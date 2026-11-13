@@ -350,7 +350,7 @@ function formatElementMatches(matches: FlatSnapshotElement[]): string {
 
 export const desktopListWindowsTool: ToolDefinition = {
   name: 'desktop_list_windows',
-  description: 'List all visible windows on the desktop. Returns window titles, PIDs, class names, and positions. Use the PID with other desktop tools to target a specific window.',
+  description: 'List all visible windows on the desktop, front to back. Returns window titles, PIDs, class names, and positions. Use the PID with other desktop tools to target a specific window. One program can own several windows (every folder window belongs to File Explorer): each then has the same PID and its own hwnd, which desktop_focus_window accepts.',
   category: 'desktop',
   parameters: {
     target: {
@@ -370,7 +370,7 @@ export const desktopListWindowsTool: ToolDefinition = {
 
 export const desktopSnapshotTool: ToolDefinition = {
   name: 'desktop_snapshot',
-  description: 'Get the UI element tree of a window (like browser_snapshot but for desktop apps). Each element has an [id] you can use with desktop_click and desktop_type. If no pid is given, snapshots the active (focused) window.',
+  description: 'Get the UI element tree of a window (like browser_snapshot but for desktop apps). Each element has an [id] you can use with desktop_click and desktop_type. If no pid is given, snapshots the active (focused) window. When a program has several windows, the one read is the one in front (bring another forward with desktop_focus_window and its hwnd first). In the reply, window_minimized true means the window is minimised and lists nothing until it is brought forward; window_elevated true means it runs as administrator and cannot be read or driven at all; truncated true means the window has more elements than one snapshot lists.',
   category: 'desktop',
   parameters: {
     target: {
@@ -504,7 +504,7 @@ export const desktopClickTool: ToolDefinition = {
  */
 export const desktopTypeTool: ToolDefinition = {
   name: 'desktop_type',
-  description: 'Type text into a UI element. Optionally provide an element_id to click and focus it first. Without element_id, types into whatever is currently focused.',
+  description: 'Type text into a UI element. Optionally provide an element_id to click and focus it first. Without element_id, types into whatever is currently focused, so bring the window you mean to the front first. On Windows the reply names the window that received the text as foreground_pid: check it is the PID you meant, and if it is not, say that the text went to another window. delivery \"unconfirmed\" means that window could not be checked and probably did not receive the text: verify with a snapshot before going on.',
   category: 'desktop',
   failureIsOutsideContent: true,
   parameters: {
@@ -553,7 +553,7 @@ export const desktopTypeTool: ToolDefinition = {
 
 export const desktopPressKeysTool: ToolDefinition = {
   name: 'desktop_press_keys',
-  description: 'Press a keyboard shortcut or key combination. Keys are pressed simultaneously (e.g., "ctrl,s" for save, "alt,f4" to close). Single keys also work: "enter", "tab", "escape".',
+  description: 'Press a keyboard shortcut or key combination. Keys are pressed simultaneously (e.g., "ctrl,s" for save, "alt,f4" to close). Single keys also work: "enter", "tab", "escape". The keys go to the window in front. On Windows the reply names it as foreground_pid: check it is the PID you meant. delivery "unconfirmed" means that window could not be checked and probably did not receive the keys.',
   category: 'desktop',
   failureIsOutsideContent: true,
   parameters: {
@@ -704,7 +704,7 @@ export const desktopScreenshotTool: ToolDefinition = {
 
 export const desktopFocusWindowTool: ToolDefinition = {
   name: 'desktop_focus_window',
-  description: 'Bring a window to the foreground by its PID (from desktop_list_windows). Use this before interacting with a background window.',
+  description: 'Bring a window to the foreground by its PID (from desktop_list_windows). Use this before interacting with a background window. When the program has several windows, pass the hwnd of the one you mean as well; without it the one most recently in front is taken.',
   category: 'desktop',
   parameters: {
     target: {
@@ -716,6 +716,11 @@ export const desktopFocusWindowTool: ToolDefinition = {
       type: 'number',
       description: 'Process ID of the window to focus',
       required: true,
+    },
+    hwnd: {
+      type: 'number',
+      description: 'Optional: the hwnd of one window of that program (from desktop_list_windows), when it has several. Windows only.',
+      required: false,
     },
   },
   execute: async (params) => {

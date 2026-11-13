@@ -81,6 +81,7 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 	}
 
 	// If element_id is given, click it first to focus
+	clicked := ""
 	if elemID, ok := params["element_id"].(float64); ok {
 		_, err := comThread.call(func(state *uiaState) (any, error) {
 			return uiaPerformAction(state, int(elemID), "click", "")
@@ -88,7 +89,17 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to click element before typing: %w", err)
 		}
+		clicked = fmt.Sprintf("element [%d] was clicked", int(elemID))
 		time.Sleep(100 * time.Millisecond)
+	}
+
+	// The text goes to whatever window is in front. Into one that runs as
+	// administrator it vanished, and the reply still said success: Windows
+	// drops those keys without an error (desktop_reach.go).
+	front := win32GetForegroundWindow()
+	reach := windowKeyReach(front)
+	if reach == keysBlocked {
+		return nil, fmt.Errorf("type_text refused: %w", keysBlockedError("typed", clicked))
 	}
 
 	// Native SendInput — replaces a per-call PowerShell spawn running
@@ -97,7 +108,12 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 	if err := typeTextNative(text); err != nil {
 		return nil, fmt.Errorf("type_text failed: %w", err)
 	}
-	return &RPCResult{Result: map[string]any{"success": true, "chars": len([]rune(text))}}, nil
+	// Which window that was, as a number and a fixed word: nothing read from
+	// the screen goes into this reply.
+	return &RPCResult{Result: map[string]any{
+		"success": true, "chars": len([]rune(text)),
+		"foreground_pid": win32GetWindowPid(front), "delivery": reach.delivery(),
+	}}, nil
 }
 
 // ── press_keys ───────────────────────────────────────────────────────
@@ -108,13 +124,22 @@ func handlePressKeys(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("missing required parameter: keys")
 	}
 
+	front := win32GetForegroundWindow()
+	reach := windowKeyReach(front)
+	if reach == keysBlocked {
+		return nil, fmt.Errorf("press_keys refused: %w", keysBlockedError("pressed", ""))
+	}
+
 	// Native SendInput chords — replaces per-call PowerShell SendKeys. This
 	// also makes the `win` modifier a real Windows-key chord (SendKeys had
 	// no Windows key; the old code sent an approximate ctrl+esc).
 	if err := pressKeysNative(keys); err != nil {
 		return nil, fmt.Errorf("press_keys failed: %w", err)
 	}
-	return &RPCResult{Result: map[string]any{"success": true, "keys": keys}}, nil
+	return &RPCResult{Result: map[string]any{
+		"success": true, "keys": keys,
+		"foreground_pid": win32GetWindowPid(front), "delivery": reach.delivery(),
+	}}, nil
 }
 
 // ── launch_app ───────────────────────────────────────────────────────
@@ -124,7 +149,8 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 	if executable == "" {
 		return nil, fmt.Errorf("missing required parameter: executable")
 	}
-	args, err := extractArgs(params)
+	// One path with spaces in it stays one argument (desktop_launch_args.go).
+	args, err := launchArgLine(params)
 	if err != nil {
 		return nil, fmt.Errorf("launch_app: %w", err)
 	}
@@ -278,27 +304,23 @@ func launchFromStartMenu(executable, args string, preexisting map[uintptr]bool) 
 	if !plain {
 		return nil, false, ""
 	}
-	out, err := runPS(startMenuFindScript(want), 15*time.Second)
+	out, err := runPS(startMenuListScript(), 15*time.Second)
 	if err != nil {
 		log.Printf("[desktop] launch_app: the Start menu could not be read: %v", err)
 		return nil, false, ""
 	}
-	var found struct {
-		ID    string   `json:"id"`
-		Name  string   `json:"name"`
-		Count int      `json:"count"`
-		Names []string `json:"names"`
-	}
-	if err := json.Unmarshal([]byte(out), &found); err != nil {
+	apps, err := startMenuApps(out)
+	if err != nil {
 		log.Printf("[desktop] launch_app: the Start menu's answer could not be read: %v", err)
 		return nil, false, ""
 	}
-	if found.ID == "" {
-		log.Printf("[desktop] launch_app: %q is not one app in the Start menu (%d found)", want, found.Count)
-		if found.Count == 0 {
+	found, names, count := startMenuPick(want, apps)
+	if found == nil {
+		log.Printf("[desktop] launch_app: %q is not one app in the Start menu (%d found)", want, count)
+		if count == 0 {
 			return nil, false, fmt.Sprintf("no program called %q could be started, and no app in the Start menu has that name. It may not be installed, or it has another name.", want)
 		}
-		return nil, false, fmt.Sprintf("%d apps in the Start menu have %q in their name (%s). Launch one by its exact name.", found.Count, want, strings.Join(found.Names, "; "))
+		return nil, false, fmt.Sprintf("%d apps in the Start menu answer to %q (%s). Launch one by its exact name.", count, want, strings.Join(names, "; "))
 	}
 	if _, err := runPS(startMenuLaunchScript(found.ID), 10*time.Second); err != nil {
 		log.Printf("[desktop] launch_app: %q could not be started from the Start menu: %v", found.Name, err)
@@ -369,13 +391,20 @@ func handleFocusWindow(params map[string]any) (*RPCResult, error) {
 
 	// Native — the previous implementation recompiled embedded C# in a fresh
 	// PowerShell per call, and returned a bare boolean with no explanation.
-	win, err := focusWindowNative(pid)
+	// One program can own several windows. `hwnd` (from list_windows) names
+	// one of them; without it the one a person means is taken.
+	hwnd := uintptr(0)
+	if h, ok := params["hwnd"].(float64); ok && h > 0 {
+		hwnd = uintptr(h)
+	}
+	win, err := focusWindowNative(pid, hwnd)
 	if err != nil {
 		return nil, fmt.Errorf("focus_window failed: %w", err)
 	}
 	return &RPCResult{Result: map[string]any{
 		"success": true,
 		"pid":     pid,
+		"hwnd":    win.Hwnd,
 		"title":   win.Title,
 	}}, nil
 }

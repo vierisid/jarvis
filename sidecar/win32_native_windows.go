@@ -70,6 +70,10 @@ func enumWindowsCallback(hwnd uintptr, _ uintptr) uintptr {
 	if visible == 0 {
 		return 1 // continue enumeration
 	}
+	// The notch is not a window anyone opened (win32_reach_windows.go).
+	if ownOverlayWindow(hwnd) {
+		return 1
+	}
 
 	var titleBuf [256]uint16
 	procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&titleBuf[0])), uintptr(len(titleBuf)))
@@ -154,15 +158,33 @@ func windowsForPid(pid int) []windowInfo {
 	return out
 }
 
-// focusWindowNative restores (if minimized) and foregrounds the topmost
-// window of pid. Returns the focused window, or an error naming what exists
+// focusWindowNative restores (if minimized) and foregrounds a window of pid:
+// the one named by hwnd when one is given, else the one a person means
+// (pickWindowOfPid). Returns the focused window, or an error naming what exists
 // instead so the model can correct itself.
-func focusWindowNative(pid int) (*windowInfo, error) {
+func focusWindowNative(pid int, hwnd uintptr) (*windowInfo, error) {
 	wins := windowsForPid(pid)
 	if len(wins) == 0 {
 		return nil, fmt.Errorf("no visible window for PID %d — %s", pid, windowInventoryHint())
 	}
-	w := wins[0]
+	want := hwnd
+	if want == 0 {
+		want = topWindowOfPid(pid)
+	}
+	var w windowInfo
+	found := false
+	for _, candidate := range wins {
+		if candidate.Hwnd == want {
+			w, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		if hwnd != 0 {
+			return nil, fmt.Errorf("PID %d has no visible window with hwnd %d — %s", pid, hwnd, windowInventoryHint())
+		}
+		w = wins[0]
+	}
 
 	const SW_RESTORE = 9
 	if minimized, _, _ := procIsIconic.Call(w.Hwnd); minimized != 0 {

@@ -67,6 +67,13 @@ let sidecarManager: SidecarManager | null = null;
  * moved to look (`desktop_pointer_target_linux_test.go` pins that nothing was
  * clicked), on Windows it has not (uia_element_guard_windows_test.go).
  *
+ * `DESKTOP_TARGET_UNREACHABLE` is typed text or keys refused because the window
+ * in front runs as administrator and the sidecar does not: Windows drops keys
+ * sent across that line without an error, so they are not sent. Returned before
+ * the first key (`keysBlockedError` in sidecar/desktop_reach.go; when an element
+ * was clicked first the same refusal carries no code, since something was done,
+ * and `desktop_reach_test.go` pins both halves).
+ *
  * `BROWSER_SNAPSHOT_SUPERSEDED` (#676) is a reviewed browser click, type or
  * hover refused because the element map is no longer on the generation the
  * call was reviewed against, or because the generation it carried was
@@ -75,8 +82,8 @@ let sidecarManager: SidecarManager | null = null;
  * reached the browser.
  */
 const NOT_STARTED_RPC_CODES = new Set([
-  'DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED', 'BROWSER_SNAPSHOT_SUPERSEDED',
-  'BROWSER_ACTION_REFUSED',
+  'DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED', 'DESKTOP_TARGET_UNREACHABLE',
+  'BROWSER_SNAPSHOT_SUPERSEDED', 'BROWSER_ACTION_REFUSED',
 ]);
 
 /**

@@ -38,6 +38,10 @@ func platformNotchCursor(handle unsafe.Pointer) (int, int, bool, bool) { return 
 
 func platformNotchTearDown(handle unsafe.Pointer) {}
 
+// The fullscreen rule is not applied on this platform, so there is nothing to
+// come back from.
+func platformNotchAsking(handle unsafe.Pointer, asking bool) {}
+
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	if take {
 		return platformFocusWindow(handle) == nil

@@ -631,3 +631,26 @@ describe('first batch of the edge-case audit, on the page', () => {
     expect($<HTMLInputElement>('input.ask')!.maxLength).toBe(4000);
   });
 });
+
+describe('the rest of the edge-case audit, on the page', () => {
+  test('it says when a question is waiting for a yes or a no, and when it no longer is', () => {
+    const asking: boolean[] = [];
+    surface.onAsking((now) => asking.push(now));
+    // A result is not a question: the window may stay hidden behind a film.
+    show({ id: 's', kind: 'say', say: ['Done.'], ms: 4000 });
+    expect(asking).toEqual([]);
+    // An approval by key is one.
+    show({ id: 'o', kind: 'offer', say: ['Run it?'], yes: 'approve' });
+    expect(asking).toEqual([true]);
+    all('.hint .key')[0]!.click();
+    // Answered: nothing waits any more.
+    expect(asking).toEqual([true, false]);
+    // A sheet that stays until it is answered is one; a sheet to read is not.
+    show({ id: 'r', kind: 'sheet', say: ['Your day'], blocks: [] });
+    expect(asking).toEqual([true, false]);
+    show({ id: 'a', kind: 'sheet', say: ['Write the file?'], yes: 'approve', stay: true, blocks: [] });
+    expect(asking).toEqual([true, false, true]);
+    surface.receive({ type: 'rest' });
+    expect(asking).toEqual([true, false, true, false]);
+  });
+});

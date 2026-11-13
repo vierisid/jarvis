@@ -1037,8 +1037,20 @@ func getSupportedPatterns(elem *ole.IDispatch) []string {
 	return patterns
 }
 
-// findWindowByPid finds the first top-level window for a given PID using UIAutomation.
+// findWindowByPid finds the window of a program that a person means: the one
+// in front, or failing that its frontmost one that is not minimised
+// (pickWindowOfPid). One program can own many windows. The first one UI
+// Automation happened to list used to be taken, which for File Explorer could
+// be the desktop or the taskbar instead of the folder being looked at.
 func findWindowByPid(state *uiaState, pid int) (*ole.IDispatch, error) {
+	if hwnd := topWindowOfPid(pid); hwnd != 0 {
+		if window, err := uiaElementFromHandle(state.automation, hwnd); err == nil && window != nil {
+			return window, nil
+		}
+	}
+
+	// No visible, titled window (or it could not be read by its handle):
+	// whatever UI Automation lists for the program, as before.
 	root, err := uiaGetRootElement(state.automation)
 	if err != nil {
 		return nil, err
@@ -1056,7 +1068,7 @@ func findWindowByPid(state *uiaState, pid int) (*ole.IDispatch, error) {
 		return nil, err
 	}
 	if window == nil {
-		return nil, fmt.Errorf("no window found for PID %d", pid)
+		return nil, fmt.Errorf("no window found for PID %d — %s", pid, windowInventoryHint())
 	}
 	return window, nil
 }
@@ -1082,8 +1094,8 @@ func resolvePid(pid int) (int, error) {
 // When semantic is true each emitted element also carries its ancestry path,
 // sibling ordinal, and durable sig (kept opt-in: paths meaningfully grow the
 // JSON payload the LLM currently reads verbatim).
-func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, depth, maxDepth int, includeInvisible, semantic bool, path []map[string]any, results *[]map[string]any) {
-	if depth > maxDepth {
+func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, depth, maxDepth int, includeInvisible, semantic bool, path []map[string]any, results *[]map[string]any, budget *walkBudget) {
+	if depth > maxDepth || budget.spent(len(*results)) {
 		return
 	}
 
@@ -1121,12 +1133,27 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		}
 		kids = append(kids, meta)
 	}
+	// From here on every child is either listed or released. Past the budget
+	// none is listed, so all are released: none is in the cache.
+	if budget.spent(len(*results)) {
+		for _, k := range kids {
+			k.elem.Release()
+		}
+		return
+	}
 
 	// Ordinal disambiguates same-signature siblings (third "row" in a list).
 	ordCount := map[string]int{}
 	for _, k := range kids {
 		ord := ordCount[k.ctrl+"|"+k.name]
 		ordCount[k.ctrl+"|"+k.name]++
+
+		// Out of room part-way through these children: the rest are not
+		// listed and not walked.
+		if budget.spent(len(*results)) {
+			k.elem.Release()
+			continue
+		}
 
 		if k.visible || includeInvisible {
 			id := state.cache.add(k.elem, desktopElementPrint{name: k.name, role: k.ctrl, autoID: k.autoID, x: k.x, y: k.y, w: k.w, h: k.h})
@@ -1151,7 +1178,7 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		if semantic {
 			childPath = append(append([]map[string]any{}, path...), pathSegment(k.ctrl, k.name))
 		}
-		walkTree(state, trueCond, k.elem, depth+1, maxDepth, includeInvisible, semantic, childPath, results)
+		walkTree(state, trueCond, k.elem, depth+1, maxDepth, includeInvisible, semantic, childPath, results, budget)
 
 		if !k.visible && !includeInvisible {
 			k.elem.Release()
@@ -1190,14 +1217,34 @@ func uiaInspect(state *uiaState, pid, maxDepth int, includeInvisible, semantic b
 	}
 
 	var elements []map[string]any
-	walkTree(state, trueCond, window, 0, maxDepth, includeInvisible, semantic, rootPath, &elements)
+	budget := newWalkBudget()
+	walkTree(state, trueCond, window, 0, maxDepth, includeInvisible, semantic, rootPath, &elements, budget)
 
-	return map[string]any{
+	result := map[string]any{
 		"window_title":  windowTitle,
 		"pid":           pid,
 		"element_count": len(elements),
 		"elements":      elements,
-	}, nil
+	}
+	// A very large window (a folder of thousands of files, a big sheet) took
+	// longer to read than the caller waits, and the caller then could not say
+	// whether anything had happened. The read stops at a limit and says so.
+	if budget.capped {
+		result["truncated"] = true
+	}
+	// Why a read came back empty, as typed facts: the caller writes the
+	// sentence. A minimised window has no element with a size; one that runs
+	// as administrator cannot be read at all. Both used to be reported as "a
+	// custom-drawn surface, use a screenshot".
+	if hwnd := uintptr(uiaElementGetPropertyInt(window, UIA_NativeWindowHandlePropertyId)); hwnd != 0 {
+		if minimized, _, _ := procIsIconic.Call(hwnd); minimized != 0 {
+			result["window_minimized"] = true
+		}
+		if windowKeyReach(hwnd) == keysBlocked {
+			result["window_elevated"] = true
+		}
+	}
+	return result, nil
 }
 
 // uiaFindElements searches for elements matching the given criteria.

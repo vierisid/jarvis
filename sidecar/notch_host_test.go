@@ -85,8 +85,12 @@ func TestNotchHidesOnlyForAFullscreenVideo(t *testing.T) {
 		{false, false, true, false}, // something moving in a window
 		{true, true, true, true},    // a fullscreen video
 	} {
-		if got := notchShouldHide(c.fullscreen, c.awake, c.playing); got != c.hide {
+		if got := notchShouldHide(c.fullscreen, c.awake, c.playing, false); got != c.hide {
 			t.Errorf("fullscreen=%v awake=%v playing=%v: hide=%v, want %v", c.fullscreen, c.awake, c.playing, got, c.hide)
+		}
+		// With a question that waits for an answer it never hides.
+		if notchShouldHide(c.fullscreen, c.awake, c.playing, true) {
+			t.Errorf("fullscreen=%v awake=%v playing=%v: hidden while asking", c.fullscreen, c.awake, c.playing)
 		}
 	}
 }

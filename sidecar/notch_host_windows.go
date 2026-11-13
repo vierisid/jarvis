@@ -50,6 +50,7 @@ type notchWindow struct {
 	dpi        int
 	loaded     atomic.Bool    // the page has loaded and may be shown
 	hidden     atomic.Bool    // hidden by the fullscreen rule
+	asking     atomic.Bool    // the page shows a question that waits for a yes or a no
 	hasFocus   atomic.Bool    // the page asked for the keyboard and has it
 	previousFg atomic.Uintptr // who had the keyboard before the page took it
 	outlineLog atomic.Int64   // unix ms of the last outline log line
@@ -138,6 +139,26 @@ func platformNotchReveal(handle unsafe.Pointer) {
 		w.show()
 	}
 	log.Printf("[notch] page loaded, window shown without focus")
+}
+
+// platformNotchAsking is the page saying whether it shows a question that
+// waits for an answer. A notch hidden for a fullscreen video comes back at
+// once for one; the watch hides it again when the question is gone and the
+// video is still playing.
+func platformNotchAsking(handle unsafe.Pointer, asking bool) {
+	w := notchWindowFor(handle)
+	if w == nil {
+		return
+	}
+	if w.asking.Swap(asking) == asking || !asking {
+		return
+	}
+	if w.hidden.CompareAndSwap(true, false) {
+		if w.loaded.Load() {
+			w.show()
+		}
+		log.Printf("[notch] shown again over a fullscreen video: it has a question that waits for an answer")
+	}
 }
 
 func (w *notchWindow) show() {
@@ -246,7 +267,7 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 			video.reset()
 			looks = 0
 		}
-		hide := notchShouldHide(fullscreen, awake, playing)
+		hide := notchShouldHide(fullscreen, awake, playing, w.asking.Load())
 		if hide != w.hidden.Load() {
 			w.hidden.Store(hide)
 			if hide {

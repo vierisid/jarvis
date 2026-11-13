@@ -3,7 +3,7 @@
  *
  * The desktop app puts a few functions on `window` (see docs/notch/README.md):
  * the page calls `__notch_set_outline`, `__notch_focus`, `__notch_send`,
- * `__notch_esc`, `__notch_keys` and `__notch_log`, and defines `__notch_receive`,
+ * `__notch_esc`, `__notch_asking`, `__notch_keys` and `__notch_log`, and defines `__notch_receive`,
  * `__notch_cursor`, `__notch_key` and `__notch_pairs` for the desktop app to
  * call. Opened in a plain browser none of them is there, so
  * every call is guarded and the page simply shows nothing.
@@ -20,6 +20,7 @@ interface NotchWindow {
   __notch_send?: (text: string) => unknown;
   __notch_log?: (text: string) => unknown;
   __notch_esc?: (want: boolean) => unknown;
+  __notch_asking?: (asking: boolean) => unknown;
   __notch_keys?: () => unknown;
   __notch_receive?: (message: NotchToPage) => void;
   __notch_cursor?: (x: number, y: number, down?: number | boolean) => void;
@@ -95,6 +96,9 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
   host.__notch_key = (name) => surface.key(String(name));
   host.__notch_pairs = (pairs) => surface.setPairs(pairs);
   surface.onWantEsc((want) => quietly(() => host.__notch_esc?.(want)));
+  // Whether a question is waiting: the window does not hide behind a
+  // fullscreen video while one is.
+  surface.onAsking((asking) => quietly(() => host.__notch_asking?.(asking)));
   // Ask once which keys this machine uses, so the hints show them from the
   // first line. A change made in the settings later arrives by __notch_pairs.
   try {

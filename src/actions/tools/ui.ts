@@ -16,7 +16,7 @@
 
 import type { ToolDefinition } from './registry.ts';
 import { getSidecarManager, autoTargetForCapability } from './sidecar-route.ts';
-import { captureSurface, type CaptureKind } from '../../structural/surface.ts';
+import { captureSurface, type CaptureKind, type CaptureWindowState } from '../../structural/surface.ts';
 import { verifyPostcondition, nextHealRung, type Postcondition, type HealRung } from '../../structural/verifier.ts';
 import { resolveRef } from '../../structural/resolver.ts';
 import { recordPerception } from '../../structural/telemetry.ts';
@@ -203,7 +203,24 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + '...' : s;
 }
 
-function formatSurface(surface: SemanticSurface, ids: number[]): string {
+/**
+ * Why a window read came back empty, in a sentence the agent can act on. Each
+ * of these was reported as "custom-drawn, use a screenshot", which sent the
+ * agent to look at a picture of a window that was only minimised, or to keep
+ * trying one it can never drive.
+ */
+export function emptySurfaceReason(window: CaptureWindowState | undefined): string | null {
+  if (window?.elevated) {
+    return '(nothing to read: this window runs as administrator and Jarvis does not, so Windows lets Jarvis neither read it nor act in it. '
+      + 'A screenshot will not change that. Tell the user this window has to be handled by hand.)';
+  }
+  if (window?.minimized) {
+    return '(nothing to read: this window is minimised. Bring it to the front with desktop_focus_window, then take a new ui_snapshot.)';
+  }
+  return null;
+}
+
+function formatSurface(surface: SemanticSurface, ids: number[], window?: CaptureWindowState): string {
   const cov = Math.round(surface.coverage * 100);
   const header =
     surface.provider === 'cdp'
@@ -211,10 +228,23 @@ function formatSurface(surface: SemanticSurface, ids: number[]): string {
       : `Window: ${surface.root.title || '(untitled)'}  [pid ${surface.root.pid ?? '?'}]`;
 
   const lines = [header, `Coverage: ${cov}% structural`, ''];
+  const why = surface.nodes.length === 0 ? emptySurfaceReason(window) : null;
+  if (why) {
+    // Not a custom-drawn surface: the advice below would be wrong.
+    lines.push(why);
+    return lines.join('\n');
+  }
   if (surface.nodes.length === 0) {
     lines.push('(no salient elements - the surface may be canvas/custom-drawn; use a screenshot)');
   } else {
     surface.nodes.forEach((n, i) => lines.push(fmtNode(n, ids[i]!)));
+  }
+  if (window?.truncated) {
+    lines.push(
+      '',
+      'This window has more elements than one snapshot lists, so the list above stops short. '
+      + 'What you are looking for may be further down: scroll the window, or look for it by name with desktop_find_element.',
+    );
   }
   if (surface.coverage < LOW_COVERAGE) {
     lines.push(
@@ -300,7 +330,7 @@ export const uiSnapshotTool: ToolDefinition = {
     if (!target) return `Error: no connected sidecar with the "${cap}" capability`;
     try {
       const pid = params.pid as number | undefined;
-      const { surface } = await captureSurface({
+      const { surface, window } = await captureSurface({
         kind,
         target,
         pid,
@@ -311,10 +341,12 @@ export const uiSnapshotTool: ToolDefinition = {
         provider: surface.provider,
         action: 'snapshot',
         coverage: surface.coverage,
-        visionRecommended: surface.coverage < LOW_COVERAGE ? 'low_coverage' : undefined,
+        // A window that is minimised or out of reach is not one to look at a picture of.
+        visionRecommended: surface.coverage < LOW_COVERAGE && !(surface.nodes.length === 0 && emptySurfaceReason(window))
+          ? 'low_coverage' : undefined,
         detail: `${surface.nodes.length} salient nodes`,
       });
-      return formatSurface(surface, ids);
+      return formatSurface(surface, ids, window);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
