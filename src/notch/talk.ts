@@ -43,6 +43,40 @@ export const NOTCH_TALK_FILLER: ReadonlySet<string> = new Set([
   'so', 'uh', 'um', 'hmm', 'mm', 'oh', 'ah', 'the', 'i', 'music', 'applause', 'silence', 'subtitles by the amara org community',
   'grazie', 'grazie mille', 'grazie a tutti', 'ciao', 'sottotitoli creati dalla comunita amara org', 'sottotitoli e revisione a cura di qtss',
 ]);
+/**
+ * What speech-to-text writes for a noise or a mumble that is longer than a
+ * word: the sign-off of a video, or a subtitle credit, in whatever language it
+ * guesses. These are never an instruction at any length. Seen on the owner's
+ * machine on 13 November 2026: 0.9 s of sound came back as a Finnish "thanks
+ * for watching the video, and have a good afternoon" and was run as an ask.
+ * Compared with the line in lower case, without accents or punctuation, from
+ * its first word. It is a list of the known ones, not a way to know: a line it
+ * does not hold still gets through, and the words are on the notch for a
+ * moment before they run.
+ */
+export const NOTCH_TALK_SIGN_OFF: readonly RegExp[] = [
+  /^(thanks?( you)?( so much| very much)?|thank you all) for (watching|listening|viewing|tuning in)\b/,
+  /^(please )?(like and )?subscribe\b/,
+  /\bamara org\b/, /^(subtitles?|captions?) (by|made by|created by|provided by)\b/,
+  /^sottotitoli\b/, /^sous titres\b/, /^untertitel\b/, /^subtitulos\b/, /^legendas\b/, /^napisy\b/, /^ondertitel/,
+  /^kiitos (kun|etta) katso/, /^tack for att (ni|du) titta/, /^takk for at (du|dere) (sa|så) /, /^tak fordi (du|i) (sa|så) /,
+  /^merci d avoir regarde/, /^gracias por (ver|mirar)\b/, /^obrigad[oa] por assistir/, /^grazie per (aver guardato|la visione|l attenzione)/,
+  /^(vielen )?dank(e)? furs zuschauen/, /^bedankt voor het kijken/, /^dziekuje za ogladanie/, /^dekuji za (pozornost|sledovani)/,
+  // (The Japanese one is written as the line reads once its marks are off, like every line here.)
+  /^спасибо за просмотр/, /^дякую за перегляд/, /^こ視聴ありかとうこさいました/, /^시청해 ?주셔서 감사합니다/, /^(谢谢|感谢)(观看|收看)/, /^字幕/,
+];
+
+/** A line as the sign-off list reads it: lower case, accents off, punctuation as spaces. */
+export function notchTalkPlain(said: string): string {
+  return said.normalize('NFD').replace(/\p{M}+/gu, '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Whether a line is one of those sign-offs or credits. */
+export function notchTalkSignOff(said: string): boolean {
+  const plain = notchTalkPlain(said);
+  return plain !== '' && NOTCH_TALK_SIGN_OFF.some((pattern) => pattern.test(plain));
+}
+
 /** How long a transcription may take before it counts as failed. */
 export const NOTCH_STT_TIMEOUT_MS = 20_000;
 
@@ -142,7 +176,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       const said = (words ?? '').trim();
       // The length, never the words: a log is not the place for what was said.
       log(`[notch] a recording was made into ${said.length} characters`);
-      if (!hasSpokenContent(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) deps.asks.nothing(talkKey, 'silence');
+      if (!hasSpokenContent(said) || notchTalkSignOff(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) deps.asks.nothing(talkKey, 'silence');
       else if (cut) deps.asks.words(talkKey, said, { cut: true });
       else deps.asks.words(talkKey, said);
     } catch (error) {
