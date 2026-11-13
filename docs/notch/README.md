@@ -154,11 +154,18 @@ What holds for all of them:
 22. **A yes is not acted on at once.** A fuse burns first and Esc takes it
     back. Nothing has been decided while it burns, so nothing has to be
     undone. A fuse nobody saw burn out (the page went away) decides nothing.
-23. **What a key may approve.** The rules a spoken yes follows, and the rule
-    every surface smaller than the dashboard follows: a payment, a
-    destructive request, one that needs on-screen review, or a sentence too
-    long to show whole or that could be a look-alike is approved in the
-    dashboard. The line says so and yes on it only opens the dashboard.
+23. **What a key may approve.** Whatever the notch can show whole: a shell
+    command, a file write, a delete, an install, a message, stopping an
+    agent. The rule a spoken yes follows (nothing destructive by voice) is
+    not applied on the notch, by the owner's decision of 13 November 2026;
+    a destructive request is shown with a careful face. Three things a key
+    does not approve: a payment, a request that needs on-screen review (the
+    product refuses both from every surface but the dashboard), and a
+    sentence longer than three lines of the notch (200 columns) or one that
+    could be a look-alike. The line says why and yes on it only opens the
+    dashboard. A sentence is drawn one block per word, and a word longer
+    than a line (a path, a URL) is cut into pieces a line can break between,
+    so no part of what is being approved is ever out of sight.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes for 0.7 s, counted in the page from when it was drawn.
 25. **The page starts nothing.** A promise is run by the executor's own
@@ -430,6 +437,7 @@ each does, and that it is harmless):
 scripts/notch/fixture.sh               # a menu
 scripts/notch/fixture.sh approval      # an approval a key may answer
 scripts/notch/fixture.sh approval 3    # three, for the count and the round
+scripts/notch/fixture.sh command       # an approval to run one shell command: echo notch test
 scripts/notch/fixture.sh payment       # an approval that is a payment; no money moves
 scripts/notch/fixture.sh promise 30    # a promise due in 30 s (two minutes when not said)
 scripts/notch/fixture.sh failure       # one failure in the list of open failures

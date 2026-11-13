@@ -8,6 +8,7 @@
 #   scripts/notch/fixture.sh                 a menu
 #   scripts/notch/fixture.sh approval        an approval a key may answer
 #   scripts/notch/fixture.sh approval 3      three of them
+#   scripts/notch/fixture.sh command         an approval to run one shell command: echo notch test
 #   scripts/notch/fixture.sh payment         an approval that is a payment (no money moves)
 #   scripts/notch/fixture.sh promise [secs]  a promise due in two minutes, or in [secs]
 #   scripts/notch/fixture.sh failure         one failure in the list of open failures
@@ -72,6 +73,7 @@ while true; do
   echo "   5  promise in 20 s   a promise due in twenty seconds"
   echo "   6  failure           one failure in the list of open failures"
   echo "   7  elsewhere         approve the fixture approval on the notch as a dashboard click would"
+  echo "   8  command           an approval to run a shell command (echo notch test)"
   echo "   l  log               the lines the promises wrote when they ran"
   echo "   q  quit"
   printf 'Make: '
@@ -85,6 +87,7 @@ while true; do
     5) one promise 20 || true ;;
     6) one failure || true ;;
     7) one elsewhere || true ;;
+    8) one command || true ;;
     l|log) show_log ;;
     '') ;;
     *) # shellcheck disable=SC2086
