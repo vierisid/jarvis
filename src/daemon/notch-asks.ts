@@ -39,6 +39,33 @@ export const NOTCH_UNDERSTAND_SYSTEM = [
   'Do not answer it. Do not carry it out. Add nothing they did not say.',
 ].join(' ');
 
+/**
+ * How an approval is put in plain words for the notch. What is asked sees the
+ * tool and its exact arguments and nothing else: not the conversation, not
+ * what the agent read. So a page that steered the agent cannot also write the
+ * sentence the person is asked to say yes to. The exact action is shown under
+ * the sentence either way (src/notch/approvals.ts).
+ */
+export const NOTCH_APPROVAL_WORDS_SYSTEM = [
+  'You are shown one action a computer assistant is about to take: the name of a tool and its exact arguments.',
+  'Write the question the assistant should ask its owner before doing it.',
+  'One short sentence, at most 14 words, in plain words for someone who is not technical.',
+  'Say what it does and to what: name the app, file, folder or person.',
+  'If it deletes, overwrites, sends, pays, installs or changes a setting, say that plainly.',
+  'No tool names, no code, no flags, no long paths. Start with a verb. End with a question mark.',
+  'Example: "Look up where Steam is installed?"',
+  'Answer with the question only.',
+].join(' ');
+
+/** The model's reply as one question, or null when it is not one. */
+export function approvalWords(raw: string): string | null {
+  const line = raw.split(/\r?\n/).map((part) => part.trim()).find((part) => part.length > 0) ?? '';
+  const plain = line.replace(/^["'`*\s]+|["'`*\s]+$/g, '').replace(/\s+/g, ' ');
+  if (!/\p{L}/u.test(plain) || [...plain].length < 6) return null;
+  const cut = [...plain].length > 110 ? `${[...plain].slice(0, 109).join('').trimEnd()}…` : plain;
+  return /[?…]$/.test(cut) ? cut : `${cut.replace(/[.!]+$/, '')}?`;
+}
+
 export interface NotchAskOptions {
   db: Database;
   /** The desktop apps: their recordings arrive as events. */
@@ -132,6 +159,13 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
         }
       }
       return result;
+    },
+    async describeApproval(request) {
+      const said = await small('notch_approval_words', [
+        { role: 'system', content: NOTCH_APPROVAL_WORDS_SYSTEM },
+        { role: 'user', content: `Tool: ${request.tool_name}\nArguments: ${request.tool_arguments.slice(0, 2000)}` },
+      ], 60);
+      return approvalWords(said);
     },
     async understand(text) {
       try {

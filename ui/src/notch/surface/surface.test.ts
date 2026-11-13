@@ -578,3 +578,38 @@ test('a row that opens something still shows its small word', () => {
   row.click();
   expect(sent).toEqual([{ type: 'answer', id: 's', act: 'go', row: 'a1' }]);
 });
+
+describe('a sheet that asks for a decision', () => {
+  const ask = (stay: boolean): NotchLine => ({
+    id: 'a', kind: 'sheet', say: ['Look up where Steam is installed?'], yes: 'approve', ...(stay ? { stay: true } : {}),
+    blocks: [{ kind: 'paper', lines: [['On this computer, run: reg query HKCU\\Software\\Valve\\Steam /v SteamExe']] }],
+  });
+
+  test('shows the question, the exact action under it, and what yes means', () => {
+    show(ask(true));
+    expect(said()).toContain('Look up where Steam is installed?');
+    expect($('.sheet .paper')?.textContent).toContain('reg query HKCU\\Software\\Valve\\Steam /v SteamExe');
+    const hint = ($('.hint')?.textContent ?? '').replace(/\s+/g, ' ');
+    expect(hint).toContain('approve');
+    // Yes is the pair of keys, not Enter: the notch has no keyboard here. And Esc says what it means.
+    expect(hint.toLowerCase()).not.toContain('enter');
+    expect(hint).toContain('no');
+  });
+
+  test('is not answered by a click somewhere else on the screen', () => {
+    show(ask(true));
+    surface.pointer(5, 600, true);
+    surface.pointer(5, 600, false);
+    expect(sent).toEqual([]);
+    expect(body()).toBe('sheet');
+    // Esc is a no, and yes is a yes.
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
+  });
+
+  test('an ordinary sheet still closes on a click away', () => {
+    show(ask(false));
+    surface.pointer(5, 600, true);
+    expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
+  });
+});

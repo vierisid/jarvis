@@ -74,6 +74,12 @@ interface View {
   src?: NotchApp | '';
   /** The sheet's rows come in one after another. */
   stag?: boolean;
+  /**
+   * Yes is the pair of keys, as on a line, though this is a sheet: it asks for
+   * a decision and has no text field, so the notch does not have the keyboard
+   * and Enter would go to the app in front.
+   */
+  pairYes?: boolean;
 }
 
 /** The line on the notch and what the person can do with it. */
@@ -288,7 +294,7 @@ export function createNotchSurface(
         : yes && !('beads' in yes) ? `Yes means ${yes.act}.` : '';
       if (spoken) sayEl.append(el('span', 'sr', ' ' + spoken));
     }
-    const ctx = { body: v.body, onYes: () => { if (cur && !cur.done) cur.onYes?.(); }, onEsc: () => { if (cur && !cur.done) cur.onEsc?.(); } };
+    const ctx = { body: v.pairYes ? 'line' : v.body, onYes: () => { if (cur && !cur.done) cur.onYes?.(); }, onEsc: () => { if (cur && !cur.done) cur.onEsc?.(); } };
     hintEl.replaceChildren(...hints.map((h) => mkHint(h, ctx)));
     optsEl.replaceChildren(...(v.opts ?? []).map((o, i) => {
       const b = btn('btn', null, o.pick);
@@ -401,7 +407,9 @@ export function createNotchSurface(
       me.onEsc = () => { answer('no'); rest(); };
       show({
         body: 'sheet', say: l.say, sheet: blocksOf(l.blocks), stag: true, ...common,
-        hint: l.yes ? [{ act: l.yes }, { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
+        // A sheet that asks for a decision says what each key means: the pair is yes, Esc is no.
+        ...(l.stay ? { pairYes: true } : {}),
+        hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
       }, instant);
       return;
     }
@@ -789,6 +797,8 @@ export function createNotchSurface(
     if (outlines(0).some((polygon) => inside(polygon, x, y))) return;
     if (sentence.picking()) sentence.closePick();
     const body = nin.dataset.body;
+    // A sheet that asks for a decision is not answered by a click meant for another app.
+    if (line?.kind === 'sheet' && line.stay) return;
     if (cur && !cur.done && (body === 'sheet' || body === 'ask')) cur.onEsc?.();
   }
 
