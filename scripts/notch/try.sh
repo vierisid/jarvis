@@ -79,7 +79,11 @@ if [ "$TARGET" = "windows" ]; then
       if [ "$BUILD" = 1 ] || [ "$START" = 1 ]; then
         say "Stopping the test build that is still running"
         powershell.exe -NoProfile -Command "Get-Process jarvis -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
-        sleep 1
+        # Stopped is not gone: wait until Windows no longer lists it.
+        for _ in $(seq 1 20); do
+          [ -z "$(running_jarvis)" ] && break
+          sleep 0.5
+        done
       fi ;;
   esac
 fi
@@ -95,9 +99,17 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "windows" ]; then
       CGO_CFLAGS="-I$PWD/include" CGO_CXXFLAGS="-I$PWD/include" \
       go build -ldflags "-H windowsgui" -o "$OUT/jarvis.exe" . )
   mkdir -p "$APP_DIR/bin"
-  if ! cp "$OUT/jarvis.exe" "$APP_DIR/bin/jarvis.exe" 2>/dev/null; then
+  # Windows keeps a program's file locked for a moment after the program has
+  # gone. When nothing had to be compiled the build is over in seconds, sooner
+  # than that, so the copy is tried for a while before giving up.
+  COPIED=0
+  for _ in $(seq 1 20); do
+    if cp "$OUT/jarvis.exe" "$APP_DIR/bin/jarvis.exe" 2>/dev/null; then COPIED=1; break; fi
+    sleep 1
+  done
+  if [ "$COPIED" != 1 ]; then
     rm -rf "$OUT"
-    echo "Could not replace $APP_DIR/bin/jarvis.exe. The test build is probably still running on Windows: quit it from its tray icon, then run this again." >&2
+    echo "Could not replace $APP_DIR/bin/jarvis.exe after 20 seconds. The test build is probably still running on Windows: quit it from its tray icon, then run this again." >&2
     exit 1
   fi
   rm -rf "$OUT"
