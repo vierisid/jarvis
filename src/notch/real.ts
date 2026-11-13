@@ -7,6 +7,7 @@
  * product's own objects and functions; nothing here reaches for them itself,
  * so this file can be read as the list of what the notch touches.
  */
+import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
@@ -36,6 +37,8 @@ export interface NotchRealDeps {
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Approves as a click on the dashboard card does. Given only when fixtures may be made, and used by them only. */
   approveAsDashboard?: (requestId: string) => Promise<ApprovalDecisionOutcome>;
+  /** The brain's own tools, once loaded. Used by the shell command fixture only, and given only when fixtures may be made. */
+  toolRegistry?: () => ToolRegistry | null | undefined;
   /** Shows a new approval wherever approvals are shown. Used by the fixtures only. */
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Opens the dashboard on the machine named, or on every machine showing the notch. */
@@ -134,6 +137,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
     approvalManager: deps.approvalManager,
     approveAsDashboard: deps.approveAsDashboard,
+    toolRegistry: deps.toolRegistry,
     approvalOnNotch: () => {
       const showing = inbox.showing();
       const prefix = approvals.itemId('');

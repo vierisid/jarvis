@@ -4,6 +4,7 @@
  * decision function, and Today lists it.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { runCommandTool } from '../actions/tools/builtin.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { ApprovalManager } from '../authority/approval.ts';
 import { approvalToast } from '../authority/approval-delivery.ts';
@@ -33,6 +34,9 @@ function harness() {
   const registry = new ToolRegistry();
   registry.register({ name: 'get_system_info', description: 'Stand-in', category: 'system', parameters: {},
     execute: async () => { runs.push('get_system_info'); return '{"hostname":"test"}'; } });
+  // The product's real shell tool: the fixture is filed against it, and its
+  // one command is a harmless echo.
+  registry.register(runCommandTool);
   const executor = new DeferredExecutor(approvals, audit);
   executor.setToolRegistry(registry);
   executor.setAuthorityEngine(new AuthorityEngine({ default_level: 3, governed_categories: [], overrides: [], context_rules: [],
@@ -57,6 +61,7 @@ function harness() {
     deliverApproval: (request) => { delivered.push(request.id); },
     openDashboard: (from) => { opened.push(from); },
     approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
+    toolRegistry: () => registry,
     // The test looks by hand.
     lookMs: 3_600_000,
     log: () => {},
@@ -79,7 +84,7 @@ function harness() {
 describe('the approval fixture, from the command to Today', () => {
   test('makes a real approval a key may answer, shows it where approvals are shown, and a yes runs it once', async () => {
     const h = harness();
-    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment', 'elsewhere']);
+    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment', 'command', 'elsewhere']);
     const made = await h.real.fixtures.make('approval', {});
     expect(made).toContain('An approval is waiting');
     const [request] = h.approvals.getPending();
@@ -139,6 +144,39 @@ describe('the approval fixture, from the command to Today', () => {
     expect(await real.fixtures.make('failure', {})).toContain('A test failure is in the list of open failures');
     await settle();
     expect(surface.current().line).toMatchObject({ kind: 'say', mark: 'fail', say: ['The notch test failed, and Jarvis cannot tell whether it took effect.'] });
+  });
+
+  test('the command fixture files a real shell command the way the product does, and a key approves it: it runs once', async () => {
+    const h = harness();
+    const made = await h.real.fixtures.make('command', {});
+    expect(made).toContain('echo notch test');
+    const [request] = h.approvals.getPending();
+    expect(request).toMatchObject({ agent_id: NOTCH_FIXTURE_AGENT, tool_name: 'run_command', action_category: 'execute_command' });
+    expect(JSON.parse(request!.tool_arguments)).toEqual({ command: 'echo notch test' });
+    // The sentence is the tool's own gate's: the machine, the directory, the command.
+    expect(notchApprovalWay(request!)).toBe('key');
+    await h.look();
+    expect(h.said()).toMatch(/run: echo notch test\?$/);
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve', mood: 'careful' });
+    await h.answer('yes');
+    await h.answer('done');
+    for (let i = 0; i < 60 && h.said() !== 'Done.'; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(h.said()).toBe('Done.');
+    const after = h.approvals.getRequest(request!.id)!;
+    expect(after).toMatchObject({ status: 'executed', decided_by: 'notch', execution_outcome: 'committed' });
+    expect(after.execution_result).toContain('notch test');
+  });
+
+  test('without the brain\'s tools there is no command fixture, and before they are loaded it says so', async () => {
+    const approvals = new ApprovalManager();
+    const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} }, () => {});
+    const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
+    expect(none.fixtures.kinds()).toEqual(['approval', 'payment']);
+    none.stop();
+    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
+    live = early;
+    await expect(early.fixtures.make('command', {})).rejects.toThrow('has not loaded its tools yet');
+    expect(approvals.getPending()).toEqual([]);
   });
 
   // Steps 2 and 7 of the hand test, on a brain whose dashboard cannot be reached.
@@ -231,6 +269,20 @@ describe('Today', () => {
     });
     expect(rows.map((r) => r.text)).toEqual(['Second', 'Send Anna the pricing', 'First']);
     expect(rows.map((r) => r.kind)).toEqual(['approved', 'promise', 'approved']);
+  });
+
+  test('a row carries the whole sentence of what was done, a shell command included, and marks a cut', () => {
+    const command = 'On this Jarvis host, in "/home/sam/projects/northwind/storefront", run: pnpm --filter storefront run build && rsync -a dist/ deploy@shop:/srv/www/';
+    const [whole, cut] = notchToday({
+      now: () => noon,
+      executedApprovals: () => [
+        row({ id: '1', tool_name: 'run_command', context: JSON.stringify({ intent: command }), executed_at: noon - 1000 }),
+        row({ id: '2', tool_name: 'run_command', context: JSON.stringify({ intent: `Run: ${'x'.repeat(400)}` }), executed_at: noon - 2000 }),
+      ],
+    });
+    expect(whole!.text).toBe(command);
+    expect([...cut!.text].length).toBe(220);
+    expect(cut!.text).toEndWith('…');
   });
 
   test('shows a dozen and says how many more there are', () => {

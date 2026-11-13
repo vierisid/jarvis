@@ -7,16 +7,23 @@
  * so "decided once" and every refusal it makes hold for the notch as they do
  * for the dashboard.
  *
- * What a key may approve follows the rules a spoken yes already follows
- * (roles/authority.ts, gateVoiceApprovalResolution), plus the rule every
- * surface smaller than the dashboard follows (approvalToast: it must be able
- * to show the action whole):
+ * A key approves whatever the notch can show whole: a shell command, a file
+ * write, a delete, an install, a message, stopping an agent. The rule a
+ * spoken yes follows (roles/authority.ts: nothing destructive by voice) is
+ * not applied here, by the owner's decision of 13 November 2026: a key press
+ * is not a word that may have been misheard, the line names the action, and
+ * the fuse gives three seconds to take it back. A destructive request is
+ * shown with a careful face, and that is all that marks it.
  *
- *   - a payment: never. The line says so and offers to open the dashboard.
- *   - a destructive request, or one that needs on-screen review: the same.
- *   - a sentence too long to show whole, or one that could be a look-alike:
- *     the same.
- *   - anything else: yes approves it.
+ * Three things a key does not approve. The line says why, and yes on it
+ * opens the dashboard:
+ *
+ *   - a payment. Never (approvalDashboardOnly).
+ *   - a request that needs on-screen review (the same function): the product
+ *     refuses it from every surface but the dashboard.
+ *   - a sentence longer than three lines of the notch, or one that could
+ *     be a look-alike. The rule of every surface smaller than
+ *     the dashboard: what cannot be read whole is not offered for a yes.
  *
  * A yes is not acted on at once. A fuse burns first, and Esc takes it back:
  * that is the undo window. The approval stays pending for all of it, so
@@ -31,12 +38,11 @@
  * The approvals are found by looking, once a second, the way the tray and
  * the toast find them: nothing in the product announces them to listeners.
  */
-import { approvalToast } from '../authority/approval-delivery.ts';
+import { approvalIntentParts, boundedApprovalLabel, toastColumns, toastLookAlike } from '../authority/approval-delivery.ts';
 import { approvalDashboardOnly, executionState } from '../authority/approval.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
-import { gateVoiceApprovalResolution } from '../roles/authority.ts';
-import type { ActionCategory } from '../roles/authority.ts';
+import { impactFromCategory } from '../roles/authority.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -49,19 +55,46 @@ export const NOTCH_APPROVAL_LOOK_MS = 1000;
 const FRESH_MS = 60_000;
 
 /**
+ * The most columns of an action's sentence the notch offers for a yes: three
+ * lines of ordinary text beside the eyes and the hint. The notch grows a line
+ * at a time and breaks a long path or URL where the line ends, so nothing of
+ * a sentence this long is hidden (measured in the page with commands, paths,
+ * URLs and runs with no space at all, up to 240 columns). Past three lines it
+ * is no longer a line to answer at a glance, and the dashboard is the place.
+ * Measured as the toast measures, so a character of unknown width counts as
+ * not fitting.
+ */
+export const NOTCH_APPROVABLE_COLUMNS = 200;
+/** The most of a sentence a line shows when it is not shown whole. */
+const SHOWN_COLUMNS = 100;
+
+/**
  * How the notch may answer a request: `key` when yes approves it, otherwise
  * why it must be approved in the dashboard.
  */
-export type NotchApprovalWay = 'key' | 'payment' | 'click' | 'destructive' | 'unreadable';
+export type NotchApprovalWay = 'key' | 'payment' | 'click' | 'too_long' | 'look_alike';
+
+/** What the request will do, as one line, whole: the sentence the dashboard card leads with. */
+export function notchApprovalSentence(request: ApprovalRequest): string {
+  const { action } = approvalIntentParts(request);
+  return boundedApprovalLabel(action, action.length);
+}
 
 export function notchApprovalWay(request: ApprovalRequest): NotchApprovalWay {
   const only = approvalDashboardOnly(request);
   if (only === 'payment') return 'payment';
   if (only === 'click_only') return 'click';
-  // A key press is a clear yes, so only the impact rule of the voice gate is left.
-  if (gateVoiceApprovalResolution(request.action_category as ActionCategory, 1, 'approve').kind !== 'resolve') return 'destructive';
-  if (!approvalToast(request).approvable) return 'unreadable';
+  const sentence = notchApprovalSentence(request);
+  const columns = toastColumns(sentence);
+  if (columns === null || columns > NOTCH_APPROVABLE_COLUMNS) return 'too_long';
+  if (toastLookAlike(sentence)) return 'look_alike';
   return 'key';
+}
+
+/** A sentence cut for a line that only points at the dashboard, with a mark that it was cut. */
+function shortened(sentence: string): string {
+  const points = [...sentence];
+  return points.length <= SHOWN_COLUMNS ? sentence : `${points.slice(0, SHOWN_COLUMNS - 1).join('').trimEnd()}…`;
 }
 
 export interface NotchApprovalDeps {
@@ -125,16 +158,19 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     for (;;) {
       const request = pendingRequest(requestId);
       if (!request) return 'settled';
-      const toast = approvalToast(request);
+      const sentence = notchApprovalSentence(request);
       const way = notchApprovalWay(request);
       if (way !== 'key') {
         // The reason first, then the thing itself, with nothing after it: a
         // line that wraps must not start with a stray full stop.
+        const shown = em(bare(shortened(sentence)));
         const why: NotchPart[] = way === 'payment'
-          ? ['A payment. I never take that on a key: ', em(bare(toast.body))]
-          : way === 'unreadable'
-            ? ['Too long to show whole here, so it is approved in the dashboard: ', em(bare(toast.body))]
-            : ['Approved with a click in the dashboard, not with a key: ', em(bare(toast.body))];
+          ? ['A payment. I never take that on a key: ', shown]
+          : way === 'too_long'
+            ? ['Too long to show whole here, so it is approved in the dashboard: ', shown]
+            : way === 'look_alike'
+              ? ['Some of its letters could be look-alikes, so it is approved in the dashboard: ', shown]
+              : ['It has to be reviewed on screen, so it is approved in the dashboard: ', shown];
         const answer = await stage.offer(why, 'open', { mood: 'careful' });
         if (answer.act !== 'yes') return 'waits';
         deps.openDashboard?.(stage.from());
@@ -142,11 +178,14 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         return 'waits';
       }
 
-      const answer = await stage.offer([`${bare(toast.body)}?`], 'approve');
+      // The one thing that marks a request that cannot be taken back once it
+      // has run: a careful face.
+      const destructive = impactFromCategory(request.action_category) === 'destructive';
+      const answer = await stage.offer([`${bare(sentence)}?`], 'approve', destructive ? { mood: 'careful' } : {});
       if (answer.act !== 'yes') return 'waits';
       answering.add(requestId);
       try {
-        const fuse = await stage.fuse([`${bare(toast.body)}…`], fuseMs, { mood: 'work' });
+        const fuse = await stage.fuse([`${bare(sentence)}…`], fuseMs, { mood: 'work' });
         if (fuse === 'undo') continue;
         // Nobody saw the fuse burn out: the yes is not acted on.
         if (fuse === 'lost') return 'waits';
@@ -173,7 +212,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         await stage.say(decidedElsewhere(requestId), 2600);
         return 'settled';
       case 'needs_dashboard':
-        await stage.say(['That one is approved with a click in the dashboard.'], 2600, { mood: 'careful' });
+        await stage.say(['That one is approved in the dashboard.'], 2600, { mood: 'careful' });
         return 'waits';
       case 'held':
         await stage.say([outcome.state === 'paused'
@@ -219,10 +258,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       // What was already waiting when the notch came up joins the count
       // quietly, as the toast leaves a backlog alone.
       speaks: now() - request.created_at < FRESH_MS,
-      title: () => {
-        const current = deps.approvalManager.getRequest(requestId) ?? request;
-        return [approvalToast(current).body];
-      },
+      title: () => [shortened(notchApprovalSentence(deps.approvalManager.getRequest(requestId) ?? request))],
       check: () => pendingRequest(requestId) !== null,
       play: (stage) => play(requestId, stage),
     };
