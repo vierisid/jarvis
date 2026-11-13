@@ -142,6 +142,9 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     if (binary?.type === 'inline' && typeof binary.data === 'string') {
       try { pcm = Buffer.from(binary.data, 'base64'); } catch { pcm = Buffer.alloc(0); }
     }
+    // What was measured, never what was said. The desktop app's own log has
+    // the levels it judged the voice by (sidecar/notch_talk.go).
+    log(`[notch] a recording ended: ${Number(payload.duration_ms ?? 0)} ms long, ${voicedMs} ms of voice, ${pcm.length} bytes of sound, ${String(payload.reason ?? 'released')}`);
     if (payload.reason === 'cap') { deps.asks.nothing(talkKey, 'too_long'); return; }
     if (!(voicedMs >= NOTCH_TALK_MIN_VOICED_MS) || pcm.length < 3200) {
       deps.asks.nothing(talkKey, voicedMs > 0 ? 'too_little' : 'silence');

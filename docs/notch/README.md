@@ -237,6 +237,11 @@ one paragraph, opens as a sheet that stays until it is closed.
     with the pair held), one made while the microphone was muted, one with
     less than 250 ms of voice in it, and one that ran into the 60 second
     limit are not sent. The brain is told how it ended and gets no sound.
+    What counts as voice is judged against the recording's own quiet: a
+    piece of sound is voice when it is 2.5 times louder than the quiet tenth
+    of the pieces, never asking for less than a level of 90 or more than 500
+    (`notchTalkMeasure`). The desktop app's log has one line per recording
+    with what it measured and what became of it.
 33. **Words are not in a log or in a broadcast.** The brain logs how long a
     transcript was, never what it said. `notch.message` and `notch.talk` are
     not passed on to dashboards with the other desktop app events.
@@ -375,9 +380,15 @@ And these are behind the switch:
   it, as before.
 - The old summon hotkey still opens the microphone and answers in its bubble,
   in writing. It is a second way in, with its own history.
-- The talk path has not been run on a real microphone by its author: the
-  recorder is tested with a stand-in microphone, the brain with stand-in
-  audio.
+- The talk path was written against a stand-in microphone. The first real
+  one it met, a Logitech C270 webcam across a desk, showed the fixed voice
+  level of the first build (500, taken from the one-shot capture) to be
+  wrong: speech hardly reached it and every recording was thrown away as too
+  little. The level is now relative (invariant 32). It has been measured on
+  no other microphone.
+- A room that is steadily louder than a level of 500 is all voice to the
+  measure, speech or not. Then the recording is sent, and what was said is
+  left to speech-to-text.
 - Today (the list under Home's text field) holds approved actions and kept
   promises only. Work that needed no
   approval is in the audit trail by tool name, with no sentence to show.
