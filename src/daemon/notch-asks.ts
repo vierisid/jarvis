@@ -14,6 +14,8 @@ import { createSTTProvider } from '../comms/voice.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { NOTCH_REQUEST_ID } from '../authority/app-open.ts';
+import { notchEnabled } from '../notch/switch.ts';
 import {
   bindScriptedModel, scriptedCalls, scriptedModelBound, scriptedTurns, setScriptedTurns,
 } from '../llm/scripted.ts';
@@ -64,6 +66,32 @@ export function approvalWords(raw: string): string | null {
   if (!/\p{L}/u.test(plain) || [...plain].length < 6) return null;
   const cut = [...plain].length > 110 ? `${[...plain].slice(0, 109).join('').trimEnd()}…` : plain;
   return /[?…]$/.test(cut) ? cut : `${cut.replace(/[.!]+$/, '')}?`;
+}
+
+/**
+ * What the agent is told about a turn that came from the notch. It goes in
+ * the part of the prompt that changes per turn, never the cached part.
+ *
+ * It exists because the agent asks before it acts: it calls
+ * `request_approval` first for anything it takes to need a yes, and then the
+ * product's own gate asks again for the real action. On the notch that was
+ * two questions for one thing, and a question before opening an app, which
+ * the owner decided is never asked (authority/app-open.ts). The gate still
+ * asks wherever the product decides to: this only stops the agent asking on
+ * its own account for what it was just told to do.
+ */
+export const NOTCH_TURN_NOTE = [
+  'This request came from the owner directly, typed or spoken on their own computer.',
+  'They see your reply as one line on their screen, so answer in one short sentence when you can.',
+  'What they asked for is authorised by their asking: do not ask whether to go ahead, and do not call request_approval before opening an app, typing or clicking where they told you to, or running a command they asked for.',
+  'Opening an app needs no approval at all: call desktop_launch_app with the app\'s plain name and no arguments.',
+  'Call request_approval only before deleting something, sending an email or a message, paying, installing or removing software, or changing a setting.',
+  'If a tool itself stops for the owner\'s approval, that is expected: they are asked on their screen, and you wait for the result.',
+].join(' ');
+
+/** The note for a turn, by its request id: only a turn started on the notch has one. */
+export function notchTurnNote(requestId: string): string | undefined {
+  return notchEnabled() && NOTCH_REQUEST_ID.test(requestId) ? NOTCH_TURN_NOTE : undefined;
 }
 
 export interface NotchAskOptions {

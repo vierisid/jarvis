@@ -574,3 +574,43 @@ describe('an approval that was already waiting when the notch came up', () => {
     expect(h.said()).toBe('Look up where Steam is installed…');
   });
 });
+
+describe('typing a poem into Notepad, as it happened on 13 November', () => {
+  // The request the product made for it, as it was.
+  const POEM = 'The morning spills its gold across the sea,\r\nAnd every waking wave brings hope to me.';
+
+  test('is asked on the notch in plain words, with the poem under them line by line. Never the dashboard', async () => {
+    const h = harness({ describe: async () => 'Type this two-line poem into Notepad?' });
+    const made = h.approvals.createRequest({
+      agentId: 'agent-1', agentName: 'PA', toolName: 'write_file',
+      toolArguments: { element_id: 1, action: 'set_value', value: POEM, verify: 'value_equals' },
+      actionCategory: 'control_app', urgency: 'normal', reason: 'outside content read this turn: control_app requires user approval',
+      context: JSON.stringify({ confirm: 'always', intent: 'Review set_value on desktop element [1] "Text Editor". Business effect unknown beyond UI hints.' }),
+      executionMode: 'deferred', principal: PRINCIPAL,
+    });
+    const request = h.approvals.getRequest(made.id)!;
+    expect(notchApprovalWay(request)).toBe('sheet');
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true });
+    expect(h.said()).toBe('Type this two-line poem into Notepad?');
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual([
+      'write_file', 'element_id: 1', 'action: set_value', 'value:',
+      'The morning spills its gold across the sea,', 'And every waking wave brings hope to me.', 'verify: value_equals',
+    ]);
+    expect(h.opened).toEqual([]);
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.approvals.getRequest(request.id)).toMatchObject({ decided_by: 'notch' });
+  });
+
+  test('ordinary writing is never "too long": curly quotes, an apostrophe, an accent, a tab, several paragraphs', () => {
+    const h = harness();
+    for (const value of ['\u201cI heard her too.\u201d', 'can\u2019t', 'caff\u00e8 perch\u00e9', 'one\ttwo', 'First.\n\nSecond.\r\n\r\nThird.']) {
+      const request = h.ask({ context: JSON.stringify({ confirm: 'always', intent: `Review typing. ${value}` }) });
+      getDb().run('UPDATE approval_requests SET tool_arguments = ? WHERE id = ?', [JSON.stringify({ text: value }), request.id]);
+      expect([value, notchApprovalWay(h.approvals.getRequest(request.id)!)]).toEqual([value, 'sheet']);
+    }
+  });
+});

@@ -126,7 +126,12 @@ export function notchApprovalExact(request: ApprovalRequest): string[] {
     const args: unknown = JSON.parse(request.tool_arguments);
     if (args && typeof args === 'object' && !Array.isArray(args)) {
       for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
-        lines.push(`${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+        const text = typeof value === 'string' ? value : JSON.stringify(value);
+        // Text of several lines (a poem to type, a note to write) is shown as
+        // its lines, under the name of what it is.
+        const parts = text.split(/\r\n|\r|\n/);
+        if (parts.length === 1) lines.push(`${key}: ${text}`);
+        else lines.push(`${key}:`, ...parts);
       }
     }
   } catch { /* arguments that are not an object are shown as they are */
@@ -144,11 +149,15 @@ export function notchApprovalSentence(request: ApprovalRequest): string {
 export function notchApprovalWay(request: ApprovalRequest): NotchApprovalWay {
   const only = approvalDashboardOnly(request);
   if (only === 'payment') return 'payment';
-  const exact = notchApprovalExact(request).join('\n');
+  // Measured as one run of text: where its lines break is not part of how
+  // long it is. (A carriage return inside a poem once counted as a character
+  // of unknown width, and sent the poem to the dashboard as "too long".)
+  const exact = notchApprovalExact(request).join(' ').replace(/\s+/g, ' ').trim();
   // Letters that pass for other letters are not shown here at all: the
   // dashboard marks them, a line and a sheet cannot.
   if (toastLookAlike(exact)) return 'look_alike';
-  const columns = toastColumns(exact.replace(/\n/g, ' '));
+  const columns = toastColumns(exact);
+  // Still unmeasurable: something in it has no width a person would see.
   if (columns === null || columns > NOTCH_SHEET_COLUMNS) return 'too_long';
   // What has to be reviewed on screen is reviewed on the notch, which is on
   // that screen: plain words, and the exact action under them.
