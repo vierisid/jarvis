@@ -156,8 +156,13 @@ func notchTopCentre(screenW, winW int) int {
 // it plays, so without it there is no need to look further), and the picture
 // is seen to be moving by itself (notch_video.go). A browser in fullscreen
 // that is only being read keeps the notch.
-func notchShouldHide(fullscreenAppInFront, displayKeptAwake, videoPlaying bool) bool {
-	return fullscreenAppInFront && displayKeptAwake && videoPlaying
+//
+// And never while it is asking something: a question that waits for a yes or a
+// no (an approval, a question back) on a notch that cannot be seen is a task
+// that stands still until it times out. So the notch comes back for the
+// question, over the video, and goes again once it is answered.
+func notchShouldHide(fullscreenAppInFront, displayKeptAwake, videoPlaying, asking bool) bool {
+	return fullscreenAppInFront && displayKeptAwake && videoPlaying && !asking
 }
 
 // bindNotch gives the page its calls, opens the line between the page and the
@@ -235,6 +240,12 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	// Only then is it taken from the app in front.
 	bind("__notch_esc", func(want bool) {
 		notch.wantEsc(want)
+	})
+	// __notch_asking(asking): whether the notch is showing something that
+	// waits for the person's yes or no. While it is, it does not hide for a
+	// fullscreen video (notchShouldHide).
+	bind("__notch_asking", func(asking bool) {
+		platformNotchAsking(handle, asking)
 	})
 	// __notch_keys(): the two pairs of keys on this machine, for the hints.
 	bind("__notch_keys", func() map[string][]string {

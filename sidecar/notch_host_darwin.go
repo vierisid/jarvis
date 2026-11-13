@@ -427,6 +427,11 @@ func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts
 	return nil
 }
 
+// On the Mac the fullscreen rule lives in the window's own code and does not
+// yet hear this: a question asked during a fullscreen video waits there until
+// the video ends. Written down in docs/notch/README.md as a limit.
+func platformNotchAsking(handle unsafe.Pointer, asking bool) {}
+
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	if handle == nil {
 		return false

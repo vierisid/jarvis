@@ -161,6 +161,18 @@ func pointerReachesElement(state *uiaState, id int, elem *ole.IDispatch) (int, i
 	defer walker.Release()
 	target, _, known := uiaHostingWindow(walker, elem)
 	hit := win32RootWindow(win32WindowFromPoint(x, y))
+	// The notch is above every window, and a sheet of it is often what is in
+	// the way: the one that asked whether this very click may be made, still
+	// folding back. So it is given a moment, and if it stays, the refusal says
+	// what it is: "bring the window to the front" cannot help under the notch.
+	for waited := 0; ownOverlayWindow(hit) && waited < 12; waited++ {
+		procSleep.Call(150)
+		hit = win32RootWindow(win32WindowFromPoint(x, y))
+	}
+	if ownOverlayWindow(hit) {
+		return 0, 0, &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
+			"%s", pointerUnderNotch(fmt.Sprintf("element [%d]", id), x, y))}
+	}
 	if why := pointerWindowMismatch(target, known, hit); why != "" {
 		return 0, 0, &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
 			"element [%d] %s at its centre (%d, %d), so nothing was clicked. "+

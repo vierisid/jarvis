@@ -56,6 +56,8 @@ export interface NotchSurface {
   setPairs(pairs: unknown): void;
   /** Told whenever the notch starts or stops having something Esc would close. */
   onWantEsc(listener: (want: boolean) => void): void;
+  /** Told whenever the notch starts or stops showing a question that waits for a yes or a no. */
+  onAsking(listener: (asking: boolean) => void): void;
   destroy(): void;
 }
 
@@ -158,10 +160,25 @@ export function createNotchSurface(
     // at the notch. The stop hint can also be clicked.
     const up = cur !== null && !cur.done && (nin.dataset.body !== 'work' || pointerOnNotch);
     const want = alive && born && (up || sentence.picking());
+    syncAsking();
     if (want === wantedEsc) return;
     wantedEsc = want;
     for (const listener of escListeners) listener(want);
   };
+
+  // A question that waits for a yes or a no: an approval (a line with a yes, or
+  // a sheet that stays), choices, or a question back. The window is told, so
+  // that it does not stay hidden behind a fullscreen video with a task standing
+  // still on it.
+  const askingListeners = new Set<(asking: boolean) => void>();
+  let wasAsking = false;
+  function syncAsking(): void {
+    const waits = line !== null && (line.kind === 'offer' || line.kind === 'ask' || (line.kind === 'sheet' && line.stay === true));
+    const asking = alive && born && cur !== null && !cur.done && waits;
+    if (asking === wasAsking) return;
+    wasAsking = asking;
+    for (const listener of askingListeners) listener(asking);
+  }
 
   const later = (ms: number, fn: () => void): number => { const mine = tok; return timers.after(ms, () => { if (mine === tok) fn(); }); };
   const answer = (act: NotchAnswerAct, more: Partial<Extract<NotchFromPage, { type: 'answer' }>> = {}): void => {
@@ -871,6 +888,7 @@ export function createNotchSurface(
     receive, outlines, pointer, key,
     onOutline(listener) { listeners.add(listener); },
     onWantEsc(listener) { escListeners.add(listener); },
+    onAsking(listener) { askingListeners.add(listener); },
     setPairs(pairs) {
       if (!setKeyPairs(pairs)) return;
       held();
@@ -881,6 +899,7 @@ export function createNotchSurface(
       alive = false;
       syncEsc();
       escListeners.clear();
+      askingListeners.clear();
       frames.stop();
       timers.clear();
       sounds.stop();
