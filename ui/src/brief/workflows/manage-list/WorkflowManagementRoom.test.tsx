@@ -145,7 +145,7 @@ test("acknowledged deletion hides and inerts only its row, Undo restores it paus
   );
   expect(document.activeElement).toBe(button("Meeting follow-ups"));
 });
-test("failed enable exposes blocker and leaves Paused, not Draft", async () => {
+test("failed enable exposes blocker and leaves Off, not Draft", async () => {
   f.setMode("blocked enable");
   await render();
   await click("Enable Weekly investor update");
@@ -155,7 +155,7 @@ test("failed enable exposes blocker and leaves Paused, not Draft", async () => {
   expect(row("investor").textContent).toContain(
     "Connect Notion before enabling.",
   );
-  expect(row("investor").textContent).toContain("Paused");
+  expect(row("investor").textContent).toContain("Off");
   expect(row("investor").textContent).not.toContain("Draft");
 });
 test("uncertain mutation exposes Check result instead of another Delete; matching result resolves once", async () => {
@@ -255,7 +255,7 @@ test("R1: Refresh reveals an externally restored workflow and removes its obsole
 test("R2: Refresh cannot show an Enabled switch beside obsolete paused feedback", async () => {
   await render();
   await click("Enable Meeting follow-ups");
-  expect(row("meeting").textContent).toContain("Workflow paused.");
+  expect(row("meeting").textContent).toContain("Workflow is off.");
   f.records.set("meeting", {
     ...f.records.get("meeting")!,
     revision: "3",
@@ -265,12 +265,12 @@ test("R2: Refresh cannot show an Enabled switch beside obsolete paused feedback"
   expect(button("Enable Meeting follow-ups").getAttribute("aria-checked")).toBe(
     "true",
   );
-  expect(row("meeting").textContent).not.toContain("Workflow paused.");
+  expect(row("meeting").textContent).not.toContain("Workflow is off.");
 });
 test("the list says before any switch that pausing stops queued and waiting runs (Q-06)", async () => {
   await render();
   expect(host.querySelector(".brief-management-hint")?.textContent).toBe(
-    "Pausing a workflow stops its queued and waiting runs.",
+    "Turning a workflow off stops its queued and waiting runs.",
   );
 });
 const field = (label: string) =>
@@ -388,4 +388,16 @@ test("search and filter stay reachable while they hide every row", async () => {
       host.querySelectorAll('[data-removed="false"] .brief-management-open'),
     ).map((e) => e.textContent),
   ).toEqual(["Morning inbox brief"]);
+});
+test("U2: an unpublished workflow says Off, then On after the switch, with no stale subtitle", async () => {
+  await render();
+  expect(
+    button("Enable Weekly investor update").getAttribute("aria-checked"),
+  ).toBe("false");
+  expect(row("investor").textContent).not.toMatch(/Unpublished|Ready|Paused/);
+  await click("Enable Weekly investor update");
+  expect(
+    button("Enable Weekly investor update").getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(row("investor").textContent).not.toMatch(/Unpublished|Ready|Paused|Enabled/);
 });

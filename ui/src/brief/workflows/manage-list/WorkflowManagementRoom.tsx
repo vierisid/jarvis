@@ -7,6 +7,7 @@ import React, {
 } from "react";
 import { ArrowLeft, Trash2, RefreshCw } from "lucide-react";
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
+import { workflowStatusWords } from "../status-words";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import {
   BriefButton,
@@ -228,7 +229,7 @@ function BoundManagement({
         />
       </div>
       <p className="brief-management-hint">
-        Pausing a workflow stops its queued and waiting runs.
+        Turning a workflow off stops its queued and waiting runs.
       </p>
       {(visible.length > 1 || narrowed) && (
         <div
@@ -415,7 +416,12 @@ function WorkflowRow({
     store.cancel(r.item.flowId);
   }
   const w = r.item,
-    locked = !store.canChange(w.flowId);
+    locked = !store.canChange(w.flowId),
+    words = workflowStatusWords({
+      activation: w.activation,
+      draftChangesNotLive: false,
+      readiness: w.readiness.state,
+    });
   return (
     <div
       className="brief-management-collapse"
@@ -452,18 +458,13 @@ function WorkflowRow({
             <p className="brief-management-description">
               {r.confirming ? "Delete this workflow?" : w.description}
             </p>
-            {!r.confirming &&
-              (w.publication === "unpublished" ||
-                w.readiness.state !== "ready") && (
-                <p className="brief-management-readiness">
-                  {w.publication === "unpublished" ? "Unpublished · " : ""}
-                  {w.readiness.state === "blocked"
-                    ? (w.readiness.reason ?? "Needs setup")
-                    : w.readiness.state === "unknown"
-                      ? "Readiness unknown"
-                      : "Ready"}
-                </p>
-              )}
+            {!r.confirming && words.note && (
+              <p className="brief-management-readiness">
+                {words.note === "Needs setup"
+                  ? (w.readiness.reason ?? words.note)
+                  : words.note}
+              </p>
+            )}
           </div>
           {r.confirming ? (
             <div role="cell" className="brief-management-confirm">
@@ -501,8 +502,8 @@ function WorkflowRow({
                     void store.activate(w.flowId, v);
                   }}
                   disabled={locked}
-                  onLabel="Enabled"
-                  offLabel="Paused"
+                  onLabel="On"
+                  offLabel="Off"
                 />
               </div>
               <div role="cell" className="brief-management-latest">
