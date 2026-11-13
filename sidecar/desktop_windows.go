@@ -136,7 +136,12 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		argsClause = "-ArgumentList " + psSingleQuoted(args)
 	}
 
+	// 'Stop', or a name that cannot be found does not fail the script: the
+	// next line still runs, PowerShell exits 0 with a null pid, and "not
+	// found" was reported as "started, but no window" (and the Start menu was
+	// never asked). Seen on the first machine this ran on.
 	script := fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
 $p = Start-Process -FilePath %s %s -PassThru
 @{ pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
 `, escaped, argsClause)
@@ -150,8 +155,12 @@ $p = Start-Process -FilePath %s %s -PassThru
 	if err != nil {
 		// Not startable by that name. An app a person installed usually is
 		// not: it is in the Start menu (desktop_startmenu.go).
-		if started, ok := launchFromStartMenu(executable, args, preexisting); ok {
+		started, ok, why := launchFromStartMenu(executable, args, preexisting)
+		if ok {
 			return started, nil
+		}
+		if why != "" {
+			return nil, fmt.Errorf("launch_app failed: %s", why)
 		}
 		return nil, fmt.Errorf("launch_app failed: %w", err)
 	}
@@ -189,50 +198,92 @@ $p = Start-Process -FilePath %s %s -PassThru
 }
 
 // launchFromStartMenu starts the one app the Start menu lists under the name
-// that could not be started directly. False when this was not a plain app by
-// its name, when no app or more than one answers to it, or when starting it
-// failed: the caller then reports the first failure as it was.
-func launchFromStartMenu(executable, args string, preexisting map[uintptr]bool) (*RPCResult, bool) {
-	want, ok := startMenuWanted(executable, args)
-	if !ok {
-		return nil, false
+// that could not be started directly. `ok` is false when this was not a plain
+// app by its name, when no app or more than one answers to it, or when
+// starting it failed; `why` then says which, in words the agent can act on.
+func launchFromStartMenu(executable, args string, preexisting map[uintptr]bool) (result *RPCResult, ok bool, why string) {
+	want, plain := startMenuWanted(executable, args)
+	if !plain {
+		return nil, false, ""
 	}
 	out, err := runPS(startMenuFindScript(want), 15*time.Second)
 	if err != nil {
 		log.Printf("[desktop] launch_app: the Start menu could not be read: %v", err)
-		return nil, false
+		return nil, false, ""
 	}
 	var found struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Count int    `json:"count"`
+		ID    string   `json:"id"`
+		Name  string   `json:"name"`
+		Count int      `json:"count"`
+		Names []string `json:"names"`
 	}
-	if err := json.Unmarshal([]byte(out), &found); err != nil || found.ID == "" {
+	if err := json.Unmarshal([]byte(out), &found); err != nil {
+		log.Printf("[desktop] launch_app: the Start menu's answer could not be read: %v", err)
+		return nil, false, ""
+	}
+	if found.ID == "" {
 		log.Printf("[desktop] launch_app: %q is not one app in the Start menu (%d found)", want, found.Count)
-		return nil, false
+		if found.Count == 0 {
+			return nil, false, fmt.Sprintf("no program called %q could be started, and no app in the Start menu has that name. It may not be installed, or it has another name.", want)
+		}
+		return nil, false, fmt.Sprintf("%d apps in the Start menu have %q in their name (%s). Launch one by its exact name.", found.Count, want, strings.Join(found.Names, "; "))
 	}
 	if _, err := runPS(startMenuLaunchScript(found.ID), 10*time.Second); err != nil {
 		log.Printf("[desktop] launch_app: %q could not be started from the Start menu: %v", found.Name, err)
-		return nil, false
+		return nil, false, fmt.Sprintf("%q is in the Start menu but could not be started from it.", found.Name)
 	}
 	log.Printf("[desktop] launch_app: %q was not startable by name; started %q from the Start menu", executable, found.Name)
-	result := map[string]any{"pid": 0, "name": found.Name, "via": "start_menu"}
-	// An app started this way can take a while to draw its first window.
-	win, _ := waitForWindow(0, startMenuWindowHint(found.ID, executable), 12*time.Second, preexisting)
-	if win == nil {
-		result["success"] = false
-		result["window_visible"] = false
-		result["note"] = fmt.Sprintf(
-			"%q was started from the Start menu, but no window appeared within 12s - it may still be starting. Run desktop_list_windows to check before interacting; do NOT launch it again.",
-			found.Name)
-		return &RPCResult{Result: result}, true
+	reply := map[string]any{"pid": 0, "name": found.Name, "via": "start_menu"}
+	hint := startMenuWindowHint(found.ID, executable)
+
+	// The Start menu hands back no process to follow, so the window is found
+	// by what it is: a new window of that program, or one that carries the
+	// app's name. One that was already open counts too, once nothing new came.
+	deadline := time.Now().Add(10 * time.Second)
+	var already *windowInfo
+	for {
+		wins := enumTopWindows()
+		seen := make([]startMenuWin, len(wins))
+		for i, w := range wins {
+			seen[i] = startMenuWin{Hwnd: w.Hwnd, Title: w.Title, ProcessName: w.ProcessName}
+		}
+		opened, how, was := pickStartMenuWindow(seen, found.Name, hint, preexisting)
+		if opened >= 0 {
+			w := wins[opened]
+			reply["success"] = true
+			reply["window_visible"] = true
+			reply["window_title"] = w.Title
+			reply["window_pid"] = w.Pid
+			reply["note"] = fmt.Sprintf("started %q from the Start menu (window matched by %s) - use pid %d with desktop_snapshot/desktop_focus_window", found.Name, how, w.Pid)
+			return &RPCResult{Result: reply}, true, ""
+		}
+		if was >= 0 {
+			w := wins[was]
+			already = &w
+		}
+		// Already open: starting it again brings its own window forward, so
+		// there is no reason to wait the whole time for a new one.
+		if already != nil && time.Until(deadline) < 7*time.Second {
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
 	}
-	result["success"] = true
-	result["window_visible"] = true
-	result["window_title"] = win.Title
-	result["window_pid"] = win.Pid
-	result["note"] = fmt.Sprintf("started %q from the Start menu - use pid %d with desktop_snapshot/desktop_focus_window", found.Name, win.Pid)
-	return &RPCResult{Result: result}, true
+	reply["success"] = true
+	if already != nil {
+		reply["window_visible"] = true
+		reply["window_title"] = already.Title
+		reply["window_pid"] = already.Pid
+		reply["note"] = fmt.Sprintf("%q was already open: its window is %q - use pid %d with desktop_snapshot/desktop_focus_window", found.Name, already.Title, already.Pid)
+		return &RPCResult{Result: reply}, true, ""
+	}
+	// Started, by the Start menu's own word, but no window could be told to be
+	// its: said as that, which is not a failure.
+	reply["window_visible"] = nil
+	reply["note"] = fmt.Sprintf("%q was started from the Start menu, but its window could not be told apart within 10s - it may still be starting. Run desktop_list_windows to see it; do NOT launch it again.", found.Name)
+	return &RPCResult{Result: reply}, true, ""
 }
 
 // ── focus_window ─────────────────────────────────────────────────────
