@@ -907,10 +907,13 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
     // Initial attempt + two retries, then it gives up loudly.
     expect(acquires).toBe(3);
     expect(logs.some((l) => l.includes("giving up after 2 retries"))).toBe(true);
+    // Given up, it says so in plain words instead of reading as on.
+    expect(tm.registrationProblem(flowId)).toContain("could not start this workflow's trigger");
 
     // A flow disabled while a retry is pending must not be resurrected.
     updateFlowStatus(flowId, "DISABLED");
     await tm.refresh(flowId);
+    expect(tm.registrationProblem(flowId)).toBeNull();
     const before = acquires;
     await settle(60);
     expect(acquires).toBe(before);
