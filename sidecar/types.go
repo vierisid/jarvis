@@ -196,6 +196,11 @@ type PreferencesConfig struct {
 	// system's own default. They matter only while the brain has the notch on.
 	NotchTalkKeys string `yaml:"notch_talk_keys,omitempty"`
 	NotchYesKeys  string `yaml:"notch_yes_keys,omitempty"`
+	// The apps the person told Jarvis never to watch, by program name
+	// ("steam", "notepad"). Kept on this machine and checked here, before
+	// anything is captured (notch_where.go). It matters only while the brain
+	// has the notch on.
+	NotchNeverWatch []string `yaml:"notch_never_watch,omitempty"`
 }
 
 type TerminalConfig struct {
