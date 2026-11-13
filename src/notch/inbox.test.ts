@@ -473,3 +473,42 @@ describe('taken off the notch in the instant its script ends', () => {
     expect(h.count()).toBe(1);
   });
 });
+
+describe('second batch of the edge-case audit', () => {
+  test('something urgent does not take the notch while a yes is burning its fuse: it speaks when that is over', async () => {
+    const h = harness();
+    let decided = 0;
+    h.inbox.add({
+      id: 'a', subject: 'a', class: 'rest', speaks: true, title: () => ['a'],
+      play: async (stage) => {
+        if ((await stage.offer(['Run it?'], 'approve')).act !== 'yes') return 'waits';
+        if ((await stage.fuse(['Running it…'], 3000)) === 'done') decided++;
+        return 'settled';
+      },
+    });
+    await settle();
+    await h.answer('yes');
+    expect(h.line()?.kind).toBe('send');
+    h.inbox.add(item('urgent', 'clock', { urgent: true }));
+    await settle();
+    // The fuse is still the line, and the yes still counts.
+    expect(h.line()?.kind).toBe('send');
+    await h.answer('done');
+    expect(decided).toBe(1);
+    expect(h.said()).toBe('urgent?');
+  });
+
+  test('the notch goes back to what was waited on after two urgent things in a row', async () => {
+    const h = harness();
+    const work = item('work', 'person', { returns: true });
+    h.inbox.add(work);
+    await settle();
+    h.inbox.add(item('first', 'clock', { urgent: true }));
+    await settle();
+    h.inbox.add(item('second', 'clock', { urgent: true }));
+    await settle();
+    expect(h.said()).toBe('second?');
+    await h.answer('yes');
+    expect(h.said()).toBe('work?');
+  });
+});

@@ -691,3 +691,11 @@ describe('an approval the person\'s own instruction is stopped at', () => {
     expect(line?.kind === 'offer' ? line.fold : 'not an offer').toBeUndefined();
   });
 });
+
+test('a sign the width table does not know is no reason to send an approval to the dashboard', () => {
+  const h = harness();
+  const arrow = h.ask({ context: JSON.stringify({ intent: 'Rename report.txt \u2192 report-final.txt and mark it \u2122' }) });
+  expect(notchApprovalWay(arrow)).toBe('sheet');
+  const short = h.ask({ context: JSON.stringify({ intent: 'Rename a \u2192 b' }) });
+  expect(['key', 'sheet']).toContain(notchApprovalWay(short));
+});

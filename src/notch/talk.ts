@@ -29,7 +29,20 @@ import type { NotchAsks } from './asks.ts';
 
 export const NOTCH_TALK_EVENT = 'notch.talk';
 /** Less voiced sound than this is not an instruction: nothing is transcribed. */
-export const NOTCH_TALK_MIN_VOICED_MS = 250;
+export const NOTCH_TALK_MIN_VOICED_MS = 150;
+/**
+ * Under this much voice a recording is one word or two. Speech-to-text, given
+ * near silence or somebody else's voice across the room, writes a stock line
+ * rather than nothing. So for so short a recording the stock lines are not
+ * taken as words (NOTCH_TALK_FILLER).
+ */
+export const NOTCH_TALK_SHORT_MS = 700;
+/** Lines speech-to-text writes for audio with no words in it. Compared in lower case, without punctuation. */
+export const NOTCH_TALK_FILLER: ReadonlySet<string> = new Set([
+  'you', 'thank you', 'thanks', 'thank you very much', 'thanks for watching', 'thank you for watching', 'bye', 'bye bye',
+  'so', 'uh', 'um', 'hmm', 'mm', 'oh', 'ah', 'the', 'i', 'music', 'applause', 'silence', 'subtitles by the amara org community',
+  'grazie', 'grazie mille', 'grazie a tutti', 'ciao', 'sottotitoli creati dalla comunita amara org', 'sottotitoli e revisione a cura di qtss',
+]);
 /** How long a transcription may take before it counts as failed. */
 export const NOTCH_STT_TIMEOUT_MS = 20_000;
 
@@ -113,7 +126,11 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   port.onSidecarDisconnected?.((sidecarId) => { lost(sidecarId, 'its desktop app disconnected'); });
   const key = (sidecarId: string, talkId: string): string => `${sidecarId}:${talkId}`;
 
-  async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number): Promise<void> {
+  /** Whether what came back is one of the lines written for audio with no words in it. */
+  const filler = (said: string): boolean =>
+    NOTCH_TALK_FILLER.has(said.toLowerCase().normalize('NFD').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim());
+
+  async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number, voicedMs: number): Promise<void> {
     const provider = deps.stt();
     if (!provider) { deps.asks.nothing(talkKey, 'no_stt'); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -125,7 +142,8 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       const said = (words ?? '').trim();
       // The length, never the words: a log is not the place for what was said.
       log(`[notch] a recording was made into ${said.length} characters`);
-      if (hasSpokenContent(said)) deps.asks.words(talkKey, said); else deps.asks.nothing(talkKey, 'silence');
+      if (!hasSpokenContent(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) deps.asks.nothing(talkKey, 'silence');
+      else deps.asks.words(talkKey, said);
     } catch (error) {
       log(`[notch] a recording could not be made into words: ${error instanceof Error ? error.message : String(error)}`);
       deps.asks.nothing(talkKey, 'failed');
@@ -182,7 +200,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       return;
     }
     const sampleRate = Number(payload.sample_rate ?? 16_000) || 16_000;
-    void transcribe(talkKey, pcm, sampleRate);
+    void transcribe(talkKey, pcm, sampleRate, voicedMs);
   });
 
   let pretended = 0;

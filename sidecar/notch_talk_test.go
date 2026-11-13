@@ -161,7 +161,7 @@ func TestNotchTalkHoldSpeakLetGo(t *testing.T) {
 // Silence, or a tap too short to say anything: the brain is told how little
 // was said, and the sound itself stays on this machine.
 func TestNotchTalkTooLittleSendsNoAudio(t *testing.T) {
-	for _, voiced := range []int{0, 200} {
+	for _, voiced := range []int{0, 100} {
 		h := newTalkHarness(t)
 		h.key(notchKeyTalkStart)
 		h.mic.speak(voiced)
@@ -372,7 +372,8 @@ func TestNotchTalkMeasureHearsAQuietMicrophone(t *testing.T) {
 			old += 20
 		}
 	}
-	if old >= notchTalkMinVoicedMs {
+	// The floor was 250 ms then.
+	if old >= 250 {
 		t.Fatalf("the example is not the failure it stands for: the fixed level heard %d ms", old)
 	}
 	heard := notchTalkMeasure(pieces, 16000)
@@ -446,5 +447,20 @@ func TestNotchTalkSendsAQuietMicrophonesSpeech(t *testing.T) {
 	}
 	if got.payload["voiced_ms"].(int64) < 600 {
 		t.Fatalf("voiced_ms = %v", got.payload["voiced_ms"])
+	}
+}
+
+// One short word is an instruction too, and a fan under a quiet microphone
+// does not drown the speech.
+func TestNotchTalkMeasureHearsAShortWordAndSpeechOverAFan(t *testing.T) {
+	word := append(repeatLevels(10, 35), repeatLevels(10, 420)...) // 200 ms of voice
+	word = append(word, repeatLevels(10, 35)...)
+	if heard := notchTalkMeasure(talkPieces(word...), 16000); heard.VoicedMs < notchTalkMinVoicedMs {
+		t.Fatalf("a short word: heard %d ms at level %.0f, under the floor of %d", heard.VoicedMs, heard.Level, notchTalkMinVoicedMs)
+	}
+	fan := repeatLevels(8, 200, 190, 210)
+	fan = append(fan, repeatLevels(9, 430, 480, 560, 450, 230, 210)...)
+	if heard := notchTalkMeasure(talkPieces(fan...), 16000); heard.VoicedMs < 400 {
+		t.Fatalf("speech over a fan: heard %d ms at level %.0f: %+v", heard.VoicedMs, heard.Level, heard)
 	}
 }

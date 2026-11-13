@@ -198,8 +198,24 @@ export class NotchStage {
   async fuse(parts: NotchPart[], ms: number, extras: NotchLineExtras = {}): Promise<'done' | 'undo' | 'lost'> {
     const id = this.id();
     this.put({ id, kind: 'send', say: parts, ms, ...extras });
-    const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
-    return answer ? (answer.act === 'undo' ? 'undo' : 'done') : 'lost';
+    this.fuses++;
+    try {
+      const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
+      return answer ? (answer.act === 'undo' ? 'undo' : 'done') : 'lost';
+    } finally {
+      this.fuses--;
+    }
+  }
+
+  private fuses = 0;
+
+  /**
+   * Whether a fuse is burning on this stage: the person has said yes and the
+   * window to take it back is open. Nothing may take the notch then, or the
+   * yes would be dropped without a word.
+   */
+  burning(): boolean {
+    return this.fuses > 0 && !this.stopped;
   }
 
   /**

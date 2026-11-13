@@ -40,7 +40,9 @@ const (
 	// itself: a key that stuck, or a lost key-up, must not leave it open.
 	notchTalkCap = 60 * time.Second
 	// Less voiced sound than this is not an instruction. The audio is not sent.
-	notchTalkMinVoicedMs = 250
+	// One short word ("yes", "stop") is about 180 to 220 ms of voice, so the
+	// floor is under that: at 250 those words were thrown away.
+	notchTalkMinVoicedMs = 150
 
 	// How loud a piece of sound must be to count as voice is not one number:
 	// a webcam microphone across a desk is ten times quieter than a headset.
@@ -49,7 +51,9 @@ const (
 	// (The first build used the fixed 500 of the one-shot capture. On the
 	// first real microphone it met, a Logitech C270, speech hardly reached
 	// it, and every recording was thrown away as "too little".)
-	notchTalkVoiceOverQuiet = 2.5
+	// (At 2.5 a fan under a quiet microphone raised the level above the
+	// speech. 1.8 still leaves a steady room, quiet or not, under it.)
+	notchTalkVoiceOverQuiet = 1.8
 	// Never lower than this: below it is the hiss of the microphone itself.
 	notchTalkVoiceFloorRMS = 90.0
 	// Never higher than this, however loud the room: what the fixed level

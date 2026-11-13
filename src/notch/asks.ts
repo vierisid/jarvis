@@ -24,6 +24,7 @@ import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/cont
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
+import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
@@ -36,8 +37,12 @@ export const NOTCH_SHEET_LINES = 60;
 /** How many instructions the ledger's sheet lists. */
 export const NOTCH_LEDGER_ROWS = 40;
 
+/** How long the last answer is offered again at the top of Home. */
+export const NOTCH_LAST_ANSWER_MS = 10 * 60_000;
+
 export const NOTCH_NOT_CAUGHT = 'I did not catch that.';
 const WAITING_FOR_YES = 'Waiting for your yes.';
+const NOT_SAVED = 'Not saved.';
 const WAITING_FOR_CHAT = 'Waiting for another chat to finish.';
 
 /** Why nothing was caught, for the ledger and for the one case where the sentence says more. */
@@ -76,8 +81,11 @@ export interface NotchAsksDeps {
   modelReady(): boolean;
   /** Everything is stopped (Esc twice): nothing new is started. */
   paused?: () => boolean;
-  /** Writes one thing to memory and reads it back. */
-  remember?: (what: string, sentence: string, askId: string) => Promise<NotchRemembered>;
+  /**
+   * Writes one thing to memory and reads it back. With `confirm` it first
+   * asks, showing the fact as it would be saved, and writes nothing on a no.
+   */
+  remember?: (what: string, sentence: string, askId: string, confirm?: (fact: string) => Promise<boolean>) => Promise<NotchRemembered>;
   /** One sentence saying what the instruction was taken to mean. Null when it cannot be said. */
   understand?: (text: string) => Promise<string | null>;
   /** An approval this instruction's turn is waiting for should take the notch now. */
@@ -160,13 +168,25 @@ export function shortened(text: string, max: number): string {
  * Null for anything that is not a plain request to remember one thing.
  */
 export function rememberSentence(text: string): string | null {
-  const match = /^\s*(?:please\s+|jarvis[,\s]+)?remember\s+(?:that\s+)?(.+?)\s*$/is.exec(text);
+  const match = /^\s*(?:please\s+|jarvis[,\s]+|per favore\s+)?(?:remember|ricorda(?:ti)?)[,:]?\s+(?:that\s+|this:\s*|che\s+)?(.+?)\s*$/is.exec(text);
   if (!match) return null;
   const what = match[1]!.replace(/[.!\s]+$/, '').trim();
   // "Remember to call Anna" is a job, not a fact, and a question is not one either.
-  if (!what || /^to\s/i.test(what) || what.endsWith('?')) return null;
+  if (!what || /^(to|di)\s/i.test(what) || what.endsWith('?')) return null;
+  // Something tied to a time ("I have a meeting tomorrow at 3") is not a
+  // fact to keep for good: saved as one it would be believed next month, and
+  // nothing would remind anybody. It goes to the agent like any other ask.
+  if (REMEMBER_TIMED.test(what)) return null;
   return [...what].length < 3 ? null : what;
 }
+
+const REMEMBER_TIMED = new RegExp([
+  '\\b(today|tonight|tomorrow|yesterday|this (morning|afternoon|evening|week|weekend|month)|next (week|month|year|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\\b',
+  '\\b(on|by|until|before|after) (monday|tuesday|wednesday|thursday|friday|saturday|sunday|the \\d{1,2}(st|nd|rd|th)?)\\b',
+  '\\bat \\d{1,2}([:.]\\d{2})?\\s?(am|pm|o\'clock)?\\b',
+  '\\bin \\d+ (minutes?|hours?|days?|weeks?)\\b',
+  '\\b(oggi|stasera|stanotte|domani|dopodomani|ieri|settimana prossima|alle \\d{1,2})\\b',
+].join('|'), 'i');
 
 /** An answer as plain lines: the marks a model writes for a web page are taken out. */
 export function plainLines(answer: string): string[] {
@@ -181,10 +201,16 @@ export function plainLines(answer: string): string[] {
         .replace(/^\s{0,3}>\s?/, '')
         .replace(/^(\s*)[-*+]\s+/, '$1• ')
         .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-        .replace(/(\*\*|__)(.+?)\1/g, '$2')
-        .replace(/(^|[\s(])[*_]([^*_\n]+)[*_](?=[\s).,;:!?]|$)/g, '$1$2')
+        // A link keeps its address, unless its words are the address.
+        .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_all, words: string, address: string) => (words.trim() === address ? address : `${words} (${address})`))
+        // Bold and italic marks, and only those: `2 * 3 * 4` and `__init__`
+        // are not emphasis, and are left as they are.
+        .replace(/\*\*(\S(?:.*?\S)?)\*\*/g, '$1')
+        .replace(/(^|[\s(])\*(\S(?:[^*\n]*\S)?)\*(?=[\s).,;:!?]|$)/g, '$1$2')
         .replace(/`([^`]+)`/g, '$1');
+      // A table: its ruler row is dropped, and a row reads across with dots.
+      if (/^\s*\|?[\s:|-]*-{3,}[\s:|-]*\|?\s*$/.test(line)) continue;
+      if (/^\s*\|.*\|\s*$/.test(line)) line = line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim()).join(' · ');
     }
     line = line.replace(/\s+$/, '');
     if (!line.trim()) continue;
@@ -198,6 +224,11 @@ export function answerShape(answer: string): { kind: 'line'; text: string } | { 
   const lines = plainLines(answer);
   if (lines.length === 0) return { kind: 'line', text: 'Done.' };
   if (lines.length === 1 && [...lines[0]!].length <= NOTCH_ONE_LINE_CHARS) return { kind: 'line', text: lines[0]!.trim() };
+  // Two short sentences on two lines are still one thing to read at a glance.
+  if (lines.length === 2 && lines.every((line) => !/^\s*(•|\d+[.)])\s/.test(line))) {
+    const joined = `${lines[0]!.trim()} ${lines[1]!.trim()}`;
+    if ([...joined].length <= NOTCH_ONE_LINE_CHARS) return { kind: 'line', text: joined };
+  }
   const kept: string[] = [];
   let used = 0;
   let cut = false;
@@ -261,6 +292,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   const byTurn = new Map<string, Live>();
   let unlisten: (() => void) | null = null;
   let tells = 0;
+  // Old rows go: the ledger is a record of what was asked, not an archive.
+  try { ledger.prune(); } catch (error) { log(`[notch] the ledger could not be pruned: ${error instanceof Error ? error.message : String(error)}`); }
 
   const itemId = (id: string): string => `ask:${id}`;
 
@@ -329,7 +362,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
    * The one way in. Typed words and heard words arrive here alike. It claims
    * the row, and only then starts anything.
    */
-  async function run(ask: Live): Promise<void> {
+  async function run(ask: Live, stage?: NotchStage): Promise<void> {
     if (ask.phase !== 'heard') return;
     if (deps.paused?.()) { refuse(ask, 'Everything is stopped. Wake me first.'); return; }
     if (!deps.modelReady()) { refuse(ask, 'no_model'); return; }
@@ -342,11 +375,32 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.phase = 'running';
       ask.activity = 'Writing it to memory.';
       let result: NotchRemembered;
+      // What was heard can be misheard, and a memory is believed later: a
+      // spoken one is shown as it would be saved and takes one yes. A typed
+      // one is the person's own letters, and is saved as written.
+      const confirm = ask.source === 'spoken' && stage
+        ? async (fact: string): Promise<boolean> => (await stage.offer(['Remember: ', em(fact), '?'], 'remember', { fold: 0 })).act === 'yes'
+        : undefined;
       try {
-        result = await deps.remember!(what, ask.heard, ask.id);
+        result = await deps.remember!(what, ask.heard, ask.id, confirm);
       } catch (error) {
+        // Something took the notch while the question was up: nothing was saved.
+        if (error instanceof NotchStageEnded) {
+          ledger.finish(ask.id, 'stopped', { note: NOT_SAVED });
+          ask.phase = 'stopped';
+          ask.note = NOT_SAVED;
+          throw error;
+        }
         log(`[notch] a memory could not be written: ${error instanceof Error ? error.message : String(error)}`);
         result = { ok: false, why: 'It could not be written to memory. Nothing was saved.' };
+      }
+      if (!result.ok && result.why === NOT_SAVED) {
+        // The person said no: nothing was written, and nothing more is said.
+        ledger.finish(ask.id, 'stopped', { note: NOT_SAVED });
+        ledger.seen(ask.id);
+        ask.phase = 'stopped';
+        ask.note = NOT_SAVED;
+        return;
       }
       if (result.ok) {
         ledger.understood(ask.id, result.understood);
@@ -516,7 +570,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         // Typed words need not be shown back. The work shows at once, and it starts under it.
         workId = stage.id();
         stage.put({ id: workId, kind: 'work', say: workSay(ask), steps: 0, done: 0, mood: 'work' });
-        await run(ask);
+        await run(ask, stage);
         continue;
       }
       switch (ask.phase) {
@@ -538,7 +592,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             turnAway(ask, 'You turned it away.');
             return 'settled';
           }
-          if (what === 'go' && ask.phase === 'heard') await run(ask);
+          if (what === 'go' && ask.phase === 'heard') await run(ask, stage);
           continue;
         }
         case 'running': {
@@ -570,6 +624,22 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         case 'done': {
           const shape = answerShape(ask.answer ?? '');
+          if (shape.kind === 'line' && /\?\s*$/.test(shape.text)) {
+            // Jarvis asked something back. A question is not a result that
+            // leaves by itself: it waits for the reply, typed here or spoken.
+            const id = stage.id();
+            stage.put({
+              id, kind: 'ask', say: [], yes: 'answer', placeholder: 'Answer here, or hold the keys and speak', mood: 'curious',
+              blocks: [{ kind: 'row', say: [shape.text] }],
+            });
+            const reply = await stage.answer(id, ['ask', 'no']);
+            if (stage.surface.listening() === 0) return 'waits';
+            ledger.seen(ask.id);
+            forget(ask);
+            const said = reply.act === 'ask' ? (reply.text ?? '').trim() : '';
+            if (said) typed(said);
+            return 'settled';
+          }
           if (shape.kind === 'line') {
             const ms = Math.min(12_000, Math.max(3200, 2400 + 60 * [...shape.text].length));
             await stage.say([shape.text], ms);
@@ -593,6 +663,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           return 'settled';
         }
         case 'failed': case 'stopped': {
+          // A memory the person said no to: nothing was done, nothing is said.
+          if (ask.note === NOT_SAVED) { forget(ask); return 'settled'; }
           if (ask.phase === 'stopped') await stage.say(['Stopped. What was already done stays done.'], 2600, { mood: 'careful' });
           else await stage.say([ask.note ?? 'That did not work.'], 5200, { mood: 'sorry', mark: 'fail' });
           if (stage.surface.listening() === 0) return 'waits';
@@ -627,13 +699,21 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   }
 
   function begin(ask: Live): void {
+    // A question Jarvis asked back, still on the notch: what is said or typed
+    // now is its answer, and the question has been seen.
+    for (const other of [...live.values()]) {
+      if (other === ask || other.phase !== 'done' || inbox.showing() !== itemId(other.id)) continue;
+      ledger.seen(other.id);
+      forget(other);
+      inbox.remove(itemId(other.id));
+    }
     inbox.add(item(ask, true));
   }
 
   /** The ledger as a sheet: the list, and one instruction in full when its row is opened. */
   async function showLedger(stage: NotchStage): Promise<void> {
     for (;;) {
-      const rows = ledger.recent(NOTCH_LEDGER_ROWS);
+      const rows = ledger.asked(NOTCH_LEDGER_ROWS);
       const blocks: NotchBlock[] = rows.length === 0
         ? [{ kind: 'note', say: ['Nothing asked yet. Hold ', { key: 'talk' }, ' and speak, or type above.'] }]
         : rows.map((row): NotchBlock => ({
@@ -653,15 +733,26 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     for (;;) {
       const id = stage.id();
       const today = deps.today?.() ?? [];
+      // The last answer stays one step away for a while: a one-line answer
+      // is on the notch for seconds, and may have gone by unread.
+      const last = ledger.asked(1)[0];
+      const recent = last && last.answer && last.endedAt !== null && Date.now() - last.endedAt < NOTCH_LAST_ANSWER_MS ? last : null;
       stage.put({
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
+          ...(recent ? [{ kind: 'row' as const, id: 'last', lead: 'Last answer', say: [shortened(recent.answer ?? '', 90)], go: true }] : []),
           ...today,
           { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }] },
         ],
       });
       const answer = await stage.answer(id, ['ask', 'no', 'button', 'go']);
       if (answer.act === 'no') return;
+      if (answer.act === 'go' && answer.row === 'last' && recent) {
+        const again = stage.id();
+        stage.put({ id: again, kind: 'sheet', say: [recent.source === 'spoken' ? 'You said' : 'You typed'], blocks: ledgerDetail(recent), stay: true });
+        await stage.answer(again, ['no']);
+        continue;
+      }
       if (answer.act === 'ask') {
         const text = (answer.text ?? '').trim();
         if (!text) continue;

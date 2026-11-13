@@ -194,6 +194,23 @@ export class NotchLedger {
     return this.db.query<Stored, [number]>('SELECT * FROM notch_asks ORDER BY created_at DESC, rowid DESC LIMIT ?').all(limit).map(parse);
   }
 
+  /**
+   * What was asked, newest first: rows that had words in them, or that ran.
+   * A hold of the keys in which nothing was caught is not something asked.
+   */
+  asked(limit = 40): NotchAskRow[] {
+    return this.db.query<Stored, [number]>(
+      "SELECT * FROM notch_asks WHERE heard != '' OR state IN ('running', 'done', 'failed', 'stopped') ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    ).all(limit).map(parse);
+  }
+
+  /** Drops rows older than `days`, and holds of the keys in which nothing was caught after a day. */
+  prune(days = 90): void {
+    const now = this.now();
+    this.db.run('DELETE FROM notch_asks WHERE created_at < ?', [now - days * 86_400_000]);
+    this.db.run("DELETE FROM notch_asks WHERE heard = '' AND state IN ('missed', 'dismissed', 'refused') AND created_at < ?", [now - 86_400_000]);
+  }
+
   /** Rows that ran and whose result nobody has closed yet, oldest first. */
   unseen(): NotchAskRow[] {
     return this.db.query<Stored, []>(

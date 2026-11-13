@@ -17,6 +17,9 @@
  */
 import type { NotchRemembered } from './asks.ts';
 
+/** What comes back when the person was shown the fact and said no. */
+export const NOTCH_NOT_SAVED = 'Not saved.';
+
 /** Where a fact the person told the notch came from, as the Memory room shows it. */
 export const NOTCH_TOLD_SOURCE = 'you told me';
 
@@ -86,13 +89,28 @@ const fold = (value: string): string => value.toLowerCase().replace(/[^\p{L}\p{N
 export function onlySaidWords(parts: NotchRememberedParts, sentence: string): boolean {
   const said = new Set(fold(sentence).split(' '));
   const used = `${parts.me ? '' : parts.subject} ${parts.object}`;
-  return fold(used).split(' ').filter(Boolean).every((word) => said.has(word));
+  if (!fold(used).split(' ').filter(Boolean).every((word) => said.has(word))) return false;
+  // A "not" that was said must not be lost on the way, and one that was not
+  // said must not appear: "does not like" and "likes" are opposite memories.
+  const negated = (text: string): boolean => /\b(not|never|no|none|nobody|nothing|non|mai|nessun\w*)\b|n['\u2019]t\b/i.test(text);
+  return negated(sentence) === negated(`${parts.predicate} ${parts.object}`);
 }
 
-export function createNotchRemember(deps: NotchRememberDeps): (what: string, sentence: string, askId: string) => Promise<NotchRemembered> {
+/** The name memory keeps the person themselves under, when they have no profile entry. */
+export const NOTCH_OWNER_NAME = 'The owner';
+
+/**
+ * `confirm`, when given, is asked with the fact as it would be saved, before
+ * anything is written. It is given for a spoken sentence: speech can be
+ * misheard ("calls" was once saved as "colds"), and a confirmed memory is
+ * believed later.
+ */
+export type NotchRememberFn = (what: string, sentence: string, askId: string, confirm?: (fact: string) => Promise<boolean>) => Promise<NotchRemembered>;
+
+export function createNotchRemember(deps: NotchRememberDeps): NotchRememberFn {
   const log = deps.log ?? ((line: string) => console.log(line));
   const no = (why: string): NotchRemembered => ({ ok: false, why: `${why} Nothing was saved.` });
-  return async (what, sentence, askId) => {
+  return async (what, sentence, askId, confirm) => {
     let raw: string;
     try {
       raw = await deps.ask([{ role: 'system', content: NOTCH_REMEMBER_SYSTEM }, { role: 'user', content: what }]);
@@ -103,14 +121,24 @@ export function createNotchRemember(deps: NotchRememberDeps): (what: string, sen
     const parts = parseRemembered(raw);
     if (!parts || !onlySaidWords(parts, what)) return no('I could not work out what to remember.');
 
-    let subject: { id: string; name: string };
+    // Who it is about is settled before anything is made, so that a no
+    // leaves nothing behind.
+    let known: { id: string; name: string } | null;
+    let name: string;
+    let type = parts.type;
     if (parts.me) {
-      subject = deps.owner() ?? deps.createEntity('person', 'The owner');
+      const mine = deps.match(deps.entities(), NOTCH_OWNER_NAME);
+      known = deps.owner() ?? (mine && 'entity' in mine ? mine.entity : null);
+      name = known?.name ?? NOTCH_OWNER_NAME;
+      type = 'person';
     } else {
       const found = deps.match(deps.entities(), parts.subject);
       if (found && 'ambiguous' in found) return no(`I know more than one ${parts.subject}. Say the full name.`);
-      subject = found ? found.entity : deps.createEntity(parts.type, parts.subject);
+      known = found ? found.entity : null;
+      name = known?.name ?? parts.subject;
     }
+    if (confirm && !(await confirm(`${name} ${parts.predicate} ${parts.object}`))) return { ok: false, why: NOTCH_NOT_SAVED };
+    const subject = known ?? deps.createEntity(type, name);
     const fact = deps.createFact(subject.id, parts.predicate, parts.object, { source: NOTCH_TOLD_SOURCE, sourceRef: `notch:${askId}`, quote: sentence });
     const stored = deps.read(fact.id);
     if (!stored) return no('It did not reach memory.');

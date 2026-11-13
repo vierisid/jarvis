@@ -103,6 +103,36 @@ describe('"Remember that Anna prefers calls."', () => {
   });
 });
 
+describe('second batch of the edge-case audit', () => {
+  test('with a question first: a no writes nothing at all, not even the name', async () => {
+    const remember = createNotchRemember(real(ANNA));
+    const asked: string[] = [];
+    const result = await remember('Anna prefers calls', 'remember that Anna prefers calls', 'ask1', async (fact) => { asked.push(fact); return false; });
+    expect(asked).toEqual(['Anna prefers calls']);
+    expect(result).toEqual({ ok: false, why: 'Not saved.' });
+    expect(findFacts({})).toHaveLength(0);
+    expect(listEntityNames()).toHaveLength(0);
+  });
+
+  test('a "not" is never lost, and never added', () => {
+    const likes = { subject: 'Anna', type: 'person' as const, me: false, predicate: 'likes', object: 'calls' };
+    expect(onlySaidWords(likes, 'Anna does not like calls')).toBe(false);
+    expect(onlySaidWords({ ...likes, predicate: 'does not like' }, 'Anna does not like calls')).toBe(true);
+    expect(onlySaidWords({ ...likes, predicate: "doesn't like" }, 'Anna likes calls')).toBe(false);
+    expect(onlySaidWords(likes, 'Anna likes calls')).toBe(true);
+  });
+
+  test('facts about the speaker go to one entry, however many are told', async () => {
+    const deps = real('{"subject":"me","type":"person","me":true,"predicate":"prefers","object":"short emails"}');
+    const remember = createNotchRemember(deps);
+    await remember('I prefer short emails', 'Remember that I prefer short emails.', 'a1');
+    deps.ask = async () => '{"subject":"me","type":"person","me":true,"predicate":"works from","object":"home"}';
+    await createNotchRemember(deps)('I work from home', 'Remember that I work from home.', 'a2');
+    expect(listEntityNames().map((entity) => entity.name)).toEqual(['The owner']);
+    expect(findFacts({})).toHaveLength(2);
+  });
+});
+
 describe('reading the split', () => {
   test('takes the object out of whatever surrounds it, and nothing else', () => {
     expect(parseRemembered(`Here: ${ANNA}`)).toEqual({ subject: 'Anna', type: 'person', me: false, predicate: 'prefers', object: 'calls' });

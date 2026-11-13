@@ -178,9 +178,15 @@ export function notchApprovalWay(request: ApprovalRequest): NotchApprovalWay {
   // Letters that pass for other letters are not shown here at all: the
   // dashboard marks them, a line and a sheet cannot.
   if (toastLookAlike(exact)) return 'look_alike';
-  const columns = toastColumns(exact);
-  // Still unmeasurable: something in it has no width a person would see.
-  if (columns === null || columns > NOTCH_SHEET_COLUMNS) return 'too_long';
+  // Something in it that cannot be seen at all (a zero-width space inside an
+  // address, a mark that turns the reading order round) is refused the same
+  // way: what is approved here must be what is read here.
+  if (/[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u.test(exact)) return 'look_alike';
+  let columns = toastColumns(exact);
+  // A sign the width table does not know (an arrow, a trademark sign) is not
+  // a reason to refuse: a sheet wraps whatever it is given.
+  if (columns === null) columns = Math.max([...exact].length, NOTCH_PLAIN_LINE_COLUMNS + 1);
+  if (columns > NOTCH_SHEET_COLUMNS) return 'too_long';
   // What has to be reviewed on screen is reviewed on the notch, which is on
   // that screen: plain words, and the exact action under them.
   if (only === 'click_only') return 'sheet';
@@ -466,7 +472,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         // Run by whoever was waiting for the answer, not here: an agent in
         // the middle of its work, or a workflow that now goes on.
         if (!outcome.executed) {
-          await stage.say(['Approved.'], 1800, { mood: 'happy', mark: 'check' });
+          // Nothing has been done yet: whoever was waiting for the answer does it now.
+          await stage.say([outcome.request?.tool_name === 'request_approval' ? 'Approved.' : 'Approved. Doing it now.'], 1800, { mood: 'happy', mark: 'check' });
           return 'settled';
         }
         const state = executionState(outcome.request);
