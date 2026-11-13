@@ -11,6 +11,7 @@
 
 import { APPROVAL_SHORT_ID_LENGTH, guardedApprovalWrite, approvalNeedsClick, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance.ts';
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -52,10 +53,16 @@ export type ApprovalDecisionOutcome =
   | { status: 'already_decided' }
   /** A card that must be reviewed on screen, approved from anywhere else: refused, and it stays pending (Q-08). */
   | { status: 'needs_dashboard'; request: ApprovalRequest }
-  /** Jarvis is paused or stopped: approving waits for Resume, and the card stays pending; denying still works (Q-08). */
-  | { status: 'held'; request: ApprovalRequest; state: 'paused' | 'killed' }
+  /**
+   * Jarvis is paused or stopped: approving waits for Resume, and the card stays pending; denying still works (Q-08).
+   * `awareness_off`: a screen-derived request while screen awareness is off waits the same way (#1314 follow-up).
+   */
+  | { status: 'held'; request: ApprovalRequest; state: ApprovalHoldState }
   | { status: 'approved'; executed: boolean; result: string; request: ApprovalRequest; error?: string }
   | { status: 'denied'; request: ApprovalRequest };
+
+/** Why approving waits: Pause or Kill, or screen awareness off for a screen-derived request. */
+export type ApprovalHoldState = 'paused' | 'killed' | 'awareness_off';
 
 export async function applyApprovalDecision(
   action: 'approve' | 'deny',
@@ -79,6 +86,11 @@ export async function applyApprovalDecision(
     if (pending?.status === 'pending' && emergency !== 'normal' && !isAgentStopCard(pending)) {
       return { status: 'held', request: pending, state: emergency };
     }
+    // Raised from what was on the screen, with screen awareness now off: it
+    // waits until awareness is back on, pending, not denied (#1314 follow-up).
+    if (pending?.status === 'pending' && approvalHeldByAwareness(pending)) {
+      return { status: 'held', request: pending, state: 'awareness_off' };
+    }
     const approved = guardedApprovalWrite(deps.assertCurrent, () => approvalManager.approve(requestId, decidedBy));
     if (!approved) return { status: 'already_decided' };
     auditDecision(deps, approved, 'approve', decidedBy);
@@ -90,7 +102,15 @@ export async function applyApprovalDecision(
       // (request_approval tool / authority gate) once it sees the status flip —
       // executing here would run the tool twice.
       try {
-        result = await deferredExecutor.executeApproved(requestId, decidedBy);
+        const receipt = await deferredExecutor.executeApprovedWithReceipt(requestId, decidedBy);
+        // Screen awareness went off between the check above and the run: the
+        // executor put the card back to pending, and it waits like one held above.
+        if (receipt.held) {
+          const reopened = approvalManager.getRequest(requestId) ?? approved;
+          wsService?.broadcastApprovalUpdate(reopened);
+          return { status: 'held', request: reopened, state: receipt.held };
+        }
+        result = receipt.result;
         executed = true;
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -200,7 +220,8 @@ export async function notificationApprovalDecision(
 }
 
 /** What a person approving while Jarvis is paused or stopped is told (Q-08). */
-export function heldApprovalMessage(state: 'paused' | 'killed'): string {
+export function heldApprovalMessage(state: ApprovalHoldState): string {
+  if (state === 'awareness_off') return AWARENESS_HELD_APPROVAL_MESSAGE;
   return state === 'paused'
     ? 'Jarvis is paused, so this action waits. Resume Jarvis, then approve it; it is still waiting.'
     : 'Jarvis was stopped with Kill, so this action cannot be approved. Reset Jarvis and make a fresh request.';
@@ -286,7 +307,10 @@ export async function applyExecutionResolution(
   // Runs through the same claim as every execution, so this is exactly one
   // attempt even if two surfaces resolve the same row at once. A claim lost
   // between the check above and the run is reported as such, not as a run.
-  const { claimed, result } = await deferredExecutor.executeApprovedWithReceipt(requestId, resolvedBy, deps.assertCurrent);
+  const { claimed, result, held } = await deferredExecutor.executeApprovedWithReceipt(requestId, resolvedBy, deps.assertCurrent);
+  // A screen-derived request waits for screen awareness (#1314 follow-up):
+  // the executor refused it before any claim, so it can still run once.
+  if (held) return { status: 'not_executable', reason: AWARENESS_HELD_APPROVAL_MESSAGE };
   const updated = approvalManager.getRequest(requestId) ?? current;
   if (!claimed) {
     return { status: 'not_executable', reason: `Another surface took this approval first (${updated.execution_outcome ?? 'in flight'}); its receipt will say what happened.` };

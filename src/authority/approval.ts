@@ -19,6 +19,7 @@ import type { ReviewedExecution } from '../actions/tools/reviewed-call-scope.ts'
 import type { AuthorityProfile } from './engine.ts';
 import { rawUiGate } from './ui-intent';
 
+import { currentApprovalProvenance, type ApprovalProvenance } from './approval-provenance.ts';
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'executed';
 export type ApprovalUrgency = 'urgent' | 'normal';
 
@@ -78,6 +79,8 @@ export type ApprovalRequest = {
   resolution_note?: string | null;
   /** JSON `ApprovalPrincipal`: who the request was asked for. Null on rows from before Q-08. */
   principal?: string | null;
+  /** Where it came from (approval-provenance.ts): `screen` is held while screen awareness is off. */
+  provenance?: ApprovalProvenance | null;
 };
 
 /**
@@ -251,6 +254,8 @@ export class ApprovalManager {
     toolRegistry?: ToolRegistry;
     /** Who the request is asked for; the executor judges the approved call again as them. */
     principal?: ApprovalPrincipal;
+    /** Where it came from; defaults to the provenance of the turn creating it. */
+    provenance?: ApprovalProvenance | null;
   }): ApprovalRequest {
     const db = getDb();
     const id = generateId();
@@ -269,10 +274,11 @@ export class ApprovalManager {
     }
 
     const principal = params.principal ? JSON.stringify(params.principal) : null;
+    const provenance = params.provenance !== undefined ? params.provenance : currentApprovalProvenance();
     db.run(
-      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at, principal)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
-      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now, principal]
+      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at, principal, provenance)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now, principal, provenance]
     );
 
     if (tool && current && params.toolRegistry) {
@@ -304,6 +310,7 @@ export class ApprovalManager {
       resolved_by: null,
       resolution_note: null,
       principal,
+      provenance,
     };
   }
 
@@ -392,6 +399,24 @@ export class ApprovalManager {
 
     if (result.changes === 0) return null;
     return this.getRequest(requestId);
+  }
+
+  /**
+   * Put an approval back to pending when its run was refused before anyone
+   * took it: a screen-derived request approved in the instant screen
+   * awareness went off (owner decision 2026-11-11). Only a row approved,
+   * never claimed and with no outcome: nothing ran. An inline row goes back
+   * as deferred: the gate that was waiting on it has been answered that it
+   * is held and has moved on, so whoever approves it next runs it.
+   */
+  reopenUnclaimed(requestId: string): boolean {
+    const db = getDb();
+    return db.run(
+      `UPDATE approval_requests SET status = 'pending', decided_at = NULL, decided_by = NULL, execution_mode = 'deferred'
+       WHERE id = ? AND status = 'approved' AND execution_mode IN ('deferred', 'inline')
+         AND execution_claimed_at IS NULL AND execution_outcome IS NULL`,
+      [requestId]
+    ).changes > 0;
   }
 
   /** Explicit deadlines belong to trusted workflow effects, never model-authored approval text. */
