@@ -48,6 +48,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 import { runAsActingAgent } from './acting-agent.ts';
+import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -532,7 +533,9 @@ async function executeTool(
       toolCategory,
       actionCategory: category,
       temporaryGrants: temporaryGrants ?? new Map(),
-      profile: profile ?? null,
+      // Opening an app the owner asked for on the notch is not held back by
+      // outside content, here as in the turn itself (authority/app-open.ts).
+      profile: appOpenNeedsNoApproval(toolCall.name, toolCall.arguments) ? (authorityCtx.profile ?? null) : (profile ?? null),
     });
     // The same substitution the orchestrator makes: a gated call whose worst
     // case is above this agent's level, when the agent clears the tool's

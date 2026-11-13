@@ -102,6 +102,23 @@ export const PEBBLE_VOICE_ROUTING_NOTE =
   + 'yourself. Before delegating, ask a question only when the request is '
   + 'genuinely ambiguous. Your reply is spoken aloud, so keep it short.';
 
+/**
+ * What the router is told about a turn the owner started with their own
+ * hands on their own computer (the notch). Fixed text, for the reason
+ * PEBBLE_VOICE_ROUTING_NOTE is: nothing a turn carries can widen it. Without
+ * it the router can still ask "shall I go ahead?" before delegating what the
+ * person has just asked for, and it writes its last answer at chat length for
+ * a surface that shows one line.
+ */
+export const OWNER_DIRECT_ROUTING_NOTE =
+  'This request came from the owner directly, typed or spoken on their own computer. '
+  + 'Their asking IS the authorization: delegate it now, routed by the Delegation Catalog above, '
+  + 'instead of first asking whether to go ahead. Whether an action needs their confirmation is '
+  + 'decided after you delegate, not by you. If a delegated task comes back needing input or '
+  + 'confirmation, ask its question as written and wait for their reply; never answer it yourself. '
+  + 'Before delegating, ask a question only when the request is genuinely ambiguous. '
+  + 'They see your reply as one line on their screen, so answer in one short sentence when you can.';
+
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
   userIdentity?: string;
@@ -188,6 +205,11 @@ export type ConvTurn = {
    * a flag is a field nobody can later widen into carrying text.
    */
   pebbleVoice?: boolean;
+  /**
+   * This turn came from the owner's own hands on the notch. A boolean, like
+   * pebbleVoice: the router gets one fixed sentence (`OWNER_DIRECT_ROUTING_NOTE`).
+   */
+  ownerDirect?: boolean;
   /**
    * This chat's taint carry-over (agents/turn-taint-carry.ts), handed to
    * every task the turn dispatches or resumes. The caller closes it.
@@ -827,6 +849,13 @@ export class ConvOrchestrator {
     if (turn.pebbleVoice) {
       parts.push('# Spoken Request');
       parts.push(PEBBLE_VOICE_ROUTING_NOTE);
+      parts.push('');
+    }
+
+    // Fixed text only, as above.
+    if (turn.ownerDirect) {
+      parts.push('# Direct Request');
+      parts.push(OWNER_DIRECT_ROUTING_NOTE);
       parts.push('');
     }
 

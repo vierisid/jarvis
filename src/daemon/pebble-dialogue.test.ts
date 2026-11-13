@@ -16,7 +16,7 @@ import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMOptions, LLMProvider, LLMResponse, LLMStreamEvent } from '../llm/provider.ts';
-import { ConvOrchestrator, PEBBLE_VOICE_ROUTING_NOTE, SITE_CHAT_ROUTING_NOTE } from '../agents/conv/conv-orchestrator.ts';
+import { ConvOrchestrator, OWNER_DIRECT_ROUTING_NOTE, PEBBLE_VOICE_ROUTING_NOTE, SITE_CHAT_ROUTING_NOTE } from '../agents/conv/conv-orchestrator.ts';
 import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { AgentService } from './agent-service.ts';
@@ -286,5 +286,35 @@ describe('#927: the Pebble response cycle stores what it finished', () => {
     expect(errBranch).toBeGreaterThan(-1);
     const branch = cycle.slice(errBranch, cycle.indexOf('break;', errBranch));
     expect(branch).toMatch(/streamFailed\s*=\s*true/);
+  });
+});
+
+describe('the router hears that a turn from the notch is authorised by the owner\'s asking', () => {
+  const NOTCH = 'JARVIS_NOTCH';
+  let before: string | undefined;
+  beforeEach(() => { initDatabase(':memory:'); before = process.env[NOTCH]; process.env[NOTCH] = '1'; });
+  afterEach(() => { closeDb(); if (before === undefined) delete process.env[NOTCH]; else process.env[NOTCH] = before; });
+
+  /** One turn through the agent, as the turn store hands it over. */
+  async function scoped(agent: AgentService, requestId: string): Promise<void> {
+    const input = { conversationId: 'c', turnId: 't', requestId, text: 'open chrome', history: [], contextKey: 'k', signal: new AbortController().signal };
+    const { stream } = agent.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input);
+    for await (const _ of stream) { /* drain */ }
+  }
+
+  test('a turn started on the notch gives the router the fixed note; a dashboard turn does not', async () => {
+    const notch = convAgent();
+    await scoped(notch.agent, 'notch-spoken-1');
+    expect(systemText(routerCall(notch.provider))).toContain(OWNER_DIRECT_ROUTING_NOTE);
+    const dashboard = convAgent();
+    await scoped(dashboard.agent, '5b0c7c1e-0000-4000-8000-000000000000');
+    expect(systemText(routerCall(dashboard.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
+  });
+
+  test('with the notch switch off nobody is told anything', async () => {
+    delete process.env[NOTCH];
+    const off = convAgent();
+    await scoped(off.agent, 'notch-spoken-1');
+    expect(systemText(routerCall(off.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
   });
 });
