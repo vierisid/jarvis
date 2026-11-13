@@ -149,7 +149,7 @@ import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
 import { getGoalApplication, GoalScoreConflict } from '../goals/application-service.ts';
 import { readGoalEvents } from '../goals/event-delivery.ts';
-import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
+import { assertDeadlineNotPast, GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
@@ -4767,6 +4767,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
 
           // Quick create (direct)
+          assertDeadlineNotPast(options.deadline);
           const goal = getGoalApplication().createGoal(title, level, options);
           return json(goal, 201);
         } catch (err) {
@@ -4873,6 +4874,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const url = new URL(req.url);
           const id = url.pathname.split('/').pop()!;
           const body = await req.json() as Record<string, unknown>;
+          // Only a deadline that is being moved must be in the future: an overdue goal keeps its date while other fields change.
+          if (body && typeof body === 'object' && body.deadline !== undefined && body.deadline !== require('../vault/goals.ts').getGoal(id)?.deadline) assertDeadlineNotPast(body.deadline);
           const updated = getGoalApplication().updateGoal(id, body);
           if (!updated) return error('Goal not found', 404);
           return json(updated);

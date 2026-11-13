@@ -765,8 +765,15 @@ actions only change local fixture state.
 
 - `goals/` is the D-24 Goals room (`goals` and `completed-goals`): goal selectors above one ordered
   path of stage cards, and settled summary cards with milestones under Completed. The room only
-  reads and navigates; it has no goal writer, calculation or approval path. `onCreate` is optional and
+  reads and navigates; it has no calculation or approval path. `onCreate` is optional and
   must open the host's existing goal-creation flow.
+- The only writes are the optional `GoalsPort.write`: "Log progress" (a typed value, or a counted
+  entry with a short note and optional link), "Set how to measure this" and "Activate" for a draft.
+  They use the existing measurement, counted-entry and status routes with the goal's
+  `measurementRevision`; a stale revision reads "This goal changed since you opened it. Refresh and
+  try again." and server wording is never shown. A request id is reused on a retry of the same input.
+  A save refreshes the room and Today's goal read. Draft goals are named "Draft: review and activate"
+  and a hidden-draft notice shows on the Active filter.
 - Each goal is a `GoalDatum`: `BriefGoal` plus owner-written title strings, with F-15's
   `progress { value, basis, rollup: "independent" }` required. The percent comes from `progress.value`
   (0..1) only, never from value/target, a title or child stages. A count is shown only with a
