@@ -1095,7 +1095,7 @@ func resolvePid(pid int) (int, error) {
 // sibling ordinal, and durable sig (kept opt-in: paths meaningfully grow the
 // JSON payload the LLM currently reads verbatim).
 func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, depth, maxDepth int, includeInvisible, semantic bool, path []map[string]any, results *[]map[string]any, budget *walkBudget) {
-	if depth > maxDepth || budget.spent(len(*results)) {
+	if depth > maxDepth || !budget.room(len(*results)) {
 		return
 	}
 
@@ -1116,6 +1116,11 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 	count := uiaArrayLength(arr)
 	kids := make([]childMeta, 0, count)
 	for i := 0; i < count; i++ {
+		// Asked before every child: reading them is where the time goes.
+		// Children not read are never fetched, so there is nothing to release.
+		if !budget.room(len(*results) + len(kids)) {
+			break
+		}
 		child := uiaArrayGetElement(arr, i)
 		if child == nil {
 			continue
@@ -1133,14 +1138,6 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		}
 		kids = append(kids, meta)
 	}
-	// From here on every child is either listed or released. Past the budget
-	// none is listed, so all are released: none is in the cache.
-	if budget.spent(len(*results)) {
-		for _, k := range kids {
-			k.elem.Release()
-		}
-		return
-	}
 
 	// Ordinal disambiguates same-signature siblings (third "row" in a list).
 	ordCount := map[string]int{}
@@ -1148,9 +1145,9 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		ord := ordCount[k.ctrl+"|"+k.name]
 		ordCount[k.ctrl+"|"+k.name]++
 
-		// Out of room part-way through these children: the rest are not
-		// listed and not walked.
-		if budget.spent(len(*results)) {
+		// No room left on the list: this child was read but is not listed,
+		// so it is not in the cache, and is let go. Its children are not walked.
+		if (k.visible || includeInvisible) && !budget.fits(len(*results)) {
 			k.elem.Release()
 			continue
 		}

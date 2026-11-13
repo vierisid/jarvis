@@ -20,6 +20,7 @@ import { NOTCH_REQUEST_ID } from '../authority/app-open.ts';
 import { notchEnabled } from '../notch/switch.ts';
 import { findSidecar, getSidecarManager, lastScreenPicture, resolveToolTarget } from '../actions/tools/sidecar-route.ts';
 import { notchApprovalWhere } from './notch-where.ts';
+import { isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
 import {
   bindScriptedModel, scriptedCalls, scriptedModelBound, scriptedTurns, setScriptedTurns,
 } from '../llm/scripted.ts';
@@ -229,6 +230,7 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
     },
     whereApproval(request) {
       return notchApprovalWhere(request, {
+        allowed: () => isScreenCaptureEnabled(),
         target: (explicit, tool) => {
           try {
             return resolveToolTarget(explicit, 'desktop', tool, { quiet: true });
@@ -236,7 +238,7 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
             return null;
           }
         },
-        picture: (target) => lastScreenPicture(target),
+        seen: (target) => lastScreenPicture(target) !== null,
         async ask(target, params) {
           const manager = getSidecarManager();
           if (!manager) return null;

@@ -14,7 +14,7 @@ import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { gateVoiceApprovalResolution } from '../roles/authority.ts';
-import { NOTCH_PLAIN_LINE_COLUMNS, attachNotchApprovals, notchApprovalWay } from './approvals.ts';
+import { NOTCH_PLAIN_LINE_COLUMNS, attachNotchApprovals, notchApprovalWay, type NotchApprovalWhere } from './approvals.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -31,7 +31,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; where?: (request: ApprovalRequest) => Promise<string | null>; mine?: (id: string) => boolean } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; where?: (request: ApprovalRequest) => Promise<NotchApprovalWhere | null>; mine?: (id: string) => boolean; now?: () => number } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -82,6 +82,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
     describe: options.describe,
     where: options.where,
     mine: options.mine,
+    ...(options.now ? { now: options.now } : {}),
     clock,
   });
   const line = (): NotchLine | null => surface.current().line;
@@ -652,7 +653,7 @@ describe('what the sheet says will be done', () => {
 
   test('a click says what on the screen it lands on, above the exact action', async () => {
     const asked: string[] = [];
-    const h = harness({ where: async (request) => { asked.push(request.tool_name); return 'Button "Send" in "Inbox - Outlook" (olk)'; } });
+    const h = harness({ where: async (request) => { asked.push(request.tool_name); return { place: 'Button "Send" in "Inbox - Outlook" (olk)' }; } });
     click(h);
     await h.sync();
     expect(asked).toEqual(['desktop_click']);
@@ -662,13 +663,65 @@ describe('what the sheet says will be done', () => {
   });
 
   test('what the screen calls it is shown as one short line with nothing hidden in it', async () => {
-    const h = harness({ where: async () => `Button "Pay\u200b now"\r\n\u202eevil ${'x'.repeat(400)}` });
+    const h = harness({ where: async () => ({ place: `Button "Pay\u200b now"\r\n\u202eevil ${'x'.repeat(400)}` }) });
     click(h);
     await h.sync();
     const first = paperOf(h)[0]!;
     expect(first.startsWith('On screen: Button "Pay now" evil x')).toBe(true);
     expect(/[\u200b\u202e\r\n]/.test(first)).toBe(false);
     expect([...first].length).toBeLessThanOrEqual('On screen: '.length + 160);
+  });
+
+  test('a click that lands on a payment is not taken on the notch: the line points at the dashboard and a yes only opens it', async () => {
+    const h = harness({ where: async () => ({ place: 'Hyperlink "Buy now" in "Store" (steamwebhelper)', pays: true }) });
+    const made = click(h);
+    await h.sync();
+    // Not a sheet with a yes: the payment line.
+    expect(h.line()?.kind).toBe('offer');
+    expect(h.said()).toBe('That looks like a payment. I never take one on a key: Hyperlink "Buy now" in "Store" (steamwebhelper)');
+    await h.answer('yes');
+    expect(h.opened).toHaveLength(1);
+    expect(h.approvals.getRequest(made.id)!.status).toBe('pending');
+    expect(h.runs).toEqual([]);
+  });
+
+  test('a read that comes in late and says it pays takes the sheet away, even after a yes', async () => {
+    let say: (read: NotchApprovalWhere) => void = () => {};
+    const h = harness({ where: () => new Promise<NotchApprovalWhere | null>((resolve) => { say = resolve; }) });
+    const made = click(h);
+    await h.sync();
+    await h.advance(1500);
+    // The machine was slow: the sheet is up without its place, and takes a yes.
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve' });
+    await h.answer('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    // The read arrives while the fuse burns, and the fuse burns out.
+    say({ place: 'Button "Pay now" in "Checkout" (chrome)', pays: true });
+    await settle();
+    await h.answer('done');
+    expect(h.approvals.getRequest(made.id)!.status).toBe('pending');
+    expect(h.runs).toEqual([]);
+    expect(h.said()).toContain('That looks like a payment');
+  });
+
+  test('a sheet that comes back later is read again: the place it shows is the one in front now', async () => {
+    let reads = 0;
+    let time = Date.now();
+    const h = harness({
+      now: () => time,
+      where: async () => ({ place: ++reads === 1 ? 'the window in front, "Notepad" (notepad)' : 'the window in front, "Bank" (chrome)' }),
+    });
+    click(h);
+    await h.sync();
+    expect(paperOf(h)[0]).toBe('On screen: the window in front, "Notepad" (notepad)');
+    // Left alone until it goes back to the count, then opened again a minute later.
+    await h.advance(60_000);
+    expect(h.line()).toBeNull();
+    time += 60_000;
+    await h.open();
+    await settle();
+    expect(reads).toBe(2);
+    expect(paperOf(h)[0]).toBe('On screen: the window in front, "Bank" (chrome)');
   });
 
   test('a machine that cannot say, or says it too late, leaves the sheet as it was', async () => {
@@ -683,7 +736,7 @@ describe('what the sheet says will be done', () => {
     expect(paperOf(broken)).toEqual(['Review desktop_click on element [12].', 'desktop_click', 'element_id: 12']);
     expect(broken.logs.some((line) => line.includes('could not be read'))).toBe(true);
 
-    const slow = harness({ where: () => new Promise<string | null>(() => {}) });
+    const slow = harness({ where: () => new Promise<NotchApprovalWhere | null>(() => {}) });
     click(slow);
     await slow.sync();
     // Nothing on the notch yet: it waits for the place, but not for long.

@@ -125,6 +125,16 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('a click at a place refused because it is on one of Jarvis\'s own windows is not started', async () => {
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_POINTER_REFUSED',
+        "pointer_action refused: the place (960, 14) is on one of Jarvis's own windows, so nothing was done.");
+    }));
+    await expect(routeToSidecarAction(mac.id, 'pointer_action', { fx: 0.5, fy: 0.01 }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_POINTER_REFUSED', effect: 'not_started' },
+    });
+  });
+
   test('a reviewed browser action refused for a superseded snapshot is not started (#676)', async () => {
     // sidecar/browser_snapshot.go's refuseStaleElement sends
     // BROWSER_SNAPSHOT_SUPERSEDED before its first CDP command

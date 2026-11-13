@@ -31,16 +31,6 @@ func mainDisplayPixels() (int, int) {
 	return int(int32(w)), int(int32(h))
 }
 
-// ownWindow says whether hwnd belongs to this program: the notch, a panel, an
-// overlay.
-func ownWindow(hwnd uintptr) bool {
-	if hwnd == 0 {
-		return false
-	}
-	own, _, _ := procReachGetCurrentProcessI.Call()
-	return win32GetWindowPid(hwnd) == uint32(own)
-}
-
 // pointerPlaceFree refuses a place that is on one of Jarvis's own windows.
 // The notch is given a moment first: the sheet that asked whether this very
 // action may be done is often still folding back over the place.
@@ -56,12 +46,24 @@ func pointerPlaceFree(x, y int) error {
 	if ownWindow(hit) {
 		return &codedError{code: desktopPointerRefusedCode, err: fmt.Errorf("%s", pointerOnOwnWindow(x, y))}
 	}
+	// Windows drops a click sent to a window that runs as administrator from
+	// a program that does not, the way it drops keys, and says nothing.
+	if windowKeyReach(hit) == keysBlocked {
+		return &codedError{code: desktopPointerRefusedCode, err: fmt.Errorf(
+			"the window at (%d, %d) runs as administrator and Jarvis does not, so Windows would drop the action: nothing was done. "+
+				"Jarvis cannot act in that window. Tell the user so; do NOT retry", x, y)}
+	}
 	return nil
 }
 
-func win32Scroll(x, y, notches int) {
+// win32Scroll turns the wheel over a place. As pointerPress, the place is
+// looked at once more with the pointer there.
+func win32Scroll(x, y, notches int) error {
 	procSetCursorPos.Call(uintptr(x), uintptr(y))
 	procSleep.Call(50)
+	if ownWindow(win32RootWindow(win32WindowFromPoint(x, y))) {
+		return &codedError{code: desktopPointerRefusedCode, err: fmt.Errorf("%s", pointerOnOwnWindow(x, y))}
+	}
 	step := int32(pointerWheelNotch)
 	if notches < 0 {
 		step, notches = -step, -notches
@@ -70,11 +72,19 @@ func win32Scroll(x, y, notches int) {
 		procMouseEvent.Call(pointerMouseEventfWheel, 0, 0, uintptr(uint32(step)), 0)
 		procSleep.Call(15)
 	}
+	return nil
 }
 
-func win32Drag(x, y, toX, toY int) {
+// win32Drag presses at one place and lets go at another. The start is looked
+// at once more with the pointer there, before the button goes down. Letting go
+// over a window that came up meanwhile presses nothing in it: a press is a
+// button going down and up on the same thing.
+func win32Drag(x, y, toX, toY int) error {
 	procSetCursorPos.Call(uintptr(x), uintptr(y))
 	procSleep.Call(50)
+	if ownWindow(win32RootWindow(win32WindowFromPoint(x, y))) {
+		return &codedError{code: desktopPointerRefusedCode, err: fmt.Errorf("%s", pointerOnOwnWindow(x, y))}
+	}
 	procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
 	procSleep.Call(80)
 	for _, step := range pointerDragSteps(x, y, toX, toY) {
@@ -83,6 +93,7 @@ func win32Drag(x, y, toX, toY int) {
 	}
 	procSleep.Call(80)
 	procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	return nil
 }
 
 func handlePointerAction(params map[string]any) (*RPCResult, error) {
@@ -105,24 +116,29 @@ func handlePointerAction(params map[string]any) (*RPCResult, error) {
 		"success": true, "action": req.Action, "screen_x": x, "screen_y": y,
 		"window_pid": win32GetWindowPid(win32RootWindow(win32WindowFromPoint(x, y))),
 	}
+	var acted error
 	switch req.Action {
 	case "click":
-		win32Click(x, y)
+		acted = pointerPress(x, y, "click")
 	case "double_click":
-		win32DoubleClick(x, y)
+		acted = pointerPress(x, y, "double_click")
 	case "right_click":
-		win32RightClick(x, y)
+		acted = pointerPress(x, y, "right_click")
 	case "scroll_up":
-		win32Scroll(x, y, req.Amount)
+		acted = win32Scroll(x, y, req.Amount)
 	case "scroll_down":
-		win32Scroll(x, y, -req.Amount)
+		acted = win32Scroll(x, y, -req.Amount)
 	case "drag":
 		toX, toY := pointerPixel(req.ToFX, w), pointerPixel(req.ToFY, h)
 		if err := pointerPlaceFree(toX, toY); err != nil {
 			return nil, fmt.Errorf("pointer_action refused: %w", err)
 		}
-		win32Drag(x, y, toX, toY)
+		acted = win32Drag(x, y, toX, toY)
 		result["to_screen_x"], result["to_screen_y"] = toX, toY
+	}
+	if acted != nil {
+		// The pointer moved and nothing was pressed or turned.
+		return nil, fmt.Errorf("pointer_action refused: %w", acted)
 	}
 	return &RPCResult{Result: result}, nil
 }

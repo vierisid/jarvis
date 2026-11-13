@@ -110,8 +110,7 @@ func actionClick(state *uiaState, id int, elem *ole.IDispatch) error {
 	if err != nil {
 		return err
 	}
-	win32Click(x, y)
-	return nil
+	return pointerPress(x, y, "click")
 }
 
 // actionDoubleClick moves the mouse to the element center and double-clicks.
@@ -120,8 +119,7 @@ func actionDoubleClick(state *uiaState, id int, elem *ole.IDispatch) error {
 	if err != nil {
 		return err
 	}
-	win32DoubleClick(x, y)
-	return nil
+	return pointerPress(x, y, "double_click")
 }
 
 // actionRightClick moves the mouse to the element center and right-clicks.
@@ -130,8 +128,7 @@ func actionRightClick(state *uiaState, id int, elem *ole.IDispatch) error {
 	if err != nil {
 		return err
 	}
-	win32RightClick(x, y)
-	return nil
+	return pointerPress(x, y, "right_click")
 }
 
 // pointerReachesElement returns the element's centre, or a refusal when a

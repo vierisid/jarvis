@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -102,6 +103,9 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 	// administrator it vanished, and the reply still said success: Windows
 	// drops those keys without an error (desktop_reach.go).
 	front := win32GetForegroundWindow()
+	if ownWindow(front) {
+		return nil, fmt.Errorf("type_text refused: %w", keysIntoOwnWindowError("typed", clicked))
+	}
 	reach := windowKeyReach(front)
 	if reach == keysBlocked {
 		return nil, fmt.Errorf("type_text refused: %w", keysBlockedError("typed", clicked))
@@ -130,6 +134,9 @@ func handlePressKeys(params map[string]any) (*RPCResult, error) {
 	}
 
 	front := win32GetForegroundWindow()
+	if ownWindow(front) {
+		return nil, fmt.Errorf("press_keys refused: %w", keysIntoOwnWindowError("pressed", ""))
+	}
 	reach := windowKeyReach(front)
 	if reach == keysBlocked {
 		return nil, fmt.Errorf("press_keys refused: %w", keysBlockedError("pressed", ""))
@@ -155,7 +162,10 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("missing required parameter: executable")
 	}
 	// One path with spaces in it stays one argument (desktop_launch_args.go).
-	args, err := launchArgLine(params)
+	args, err := launchArgLine(params, func(path string) bool {
+		_, statErr := os.Stat(path)
+		return statErr == nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("launch_app: %w", err)
 	}

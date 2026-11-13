@@ -90,28 +90,61 @@ func TestPointerUnderNotchDoesNotSendTheModelInACircle(t *testing.T) {
 	}
 }
 
-func TestWalkBudgetStopsAtItsLimitsAndStaysStopped(t *testing.T) {
+func TestWalkBudgetStopsReadingAtItsLimitsAndStaysStopped(t *testing.T) {
 	now := time.Unix(1000, 0)
 	budget := &walkBudget{limit: 3, deadline: now.Add(10 * time.Second), now: func() time.Time { return now }}
-	if budget.spent(0) || budget.spent(2) || budget.capped {
+	if !budget.room(0) || !budget.room(2) || budget.capped {
 		t.Error("under both limits the read goes on")
 	}
-	if !budget.spent(3) || !budget.capped {
+	if budget.room(3) || !budget.capped {
 		t.Error("at the element limit the read stops and says so")
 	}
-	if !budget.spent(0) {
+	if budget.room(0) {
 		t.Error("once stopped it stays stopped")
 	}
 	late := &walkBudget{limit: 100, deadline: now.Add(10 * time.Second), now: func() time.Time { return now }}
 	now = now.Add(10 * time.Second)
-	if !late.spent(1) || !late.capped {
+	if late.room(1) || !late.capped {
 		t.Error("at the time limit the read stops and says so")
 	}
+	// What was read before the time ran out is still listed, up to the count.
+	if !late.fits(1) || !late.fits(99) {
+		t.Error("an element already read is listed although the time is up")
+	}
+	if late.fits(100) {
+		t.Error("the count holds for listing too")
+	}
+	full := &walkBudget{limit: 2, deadline: now.Add(time.Hour), now: func() time.Time { return now }}
+	if full.fits(2) || !full.capped {
+		t.Error("an element with no room on the list is not listed, and the read says it was cut")
+	}
 	var none *walkBudget
-	if none.spent(1 << 20) {
+	if !none.room(1<<20) || !none.fits(1<<20) {
 		t.Error("a read with no budget is not limited")
 	}
-	if fresh := newWalkBudget(); fresh.limit != walkElementLimit || fresh.spent(0) {
+	if fresh := newWalkBudget(); fresh.limit != walkElementLimit || !fresh.room(0) {
 		t.Error("a new budget starts unspent")
+	}
+}
+
+func TestRefusalsBeforeTheFirstKeyCarryTheNotStartedCode(t *testing.T) {
+	var coded *codedError
+	for name, err := range map[string]error{
+		"own window":            keysIntoOwnWindowError("typed", ""),
+		"shift+enter not built": softBreakUnsupportedError(),
+	} {
+		if !errors.As(err, &coded) || coded.code != desktopTargetUnreachableCode {
+			t.Errorf("%s: a refusal before anything was done must carry the not-started code: %v", name, err)
+		}
+	}
+	if err := keysIntoOwnWindowError("typed", "element [4] was clicked"); errors.As(err, &coded) {
+		t.Errorf("after a click it is not a refusal before anything happened: %v", err)
+	}
+}
+
+func TestPointerUnderNotchSaysWhatIsTrueWhileATaskRuns(t *testing.T) {
+	text := pointerUnderNotch("the place", 1280, 20)
+	if strings.Contains(text, "try again in a few seconds") {
+		t.Errorf("the notch's line stays for the whole task: waiting does not help: %s", text)
 	}
 }

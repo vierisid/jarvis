@@ -135,6 +135,9 @@ func platformNotchReveal(handle unsafe.Pointer) {
 		return
 	}
 	w.loaded.Store(true)
+	// A page that has just loaded is asking nothing yet. (A page that was
+	// asking when it went away never said it had stopped.)
+	w.asking.Store(false)
 	if !w.hidden.Load() {
 		w.show()
 	}

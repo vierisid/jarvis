@@ -67,18 +67,23 @@ let sidecarManager: SidecarManager | null = null;
  * moved to look (`desktop_pointer_target_linux_test.go` pins that nothing was
  * clicked), on Windows it has not (uia_element_guard_windows_test.go).
  *
- * `DESKTOP_TARGET_UNREACHABLE` is typed text or keys refused because the window
- * in front runs as administrator and the sidecar does not: Windows drops keys
- * sent across that line without an error, so they are not sent. Returned before
- * the first key (`keysBlockedError` in sidecar/desktop_reach.go; when an element
- * was clicked first the same refusal carries no code, since something was done,
- * and `desktop_reach_test.go` pins both halves).
+ * `DESKTOP_TARGET_UNREACHABLE` is typed text or keys refused before the first
+ * key: the window in front runs as administrator and the sidecar does not
+ * (Windows drops keys sent across that line without an error); or it is one of
+ * Jarvis's own windows; or a line break was asked to be typed with Shift+Enter
+ * on a system where that is not built. (`keysBlockedError`,
+ * `keysIntoOwnWindowError`, `softBreakUnsupportedError` in
+ * sidecar/desktop_reach.go; when an element was clicked first the same refusal
+ * carries no code, since something was done. `desktop_reach_test.go` pins both
+ * halves, and `desktop_wiring_test.go` that the handlers ask before they type.)
  *
  * `DESKTOP_POINTER_REFUSED` is a click, scroll or drag at a place on the screen
- * refused before the pointer moved: a request the sidecar could not read, a
- * place on one of Jarvis's own windows, or a system the action is not built for
- * (`handlePointerAction` in sidecar/desktop_pointer_windows.go checks all of it
- * before its first mouse call).
+ * refused before any button went down or the wheel turned: a request the
+ * sidecar could not read, a place on one of Jarvis's own windows or on a window
+ * that runs as administrator, or a system the action is not built for. The
+ * first look is before the pointer moves; the last one is with the pointer
+ * already there, so that refusal has moved the pointer and pressed nothing
+ * (`pointerPlaceFree`, `pointerPress`; `desktop_wiring_test.go` pins the order).
  *
  * `BROWSER_SNAPSHOT_SUPERSEDED` (#676) is a reviewed browser click, type or
  * hover refused because the element map is no longer on the generation the
