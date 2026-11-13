@@ -154,11 +154,16 @@ describe('the approval fixture, from the command to Today', () => {
     const [request] = h.approvals.getPending();
     expect(request).toMatchObject({ agent_id: NOTCH_FIXTURE_AGENT, tool_name: 'run_command', action_category: 'execute_command' });
     expect(JSON.parse(request!.tool_arguments)).toEqual({ command: 'echo notch test' });
-    // The sentence is the tool's own gate's: the machine, the directory, the command.
-    expect(notchApprovalWay(request!)).toBe('key');
+    // Asked in plain words (here, with nobody to word it, by what kind of
+    // thing it is), with the tool's own gate's sentence under them: the
+    // machine, the directory, the command.
+    expect(notchApprovalWay(request!)).toBe('sheet');
     await h.look();
-    expect(h.said()).toMatch(/run: echo notch test\?$/);
-    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'approve', mood: 'careful' });
+    expect(h.said()).toBe('Run a command on this computer?');
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true, mood: 'careful' });
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')).join(' ') : '').toMatch(/run: echo notch test$/);
     await h.answer('yes');
     await h.answer('done');
     for (let i = 0; i < 60 && h.said() !== 'Done.'; i++) await new Promise((r) => setTimeout(r, 25));
