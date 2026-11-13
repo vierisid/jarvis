@@ -6,10 +6,12 @@
  * inert by itself: it draws nothing until the brain answers its hello, and a
  * brain with the switch off never does.
  *
- * The routes are the demo and fixture endpoints, which exist only with the
- * switch on and their gate open (./demo-gate.ts).
+ * The routes are the demo, fixture and script endpoints, which exist only with
+ * the switch on and their gate open (./demo-gate.ts).
  */
-import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
+import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
+import { notchScriptOp } from './script.ts';
+import type { NotchScriptDeps } from './script.ts';
 
 /** Where the desktop app is told to point the notch's window. */
 export const NOTCH_PAGE_PATH = '/notch.html';
@@ -28,6 +30,8 @@ export interface NotchRouteDeps {
     /** Comes back with a sentence saying what was made, or throws one saying why not. */
     make(kind: string, options: { in?: number }): Promise<string>;
   } | null;
+  /** The stand-in model's script, and words sent as if typed or spoken (./script.ts). */
+  script?: NotchScriptDeps | null;
   /** How many notch pages are up and listening. */
   pages?: () => number;
 }
@@ -78,6 +82,15 @@ export function notchRoutes(enabled: boolean, deps: NotchRouteDeps = {}): NotchR
         } catch (error) {
           return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
         }
+      },
+    },
+    [NOTCH_SCRIPT_PATH]: {
+      POST: async (req) => {
+        const gate = notchDemoGate();
+        const script = deps.script;
+        if (!gate || !script || !notchDemoTokenMatches(req.headers.get(NOTCH_DEMO_HEADER), gate)) return notFound();
+        const answer = notchScriptOp(await req.json().catch(() => null), script);
+        return Response.json({ ...answer.body, pages: deps.pages?.() ?? 0 }, { status: answer.status });
       },
     },
   };

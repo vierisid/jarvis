@@ -100,6 +100,10 @@ type SidecarClient struct {
 	// is per-connection but the playback service outlives a reconnect (and is
 	// rebuilt by reloadConfig), so the two can't be captured in one closure.
 	wakeSuppress atomic.Pointer[func(playing bool)]
+	// wakeDecide is the current connection's way to act on the brain's word
+	// about listening for its name (pebble_wake.go, wakeHold). Nil when this
+	// connection has no wake listener.
+	wakeDecide atomic.Pointer[func(notchOn bool)]
 }
 
 // installPlayStateHook wires a playback service's state callback. Two jobs on
@@ -649,6 +653,33 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		return c.sendEvent(ctx, event, binaryData)
 	}
 
+	// Whether to listen for the wake word is the brain's to say, in its
+	// register_ack. Until it has, the listener keeps the microphone closed.
+	wakeHold.Store(wakeUndecided)
+	defer wakeHold.Store(wakeAllowed)
+
+	// What the notch's talk keys record goes out on this connection. Until a
+	// microphone is given below, a hold of the keys is answered "refused".
+	talkSend := func(phase string, payload map[string]any, pcm []byte) {
+		payload["phase"] = phase
+		evt := SidecarEvent{
+			Type:      "sidecar_event",
+			EventType: notchTalkEvent,
+			Timestamp: time.Now().UnixMilli(),
+			// The person is waiting on it: never the event dropped from a full queue.
+			Priority: "high",
+			Payload:  payload,
+		}
+		if pcm != nil {
+			evt.Binary = BinaryDataInline{Type: "inline", MimeType: "audio/pcm"}
+		}
+		if err := sendFn(ctx, evt, pcm); err != nil {
+			log.Printf("[notch] talk: %q did not reach the brain: %v", phase, err)
+		}
+	}
+	notchTalk.use(nil, talkSend)
+	defer notchTalk.forget()
+
 	// What the notch's page says to the brain goes out on this connection, as
 	// it came. With no connection there is nowhere for it to go.
 	notch.OnMessage(func(text string) {
@@ -888,6 +919,68 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				log.Printf("[audio] streamed session %s to daemon (%d PCM bytes, %.2fs)", sessionID, len(pcm), dur.Seconds())
 			}
 		}
+
+		// The notch's hold-to-talk records on this same microphone, under the
+		// same rules as the capture above: mute is a gate, one recording at a
+		// time, and the wake listener (where it runs at all) gives the device
+		// up for it. It stops when the keys come up, not on silence.
+		notchTalk.use(&notchTalkMic{
+			SampleRate: pebbleAudioSampleRate,
+			Muted:      micMuted,
+			Open: func(id string, onChunk func([]byte)) string {
+				if micMuted() {
+					log.Printf("[notch] talk refused — microphone muted")
+					return "muted"
+				}
+				if !sessionInFlight.CompareAndSwap(false, true) {
+					return "busy"
+				}
+				ambientHoldFor(voiceTurnAmbientHold)
+				if wakeListener != nil {
+					wakeListener.Pause()
+				}
+				audioSvc.SetChunkListener(onChunk)
+				if err := audioSvc.Start(id); err != nil {
+					log.Printf("[notch] talk: the microphone could not be opened: %v", err)
+					audioSvc.SetChunkListener(nil)
+					sessionInFlight.Store(false)
+					if wakeListener != nil {
+						wakeListener.Resume(ctx)
+					}
+					return "error"
+				}
+				return ""
+			},
+			Close: func() ([]byte, time.Duration) {
+				pcm, dur, _ := audioSvc.Stop()
+				audioSvc.SetChunkListener(nil)
+				sessionInFlight.Store(false)
+				if wakeListener != nil {
+					wakeListener.Resume(ctx)
+				}
+				return pcm, dur
+			},
+		}, talkSend)
+		// Before the listener and the device are torn down below it.
+		defer notchTalk.forget()
+
+		// The brain's word on the wake word, when it comes. No word within a
+		// few seconds is a brain too old to send one: it listens, as it always
+		// did. A brain with the notch on never lets it open.
+		wakeDecide := func(notchOn bool) {
+			if notchOn {
+				wakeHold.Store(wakeForbidden)
+				log.Printf("[wake] the brain has the notch on: not listening for the wake word")
+				return
+			}
+			if wakeHold.CompareAndSwap(wakeUndecided, wakeAllowed) && wakeListener != nil {
+				wakeListener.Resume(ctx)
+			}
+		}
+		c.wakeDecide.Store(&wakeDecide)
+		defer c.wakeDecide.Store(nil)
+		wakeFallback := time.AfterFunc(3*time.Second, func() { wakeDecide(false) })
+		defer wakeFallback.Stop()
 
 		// ── Native realtime voice (gpt-realtime) ──────────────────────────
 		// When the daemon reports realtime is enabled, the summon hotkey
@@ -1439,8 +1532,18 @@ func (c *SidecarClient) handleRegisterAck(data []byte) {
 		UpdateSuggested bool   `json:"update_suggested"`
 		Recommended     string `json:"recommended"`
 		Latest          string `json:"latest"`
+		// The brain has the notch on: it does not listen for its name.
+		Notch bool `json:"notch"`
 	}
 	_ = json.Unmarshal(data, &msg)
+	if decide := c.wakeDecide.Load(); decide != nil {
+		(*decide)(msg.Notch)
+	} else if msg.Notch {
+		// Before this connection's listener exists: it will find the answer waiting.
+		wakeHold.Store(wakeForbidden)
+	} else {
+		wakeHold.CompareAndSwap(wakeUndecided, wakeAllowed)
+	}
 	if msg.UpdateSuggested {
 		log.Printf("[sidecar] An update is available (this brain recommends sidecar >= %s; running %s). Still compatible.", msg.Recommended, sidecarVersion)
 	}
@@ -1723,6 +1826,11 @@ func runRPCHandler(method string, h RPCHandler, params map[string]any) (result *
 // change is about. What changes is only that a panic inside `sp.Write` becomes
 // a `HANDLER_PANIC` reply instead of the end of the process.
 func (c *SidecarClient) playPCMInline(params map[string]any) (*RPCResult, error) {
+	// With the notch on nothing is spoken: the frame is dropped like any other
+	// that cannot be played, and acknowledged the same way.
+	if notch.Enabled() {
+		return &RPCResult{Result: map[string]any{"ok": true}}, nil
+	}
 	if sp := c.streamPlayer.Load(); sp != nil {
 		if d, ok := params["data"].(string); ok {
 			if pcm, err := base64.StdEncoding.DecodeString(d); err == nil {

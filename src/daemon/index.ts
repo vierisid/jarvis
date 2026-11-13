@@ -167,6 +167,9 @@ import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
 import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
+import { notchSilent } from "../notch/silence.ts";
+import { initScriptedModelGate } from "../llm/scripted.ts";
+import { notchAskDeps, notchScriptDeps } from "./notch-asks.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -727,6 +730,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   const debugRpcState = initDebugRpcGate({ hosted: isHostedInstall(jarvisConfig) });
   // The notch's demo gate, resolved at the same moment and for the same reason.
   const notchDemoState = initNotchDemoGate({ hosted: isHostedInstall(jarvisConfig), notch: notchEnabled() });
+  // The stand-in model (src/llm/scripted.ts): only on an isolated development
+  // brain with that gate open, and only once a script is loaded into it.
+  initScriptedModelGate({ hosted: isHostedInstall(jarvisConfig), localIntegration, devGate: notchDemoState === 'open' });
+  // The turn store, for instructions given on the notch. Built far below.
+  let notchTurnStore: BriefChatTransport | null = null;
   let notchSurface: NotchSurface | null = null;
   let notchDemo: NotchDemo | null = null;
   // The real things on the notch: approvals and the rest (src/notch/real.ts).
@@ -1148,7 +1156,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.
         notchDemo = createNotchDemo(notchSurface, { real: true, onEnd: () => notchReal?.inbox.refresh() });
-        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences, and can make the fixed test items of src/notch/fixtures.ts. Nothing else.`);
+        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences, can make the fixed test items of src/notch/fixtures.ts, and, while this brain has no real model, can load a script into the stand-in model and send it words (src/notch/script.ts). Nothing else.`);
       }
     }
     if (notchDemoState === 'too-short') {
@@ -2874,7 +2882,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         spoken: (ctrl, text) => pebbleFastPathTurns.spoke(ctrl, text),
         heartbeat: (text) => wsService.broadcastHeartbeatToDashboard(text),
         synthesizer: () => {
-          const tts = pebbleTTS;
+          // With the notch on nothing is spoken: the confirmation is shown only.
+          const tts = notchSilent() ? null : pebbleTTS;
           return tts ? (text) => tts.synthesize(text) : null;
         },
         play: async (sidecarId, audio) => {
@@ -3603,7 +3612,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         };
 
         const enqueueSentence = (sentence: string): void => {
-          if (!pebbleTTS) return;
+          // With the notch on a reply is shown, never spoken (src/notch/silence.ts).
+          if (!pebbleTTS || notchSilent()) return;
           const speakText = stripMarkdownForSpeech(sentence);
           if (!speakText) return; // sentence was pure markdown (e.g. a code fence)
           const prev = ttsTail;
@@ -4159,6 +4169,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // continuous wake stream doesn't fight with the active turn.
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'audio.wake_segment') return;
+        // With the notch on Jarvis does not listen for its name. A desktop app
+        // that is new enough never opens the microphone for it; this is for
+        // one that is not: its audio is dropped here, untranscribed.
+        if (notchSilent()) return;
         // Suppress while an active summon is in flight — the user already
         // got JARVIS's attention via the summon hotkey (or a prior wake).
         if (pendingSummons.has(sidecarId)) return;
@@ -4576,6 +4590,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             ? (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line)
             : undefined,
         },
+        // Asking: typed in Home, or spoken while the talk keys are held. One
+        // stored turn each, in the notch's own conversation; nothing spoken.
+        asks: notchAskDeps({
+          db: getDb(),
+          sidecars: sidecarManager,
+          config: () => agentService.getConfig(),
+          llm: () => agentService.getLLMManager(),
+          transport: () => notchTurnStore,
+        }),
         openDashboard: (sidecarId) => {
           const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
           for (const id of targets) {
@@ -5066,11 +5089,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
+      // With the notch on a reply is never spoken (src/notch/silence.ts).
+      speakAllowed: () => !notchSilent(),
       // Which Telegram or Discord threads are a guest's, against the channel
       // owner as configured now (#1313 follow-up): their rows are framed. A
       // forward in the owner's own thread is framed on its own (holdsForward).
       isGuestConversation: id => isChannelGuestThread(id, agentService.getConfig().channels),
     });
+    // Instructions given on the notch run as turns of this same store. What
+    // the last run left open is closed now, and answers nobody closed come back.
+    notchTurnStore = briefChatTransport;
+    notchReal?.asks?.resume();
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
     briefPreparedOpportunities = new PreparedOpportunities(getDb());
@@ -5521,7 +5550,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       // Absent unless the notch switch is on.
-      ...notchRoutes(notchEnabled(), { demo: notchDemo, fixtures: notchReal?.fixtures ?? null, pages: () => notchSurface?.listening() ?? 0 }),
+      ...notchRoutes(notchEnabled(), {
+        demo: notchDemo, fixtures: notchReal?.fixtures ?? null, pages: () => notchSurface?.listening() ?? 0,
+        script: notchReal?.asks && notchReal.talk ? notchScriptDeps({
+          llm: () => agentService.getLLMManager(),
+          type: (text) => { notchReal?.asks?.typed(text); },
+          say: (text) => { notchReal?.talk?.pretend(text); },
+        }) : null,
+      }),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,
@@ -6323,6 +6359,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Self-update progress is bookkeeping the sidecar manager records on the
     // connection (surfaced through /api/sidecars); it is not an observation.
     const internalSidecarEventTypes = ['update_progress'];
+    // What is typed into the notch, and its recordings, are for the notch
+    // alone (src/notch/surface.ts, src/notch/talk.ts): an instruction is not
+    // an observation to pass round the dashboards.
+    const notchSidecarEventTypes = ['notch.message', 'notch.talk'];
 
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double
@@ -6331,6 +6371,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (skipGenericSidecarEvent(event.event_type, !!awarenessService)) return;
       if (recorderEventTypes.includes(event.event_type)) return;
       if (internalSidecarEventTypes.includes(event.event_type)) return;
+      if (notchSidecarEventTypes.includes(event.event_type)) return;
 
       const payloadObj: Record<string, unknown> =
         typeof event.payload === 'object' && event.payload !== null

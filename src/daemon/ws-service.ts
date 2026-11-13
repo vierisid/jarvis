@@ -74,6 +74,7 @@ import { findFacts } from '../vault/facts.ts';
 import { roomActionArgs, roomActionEntityArg, roomActionTargetKind, roomActionTimeArg, SETTLED_TIME_ARG, withoutEntityPin } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
+import { notchSilent } from '../notch/silence.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { reportExecutionActivity } from '../actions/progress-context.ts';
 import type { RealtimeTaint } from '../agents/realtime-taint.ts';
@@ -1106,6 +1107,8 @@ export class WebSocketService implements Service {
    * audio was synthesized, so a caller never reports silence as spoken.
    */
   async broadcastProactiveVoice(text: string): Promise<number> {
+    // Nothing is spoken with the notch on. 0 is the truth: nobody heard it.
+    if (notchSilent()) return 0;
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
       return 0;
@@ -1788,7 +1791,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext, scope, chatContextKey);
 
       // Set up streaming TTS: speak sentences as they arrive
-      const ttsActive = !!(this.ttsProvider && ws);
+      // Never with the notch on: the reply is text there (src/notch/silence.ts).
+      const ttsActive = !!(this.ttsProvider && ws) && !notchSilent();
       let ttsSentenceQueue: string[] = [];
       let ttsSpeaking = false;
       let ttsStartSent = false;
@@ -3821,6 +3825,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // An earlier answer still playing is stale now, whether or not this one
     // is spoken (#1156): a refusal kept talking under a later decision.
     this.stopVoiceAnswer(ws);
+    // With the notch on the answer is shown, never said (src/notch/silence.ts).
+    if (notchSilent()) return;
     if (this.realtimeSessions.has(ws)) return;
     const open = this.activeChats.get(ws);
     if (open?.replied) {

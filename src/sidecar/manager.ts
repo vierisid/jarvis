@@ -35,6 +35,7 @@ import { classifySidecarVersion, isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDE
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 import { computeAnonId } from '../telemetry/anon-id.ts';
 import { loadOrGenerateSidecarKeys, enrollDevice, buildEnrollmentUrls, isLocalhostBrainUrl } from './enrollment.ts';
+import { notchEnabled } from '../notch/switch.ts';
 
 export { buildEnrollmentUrls, isLocalhostBrainUrl } from './enrollment.ts';
 
@@ -102,6 +103,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'update_progress',
   // What the notch's page says to the brain: an answer, "open", hello.
   'notch.message',
+  // A recording made while the notch's talk keys were held (src/notch/talk.ts).
+  'notch.talk',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */
@@ -884,6 +887,10 @@ export class SidecarManager implements Service {
               update_status: verdict,
               latest: SIDECAR_LATEST_VERSION,
               ...(verdict === 'suggested' ? { update_suggested: true, recommended: SIDECAR_RECOMMENDED_VERSION } : {}),
+              // With the notch on Jarvis does not listen for its name, and a
+              // desktop app told so here never opens the microphone for it.
+              // A brain with the switch off does not mention the notch.
+              ...(notchEnabled() ? { notch: true } : {}),
             }));
           } catch { /* best-effort */ }
           if (verdict === 'suggested') {

@@ -88,6 +88,7 @@ export class NotchSurface {
     if (change.say) line.say = structuredClone(change.say);
     if (change.done !== undefined && line.kind === 'work') line.done = change.done;
     if (change.heard !== undefined && line.kind === 'listen') line.heard = change.heard;
+    if (change.over !== undefined && line.kind === 'listen') line.over = change.over;
     if (change.blocks && (line.kind === 'sheet' || line.kind === 'ask')) line.blocks = structuredClone(change.blocks);
     this.push({ type: 'update', id, ...change });
   }

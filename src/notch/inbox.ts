@@ -21,6 +21,8 @@
  *     round ends on the list of what still waits.
  *   - Before an item is shown it is asked whether it is still true. One that
  *     is not leaves the count without a word.
+ *   - Something the person started and is waiting on (an instruction that is
+ *     running) gets the notch back after an urgent thing took it.
  *
  * An item plays itself: it is a small script on a stage (./stage.ts), so what
  * a yes means stays with the thing that knows (an approval decides itself
@@ -56,6 +58,17 @@ export interface NotchItem {
   urgent?: boolean;
   /** Said once and then gone, whatever the person does: news, not a question. */
   once?: boolean;
+  /**
+   * The person started it (they asked, or are speaking): its first line can
+   * be answered at once, with none of the moment a line that came by itself
+   * is given.
+   */
+  asked?: boolean;
+  /**
+   * It is under way and the person is waiting on it: when something urgent
+   * takes its place on the notch, it gets the notch back when that is over.
+   */
+  returns?: boolean;
   /** One line for the list of what waits. */
   title(): NotchPart[];
   /** Is it still true? Asked each time before it is shown. */
@@ -130,6 +143,8 @@ export class NotchInbox {
       const old = this.entries[at]!;
       entry = { item, seq: old.seq };
       this.entries[at] = entry;
+      // Whoever was going to hand the notch back to the old one hands it to this one.
+      if (this.playing?.then === old) this.playing.then = entry;
       if (this.playing?.entry === old) wasPlaying = this.halt();
     } else {
       entry = { item, seq: ++this.seq };
@@ -141,8 +156,10 @@ export class NotchInbox {
     }
     if (item.speaks && this.free()) { this.start(entry, { unasked: true }, null); return; }
     if (item.speaks && item.urgent && this.playing && this.canShow()) {
-      this.halt();
+      const was = this.halt();
       this.start(entry, { unasked: true }, null);
+      const back = was?.entry;
+      if (back?.item.returns && back !== entry && this.playing?.entry === entry) this.playing.then = back;
       return;
     }
     // No notch was up, or everything was held: it gets its say when that ends.
@@ -262,7 +279,7 @@ export class NotchInbox {
 
   private start(entry: Entry, how: { unasked: boolean }, round: Round | null): void {
     entry.missed = false;
-    this.run({ entry, stage: this.stage(entry.item.id, how.unasked), round }, async (stage) => {
+    this.run({ entry, stage: this.stage(entry.item.id, how.unasked && entry.item.asked !== true), round }, async (stage) => {
       if (entry.item.check && !(await entry.item.check())) return 'gone';
       if (stage.ended()) throw new NotchStageEnded();
       return entry.item.play(stage, how);

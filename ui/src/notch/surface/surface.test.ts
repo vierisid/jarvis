@@ -490,3 +490,91 @@ describe('what should never break it', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'second', act: 'yes' }]);
   });
 });
+
+describe('talking and typing (pass 5)', () => {
+  test('Esc on what is being heard turns it away', () => {
+    show({ id: 'l', kind: 'listen', say: [], heard: 'delete every' });
+    expect($('.heard')?.textContent).toBe('delete every');
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'l', act: 'no' }]);
+    expect(body()).toBe('rest');
+  });
+
+  test('a recording ended by a slip lets go of the keys like one that was let go', () => {
+    surface.key('talk-start');
+    expect($('.wrap')?.classList.contains('att')).toBe(true);
+    surface.key('talk-cancel');
+    expect($('.wrap')?.classList.contains('att')).toBe(false);
+  });
+
+  test('work with no known number of steps draws no beads, and Esc still stops it', () => {
+    show({ id: 'w', kind: 'work', say: ['Running a command.'], steps: 0, done: 0 });
+    expect(body()).toBe('work');
+    expect(said()).toBe('Running a command.');
+    expect($('.beads')).toBeNull();
+    expect($('.count')).toBeNull();
+    surface.receive({ type: 'update', id: 'w', say: ['Searching the web.'] });
+    expect(said()).toBe('Searching the web.');
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'w', act: 'stop' }]);
+  });
+
+  test('a text field opened to type in takes the keyboard, and gives it back when it goes', () => {
+    show({ id: 'h', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask', blocks: [], focus: true });
+    const input = $<HTMLInputElement>('input.ask')!;
+    expect(focus).toEqual([true]);
+    expect(document.activeElement).toBe(input);
+    // Esc from the key watcher, not from the field: the field never saw it.
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'h', act: 'no' }]);
+    expect(focus).toEqual([true, false]);
+  });
+
+  test('a field replaced by another line gives the keyboard back too', () => {
+    show({ id: 'h', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask', blocks: [], focus: true });
+    show({ id: 'w', kind: 'work', say: ['On it.'], steps: 0, done: 0 });
+    expect(focus).toEqual([true, false]);
+  });
+
+  test('a field that is only drawn again does not take the keyboard', () => {
+    surface.receive({ type: 'state', count: 0, line: { id: 'h', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask', blocks: [], focus: true } });
+    expect(focus).toEqual([]);
+  });
+
+  test('a field without the word for it waits for a click, as before', () => {
+    show({ id: 'h', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask', blocks: [] });
+    expect(focus).toEqual([]);
+  });
+});
+
+describe('what was heard, once the keys are up', () => {
+  const hints = (): string => ($('.hint')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+  test('while listening the hint is to let go; once the keys are up it is Esc', () => {
+    show({ id: 'l', kind: 'listen', say: [], heard: '' });
+    expect(hints()).toContain('let go when done');
+    expect($('.wrap')?.classList.contains('talk')).toBe(true);
+    surface.receive({ type: 'update', id: 'l', over: true });
+    expect(hints()).not.toContain('let go');
+    expect(hints()).toContain('not this');
+    expect($('.wrap')?.classList.contains('talk')).toBe(false);
+    surface.receive({ type: 'update', id: 'l', heard: 'send Leo the numbers', over: true });
+    expect($('.heard')?.textContent).toBe('send Leo the numbers');
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'l', act: 'no' }]);
+  });
+
+  test('a line that arrives already over never asks to let go', () => {
+    show({ id: 'l', kind: 'listen', say: [], heard: 'send Leo the numbers', over: true });
+    expect(hints()).toContain('not this');
+    expect($('.wrap')?.classList.contains('talk')).toBe(false);
+  });
+});
+
+test('a row that opens something still shows its small word', () => {
+  show({ id: 's', kind: 'sheet', say: ['What you asked'], blocks: [{ kind: 'row', id: 'a1', lead: '15:08', say: ['send Leo the numbers'], small: 'done', go: true }] });
+  const row = $('.sheet button.row.go')!;
+  expect(row.querySelector('.at')?.textContent).toBe('done');
+  row.click();
+  expect(sent).toEqual([{ type: 'answer', id: 's', act: 'go', row: 'a1' }]);
+});

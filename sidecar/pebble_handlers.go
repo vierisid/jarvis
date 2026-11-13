@@ -105,6 +105,11 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 // sequence.
 func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
+		// With the notch on nothing is spoken back. The brain does not send
+		// speech then; this is for a brain that still does.
+		if notch.Enabled() {
+			return nil, fmt.Errorf("nothing is spoken while the notch is on")
+		}
 		rawData, ok := params["data"]
 		if !ok {
 			return nil, fmt.Errorf("missing required parameter: data")

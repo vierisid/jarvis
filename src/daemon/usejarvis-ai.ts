@@ -1,6 +1,7 @@
 import type { JarvisConfig, LLMConfig, STTConfig, TTSConfig } from '../config/types.ts';
 import type { HostedVoiceCredentials } from '../comms/voice.ts';
 import { loadUserSection, loadUserSectionStrict } from './user-settings.ts';
+import { notchSilent } from '../notch/silence.ts';
 
 /**
  * Hosted "Usejarvis AI" wiring (the platform's LLM proxy).
@@ -336,6 +337,9 @@ export function realtimeEnablement(
   config: JarvisConfig,
   loadStored: (section: 'voice') => unknown = loadUserSectionStrict,
 ): RealtimeEnablement {
+  // Live voice answers out loud by design, so with the notch on it is off,
+  // whatever the settings say (src/notch/silence.ts).
+  if (notchSilent()) return 'off';
   const configured = config.voice?.realtime?.enabled === true;
   if (!hasUsejarvisAi(config)) return configured ? 'user-on' : 'off';
   // An explicit TRUE needs no disambiguation, and must not cost a vault read:

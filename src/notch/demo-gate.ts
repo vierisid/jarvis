@@ -13,9 +13,12 @@
  * What the secret is worth: whoever holds it can make the notch show sample
  * sentences, and can make the fixed test items of ./fixtures.ts (an approval,
  * a promise, a question, a failure), each of which does one harmless thing
- * that is written down there. It reaches no data and chooses nothing that
- * runs. It is still a secret, because an open gate is a way to put words in
- * Jarvis's mouth.
+ * that is written down there. On an isolated development brain with no real
+ * model it can also load a script into the stand-in model and send it words
+ * as if typed or spoken (./script.ts); such a script may call three fixed,
+ * harmless tools and nothing else, and none of that works once a real model
+ * is set up. It reaches no data and chooses nothing that runs. It is still a
+ * secret, because an open gate is a way to put words in Jarvis's mouth.
  */
 import { MIN_SECRET_LENGTH, debugRpcTokenMatches } from '../daemon/debug-rpc-gate.ts';
 
@@ -24,6 +27,8 @@ export const NOTCH_DEMO_HEADER = 'x-notch-demo-token';
 export const NOTCH_DEMO_PATH = '/api/notch/demo';
 /** The second route behind the same gate: makes one real test item (./fixtures.ts). */
 export const NOTCH_FIXTURE_PATH = '/api/notch/fixture';
+/** The third: the stand-in model's script, and words sent to it as if typed or spoken (./script.ts). */
+export const NOTCH_SCRIPT_PATH = '/api/notch/script';
 
 export type NotchDemoGateState = 'off' | 'too-short' | 'refused-hosted' | 'notch-off' | 'open';
 

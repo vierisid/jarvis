@@ -115,11 +115,19 @@ export interface NotchAskLine extends NotchLineBase {
   /** The word for sending what was typed. */
   yes: string;
   blocks: NotchBlock[];
+  /**
+   * The person opened this to type: the field takes the keyboard as soon as
+   * it is shown, without a click. Where the system will not hand it over, a
+   * click on the field still does.
+   */
+  focus?: boolean;
 }
 
 /**
  * Jarvis doing something step by step. `done` of `steps` beads are lit; the
- * brain moves them on with `update`. Esc asks to stop.
+ * brain moves them on with `update`. Esc asks to stop. With `steps` 0 how many
+ * there will be is not known: no beads are drawn, and the sentence says what
+ * is being done.
  */
 export interface NotchWorkLine extends NotchLineBase {
   kind: 'work';
@@ -139,10 +147,18 @@ export interface NotchSendLine extends NotchLineBase {
   ms: number;
 }
 
-/** The person is speaking. `heard` is what has been made out so far. */
+/**
+ * The person is speaking, or has just spoken. `heard` is what has been made
+ * out so far. Esc turns it away (the answer is no): it is not acted on.
+ */
 export interface NotchListenLine extends NotchLineBase {
   kind: 'listen';
   heard: string;
+  /**
+   * The keys are up: nothing more is being heard, and `heard` is being made
+   * out or is final. The hint to let go gives way to the one for Esc.
+   */
+  over?: boolean;
 }
 
 export type NotchLine =
@@ -193,7 +209,7 @@ export type NotchToPage =
    * A change to the line on screen, in place: steps done, a new sentence,
    * words heard, or a sheet's content after one of its buttons was pressed.
    */
-  | { type: 'update'; id: string; done?: number; say?: NotchPart[]; heard?: string; blocks?: NotchBlock[] }
+  | { type: 'update'; id: string; done?: number; say?: NotchPart[]; heard?: string; over?: boolean; blocks?: NotchBlock[] }
   /** Something the notch does with its face or body, without saying anything. */
   | {
     type: 'act'; mood?: NotchMood; gesture?: NotchGesture; lip?: NotchLip; birth?: NotchBirth;

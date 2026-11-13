@@ -65,6 +65,10 @@ type NotchService struct {
 // the zero value is "off, no surface".
 var notch = &NotchService{}
 
+// notchTalk makes a recording while the talk keys are held (notch_talk.go).
+// It has no microphone until a connection gives it one.
+var notchTalk = newNotchTalker()
+
 // usePanels records the panel service the notch's window is opened through.
 // nil means this build or machine has no windows to offer.
 func (n *NotchService) usePanels(panels PanelService) {
@@ -151,7 +155,11 @@ func (n *NotchService) watchKeys() {
 	if !pairs.valid() {
 		pairs = notchDefaultPairs(runtime.GOOS)
 	}
-	kb := newNotchKeyboard(pairs, func(action notchKeyAction) { n.runInPage(notchKeyScript(action)) }, nil)
+	kb := newNotchKeyboard(pairs, func(action notchKeyAction) {
+		// The microphone first: it must not wait on the page.
+		notchTalk.key(action)
+		n.runInPage(notchKeyScript(action))
+	}, nil)
 	if err := kb.watch(); err != nil {
 		log.Printf("[notch] keys: not watching: %v", err)
 		return

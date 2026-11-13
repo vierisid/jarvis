@@ -19,6 +19,7 @@ const REQUIRED = [
   'tray.set_pause', 'tray.set_mute', 'notify.action',
   'ui_interaction', 'ui_recording',
   'notch.message',
+  'notch.talk',
 ];
 
 describe('sidecar event subscriptions', () => {

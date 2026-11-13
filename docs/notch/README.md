@@ -100,7 +100,9 @@ itself, and `sidecar.yaml` has no setting for it.
     /api/notch/demo` exists only with the switch on, a `JARVIS_NOTCH_DEMO`
     secret of 16 or more characters, and not on a hosted install, and every
     request must echo the secret. Otherwise it answers 404. It can make the
-    notch show sample sentences and nothing else.
+    notch show sample sentences, make the fixed test items (below), and, on a
+    development brain with no real model, load a script into the stand-in
+    model (invariant 37). Nothing else.
 
 14. **The keyboard is watched only while the notch is on screen.** The watch
     starts when the notch's page is attached and ends when it is detached, so
@@ -188,6 +190,80 @@ What holds for all of them:
 28. **While a notch is up, it is the one that asks.** The approval toast and
     the task-complete toast are not raised for what the notch shows.
 
+## Talking and typing
+
+Hold the talk keys, speak, let go. Or yes at rest, and type. Nothing is spoken
+back.
+
+Both are the same thing to the brain: one instruction, entering at one
+function (`src/notch/asks.ts`, `run`). It becomes one stored turn of the
+product's own turn store (`BriefChatTransport.submit`): the same agent, tools
+and authority gate as a dashboard message, kept in one conversation called
+Notch, which the dashboard lists like any other. "Remember that..." does not
+go to the agent: it is written to memory as one fact and read back
+(`src/notch/remember.ts`).
+
+| What | Where |
+|---|---|
+| The instruction from heard to answered, and Home | `src/notch/asks.ts` |
+| The ledger, and the two promises it keeps | `src/notch/ledger.ts` |
+| The desktop app's recordings, made into words | `src/notch/talk.ts` |
+| The microphone while the keys are held | `sidecar/notch_talk.go` |
+| What the notch is given from the product | `src/daemon/notch-asks.ts` |
+| Nothing is spoken: the one question every speaking place asks | `src/notch/silence.ts` |
+| The stand-in model, and its dev route | `src/llm/scripted.ts`, `src/notch/script.ts` |
+
+What the person sees. While the keys are held the line listens. When they
+come up it shows what was heard, for 0.9 seconds, and then the work. Esc at
+any point before the work starts turns it away. Typed words are not shown
+back: the work shows at once. While it works the line says what is being done
+(the product's own fixed sentences, never a tool's arguments), and Esc stops
+it. The answer is one line; one longer than 140 characters, or in more than
+one paragraph, opens as a sheet that stays until it is closed.
+
+29. **A recording that was turned away can never run.** An instruction runs
+    only by its row in the ledger being claimed, which moves it from `heard`
+    to `running` in one statement. A row that was dismissed is not `heard`.
+    Its audio arriving late, its words arriving late, a second key-up: none
+    of them can claim it.
+30. **Nothing runs twice.** A row is claimed once. The turn it starts carries
+    the row's id as its request id, which the turn store refuses a second
+    time. A restart retries nothing: what was running is closed as failed,
+    and what had not run is closed as turned away.
+31. **Audio is acted on only by its recording's id.** The id is made where the
+    microphone opens. The brain keeps one open recording per desktop app and
+    drops an `end` for any other id unread. Nothing looks up "the latest".
+32. **What stays on the machine.** A recording ended by a slip (another key
+    with the pair held), one made while the microphone was muted, one with
+    less than 250 ms of voice in it, and one that ran into the 60 second
+    limit are not sent. The brain is told how it ended and gets no sound.
+33. **Words are not in a log or in a broadcast.** The brain logs how long a
+    transcript was, never what it said. `notch.message` and `notch.talk` are
+    not passed on to dashboards with the other desktop app events.
+34. **Nothing is spoken back.** With the switch on no reply, confirmation,
+    suggestion or workflow note is synthesised, live voice is off whatever
+    the settings say, and the desktop app refuses to play speech. The speech
+    settings are not changed: with the switch off everything speaks as it
+    did, and the settings page's voice preview still plays.
+35. **It does not listen for its name.** With the switch on the brain says so
+    when a desktop app connects, and that desktop app never opens the
+    microphone for the wake word. A desktop app too old to understand still
+    sends what it hears, and the brain drops it untranscribed. The talk keys
+    are the only way to speak to it.
+36. **A memory holds only what was said.** "Remember that..." is split into
+    who, what and the rest by one small model call. If the reply is not
+    exactly that, if it uses a word the person did not say, or if the name
+    fits more than one entry, nothing is saved and the notch says so. The
+    fact is confirmed, its evidence is the person's own sentence, and its
+    source reads "you told me".
+37. **The stand-in model cannot be mistaken for a model, or reach one.** It
+    is never in the settings: nothing lists it and no save can keep it. It is
+    bound only on a `dev:local` brain with the dev gate open, after a script
+    is loaded, and only while no real provider is bound. Its script's words
+    are free; its tool calls are limited to three with fixed arguments
+    (`NOTCH_SCRIPT_TOOLS`). Words can be sent through the dev route only
+    while it is the model that answers.
+
 ### What this branch changes with the switch off
 
 Invariant 1 is about the notch. These are changes to the product itself, made
@@ -204,6 +280,18 @@ switch is on:
   restart is closed, not run again; nothing is announced or run while Jarvis
   is paused; a turn that came back as error text is a failure.
 - **The audit trail has a channel `notch`**, unused while the switch is off.
+- **The wake listener opens the microphone when the brain has answered the
+  registration**, not at the moment of connecting (`wakeHold`,
+  `sidecar/pebble_wake.go`). A brain with the switch off answers at once, so
+  this is milliseconds; a brain too old to answer is given three seconds.
+- **A recording on the talk keys ended by a slip is a new key action**
+  (`talk-cancel`). The keys are only watched while a notch is up.
+- **The turn store has a door for the brain itself**
+  (`BriefChatTransport.submit`, `onEvent`, `cancelTurn`) and a rule for
+  whether a spoken reply may be spoken (`speakAllowed`). Nothing calls them
+  with the switch off.
+- **A sheet row that opens something shows its small word** (the page's
+  `blocks.ts`). No sheet used both before.
 
 And these are behind the switch:
 
@@ -211,6 +299,9 @@ And these are behind the switch:
   Background model calls wait for Resume. One line in `daemon/index.ts`
   makes it the rule everywhere.
 - **Suggestions join the count** and are not spoken or toasted.
+- **Nothing is spoken and nothing listens for the wake word** (invariants 34
+  and 35).
+- **Typed and spoken notch events are not broadcast to dashboards.**
 - **Approval and task-complete toasts are not raised** while a notch page is up.
 
 ## The keys
@@ -256,7 +347,7 @@ And these are behind the switch:
   on the notch. They are in the dashboard, and in the tray's count.
 - Esc twice is heard only while the notch has something on it, because that
   is the only time Esc is taken from the app in front. To stop everything
-  from rest: yes (which opens Today or starts a round), then Esc twice. Or
+  from rest: yes (which opens Home or starts a round), then Esc twice. Or
   the tray's Pause. The same pause either way.
 - Pause does not stop watching. The observers run on; "eyes closed" here
   means nothing is done, not that nothing is seen.
@@ -267,11 +358,29 @@ And these are behind the switch:
 - Workflow questions, failures and suggestions on the notch have tests but
   no fixture that makes a real workflow run, so they have not been seen on a
   real brain. Approvals, promises and the pause have.
-- There is no model for testing without a key. The fixtures need none.
-- Today lists approved actions and kept promises only. Work that needed no
+- A second instruction while one is running is not queued: it is not
+  started, and the notch says what is still running.
+- "What was understood" in the ledger is a second, small model's one
+  sentence about the words, made beside the turn. It is not a record of what
+  the agent that acted understood, because the product keeps none. For
+  "Remember that..." it is exactly what was stored.
+- The answer is the text after the last thing the turn did. If an agent's
+  late progress arrives after its last words, the whole reply is shown.
+- The words do not appear while they are spoken: only when the keys come up.
+  No speech-to-text provider here streams.
+- The microphone stays open until the keys come up, also after Esc turned the
+  line away. What it records then is dropped by the brain unread, but is sent.
+- The Windows foreground rule may refuse the notch the keyboard when Home is
+  opened with the keys and not with a click. Then a click on the field takes
+  it, as before.
+- The old summon hotkey still opens the microphone and answers in its bubble,
+  in writing. It is a second way in, with its own history.
+- The talk path has not been run on a real microphone by its author: the
+  recorder is tested with a stand-in microphone, the brain with stand-in
+  audio.
+- Today (the list under Home's text field) holds approved actions and kept
+  promises only. Work that needed no
   approval is in the audit trail by tool name, with no sentence to show.
-- Talking is only seen, not heard: holding the talk keys makes the notch perk
-  up. Speech comes in a later pass.
 - The keys were tried by hand on one Windows 11 machine. The macOS tap has
   never run.
 - The existing Ctrl + Shift + Space hotkey is untouched and still does what
@@ -329,6 +438,8 @@ And these are behind the switch:
 | brain to desktop app | `notch.push` | `{message: any JSON}`, for the page | `{pushed: true}` |
 | brain to desktop app | `notch.open_dashboard` | none | `{opened: boolean}`. Opens the dashboard's window, as the tray's entry does. Decides nothing |
 | desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
+| desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
+| brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through six functions on `window`:
 
@@ -346,7 +457,7 @@ and the desktop app calls four functions the page defines:
 | Function | Meaning |
 |---|---|
 | `window.__notch_receive(message)` | One message from the brain |
-| `window.__notch_key(name)` | What the keys said: `talk-start`, `talk-end`, `yes`, `esc`, `esc-twice` |
+| `window.__notch_key(name)` | What the keys said: `talk-start`, `talk-end` (let go), `talk-cancel` (ended by a slip), `yes`, `esc`, `esc-twice` |
 | `window.__notch_pairs(pairs)` | The pairs changed in the settings: same shape as `__notch_keys()` answers |
 | `window.__notch_cursor(x, y, down)` | Where the pointer is, in the page's own pixels from the window's top left corner, and whether the main mouse button is down (1 or 0). Sent about 30 times a second, and only when something changed. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen, and how a click in the app underneath closes a sheet |
 
@@ -458,6 +569,28 @@ promise is kept by adding one line to `notch-fixture.log` in the data
 directory, with no model: the file is the proof that it ran once. Before
 setup is complete the promise executor is not running; with the demo gate
 open it runs for fixture promises alone.
+
+### Asking without a model key
+
+A test brain has no model and no speech-to-text until keys are typed into
+its dashboard. Until then an instruction on the notch answers "No model is
+set up yet", and yes opens the dashboard. To try the path without keys there
+is a stand-in model: it answers from a script written in advance, and
+nothing thinks.
+
+```sh
+scripts/notch/standin.sh load                          # the sample script, scripts/notch/standin.json
+scripts/notch/standin.sh type "what is two plus two"   # as if typed in Home
+scripts/notch/standin.sh say "what is two plus two"    # as if spoken, from after the microphone on
+scripts/notch/standin.sh say                           # a recording in which nothing was caught
+scripts/notch/standin.sh list                          # the script, and the calls the stand-in received
+```
+
+With the sample loaded, typing on the notch itself works too: "what system
+is this" runs a real tool and answers in a sheet, "run the test command"
+stops for an approval first, "explain the notch" is a long answer, "Remember
+that Anna prefers calls." writes one fact. Once a real model is set up the
+brain refuses all of this.
 
 The page can also be tried without the desktop app or a brain, in a browser.
 The preview runs the real page with the brain's own demo scripts, and can draw
