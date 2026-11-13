@@ -58,6 +58,7 @@ function harness() {
   const real = attachNotchReal(surface, {
     approvalManager: approvals,
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
+    deny: (id) => applyApprovalDecision('deny', id, NOTCH_DECIDER, deps),
     deliverApproval: (request) => { delivered.push(request.id); },
     openDashboard: (from) => { opened.push(from); },
     approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
@@ -134,7 +135,7 @@ describe('the approval fixture, from the command to Today', () => {
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} }, () => {});
     onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
     const real = attachNotchReal(surface, {
-      approvalManager: approvals, approve: async () => ({ status: 'already_decided' }),
+      approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
       openFailures: () => open,
       recordFixtureFailure: () => { open.push({ key: 'k', headline: 'The notch test failed, and Jarvis cannot tell whether it took effect.' }); return open[0]!.headline; },
       lookMs: 3_600_000, log: () => {},
@@ -170,10 +171,10 @@ describe('the approval fixture, from the command to Today', () => {
   test('without the brain\'s tools there is no command fixture, and before they are loaded it says so', async () => {
     const approvals = new ApprovalManager();
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} }, () => {});
-    const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
+    const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
     expect(none.fixtures.kinds()).toEqual(['approval', 'payment']);
     none.stop();
-    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
+    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
     live = early;
     await expect(early.fixtures.make('command', {})).rejects.toThrow('has not loaded its tools yet');
     expect(approvals.getPending()).toEqual([]);

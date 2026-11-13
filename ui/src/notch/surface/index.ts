@@ -24,7 +24,7 @@ import { createSounds } from './sounds.ts';
 
 /** How long after a line is drawn a yes from the keyboard is ignored. */
 const YES_DEAD_MS = 350;
-/** And how long when the line came by itself. */
+/** And how long when the line came by itself. An Esc is ignored for as long on such a line. */
 const YES_DEAD_UNASKED_MS = 700;
 
 export interface NotchSurfaceOptions {
@@ -669,7 +669,8 @@ export function createNotchSurface(
     if (!cur || cur.done || e.target instanceof HTMLInputElement) return;
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (sentence.picking()) sentence.closePick(); else cur.onEsc?.();
+      if (sentence.picking()) sentence.closePick();
+      else if (!(line?.unasked && tooSoon())) cur.onEsc?.();
       return;
     }
     // A line that only just appeared cannot be answered by a key already on its way down.
@@ -783,6 +784,10 @@ export function createNotchSurface(
       yesKey();
     } else if (name === 'esc') {
       if (sentence.picking()) sentence.closePick();
+      // Esc on a line is a no. One that came by itself takes none for its
+      // first moment, like a yes: the key may have been on its way to the
+      // app in front.
+      else if (line?.unasked && tooSoon()) return;
       else if (cur && !cur.done) cur.onEsc?.();
     } else if (name === 'esc-twice') {
       eyes.gesture('shake');

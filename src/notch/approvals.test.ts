@@ -31,7 +31,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -75,6 +75,7 @@ function harness(options: { page?: boolean } = {}) {
   const notch = attachNotchApprovals(inbox, {
     approvalManager: approvals,
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
+    deny: (id) => (options.denyFails ? Promise.reject(new Error('database is locked')) : applyApprovalDecision('deny', id, NOTCH_DECIDER, deps)),
     openDashboard: (from) => { opened.push(from); },
     log: (line) => logs.push(line),
   });
@@ -82,6 +83,7 @@ function harness(options: { page?: boolean } = {}) {
   const text = (l: NotchLine | null): string => (l?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   return {
     approvals, deps, runs, ask, surface, inbox, notch, logs, opened, line, fromPage,
+    pushed: () => pushed,
     said: (): string => text(line()),
     count: (): number => surface.current().count,
     async sync(): Promise<void> { notch.sync(); await settle(); },
@@ -162,19 +164,58 @@ describe('one line, one yes', () => {
     expect(h.inbox.has(h.notch.itemId(req.id))).toBe(true);
   });
 
-  test('not now, and a line left alone, are never a deny', async () => {
-    for (const act of ['no', 'fold'] as const) {
-      // A clean store each time round: the first request would still be pending.
-      closeDb();
-      initDatabase(':memory:', { quiet: true });
-      const h = harness();
-      const req = h.ask();
-      await h.sync();
-      await h.answer(act);
-      expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
-      expect(h.line()).toBeNull();
-      expect(h.count()).toBe(1);
-    }
+  test('a line left alone until it folds is not a no: the request still waits, and comes round again', async () => {
+    const h = harness();
+    const req = h.ask();
+    await h.sync();
+    await h.answer('fold');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    await h.open();
+    expect(h.inbox.showing()).toBe(h.notch.itemId(req.id));
+  });
+
+  test('Esc is a no: the request is denied as the notch, nothing runs, and it is gone from the count', async () => {
+    const h = harness();
+    const req = h.ask();
+    await h.sync();
+    await h.answer('no');
+    expect(h.approvals.getRequest(req.id)).toMatchObject({ status: 'denied', decided_by: 'notch' });
+    expect(getDb().query('SELECT channel, authority_decision FROM audit_trail WHERE approval_id = ?').get(req.id))
+      .toEqual({ channel: 'notch', authority_decision: 'denied' });
+    expect(h.runs).toEqual([]);
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+    await h.sync();
+    expect(h.inbox.has(h.notch.itemId(req.id))).toBe(false);
+    // Nothing waits any more: yes at rest does not bring it back.
+    await h.open();
+    expect(h.line()).toBeNull();
+  });
+
+  test('Esc inside the fuse only takes back the yes; a second Esc, on the offer, is the no', async () => {
+    const h = harness();
+    const req = h.ask();
+    await h.sync();
+    await h.answer('yes');
+    await h.answer('undo');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+    expect(h.line()).toMatchObject({ kind: 'offer' });
+    await h.answer('no');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('denied');
+    expect(h.runs).toEqual([]);
+  });
+
+  test('a no that cannot be recorded is said, and the request still waits', async () => {
+    const h = harness({ denyFails: true });
+    const req = h.ask();
+    await h.sync();
+    await h.answer('no');
+    expect(h.said()).toBe('That did not go through. It still waits.');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+    await h.answer('done');
+    expect(h.count()).toBe(1);
   });
 });
 
@@ -277,6 +318,17 @@ describe('what a key may not approve', () => {
     expect(h.count()).toBe(1);
   });
 
+  test('Esc on a line a key cannot approve is still a no: a payment can be refused from anywhere', async () => {
+    const h = harness();
+    const req = h.ask({ category: 'make_payment' });
+    await h.sync();
+    expect(h.line()).toMatchObject({ yes: 'open' });
+    await h.answer('no');
+    expect(h.approvals.getRequest(req.id)).toMatchObject({ status: 'denied', decided_by: 'notch' });
+    expect(h.opened).toEqual([]);
+    expect(h.count()).toBe(0);
+  });
+
   test('a request that needs on-screen review is approved in the dashboard: the product refuses it from anywhere else', async () => {
     const h = harness();
     const review = h.ask({ context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail (sends an email)' }) });
@@ -357,6 +409,32 @@ describe('the count and the round', () => {
     expect(h.count()).toBe(1);
     expect(h.runs).toHaveLength(2);
     expect(h.approvals.getRequest(second.id)!.status).toBe('pending');
+  });
+
+  // The owner's case of 13 November: three things wait, Esc on each of them.
+  test('Esc on each of three in a round turns all three down, and yes at rest then finds nothing waiting', async () => {
+    const h = harness();
+    const first = h.ask();
+    const second = h.ask();
+    const payment = h.ask({ category: 'make_payment' });
+    await h.sync();
+    await h.answer('fold');
+    expect(h.count()).toBe(3);
+    await h.open();
+    const before = h.pushed().length;
+    await h.answer('no');
+    await h.answer('no');
+    await h.answer('no');
+    // One key each, with no line in between and no list at the end: nothing is left to list.
+    expect(h.pushed().slice(before).filter((m) => m.type === 'show').map((m) => (m.type === 'show' ? m.line.kind : ''))).toEqual(['offer', 'offer']);
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+    for (const req of [first, second, payment]) expect(h.approvals.getRequest(req.id)!.status).toBe('denied');
+    expect(h.runs).toEqual([]);
+    await h.sync();
+    await h.open();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
   });
 
   test('an approval that was already waiting when the notch came up joins the count quietly', async () => {

@@ -377,6 +377,24 @@ describe('the keys', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'a1', act: 'yes' }]);
   });
 
+  test('a line that came by itself takes no Esc for 0.7 seconds either, and then Esc is its no', async () => {
+    show({ id: 'a2', kind: 'offer', say: ['Get system info?'], yes: 'approve', unasked: true });
+    await wait(300);
+    surface.key('esc');
+    expect(sent).toEqual([]);
+    expect(body()).toBe('line');
+    await wait(460);
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'a2', act: 'no' }]);
+    expect(body()).toBe('rest');
+  });
+
+  test('a line the person asked for takes Esc at once', () => {
+    show({ id: 'a3', kind: 'offer', say: ['Get system info?'], yes: 'approve' });
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'a3', act: 'no' }]);
+  });
+
   test('yes with nothing on the notch opens it', async () => {
     await settleKeys();
     surface.key('yes');

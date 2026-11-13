@@ -4523,6 +4523,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         busy: () => notchDemo?.running() != null,
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
+        // Esc on its line is a no: denied through the same function.
+        deny: (requestId) => applyApprovalDecision('deny', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
         // For the hand test, demo gate only: the shell command fixture is
         // filed against the brain's real run_command tool.

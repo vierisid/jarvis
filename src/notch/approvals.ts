@@ -31,9 +31,15 @@
  * before it has burnt, nothing was ever decided. If the dashboard decides in
  * the meantime, the decision function says so and the notch passes that on.
  *
- * Not now and a line left alone are never a deny. A deny is a decision with
- * consequences (the agent is told not to try again), and it is not given by
- * looking away.
+ * Esc is a no. It denies the request through the same decision function, so
+ * it is gone from the notch, the dashboard and the count, and the agent that
+ * asked is told no. That holds for every line here, the ones a key cannot
+ * approve included: a payment can be refused from anywhere. (Esc inside the
+ * fuse is different: it takes back the yes just given, and the offer is
+ * there again.)
+ *
+ * A line left alone until it folds is not a no. It goes back to the count,
+ * and comes round again. Looking away decides nothing.
  *
  * The approvals are found by looking, once a second, the way the tray and
  * the toast find them: nothing in the product announces them to listeners.
@@ -104,6 +110,8 @@ export interface NotchApprovalDeps {
   };
   /** Approves through the product's own decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
+  /** Denies through the same function, as the notch. */
+  deny(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Opens the dashboard on the machine whose notch was answered. */
   openDashboard?: (sidecarId: string | null) => void;
   now?: () => number;
@@ -172,6 +180,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
               ? ['Some of its letters could be look-alikes, so it is approved in the dashboard: ', shown]
               : ['It has to be reviewed on screen, so it is approved in the dashboard: ', shown];
         const answer = await stage.offer(why, 'open', { mood: 'careful' });
+        if (answer.act === 'no') return refuse(requestId, stage);
         if (answer.act !== 'yes') return 'waits';
         deps.openDashboard?.(stage.from());
         await stage.say(['It is open in the dashboard.'], 1800);
@@ -182,6 +191,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       // has run: a careful face.
       const destructive = impactFromCategory(request.action_category) === 'destructive';
       const answer = await stage.offer([`${bare(sentence)}?`], 'approve', destructive ? { mood: 'careful' } : {});
+      if (answer.act === 'no') return refuse(requestId, stage);
+      // Left alone until it folded: it waits, and comes round again.
       if (answer.act !== 'yes') return 'waits';
       answering.add(requestId);
       try {
@@ -194,6 +205,27 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         answering.delete(requestId);
       }
     }
+  }
+
+  /**
+   * Esc on the line: no. The request is denied, and nothing more is said
+   * about it: the notch shakes its head and goes on to what is next, so a
+   * row of them can be turned down one key each.
+   */
+  async function refuse(requestId: string, stage: NotchStage): Promise<NotchItemEnd> {
+    answering.add(requestId);
+    try {
+      await deps.deny(requestId);
+    } catch (error) {
+      log(`[notch] an approval could not be denied: ${error instanceof Error ? error.message : String(error)}`);
+      await stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' });
+      return 'waits';
+    } finally {
+      answering.delete(requestId);
+    }
+    // Denied here, or already decided somewhere else: either way it no longer waits.
+    stage.surface.act({ gesture: 'shake' });
+    return 'settled';
   }
 
   /** The fuse has burnt: decide, and say what came of it. */

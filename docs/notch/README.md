@@ -147,10 +147,16 @@ What holds for all of them:
 20. **The notch decides nothing.** A yes goes through the same function every
     other surface uses, so "decided once" holds: a second answer, from the
     notch or from anywhere else, is refused there, and the notch says so.
-21. **Not now is never no.** A line turned down, clicked away from, or left
-    until it folds goes back to the count. Nothing is denied, rejected or
-    cancelled by looking away. The only cancel on the notch is Esc inside a
-    promise's window, where cancelling is what the window is for.
+21. **Esc is a no. Looking away is not.** Esc on a line turns it down
+    through the product's own function: an approval is denied (a payment
+    too: it can be refused from anywhere), an approve-or-reject question is
+    rejected, a promise in its window is cancelled. It is gone from the
+    notch, the count and the dashboard, and whoever asked is told no. A
+    question that has no "no" (a choice, a form) leaves the notch for good
+    and stays in the dashboard. A line left alone until it folds is not
+    answered: it goes back to the count and comes round again. Esc inside a
+    fuse takes back the yes just given, and nothing else. By the owner's
+    decision of 13 November 2026; before it, Esc only meant "not now".
 22. **A yes is not acted on at once.** A fuse burns first and Esc takes it
     back. Nothing has been decided while it burns, so nothing has to be
     undone. A fuse nobody saw burn out (the page went away) decides nothing.
@@ -167,7 +173,9 @@ What holds for all of them:
     than a line (a path, a URL) is cut into pieces a line can break between,
     so no part of what is being approved is ever out of sight.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
-    takes no yes for 0.7 s, counted in the page from when it was drawn.
+    takes no yes and no Esc for 0.7 s, counted in the page from when it was
+    drawn. After that an Esc pressed for the app in front does land on the
+    line, because Esc is taken from that app while a line is up (16).
 25. **The page starts nothing.** A promise is run by the executor's own
     clock. The page saying its fuse has burnt is not what runs it.
 26. **One item per subject, and each has one chance to speak up.** An item
