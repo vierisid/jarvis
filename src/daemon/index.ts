@@ -5641,7 +5641,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
         onboardingComposer = compositionDependencies;
-        briefWorkflowComposition?.configure(compositionDependencies);
+        briefWorkflowComposition?.configure(compositionDependencies, () => llmManager.getProviderNames().length > 0);
         if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
           const quality = await loadPreparedQualityGate({ authority: authorityEngine,
             tool: name => toolRegistry.get(name) ?? null,

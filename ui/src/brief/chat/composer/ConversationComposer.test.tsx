@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { AI_PROVIDER_NEEDED_MESSAGE } from "../../../../../src/brief/ai-provider-needed";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { bindConversationComposer, composerAvailability, draftError, type ComposerBinding, type ComposerOwner } from "./model";
 
@@ -153,6 +154,15 @@ test("synchronous cancellation dispatch keeps feedback until the matching turn e
   await click(retry); expect(calls).toEqual(["cancel:a", "cancel:a"]); expect(status()).toBe("Stopping response…");
   binding = { ...binding, turn: null }; await render();
   expect(status()).toBe(""); expect(send().getAttribute("aria-disabled")).toBe("false"); expect(input().value).toBe("Next question");
+});
+
+test("the AI-provider-needed message links to AI settings; other errors do not", async () => {
+  binding = { ...binding, error: AI_PROVIDER_NEEDED_MESSAGE }; await render();
+  const link = host.querySelector<HTMLAnchorElement>("[data-provider-settings]");
+  expect(link?.textContent).toBe("Open AI settings");
+  expect(new URL(link!.href).searchParams.get("settingsTab")).toBe("llm");
+  binding = { ...binding, error: "Stop was not accepted." }; await render();
+  expect(host.querySelector("[data-provider-settings]")).toBeNull();
 });
 
 test("owner cancellation failure permits retry, and disconnect does not claim the turn stopped", async () => {

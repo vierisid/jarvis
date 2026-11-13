@@ -1,4 +1,6 @@
 import { IngredientPicker, IngredientChips } from "../ingredient-picker/IngredientPicker";
+import { AiSettingsLink } from "../../components/AiSettingsLink";
+import { AI_PROVIDER_NEEDED_CODE } from "../../../../../src/brief/ai-provider-needed";
 import type { IngredientCatalog } from "../ingredient-picker/model";
 import React, { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { Plus } from "lucide-react";
@@ -89,6 +91,7 @@ function BoundCreation({ shell, binding, reducedMotion }: { shell: BriefShellPor
           actions:{ setDraft:controller.setDraft, send:controller.submit, cancel:()=>{} } }} />
       <div className="brief-workflow-create-feedback" aria-live="polite">
         <p>{notice}</p>
+        {job?.blocker?.code === AI_PROVIDER_NEEDED_CODE && <AiSettingsLink />}
         {job?.blocker?.details?.length ? <ul>{job.blocker.details.map((detail, i) => <li key={i}>{detail}</li>)}</ul> : null}
         {!unresolved && job?.blocker && Object.hasOwn(failureLinks, job.blocker.code) &&
           <a data-failure-link href={targetHref(window.location.href, failureLinks[job.blocker.code]!.target)}>{failureLinks[job.blocker.code]!.label}</a>}

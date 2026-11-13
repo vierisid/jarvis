@@ -119,7 +119,16 @@ function TutorialConversation() {
 /** Existing provider credential/setup UI, returning before its old interview/tour. */
 export function ProviderSetup(props: Record<string, unknown>) {
   const { status } = useOnboardingStatus();
-  return (props.model as { setup?: { ready?: boolean } })?.setup?.ready || status?.setup_completed ? <button onClick={() => void (props.onComplete as () => Promise<void>)()}>Continue to your workspace</button> : status ? <OnboardingWizard status={status} setupOnly onComplete={props.onComplete as () => Promise<void>} /> : <p role="status">Loading provider setup…</p>;
+  const ready = (props.model as { setup?: { ready?: boolean } })?.setup?.ready === true;
+  const onLeave = props.onLeave as ((outcome: { setupSaved: boolean }) => Promise<void>) | undefined;
+  if (ready || status?.setup_completed) {
+    // Setup is saved but the services are not ready (no AI provider was added): the
+    // journey cannot go on, so this opens the workspace instead of a step that fails.
+    const open = !ready && onLeave ? () => onLeave({ setupSaved: true }) : (props.onComplete as () => Promise<void>);
+    return <button onClick={() => void open()}>Continue to your workspace</button>;
+  }
+  return status ? <OnboardingWizard status={status} setupOnly onComplete={props.onComplete as () => Promise<void>}
+    onBack={props.onBack as (() => Promise<void>) | undefined} onLeave={onLeave} /> : <p role="status">Loading provider setup…</p>;
 }
 export function createResultCanvas(http: HostTransport, registerDirty: (dirty: boolean) => void = noop) {
   return function ResultCanvas({ draft, reviewing, onDirtyChange, onUnavailable }: ResultCanvasProps) {

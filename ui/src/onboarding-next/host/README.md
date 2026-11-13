@@ -45,6 +45,12 @@ Once setup is completed, the welcome Explore control persists B01's `explore`
 exit, so the welcome screen does not return on the next load. Before setup it only
 leaves this mount: welcome and setup return next time, because the daemon refuses
 chat until setup completes. B01 also allows Explore at activation.
+Self-hosted setup is never a dead end: Back on its first step returns to the
+explainer, and "Finish later" on every setup step leaves this mount the same way
+Explore does (nothing is saved, setup resumes next load, and a refresh cannot pull
+the person back). The AI step has "Skip for now": setup is saved without a provider
+and the person lands in the workspace (resuming shows "Continue to your workspace", which opens it again, because the journey's later steps need a provider), where chat and workflow creation say an AI
+provider is needed and link to AI settings.
 Finishing/skipping a tutorial keeps activation visible; old tutorial flags cannot dismiss it. Result completion
 uses B01's guarded `finish` transition, never a Talk request or workflow run.
 
