@@ -41,7 +41,9 @@ function row(block: Extract<NotchBlock, { kind: 'row' }>, deps: BlockDeps): HTML
     const b = el('button', 'row go');
     b.type = 'button';
     b.onclick = () => deps.go(id);
-    b.append(main, icon(G.chev));
+    // The small word on the right (a time, how it ended) shows here too, before the chevron.
+    const aside = block.small ?? block.tail;
+    b.append(main, ...(aside ? [el('span', 'at', aside)] : []), icon(G.chev));
     return b;
   }
   const buttons = block.buttons ?? [];

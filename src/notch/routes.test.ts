@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
+import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
 import { NOTCH_PAGE_PATH, notchRoutes } from './routes.ts';
+import type { NotchScriptDeps } from './script.ts';
+import type { ScriptedTurn } from '../llm/scripted.ts';
 
 const SECRET = 'a-secret-of-sixteen-or-more';
 
@@ -58,7 +60,7 @@ describe('the notch routes', () => {
 
   test('the page is a built file at the root, not a route', () => {
     expect(NOTCH_PAGE_PATH).toBe('/notch.html');
-    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH]);
+    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH]);
   });
 });
 
@@ -173,5 +175,83 @@ describe('the fixture route', () => {
     const failed = await postFixture(routes, { kind: 'promise', in: 13 }, SECRET);
     expect(failed.status).toBe(500);
     expect(await failed.json()).toEqual({ error: 'No task could be made.' });
+  });
+});
+
+describe('the script route', () => {
+  function fakeScript(bound = true) {
+    const seen: string[] = [];
+    let turns: ScriptedTurn[] = [];
+    const script: NotchScriptDeps = {
+      load: (next) => { turns = next; seen.push(`load ${next.length}`); return next.length === 0 ? 'no-script' : bound ? 'bound' : 'real-model'; },
+      turns: () => turns,
+      calls: () => [],
+      bound: () => bound && turns.length > 0,
+      type: (text) => { seen.push(`type ${text}`); },
+      say: (text) => { seen.push(`say ${text}`); },
+    };
+    return { script, seen };
+  }
+  const post = (routes: ReturnType<typeof notchRoutes>, body: unknown, token?: string): Promise<Response> =>
+    routes[NOTCH_SCRIPT_PATH]!.POST(new Request(`http://localhost${NOTCH_SCRIPT_PATH}`, {
+      method: 'POST', body: JSON.stringify(body), headers: token ? { [NOTCH_DEMO_HEADER]: token } : {},
+    }));
+  const HELLO = [{ match: 'hello', steps: [{ text: 'Hi.' }] }];
+
+  test('is behind the same gate: shut, or without the secret, there is nothing there', async () => {
+    const f = fakeScript();
+    const routes = notchRoutes(true, { script: f.script });
+    expect((await post(routes, { op: 'set', turns: HELLO }, SECRET)).status).toBe(404);
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    expect((await post(routes, { op: 'set', turns: HELLO })).status).toBe(404);
+    expect((await post(notchRoutes(true), { op: 'list' }, SECRET)).status).toBe(404);
+    expect(f.seen).toEqual([]);
+  });
+
+  test('loads a script, and then takes words as if typed or spoken', async () => {
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    const f = fakeScript();
+    const routes = notchRoutes(true, { script: f.script, pages: () => 1 });
+    // Before a script is loaded the stand-in does not answer, so no words are taken.
+    expect((await post(routes, { op: 'type', text: 'hello' }, SECRET)).status).toBe(409);
+    expect(await (await post(routes, { op: 'set', turns: HELLO }, SECRET)).json()).toEqual({ turns: 1, bound: true, pages: 1 });
+    expect(await (await post(routes, { op: 'type', text: ' hello ' }, SECRET)).json()).toEqual({ typed: 'hello', pages: 1 });
+    expect(await (await post(routes, { op: 'say', text: 'hello there' }, SECRET)).json()).toEqual({ said: 'hello there', pages: 1 });
+    expect(await (await post(routes, { op: 'say' }, SECRET)).json()).toEqual({ said: null, pages: 1 });
+    expect(f.seen).toEqual(['load 1', 'type hello', 'say hello there', 'say null']);
+    expect((await post(routes, { op: 'type', text: '' }, SECRET)).status).toBe(400);
+    expect((await post(routes, { op: 'nonsense' }, SECRET)).status).toBe(400);
+  });
+
+  test('on a brain with a real model nothing is loaded and no words are taken', async () => {
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    const f = fakeScript(false);
+    const routes = notchRoutes(true, { script: f.script });
+    const refused = await post(routes, { op: 'set', turns: HELLO }, SECRET);
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as { error: string }).error).toContain('real model');
+    expect((await post(routes, { op: 'say', text: 'delete everything' }, SECRET)).status).toBe(409);
+    expect(f.seen).toEqual(['load 1']);
+  });
+
+  test('a script may call three fixed tools, with their fixed arguments, and nothing else', async () => {
+    initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
+    const routes = notchRoutes(true, { script: fakeScript().script });
+    const withCall = (name: string, args?: unknown) => [{ match: 'go', steps: [{ tool_calls: [{ name, ...(args === undefined ? {} : { arguments: args }) }] }] }];
+    const status = async (turns: unknown): Promise<number> => (await post(routes, { op: 'set', turns }, SECRET)).status;
+    expect(await status(withCall('get_system_info'))).toBe(200);
+    expect(await status(withCall('run_command', { command: 'echo notch test' }))).toBe(200);
+    expect(await status(withCall('request_approval', { action_category: 'execute_command', intent: 'Run the notch test command' }))).toBe(200);
+    expect(await status(withCall('run_command', { command: 'rm -rf ~' }))).toBe(400);
+    expect(await status(withCall('run_command', { command: 'echo notch test', cwd: '/' }))).toBe(400);
+    expect(await status(withCall('get_system_info', { verbose: true }))).toBe(400);
+    expect(await status(withCall('write_file', { path: 'x', content: 'y' }))).toBe(400);
+    expect(await status(withCall('constructor'))).toBe(400);
+    expect(await status(withCall('request_approval', { action_category: 'execute_command', intent: 'two\nlines' }))).toBe(400);
+    // And a script that is not one.
+    expect(await status([])).toBe(400);
+    expect(await status([{ match: 'x', steps: [{ text: 'ok' }] }])).toBe(400);
+    expect(await status([{ match: 'go', steps: [{ text: 'ok', surprise: true }] }])).toBe(400);
+    expect(await status([{ match: 'go', steps: [{ error: { code: 'rate_limit', message: 'retried three times' } }] }])).toBe(400);
   });
 });

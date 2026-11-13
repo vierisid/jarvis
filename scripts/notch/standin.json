@@ -1,0 +1,16 @@
+[
+  { "match": "two plus two", "steps": [{ "text": "It is four." }] },
+  { "match": "system", "steps": [
+    { "text": "One moment.", "tool_calls": [{ "name": "get_system_info" }] },
+    { "text": "This machine answered. Here is what it said:\n\n{{last_tool_result}}" }
+  ] },
+  { "match": "explain", "steps": [{ "text": "## Three things about the notch\n\n- It shows **one line** at a time.\n- A long answer opens as a sheet, like this one.\n- The sheet stays until you close it, and comes back after a restart if you did not.\n\nThis text was written in advance. No model wrote it." }] },
+  { "match": "test command", "steps": [
+    { "text": "I need your yes for that.", "tool_calls": [{ "name": "request_approval", "arguments": { "action_category": "execute_command", "intent": "Run the notch test command" } }] },
+    { "tool_calls": [{ "name": "run_command", "arguments": { "command": "echo notch test" } }] },
+    { "text": "Ran it. It printed: notch test" }
+  ] },
+  { "match": "slow", "steps": [{ "delay_ms": 20000, "text": "That took a while, and now it is done." }] },
+  { "match": "broken", "steps": [{ "error": { "code": "bad_request", "message": "a scripted failure" } }] },
+  { "match": "prefers calls", "plain": true, "steps": [{ "text": "{\"subject\":\"Anna\",\"type\":\"person\",\"me\":false,\"predicate\":\"prefers\",\"object\":\"calls\"}" }] }
+]

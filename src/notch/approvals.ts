@@ -124,6 +124,11 @@ export interface NotchApprovals {
   sync(): void;
   /** The item id an approval has in the inbox. */
   itemId(requestId: string): string;
+  /**
+   * The person is waiting on this one: an instruction they gave on the notch
+   * has stopped for it. It takes the notch now, whatever is on it.
+   */
+  raise(requestId: string): void;
 }
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -279,9 +284,10 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     }
   }
 
-  function item(request: ApprovalRequest): NotchItem {
+  function item(request: ApprovalRequest, raised = false): NotchItem {
     const requestId = request.id;
     return {
+      ...(raised ? { urgent: true } : {}),
       id: itemId(requestId),
       subject: itemId(requestId),
       // An agent stopped in the middle of its work is a running clock: it
@@ -289,7 +295,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       class: request.execution_mode === 'inline' ? 'clock' : 'rest',
       // What was already waiting when the notch came up joins the count
       // quietly, as the toast leaves a backlog alone.
-      speaks: now() - request.created_at < FRESH_MS,
+      speaks: raised || now() - request.created_at < FRESH_MS,
       title: () => [shortened(notchApprovalSentence(deps.approvalManager.getRequest(requestId) ?? request))],
       check: () => pendingRequest(requestId) !== null,
       play: (stage) => play(requestId, stage),
@@ -319,5 +325,12 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     }
   }
 
-  return { sync, itemId };
+  function raise(requestId: string): void {
+    const request = pendingRequest(requestId);
+    if (!request || inbox.showing() === itemId(requestId)) return;
+    known.add(requestId);
+    inbox.add(item(request, true));
+  }
+
+  return { sync, itemId, raise };
 }

@@ -62,6 +62,10 @@ const (
 	notchKeyYes
 	notchKeyEsc
 	notchKeyEscTwice
+	// Talking ended, but not by letting go: another key was pressed with the
+	// pair held, or the keyboard could no longer be trusted. What was said is
+	// not an instruction, and is thrown away.
+	notchKeyTalkCancel
 )
 
 // The name each action has for the page (window.__notch_key).
@@ -77,6 +81,8 @@ func (a notchKeyAction) String() string {
 		return "esc"
 	case notchKeyEscTwice:
 		return "esc-twice"
+	case notchKeyTalkCancel:
+		return "talk-cancel"
 	}
 	return ""
 }
@@ -165,7 +171,7 @@ func (k *notchKeys) WantEsc(want bool) { k.wantEsc = want }
 // talking, that ends.
 func (k *notchKeys) Reset() (ended []notchKeyAction) {
 	if k.talking {
-		ended = []notchKeyAction{notchKeyTalkEnd}
+		ended = []notchKeyAction{notchKeyTalkCancel}
 	}
 	pairs, want := k.pairs, k.wantEsc
 	*k = notchKeys{pairs: pairs, wantEsc: want}
@@ -228,8 +234,10 @@ func (k *notchKeys) wake(v *notchKeyVerdict) {
 // lose ends whatever this press of the modifiers was becoming.
 func (k *notchKeys) lose(v *notchKeyVerdict) {
 	if k.talking {
+		// A key that is not one of the pair: this was somebody's shortcut, or
+		// a slip. Either way it was not the end of a sentence.
 		k.talking = false
-		v.Actions = append(v.Actions, notchKeyTalkEnd)
+		v.Actions = append(v.Actions, notchKeyTalkCancel)
 	}
 	k.talkAt, k.yesAt = 0, 0
 	if k.mods != 0 {
@@ -259,11 +267,16 @@ func (k *notchKeys) modifiers(ev notchKeyEvent, v *notchKeyVerdict) {
 	}
 	talk, yes := k.pairs.Talk.mask(), k.pairs.Yes.mask()
 	if k.talking {
-		// Letting go of either key ends it; so does a third modifier.
+		// Letting go of either key ends it. A third modifier going down
+		// ends it too, but as a slip: nothing is done with what was said.
 		if now != talk {
 			k.talking = false
 			k.spent = true
-			v.Actions = append(v.Actions, notchKeyTalkEnd)
+			if now&^talk != 0 {
+				v.Actions = append(v.Actions, notchKeyTalkCancel)
+			} else {
+				v.Actions = append(v.Actions, notchKeyTalkEnd)
+			}
 		}
 		return
 	}
