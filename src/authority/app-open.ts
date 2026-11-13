@@ -58,6 +58,19 @@ const NOT_AN_APP: ReadonlySet<string> = new Set([
   'open', 'start', 'xdg-open', 'launchctl', 'systemctl', 'service', 'kill', 'killall', 'pkill', 'rm', 'del', 'rd', 'rmdir', 'erase', 'mv', 'move', 'cp', 'copy', 'dd',
 ]);
 
+/**
+ * The same, by the names the Start menu shows them under: the desktop app
+ * finds an app by that name too (sidecar/desktop_startmenu.go), so "Command
+ * Prompt" must not pass where `cmd` does not. A name that says it uninstalls,
+ * installs, repairs or resets something is not an app to open either.
+ */
+const NOT_AN_APP_BY_NAME = new RegExp([
+  '\\b(command prompt|powershell|terminal|console|git bash|git cmd|bash|shell|wsl|ubuntu|debian)\\b',
+  '\\b(registry editor|task scheduler|services|computer management|disk management|disk cleanup|event viewer)\\b',
+  '\\b(group policy|local security policy|system configuration|system restore|recovery|device manager|run)\\b',
+  '\\b(un-?install\\w*|install\\w*|setup|remove|repair|reset|updater?|maintenance tool)\\b',
+].join('|'), 'i');
+
 /** What ends a file that is not a program to open but a script or an installer to run. */
 const NOT_AN_APP_ENDING = /\.(bat|cmd|com|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|msi|msp|scr|pif|cpl|lnk|url|reg|jar|sh|command|py|pl|rb)$/i;
 
@@ -92,11 +105,12 @@ export function plainAppOpen(toolName: string, params: Record<string, unknown>):
   if (/[\\/]/.test(executable)) {
     // A path: only into the system's own folders for installed apps, and never upward out of them.
     if (/(^|[\\/])\.\.([\\/]|$)/.test(executable)) return false;
-    if (MAC_APP.test(executable)) return !NOT_AN_APP.has(bareName(lastPart(executable)));
-    if (!WINDOWS_APP_FOLDER.test(executable) || !/\.exe$/i.test(executable)) return false;
-    return !NOT_AN_APP.has(bareName(lastPart(executable)));
+    const program = bareName(lastPart(executable));
+    if (NOT_AN_APP.has(program) || NOT_AN_APP_BY_NAME.test(program)) return false;
+    if (MAC_APP.test(executable)) return true;
+    return WINDOWS_APP_FOLDER.test(executable) && /\.exe$/i.test(executable);
   }
-  return APP_NAME.test(executable) && !NOT_AN_APP.has(bareName(executable));
+  return APP_NAME.test(executable) && !NOT_AN_APP.has(bareName(executable)) && !NOT_AN_APP_BY_NAME.test(executable);
 }
 
 /** A plain app open, in a turn the owner started on the notch: the one case that needs no approval. */

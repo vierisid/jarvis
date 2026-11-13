@@ -48,19 +48,22 @@ func startMenuWanted(executable, args string) (string, bool) {
 // startMenuFindScript looks the name up: the app with exactly that name, or
 // failing that the apps whose name contains it. It answers one JSON object,
 // {id, name, count}; id is empty unless exactly one app was found. Entries
-// that are web links are not apps and are left out.
+// that are web links are not apps and are left out, and so is anything the
+// Start menu lists to uninstall something. `names` holds up to five of what
+// was found, so that "more than one" can be said with their names.
 func startMenuFindScript(name string) string {
 	return `
 $ErrorActionPreference = 'Stop'
 $want = ` + psSingleQuoted(name) + `
-$apps = @(Get-StartApps | Where-Object { $_.AppID -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://' })
+$apps = @(Get-StartApps | Where-Object { $_.AppID -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://' -and $_.Name -notmatch '(?i)\buninstall' })
 $hit = @($apps | Where-Object { $_.Name -eq $want })
 if ($hit.Count -eq 0) {
   $like = '*' + [System.Management.Automation.WildcardPattern]::Escape($want) + '*'
   $hit = @($apps | Where-Object { $_.Name -like $like })
 }
-if ($hit.Count -eq 1) { @{ id = [string]$hit[0].AppID; name = [string]$hit[0].Name; count = 1 } | ConvertTo-Json -Compress }
-else { @{ id = ''; name = ''; count = $hit.Count } | ConvertTo-Json -Compress }
+$names = @($hit | Select-Object -First 5 | ForEach-Object { [string]$_.Name })
+if ($hit.Count -eq 1) { @{ id = [string]$hit[0].AppID; name = [string]$hit[0].Name; count = 1; names = $names } | ConvertTo-Json -Compress }
+else { @{ id = ''; name = ''; count = $hit.Count; names = $names } | ConvertTo-Json -Compress }
 `
 }
 
@@ -72,6 +75,53 @@ $ErrorActionPreference = 'Stop'
 Start-Process -FilePath ('shell:AppsFolder\' + ` + psSingleQuoted(appID) + `)
 'started'
 `
+}
+
+// startMenuWin is a window as the picker needs it.
+type startMenuWin struct {
+	Hwnd        uintptr
+	Title       string
+	ProcessName string
+}
+
+func startMenuFold(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimSuffix(s, ".exe")
+}
+
+// startMenuMatches says whether a window is the app's: its program is the one
+// the Start menu entry names, or its title carries the app's name ("Untitled
+// - Paint", "Calculator", "Settings"). A packaged app's window belongs to a
+// host program with another name, so the title is often all there is.
+func startMenuMatches(w startMenuWin, appName, hint string) string {
+	if h := startMenuFold(hint); h != "" && startMenuFold(w.ProcessName) == h {
+		return "process_name"
+	}
+	if n := strings.ToLower(strings.TrimSpace(appName)); n != "" && strings.Contains(strings.ToLower(w.Title), n) {
+		return "title"
+	}
+	return ""
+}
+
+// pickStartMenuWindow chooses, from the windows on screen, the one a Start
+// menu launch produced: a window that was not there before and is the app's.
+// With none, `already` is a window that was there before and is the app's:
+// the app was open, and starting it again showed nothing new. -1 for neither.
+func pickStartMenuWindow(wins []startMenuWin, appName, hint string, preexisting map[uintptr]bool) (opened int, how string, already int) {
+	opened, already = -1, -1
+	for i, w := range wins {
+		match := startMenuMatches(w, appName, hint)
+		if match == "" {
+			continue
+		}
+		if !preexisting[w.Hwnd] {
+			return i, match, already
+		}
+		if already < 0 {
+			already = i
+		}
+	}
+	return opened, "", already
 }
 
 // startMenuWindowHint is the program whose window to wait for. A classic

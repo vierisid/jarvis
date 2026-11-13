@@ -38,6 +38,19 @@ describe('what a plain app open is', () => {
     }
   });
 
+  test('never one of those by the name the Start menu shows it under, and never something that uninstalls or installs', () => {
+    for (const executable of ['Command Prompt', 'Windows PowerShell', 'Windows PowerShell ISE', 'Windows Terminal', 'Terminal', 'Git Bash',
+      'Registry Editor', 'Task Scheduler', 'Services', 'Computer Management', 'Event Viewer', 'Run', 'Uninstall Steam', 'Steam Uninstaller',
+      'Install Updates', 'Visual Studio Installer', 'Setup', 'Reset this PC', 'C:\\Program Files\\Steam\\uninstall.exe',
+      'C:\\Program Files\\App\\App Setup.exe', '/Applications/Install macOS.app']) {
+      expect([executable, plainAppOpen('desktop_launch_app', open(executable))]).toEqual([executable, false]);
+    }
+    // And ordinary apps whose names only look a little like those still open.
+    for (const executable of ['Steam', 'Task Manager', 'File Explorer', 'Settings', 'Visual Studio Code', 'Calculator', 'Microsoft Edge', 'Epic Games Launcher', 'Docker Desktop', 'Runway', 'Shellfish']) {
+      expect([executable, plainAppOpen('desktop_launch_app', open(executable))]).toEqual([executable, true]);
+    }
+  });
+
   test('never a script, an installer or a shortcut, whatever it is called', () => {
     for (const executable of ['update.bat', 'setup.msi', 'run.ps1', 'thing.vbs', 'Steam.lnk', 'game.scr', 'tool.jar', 'x.cmd']) {
       expect([executable, plainAppOpen('desktop_launch_app', open(executable))]).toEqual([executable, false]);
