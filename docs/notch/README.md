@@ -205,6 +205,10 @@ What holds for all of them:
     Opening it still counts as outside content: what the turn does after it
     is asked about as before. Everywhere but a notch turn, and with the
     switch off, opening an app is reviewed on screen as it always was.
+    The agent is told the same in the per-turn part of its prompt
+    (`NOTCH_TURN_NOTE`): it does not ask on its own account before opening
+    an app or doing what it was just told to, only before a delete, a send,
+    a payment, an install or a change of settings.
 24. **A tap cannot land on the wrong thing.** A line that came by itself
     takes no yes and no Esc for 0.7 s, counted in the page from when it was
     drawn. After that an Esc pressed for the app in front does land on the
@@ -316,6 +320,11 @@ switch is on:
   restart is closed, not run again; nothing is announced or run while Jarvis
   is paused; a turn that came back as error text is a failure.
 - **The audit trail has a channel `notch`**, unused while the switch is off.
+- **On Windows an app that cannot be started by its name is looked up in the
+  Start menu** (`sidecar/desktop_startmenu.go`). `launch_app` could only
+  start what is on PATH or under "App Paths", so "open Steam" failed while
+  "open Notepad" worked. Now a bare name with no arguments that fails is
+  started as the Start menu starts it, when exactly one app answers to it.
 - **The wake listener opens the microphone when the brain has answered the
   registration**, not at the moment of connecting (`wakeHold`,
   `sidecar/pebble_wake.go`). A brain with the switch off answers at once, so
