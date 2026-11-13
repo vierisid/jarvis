@@ -119,20 +119,28 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/** What a caller that knows it is self-hosted reads, without ever asking the daemon. */
+export const SELF_HOSTED_SNAPSHOT: BillingSnapshot = { ...INITIAL, state: "self" };
+const noSubscribe = (): (() => void) => () => {};
+const selfHosted = (): BillingSnapshot => SELF_HOSTED_SNAPSHOT;
+
 export function useBilling(
   /**
    * `refreshOnMount: false` for callers that only need the load state (the
    * Settings tab list): they must not turn opening Settings into a read.
+   * `enabled: false` for a caller that already knows this is a self-hosted
+   * install: it reads as "self" and sends no request (the daemon answers 503).
    */
-  opts: { refreshOnMount?: boolean } = {},
+  opts: { refreshOnMount?: boolean; enabled?: boolean } = {},
 ): BillingSnapshot & { refresh: () => void } {
-  const snap = useSyncExternalStore(subscribe, () => snapshot, () => INITIAL);
-  const refreshOnMount = opts.refreshOnMount ?? true;
+  const enabled = opts.enabled ?? true;
+  const snap = useSyncExternalStore(enabled ? subscribe : noSubscribe, enabled ? () => snapshot : selfHosted, () => INITIAL);
+  const refreshOnMount = enabled && (opts.refreshOnMount ?? true);
   // Opening Settings -> Billing is itself a reason to look again, including
   // onto an "unavailable" screen, which schedules no retry of its own. The very
   // first mount already loads through subscribe().
   useEffect(() => {
     if (refreshOnMount && (snapshot.state === "ready" || snapshot.state === "unavailable")) void load(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- a mount-time read, by definition
-  return { ...snap, refresh: () => void load(true) };
+  return { ...snap, refresh: () => { if (enabled) void load(true); } };
 }

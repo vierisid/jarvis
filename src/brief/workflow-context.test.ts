@@ -327,6 +327,31 @@ test('a failed run takes its wording from the typed failure projection; a succee
   const ok = run(); updateRun(ok.id, { status: 'SUCCEEDED' });
   expect(service.detail(flowId, ok.id)).toMatchObject({ failure: null, recovery: null, status: 'succeeded' });
 });
+test('run detail says who started the run and names steps as the workflow does', () => {
+  const triggerOf = (triggeredBy?: string) => {
+    const r = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy }); updateRun(r.id, { status: 'SUCCEEDED' });
+    return service.detail(flowId, r.id).trigger;
+  };
+  expect(triggerOf('brief_manual')).toBe('Started by you');
+  expect(triggerOf('dashboard')).toBe('Started by you');
+  expect(triggerOf('trigger:webhook')).toBe('Webhook');
+  expect(triggerOf('trigger:cron')).toBe('Schedule');
+  expect(triggerOf('trigger:engine')).toBe('App trigger');
+  expect(triggerOf('dashboard:test-from-here')).toBe('Started by you');
+  expect(triggerOf('assistant:manage_workflow')).toBe('Started by Jarvis');
+  expect(triggerOf('workflow:run_workflow')).toBe('Another workflow');
+  expect(triggerOf('work_item:w1:decision:d1')).toBe('Accepted work proposal');
+  expect(triggerOf('something:else')).toBe('Unknown');
+  // No label and no trigger: only a person can have started it.
+  expect(triggerOf(undefined)).toBe('Started by you');
+  const piece = createDraftVersion({ flowId, displayName: 'Piece', trigger: { name: 'trigger', type: 'PIECE_TRIGGER', displayName: 'Catch hook', settings: {},
+    nextAction: { name: 'step_1', type: 'CODE', displayName: 'Tidy\u202E the\n  names\u202C', settings: { sourceCode: { code: 'x', packageJson: '{}' } } } } });
+  const locked = lockVersion(piece.id).id;
+  const r = createFlowRun({ flowId, flowVersionId: locked }); updateRun(r.id, { status: 'SUCCEEDED', steps: { trigger: { status: 'SUCCEEDED' }, step_1: { status: 'SUCCEEDED' }, gone: { status: 'SUCCEEDED' } } });
+  const d = service.detail(flowId, r.id);
+  expect(d.trigger).toBe('Unknown');
+  expect(d.steps.map(s => s.title).sort()).toEqual(['Catch hook', 'Step gone', 'Tidy the names']);
+});
 test('recorded connections come from the Q-05 run bindings, identity only', () => {
   const r = run(); updateRun(r.id, { status: 'SUCCEEDED' });
   const put = (externalId: string, record: unknown) => db.run('INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)', [r.id, externalId, JSON.stringify(record)]);
