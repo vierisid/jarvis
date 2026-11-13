@@ -45,7 +45,8 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
   const deps: ApprovalDecisionDeps = { approvalManager: approvals, deferredExecutor: executor, auditTrail: audit };
   const ask = (extra: { context?: string; category?: string; created?: number; mode?: 'deferred' | 'inline' } = {}) => {
     const request = approvals.createRequest({ agentId: 'agent-1', agentName: 'PA', toolName: 'write_file', toolArguments: { path: '/tmp/a' },
-      actionCategory: 'write_data', urgency: 'normal', reason: 'Write the note', context: extra.context ?? '',
+      // As a tool's own gate files it: with one sentence that says what will be done.
+      actionCategory: 'write_data', urgency: 'normal', reason: 'Write the note', context: extra.context ?? JSON.stringify({ intent: 'Write file' }),
       executionMode: extra.mode ?? 'deferred', principal: PRINCIPAL });
     if (extra.category) getDb().run('UPDATE approval_requests SET action_category = ? WHERE id = ?', [extra.category, request.id]);
     if (extra.created !== undefined) getDb().run('UPDATE approval_requests SET created_at = ? WHERE id = ?', [extra.created, request.id]);
@@ -341,7 +342,8 @@ describe('what a key may not approve', () => {
     expect(h.said()).toBe('Write or change a file?');
     const sheet = h.line();
     const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
-    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual(['write_file', 'path: /tmp/a']);
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual([
+      'Review desktop_click. Business effect unknown.', 'write_file', 'path: /tmp/a']);
     // Any other surface is still refused it. The notch is not.
     expect(await applyApprovalDecision('approve', review.id, 'telegram', h.deps)).toMatchObject({ status: 'needs_dashboard' });
     await h.answer('yes');
@@ -596,6 +598,7 @@ describe('typing a poem into Notepad, as it happened on 13 November', () => {
     const sheet = h.line();
     const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
     expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual([
+      'Review set_value on desktop element [1] "Text Editor". Business effect unknown beyond UI hints.',
       'write_file', 'element_id: 1', 'action: set_value', 'value:',
       'The morning spills its gold across the sea,', 'And every waking wave brings hope to me.', 'verify: value_equals',
     ]);
@@ -612,5 +615,49 @@ describe('typing a poem into Notepad, as it happened on 13 November', () => {
       getDb().run('UPDATE approval_requests SET tool_arguments = ? WHERE id = ?', [JSON.stringify({ text: value }), request.id]);
       expect([value, notchApprovalWay(h.approvals.getRequest(request.id)!)]).toEqual([value, 'sheet']);
     }
+  });
+});
+
+describe('what the sheet says will be done', () => {
+  test('an action on screen: what the product says is acted on comes first, then with what', async () => {
+    const h = harness();
+    const made = h.approvals.createRequest({
+      agentId: 'agent-1', agentName: 'PA', toolName: 'write_file', toolArguments: { element_id: 12, action: 'click' },
+      actionCategory: 'control_app', urgency: 'normal', reason: 'needs review',
+      context: JSON.stringify({ confirm: 'always', intent: 'Review click on browser element [12] "Send" in Gmail. UI hints: send_email.' }),
+      executionMode: 'deferred', principal: PRINCIPAL,
+    });
+    await h.sync();
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual([
+      'Review click on browser element [12] "Send" in Gmail. UI hints: send_email.', 'write_file', 'element_id: 12', 'action: click',
+    ]);
+    expect(h.approvals.getRequest(made.id)!.status).toBe('pending');
+  });
+
+  test('a tool that wrote no sentence of its own is never one line with its name: its arguments are on the sheet', async () => {
+    const h = harness();
+    const bare = h.ask({ context: '' });
+    expect(notchApprovalWay(bare)).toBe('sheet');
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'approve', stay: true });
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual(['write_file', 'path: /tmp/a']);
+    // With no arguments at all, its name is the whole of it, and a line is enough.
+    const empty = h.ask({ context: '' });
+    getDb().run("UPDATE approval_requests SET tool_arguments = '{}' WHERE id = ?", [empty.id]);
+    expect(notchApprovalWay(h.approvals.getRequest(empty.id)!)).toBe('key');
+  });
+
+  test('a click that pays is a payment: the notch points at the dashboard and its yes is refused', async () => {
+    const h = harness();
+    const pay = h.ask({ category: 'make_payment', context: JSON.stringify({ confirm: 'always', intent: 'Review click on "Pay now".' }) });
+    expect(notchApprovalWay(pay)).toBe('payment');
+    await h.sync();
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'open' });
+    expect(h.said()).toStartWith('A payment. I never take that on a key');
+    expect(await applyApprovalDecision('approve', pay.id, NOTCH_DECIDER, h.deps)).toMatchObject({ status: 'needs_dashboard' });
   });
 });
