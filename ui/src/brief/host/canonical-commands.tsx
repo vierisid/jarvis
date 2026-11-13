@@ -11,7 +11,7 @@ import '../decisions/decisions.css';
 import './host.css';
 
 const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next step', reject_intent: 'Reject next step',
-  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', inspect: 'Inspect' };
+  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', mark_done: 'Mark done', not_doing: 'Not doing this', inspect: 'Inspect' };
 /**
  * A browser permission card's heading names what the call will do, from the
  * subject captured when the card was raised: the element a click lands on and
@@ -72,13 +72,13 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
     if (pending || !enabled || action === 'inspect') return;
     setPending(true);
     try {
-      const intent = action === 'accept_intent' || action === 'reject_intent';
-      const reason = intent ? await inputDialog('Reason for this decision', '', http.signal) : null;
+      const intent = action === 'accept_intent' || action === 'reject_intent' || action === 'mark_done' || action === 'not_doing';
+      const reason = intent ? await inputDialog(action === 'mark_done' ? 'What shows this is done?' : action === 'not_doing' ? 'Why are you not doing this?' : 'Reason for this decision', '', http.signal) : null;
       if (intent && !reason?.trim()) return;
       if (action === 'execute_once' && !await confirmDialog(`Execute this action once: ${row.title}?`)) return;
       const result = await http.json(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/resolve`, post({ revision: row.revision, action, ...(intent ? { reason } : {}) }));
       if (result.decisionId !== row.decisionId || typeof result.state !== 'string' || typeof result.revision !== 'string') throw Error();
-      setMessage(`Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; changed(); refresh(n => n + 1);
+      setMessage(action === 'mark_done' ? 'Marked done.' : action === 'not_doing' ? 'Dropped. You are not doing this step.' : `Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; changed(); refresh(n => n + 1);
     } catch { setMessage('Outcome is unconfirmed. Recheck the saved decision before making another choice.'); setRows(null); }
     finally { setPending(false); }
   };
@@ -87,7 +87,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   const row = asks?.find(r => r.decisionId === selected) ?? asks?.[0];
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? r.title;
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
-  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
+  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once', 'mark_done'].includes(a));
   return <section className="brief-host-pending" aria-label="Other decisions">
     {row && <div className="brief-decisions-grid">
       <nav ref={list} className="brief-decision-list" aria-label="Requests to review">
@@ -101,7 +101,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
       <article className="brief-decision-paper" aria-label="Selected request">
         <header className="brief-decision-title"><h2 className="brief-type-hero-heading">{title(row)}</h2>
           {browserCardTitle(row) && <p className="brief-decision-subtitle">{browserCardTitle(row)!.kind}</p>}
-          <span className="brief-decision-badge">{actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
+          <span className="brief-decision-badge">{actions.includes('mark_done') ? 'Accepted' : actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
         <div className="brief-decision-context"><span>{row.review?.workflowName ?? (row.workflow ? 'Workflow request' : 'Jarvis request')}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">

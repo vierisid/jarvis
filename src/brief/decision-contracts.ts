@@ -7,7 +7,7 @@ export type DecisionReference =
   | { kind: 'work_item'; id: string }
   | { kind: 'effect'; id: string; runId: string; status: EffectStatus };
 export type DecisionAction = 'accept_intent' | 'reject_intent' | 'approve_permission' | 'reject_permission'
-  | 'execute_once' | 'close_without_running' | 'inspect';
+  | 'execute_once' | 'close_without_running' | 'mark_done' | 'not_doing' | 'inspect';
 export interface QueuedDecision extends BriefDecision {
   kind: 'intent' | 'permission' | 'recovery' | 'held';
   /**
