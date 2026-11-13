@@ -138,10 +138,13 @@ export function createDomainPorts(scopeId: string, http: HostTransport, storage:
         const d = doc.decision;
         if (!d || d.decisionId !== row.decisionId || d.revision !== row.revision || !Array.isArray(doc.actions)) throw new Error('Decision changed during read');
         const document = doc.document;
+        // An accepted step the founder finishes in Needs you is waiting on them to do it, not to review it.
+        // Accepted workflow work is ready too, but it finishes through its run, so it is not offered a finish.
+        const accepted = d.kind === 'intent' && Array.isArray(d.supportedActions) && d.supportedActions.includes('mark_done');
         const subject = document?.kind === 'email' ? document.subject : document?.kind === 'calendar' ? document.title : d.title;
-        const body = document?.kind === 'email' ? document.body : document?.kind === 'calendar' ? document.description : 'Open Needs you to review this decision and its available actions.';
-        data.push({ paper: { decision: d, title: d.title, summary: d.title, description: d.kind === 'intent' ? 'A proposed next step needs your review.' : 'A decision needs your review.',
-          reviewLabel: 'Review decision', document: { subject, paragraphs: [body], ...(document?.kind === 'email' ? { recipient: document.to.join(', ') } : {}) },
+        const body = document?.kind === 'email' ? document.body : document?.kind === 'calendar' ? document.description : accepted ? 'Open Needs you to mark this step done, or to say you are not doing it.' : 'Open Needs you to review this decision and its available actions.';
+        data.push({ paper: { decision: d, title: d.title, summary: d.title, description: accepted ? 'You accepted this step. Tell Jarvis when it is done.' : d.kind === 'intent' ? 'A proposed next step needs your review.' : 'A decision needs your review.',
+          reviewLabel: accepted ? 'Finish step' : 'Review decision', document: { subject, paragraphs: [body], ...(document?.kind === 'email' ? { recipient: document.to.join(', ') } : {}) },
           actionLabels: { ...(doc.actions.includes('approve') ? { approve: 'Approve' } : {}), ...(doc.actions.includes('keep_draft') ? { keep_draft: 'Keep draft' } : {}), ...(doc.actions.includes('reject') ? { reject: 'Reject' } : {}) },
           approveResult: 'permission_granted', queueCount: rows.length }, document, generation: doc.generation, editable: doc.editable,
           actions: doc.actions, state: doc.state, reason: doc.reason, context: null,
