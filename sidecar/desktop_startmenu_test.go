@@ -43,3 +43,44 @@ func TestStartMenuWindowHint(t *testing.T) {
 		t.Errorf("a packaged app's hint = %q, want the name that was asked for", got)
 	}
 }
+
+func TestStartMenuLookupLeavesOutUninstallersAndNamesWhatItFound(t *testing.T) {
+	find := startMenuFindScript("steam")
+	if !strings.Contains(find, `\buninstall`) {
+		t.Errorf("an uninstaller must not be an app to open:\n%s", find)
+	}
+	if !strings.Contains(find, "names = $names") {
+		t.Errorf("the lookup must say what it found, for when it is more than one:\n%s", find)
+	}
+}
+
+func TestPickStartMenuWindow(t *testing.T) {
+	before := map[uintptr]bool{1: true, 2: true}
+	wins := []startMenuWin{
+		{Hwnd: 1, Title: "Inbox - Outlook", ProcessName: "olk.exe"},
+		{Hwnd: 2, Title: "Program Manager", ProcessName: "explorer.exe"},
+		{Hwnd: 3, Title: "Calculator", ProcessName: "ApplicationFrameHost.exe"},
+		{Hwnd: 4, Title: "Steam", ProcessName: "steamwebhelper.exe"},
+		{Hwnd: 5, Title: "Welcome", ProcessName: "Code.exe"},
+	}
+	// A packaged app: the window is a host program's, the title is the app's.
+	if i, how, _ := pickStartMenuWindow(wins, "Calculator", "calculator", before); i != 2 || how != "title" {
+		t.Errorf("Calculator: got %d by %q, want window 3 by title", i, how)
+	}
+	// A classic app whose window is drawn by a helper: found by its title.
+	if i, how, _ := pickStartMenuWindow(wins, "Steam", "Steam.exe", before); i != 3 || how != "title" {
+		t.Errorf("Steam: got %d by %q", i, how)
+	}
+	// By its program, when the title says nothing.
+	if i, how, _ := pickStartMenuWindow(wins, "Visual Studio Code", "Code.exe", before); i != 4 || how != "process_name" {
+		t.Errorf("VS Code: got %d by %q", i, how)
+	}
+	// Already open: nothing new, but its own window was there.
+	if i, _, already := pickStartMenuWindow(wins, "Outlook", "olk.exe", before); i != -1 || already != 0 {
+		t.Errorf("Outlook already open: got opened %d already %d", i, already)
+	}
+	// Not there at all.
+	if i, _, already := pickStartMenuWindow(wins, "Paint", "mspaint.exe", before); i != -1 || already != -1 {
+		t.Errorf("Paint not open: got opened %d already %d", i, already)
+	}
+}
