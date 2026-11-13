@@ -613,3 +613,21 @@ describe('a sheet that asks for a decision', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
   });
 });
+
+describe('first batch of the edge-case audit, on the page', () => {
+  test('Esc is taken from the app in front for a piece of work only while the pointer is on the notch', () => {
+    const wants: boolean[] = [];
+    surface.onWantEsc((want) => wants.push(want));
+    show({ id: 'w', kind: 'work', say: ['Running a command.'], steps: 0, done: 0 });
+    // The work is up, the person is in their own app: Esc is theirs.
+    expect(wants.at(-1) ?? false).toBe(false);
+    // An offer takes it, as before.
+    show({ id: 'o', kind: 'offer', say: ['Run it?'], yes: 'approve' });
+    expect(wants.at(-1)).toBe(true);
+  });
+
+  test('the text field takes no more than the brain will read', () => {
+    show({ id: 'h', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask', blocks: [] });
+    expect($<HTMLInputElement>('input.ask')!.maxLength).toBe(4000);
+  });
+});

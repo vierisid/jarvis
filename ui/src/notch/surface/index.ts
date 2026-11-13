@@ -149,8 +149,15 @@ export function createNotchSurface(
   // Esc is taken from the app in front only while it would do something here.
   const escListeners = new Set<(want: boolean) => void>();
   let wantedEsc = false;
+  /** Whether the pointer is on the notch itself: on its body or on a sheet. */
+  let pointerOnNotch = false;
   const syncEsc = (): void => {
-    const want = alive && born && ((cur !== null && !cur.done) || sentence.picking());
+    // A piece of work is on the notch for as long as it takes, which can be
+    // minutes, and the person goes back to their own app meanwhile. Esc there
+    // is theirs: it is taken for the work (it stops it) only while they point
+    // at the notch. The stop hint can also be clicked.
+    const up = cur !== null && !cur.done && (nin.dataset.body !== 'work' || pointerOnNotch);
+    const want = alive && born && (up || sentence.picking());
     if (want === wantedEsc) return;
     wantedEsc = want;
     for (const listener of escListeners) listener(want);
@@ -419,6 +426,8 @@ export function createNotchSurface(
       input.placeholder = l.placeholder;
       input.autocomplete = 'off';
       input.spellcheck = false;
+      // What the brain reads at most (protocol.ts). More would be dropped unread.
+      input.maxLength = 4000;
       input.setAttribute('aria-label', l.placeholder);
       const submit = (): void => {
         const text = input.value.trim();
@@ -792,9 +801,11 @@ export function createNotchSurface(
     eyes.pointer(x, y);
     const pressed = down && !wasDown;
     wasDown = down;
+    const on = born && outlines(0).some((polygon) => inside(polygon, x, y));
+    if (on !== pointerOnNotch) { pointerOnNotch = on; syncEsc(); }
     if (!pressed || !born) return;
     // A press outside everything the notch is made of is a click away from it.
-    if (outlines(0).some((polygon) => inside(polygon, x, y))) return;
+    if (on) return;
     if (sentence.picking()) sentence.closePick();
     const body = nin.dataset.body;
     // A sheet that asks for a decision is not answered by a click meant for another app.

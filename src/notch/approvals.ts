@@ -215,6 +215,13 @@ export interface NotchApprovalDeps {
    * arguments, never the conversation. Null when it cannot say.
    */
   describe?: (request: ApprovalRequest) => Promise<string | null>;
+  /**
+   * Whether an instruction the person gave on the notch is stopped at this
+   * request right now. Then it does not fold and its sheet does not time
+   * out: it is the one thing they are waiting on, and if it left the notch
+   * there would be nothing left to say yes to.
+   */
+  mine?: (requestId: string) => boolean;
   now?: () => number;
   fuseMs?: number;
   wordsMs?: number;
@@ -336,7 +343,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       // The one thing that marks a request that cannot be taken back once it
       // has run: a careful face.
       const destructive = impactFromCategory(request.action_category) === 'destructive';
-      const answer = await stage.offer([`${bare(sentence)}?`], 'approve', destructive ? { mood: 'careful' } : {});
+      const waitedOn = deps.mine?.(requestId) === true;
+      const answer = await stage.offer([`${bare(sentence)}?`], 'approve', { ...(destructive ? { mood: 'careful' as const } : {}), ...(waitedOn ? { fold: 0 } : {}) });
       if (answer.act === 'no') return refuse(requestId, stage);
       // Left alone until it folded: it waits, and comes round again.
       if (answer.act !== 'yes') return 'waits';
@@ -382,7 +390,9 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
           if (!stage.ended() && words.get(requestId)) stage.surface.update(id, { say: [words.get(requestId)!] });
         });
       }
-      const left = stage.wait(sheetMs).then(() => null);
+      // One the person's own instruction is stopped at stays until it is answered.
+      const waitedOn = deps.mine?.(requestId) === true;
+      const left = waitedOn ? new Promise<null>(() => {}) : stage.wait(sheetMs).then(() => null);
       left.catch(() => {});
       const answer = await Promise.race([stage.answer(id, ['yes', 'no']), left]);
       // Left alone: it waits, and comes round again.

@@ -19,6 +19,7 @@ function fakeDoor() {
   let sequence = 0;
   let busy = false;
   let ready = true;
+  const marks: string[] = [];
   const emit = (turnId: string, payload: BriefChatPayload): void => {
     const turn = turns.get(turnId)!;
     if (payload.kind === 'delta') turn.reply += payload.text;
@@ -36,9 +37,10 @@ function fakeDoor() {
     cancel(ref) { if (turns.get(ref.turnId)?.state === 'running') emit(ref.turnId, { kind: 'terminal', state: 'cancelled' }); },
     onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     look(ref) { const turn = turns.get(ref.turnId); return turn ? { state: turn.state, text: turn.reply, error: turn.error } : null; },
+    mark(ref, text) { marks.push(`${ref.turnId}: ${text}`); },
   };
   return {
-    door, turns, emit,
+    door, turns, emit, marks,
     setBusy: (value: boolean) => { busy = value; },
     setReady: (value: boolean) => { ready = value; },
     /** The one turn that is running. */
@@ -73,12 +75,16 @@ function harness(options: { deps?: Partial<NotchAsksDeps>; db?: Database; page?:
   const door = fakeDoor();
   const opened: (string | null)[] = [];
   const raised: string[] = [];
+  const withdrawn: string[] = [];
+  let shakes = 0;
   let asks!: ReturnType<typeof attachNotchAsks>;
   const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), home: (stage) => asks.home(stage) });
   asks = attachNotchAsks(inbox, {
     ledger, turns: () => door.door, modelReady: () => true, log: (line) => logs.push(line),
     openDashboard: (sidecarId) => { opened.push(sidecarId); },
     raiseApproval: (id) => { raised.push(id); },
+    withdrawApproval: (id) => { withdrawn.push(id); },
+    attention: () => { shakes++; },
     today: () => [{ kind: 'note', say: ['Nothing done yet today.'] }],
     ...options.deps,
   });
@@ -88,7 +94,7 @@ function harness(options: { deps?: Partial<NotchAsksDeps>; db?: Database; page?:
   const text = (parts: NotchLine['say'] | undefined): string =>
     (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   return {
-    surface, inbox, asks, ledger, door, db, pushed, logs, opened, raised, line, fromPage,
+    surface, inbox, asks, ledger, door, db, pushed, logs, opened, raised, withdrawn, shakes: () => shakes, line, fromPage,
     said: (): string => text(line()?.say),
     count: (): number => surface.current().count,
     async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> {
@@ -296,8 +302,8 @@ describe('speaking', () => {
     expect(said.said()).toBe(typed.said());
   });
 
-  test('silence, too little and a failure all say the same sentence, and nothing runs', async () => {
-    for (const why of ['silence', 'too_little', 'failed'] as const) {
+  test('silence and too little say the same sentence, and nothing runs', async () => {
+    for (const why of ['silence', 'too_little'] as const) {
       const h = harness();
       h.asks.listen('t1');
       await settle();
@@ -607,5 +613,128 @@ describe('the shape of an answer', () => {
   test('marks written for a web page are taken out, code is left as it is', () => {
     expect(plainLines('# Title\n\n**Bold** and _soft_ and `code` and [a link](https://x.y).\n\n```sh\necho **hi**\n```')).toEqual(
       ['Title', 'Bold and soft and code and a link.', 'echo **hi**']);
+  });
+});
+
+describe('first batch of the edge-case audit', () => {
+  test('a long answer is not closed by a click meant for another app', async () => {
+    const h = harness();
+    await h.type('explain it');
+    const turn = h.door.running();
+    h.door.say(turn, 'One.\n\nTwo.');
+    h.door.end(turn);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
+  });
+
+  test('a speech-to-text failure says so, after the same sentence', async () => {
+    const h = harness();
+    h.asks.listen('t1');
+    await settle();
+    h.asks.nothing('t1', 'failed');
+    await settle();
+    expect(h.said()).toBe(`${NOTCH_NOT_CAUGHT} Speech-to-text is not answering: check its key in the dashboard.`);
+  });
+
+  test('a stopped turn is written into the conversation as over, so the next turn does not pick it up', async () => {
+    const h = harness();
+    await h.type('do something long');
+    const turn = h.door.running();
+    await h.answer('stop');
+    expect(h.door.marks).toEqual([`${turn}: (The owner stopped this request before it finished. It is over: do not continue it unless they ask again.)`]);
+  });
+
+  test('a failed turn is written as over too, a finished one is not', async () => {
+    const h = harness();
+    await h.type('do it');
+    h.door.end(h.door.running(), 'failed', { code: 'provider', message: 'It broke.' });
+    await settle();
+    expect(h.door.marks).toHaveLength(1);
+    await h.answer('done');
+    await h.type('again');
+    h.door.say(h.door.running(), 'Fine.');
+    h.door.end(h.door.running());
+    await settle();
+    expect(h.door.marks).toHaveLength(1);
+  });
+
+  test('when a turn ends, what it was still asking approval for is asked no more', async () => {
+    const h = harness();
+    await h.type('run the command');
+    const turn = h.door.running();
+    h.door.emit(turn, { kind: 'approval', approvalId: 'ap1', status: 'pending' });
+    await settle();
+    h.door.say(turn, 'I am waiting for approval.');
+    h.door.end(turn);
+    await settle();
+    expect(h.withdrawn).toEqual(['ap1']);
+    expect(h.asks.mine('ap1')).toBe(false);
+  });
+
+  test('spoken while everything is stopped: turned away at the first key, and it never runs later', async () => {
+    let paused = true;
+    const h = harness({ deps: { paused: () => paused } });
+    h.asks.listen('t1');
+    h.asks.released('t1');
+    h.asks.words('t1', 'delete the folder');
+    await settle();
+    expect(h.shakes()).toBe(1);
+    expect(h.line()).toBeNull();
+    paused = false;
+    await h.advance(5000);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'refused', note: 'Everything is stopped. Wake me first.', heard: '' });
+  });
+
+  test('spoken while something runs: refused at the first key, not after it was all said', async () => {
+    const h = harness();
+    await h.type('first thing');
+    h.asks.listen('t2');
+    await settle();
+    expect(h.shakes()).toBe(1);
+    // The work is still on the notch, and nothing listens.
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    h.asks.words('t2', 'second thing');
+    await h.advance(2000);
+    expect(h.door.texts()).toEqual(['first thing']);
+    expect(row(h)).toMatchObject({ state: 'refused' });
+  });
+
+  test('a turn waiting behind another chat says so', async () => {
+    const h = harness();
+    await h.type('hello');
+    const turn = h.door.running();
+    h.door.emit(turn, { kind: 'status', state: 'queued' });
+    await settle();
+    expect(h.said()).toBe('Waiting for another chat to finish.');
+    h.door.emit(turn, { kind: 'status', state: 'running' });
+    await settle();
+    expect(h.said()).toBe('On it: hello');
+  });
+
+  test('a turn whose end was never heard is concluded from the turn store', async () => {
+    const h = harness();
+    await h.type('quick one');
+    const turn = h.door.running();
+    // The store has it finished, but no event said so.
+    const stored = h.door.turns.get(turn)!;
+    stored.state = 'completed';
+    stored.reply = 'Here it is.';
+    h.asks.reconcile();
+    await settle();
+    expect(h.said()).toBe('Here it is.');
+    expect(row(h).state).toBe('done');
+  });
+
+  test('words that were in when the brain restarted are not dropped without a word', async () => {
+    const db = new Database(':memory:');
+    const before = harness({ db });
+    await before.speak('t1', 'send Leo the numbers');
+    const after = harness({ db, page: false });
+    after.asks.resume();
+    after.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    expect(after.said()).toBe('Jarvis restarted before it started on: send Leo the numbers. Say it again.');
+    expect(after.door.texts()).toEqual([]);
   });
 });

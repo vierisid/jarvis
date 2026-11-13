@@ -38,6 +38,7 @@ export const NOTCH_LEDGER_ROWS = 40;
 
 export const NOTCH_NOT_CAUGHT = 'I did not catch that.';
 const WAITING_FOR_YES = 'Waiting for your yes.';
+const WAITING_FOR_CHAT = 'Waiting for another chat to finish.';
 
 /** Why nothing was caught, for the ledger and for the one case where the sentence says more. */
 export type NotchMissReason = 'silence' | 'too_little' | 'failed' | 'no_stt' | 'too_long';
@@ -54,6 +55,12 @@ export interface NotchTurnDoor {
   onEvent(listener: (event: BriefChatEvent) => void): () => void;
   /** Where a turn stands now, and its whole stored reply. Null when there is no such turn. */
   look(turn: BriefTurnRef): { state: BriefTurnState; text: string; error?: { code: string; message: string } } | null;
+  /**
+   * Writes one line into the conversation after a turn that did not finish,
+   * so that the next turn's model does not take the unanswered request for
+   * something still to be done.
+   */
+  mark?(turn: BriefTurnRef, text: string): void;
 }
 
 /** What "Remember that..." comes back with. */
@@ -75,6 +82,10 @@ export interface NotchAsksDeps {
   understand?: (text: string) => Promise<string | null>;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
+  /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
+  withdrawApproval?: (approvalId: string) => void;
+  /** A small sign that the notch heard and will not act (a shake), for when no line can be shown. */
+  attention?: () => void;
   openDashboard?: (sidecarId: string | null) => void;
   /** Rows for Home, under the text field: what was done today. */
   today?: () => NotchBlock[];
@@ -107,6 +118,8 @@ export interface NotchAsks {
   resume(): void;
   /** Whether `approvalId` belongs to a turn started here that is still running. */
   mine(approvalId: string): boolean;
+  /** Looks up what is running in the turn store, and concludes what has ended there. */
+  reconcile(): void;
   stop(): void;
 }
 
@@ -419,13 +432,35 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       bump(ask);
       return;
     }
+    if (payload.kind === 'status') {
+      // Behind another chat's turn: the brain answers one at a time.
+      const queued = payload.state === 'queued';
+      if (queued !== (ask.activity === WAITING_FOR_CHAT)) { ask.activity = queued ? WAITING_FOR_CHAT : null; bump(ask); }
+      return;
+    }
     if (payload.kind !== 'terminal') return;
     conclude(ask, payload.state, ask.segment.trim() || ask.whole.trim(), payload.error);
     bump(ask);
   }
 
   function conclude(ask: Live, state: 'completed' | 'failed' | 'cancelled', text: string, error?: { code: string; message: string }): void {
-    if (ask.turn) byTurn.delete(ask.turn.turnId);
+    const turn = ask.turn;
+    if (turn) byTurn.delete(turn.turnId);
+    // What it was still asking for is asked no more: a yes given later would
+    // run one step with nothing behind it.
+    for (const approvalId of ask.approvals) {
+      try { deps.withdrawApproval?.(approvalId); } catch { /* it was answered meanwhile */ }
+    }
+    ask.approvals.clear();
+    if (turn && state !== 'completed') {
+      try {
+        deps.turns()?.mark?.(turn, state === 'cancelled'
+          ? '(The owner stopped this request before it finished. It is over: do not continue it unless they ask again.)'
+          : '(This request did not finish. It is over: do not continue it unless the owner asks again.)');
+      } catch (failure) {
+        log(`[notch] the conversation could not be told a turn was over: ${failure instanceof Error ? failure.message : String(failure)}`);
+      }
+    }
     if (state === 'completed') {
       ask.answer = text || 'Done.';
       ledger.finish(ask.id, 'done', { answer: ask.answer });
@@ -543,7 +578,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             if (shape.cut) blocks.push({ kind: 'note', say: ['The rest is in the dashboard, in the chat called Notch.'] });
             if (deps.openDashboard) blocks.push({ kind: 'buttons', buttons: [{ id: 'dashboard', label: 'Open the dashboard', quiet: true }] });
             const id = stage.id();
-            stage.put({ id, kind: 'sheet', say: ['You asked: ', em(shortened(ask.heard, 70))], blocks, mood: 'read' });
+            // It stays until it is closed on purpose: a click meant for another app does not close it.
+            stage.put({ id, kind: 'sheet', say: ['You asked: ', em(shortened(ask.heard, 70))], blocks, mood: 'read', stay: true });
             for (;;) {
               const answer = await stage.answer(id, ['no', 'button']);
               if (answer.act === 'no') break;
@@ -566,7 +602,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         case 'missed': {
           const more = ask.missed === 'no_stt' ? ' Speech-to-text is not set up yet: add a key in the dashboard.'
-            : ask.missed === 'too_long' ? ' That was longer than I can take in one go.' : '';
+            : ask.missed === 'too_long' ? ' That was longer than I can take in one go.'
+              // Not the person's fault, and saying it again will not help.
+              : ask.missed === 'failed' ? ' Speech-to-text is not answering: check its key in the dashboard.' : '';
           await stage.say([NOTCH_NOT_CAUGHT + more], more ? 5200 : 2400, { mood: 'confused' });
           forget(ask);
           return 'settled';
@@ -643,6 +681,25 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     return id;
   }
 
+  /**
+   * The end of a turn is heard as an event. If that event is ever lost the
+   * instruction would stand as running for good, and every later one would
+   * be refused. So what is running is looked up in the turn store once a
+   * minute, and concluded from what the store says.
+   */
+  function reconcile(): void {
+    for (const ask of [...live.values()]) {
+      if (ask.phase !== 'running' || !ask.turn) continue;
+      let seen: ReturnType<NotchTurnDoor['look']> = null;
+      try { seen = deps.turns()?.look(ask.turn) ?? null; } catch { seen = null; }
+      if (!seen || seen.state === 'queued' || seen.state === 'running') continue;
+      conclude(ask, seen.state, ask.segment.trim() || seen.text.trim(), seen.error);
+      bump(ask);
+    }
+  }
+  const watch = setInterval(reconcile, 60_000);
+  (watch as { unref?: () => void }).unref?.();
+
   const ofTalk = (talkId: string): Live | null => {
     const id = byTalk.get(talkId);
     return id ? live.get(id) ?? null : null;
@@ -652,6 +709,23 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     typed,
     home,
     listen(talkId) {
+      // Said where nothing can be done with it: it is turned away now, at
+      // the first key, not after it was said and not when Jarvis next wakes.
+      if (deps.paused?.()) {
+        const refused = crypto.randomUUID();
+        ledger.open(refused, 'spoken');
+        ledger.refused(refused, 'Everything is stopped. Wake me first.');
+        deps.attention?.();
+        return refused;
+      }
+      const running = [...live.values()].find((other) => other.phase === 'running');
+      if (running) {
+        const refused = crypto.randomUUID();
+        ledger.open(refused, 'spoken');
+        ledger.refused(refused, `I am still on the last thing: ${shortened(running.heard, 60)}`);
+        deps.attention?.();
+        return refused;
+      }
       replaceEarlier('A new recording took its place.');
       const id = crypto.randomUUID();
       ledger.open(id, 'spoken');
@@ -708,6 +782,17 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         if (row.state !== 'running') {
           // It never ran, and now it never will.
           ledger.dismiss(row.id, 'Jarvis restarted before it ran.');
+          // If its words were already in, the person is told: they said
+          // something and nothing came of it.
+          if (row.heard.trim() && Date.now() - row.createdAt < 15 * 60_000) {
+            const parts: NotchPart[] = ['Jarvis restarted before it started on: ', em(shortened(row.heard, 70)), '. Say it again.'];
+            const id = `ask-lost-${row.id}`;
+            inbox.add({
+              id, subject: id, class: 'person', speaks: true, once: true, asked: true,
+              title: () => parts,
+              play: async (stage) => { await stage.say(parts, 6000, { mood: 'sorry' }); return 'settled'; },
+            });
+          }
           continue;
         }
         const ref = row.conversationId && row.turnId && row.requestId
@@ -734,8 +819,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
     },
     stop() {
+      clearInterval(watch);
       unlisten?.();
       unlisten = null;
     },
+    reconcile,
   };
 }

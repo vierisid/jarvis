@@ -95,10 +95,19 @@ export function verifyPostcondition(pc: Postcondition, ctx: VerifyContext): Veri
     case 'value_equals': {
       const r = resolveRef(pc.ref, ctx.after, FLOOR);
       if (!r.node) return fail(`element "${pc.ref.name}" not found to read its value`);
-      const actual = (r.node.value ?? '').trim();
-      return actual === pc.value.trim()
-        ? ok(`value equals "${pc.value}"`)
-        : fail(`value is "${actual}", expected "${pc.value}"`);
+      // Line endings are the app's own business: a box given "a\nb" may hand
+      // back "a\r\nb". And the desktop app reads back at most 200 characters
+      // of a value, so a longer text can only be checked as far as that.
+      const lines = (text: string): string => text.replace(/\r\n?/g, '\n').trim();
+      const actual = lines(r.node.value ?? '');
+      const expected = lines(pc.value);
+      if (actual === expected) return ok(`value equals "${pc.value}"`);
+      const READ_BACK = 200;
+      const got = [...actual];
+      if (got.length >= READ_BACK - 2 && [...expected].length > got.length && expected.startsWith(actual)) {
+        return ok(`value begins as expected (the first ${got.length} characters were read back and match)`);
+      }
+      return fail(`value is "${actual}", expected "${pc.value}"`);
     }
 
     case 'title_changed': {

@@ -17,10 +17,13 @@ function harness(stt: NotchTalkDeps['stt'] = () => ({ transcribe: async () => 's
     dropped: (id) => { calls.push(`dropped ${id}`); },
     tell: (parts) => { calls.push(`tell ${parts.join('')}`); },
   };
-  const talk = attachNotchTalk({ onEvent: (listener) => { onEvent = listener; } }, { asks, stt, sttTimeoutMs, log: (line) => logs.push(line) });
+  let gone: (sidecarId: string) => void = () => {};
+  const talk = attachNotchTalk(
+    { onEvent: (listener) => { onEvent = listener; }, onSidecarDisconnected: (listener) => { gone = listener; } },
+    { asks, stt, sttTimeoutMs, openMs: 40, log: (line) => logs.push(line) });
   const pcm = Buffer.alloc(16_000 * 2, 1).toString('base64');
   return {
-    calls, logs, talk, turnedAway,
+    calls, logs, talk, turnedAway, disconnect: (sidecarId = 'pc') => gone(sidecarId),
     event: (payload: Record<string, unknown>, audio = false, sidecarId = 'pc'): void =>
       onEvent(sidecarId, { event_type: NOTCH_TALK_EVENT, payload, ...(audio ? { binary: { type: 'inline', mime_type: 'audio/pcm', data: pcm } } : {}) }),
   };
@@ -146,4 +149,31 @@ test('the WAV header says what the audio is', () => {
   expect(wav.toString('ascii', 0, 4)).toBe('RIFF');
   expect(wav.readUInt32LE(24)).toBe(16_000);
   expect(wav.readUInt32LE(40)).toBe(100);
+});
+
+describe('a recording whose microphone goes away', () => {
+  test('the desktop app disconnects while the keys are held: the recording is dropped and the line leaves', () => {
+    const h = harness();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.disconnect();
+    expect(h.calls).toEqual(['listen pc:a1', 'dropped pc:a1']);
+    // Its end, arriving after a reconnect, is nothing.
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900 }, true);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  test('no end ever arrives: it does not stay listening for ever', async () => {
+    const h = harness();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(h.calls).toEqual(['listen pc:a1', 'dropped pc:a1']);
+  });
+
+  test('a recording that ended in time is not dropped afterwards', async () => {
+    const h = harness();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900 }, true);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    expect(h.calls.filter((call) => call.startsWith('dropped'))).toEqual([]);
+  });
 });
