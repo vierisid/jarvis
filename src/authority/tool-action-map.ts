@@ -244,6 +244,8 @@ export type ResolvedToolGate = {
   floorCategory: ActionCategory;
   intent?: string;
   confirm?: ToolGate['confirm'];
+  /** The tool's own classifier threw: nothing is known about what this call does. */
+  unclassified?: true;
 };
 
 /**
@@ -266,9 +268,11 @@ export function resolveToolGate(
   const floorCategory: ActionCategory = Object.hasOwn(AUTHORITY_REQUIREMENTS, rawFloor) ? rawFloor : 'execute_command';
   const uiGate = rawUiGate(toolName, params);
   let gate: ToolGate | null = null;
+  let unclassified = false;
   try {
     gate = tool?.authorityGate?.(params) ?? null;
   } catch (err) {
+    unclassified = true;
     console.warn(`[Authority] ${toolName} authorityGate threw; requiring explicit review:`, err instanceof Error ? err.message : err);
     gate = { actionCategory: floorCategory, confirm: 'always',
       intent: `Review ${toolName}. Business effect unknown: its effect classifier failed; no automatic execution is permitted.` };
@@ -283,6 +287,7 @@ export function resolveToolGate(
     floorCategory,
     intent: gate?.intent ?? uiGate?.intent,
     confirm: uiGate?.confirm === 'always' ? 'always' : gate?.confirm,
+    ...(unclassified ? { unclassified: true as const } : {}),
   };
 }
 

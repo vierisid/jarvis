@@ -18,7 +18,7 @@ import { ConversationRequestError } from '../vault/conversation-lifecycle.ts';
 import type { BriefProvider } from './providers.ts';
 import type { BriefChatEvent, BriefSendTurn, BriefTurnRef } from './contracts.ts';
 import type { BriefCapabilities } from './capabilities.ts';
-import { currentBriefTurn, withBriefTurn } from './chat-context.ts';
+import { currentBriefTurn, withBriefTurn, type BriefExecutionContext } from './chat-context.ts';
 
 type Client = ServerWebSocket<unknown>;
 export interface ScopedChatInput extends BriefTurnRef {
@@ -305,10 +305,13 @@ export class BriefChatTransport implements BriefProvider {
       if (!client || !this.audioOwners.has(turn.turnId) || !this.clients.get(client)?.has(turn.conversationId)) return;
       this.send(client, 'brief_chat_audio', { ...identity, sequence: this.repository.nextSequence(turn.conversationId), ...payload }, turn.requestId);
     };
+    // One object for the whole turn, marked when the turn is over: what the
+    // turn leaves running keeps it, and can tell (chat-context.ts).
+    const context: BriefExecutionContext = { ...identity, signal, progress };
     try {
       if (signal.aborted || isTerminalTurn(this.repository.get(turn).state)) return;
       this.emit(this.repository.start(turn));
-      await runWithOrigin('user', () => withExecutionProgress(observe, () => withBriefTurn({ ...identity, signal, progress }, () => withExecutionScope(() => signal.throwIfAborted(), async () => {
+      await runWithOrigin('user', () => withExecutionProgress(observe, () => withBriefTurn(context, () => withExecutionScope(() => signal.throwIfAborted(), async () => {
         // A forward or a guest's message in the history taints the turn
         // (#1155, #1313 follow-up), from the same rows that framed it.
         const guestConversation = this.deps.isGuestConversation
@@ -365,6 +368,8 @@ export class BriefChatTransport implements BriefProvider {
     } catch (error) {
       this.endAudio(turn.turnId, signal.aborted);
       for (const event of this.repository.finishEvents(turn, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? undefined : error instanceof ConversationRequestError ? { code: 'attachment_unavailable', message: error.message } : briefChatFailure(error, toolsRan))) this.emit(event);
+    } finally {
+      context.over = true;
     }
   }
 }

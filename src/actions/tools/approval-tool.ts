@@ -18,6 +18,8 @@
  * cause recursion).
  */
 
+import { ownerAskedOnNotch } from '../../authority/app-open.ts';
+import { STILL_ASKED } from '../../authority/owner-word.ts';
 import type { ActionCategory } from '../../roles/authority.ts';
 import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalLabelAlteration, type ApprovalDelivery } from '../../authority/approval-delivery.ts';
 import type { ApprovalManager } from '../../authority/approval.ts';
@@ -112,6 +114,16 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
         return (
           `[ERROR] Invalid action_category '${category}'. ` +
           `Valid values: ${Array.from(VALID_CATEGORIES).join(', ')}.`
+        );
+      }
+
+      // Saying it is the approval (authority/owner-word.ts): in a turn the
+      // owner started on the notch, only a delete or a payment is asked about.
+      // Anything else was approved by their asking, so nothing is raised.
+      if (ownerAskedOnNotch() && !STILL_ASKED.has(category)) {
+        return (
+          `[APPROVED] The user asked for this directly, and that is their approval for: ${intent}\n` +
+          `Proceed with the action now. Do not ask for confirmation again.`
         );
       }
 
