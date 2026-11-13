@@ -392,7 +392,7 @@ test("the canvas room mounts the real editor over the fixture without a render e
   expect(errors).toEqual([]);
   expect(host.querySelector(".wf-editor--workspace")).not.toBeNull();
   expect(host.textContent).toContain("Run workflow");
-  expect(host.textContent).toContain("Saved draft");
+  expect(host.textContent).toContain("Needs setup");
   // The run-history poll reads the paged runs API shape ({ items, nextOffset }).
   expect(fixture.requests.some((r) => r.path.includes("/runs?"))).toBe(true);
   expect(fixture.requests.every((r) => r.method === "GET")).toBe(true);
@@ -422,7 +422,7 @@ test('setup notice opens mapped fields and partial saves remain editable without
   expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Submission ID field, Email field');
   expect(host.querySelector('.brief-canvas-setup')?.textContent).toContain('Account, Instructions');
   expect(button('Run workflow').disabled).toBe(true);
-  expect(button('Publish version').disabled).toBe(true);
+  expect(button('Save and turn on').disabled).toBe(true);
   await React.act(async () => button('Receive form submissions').click());
   expect(host.querySelector('[aria-label="Step settings"]')?.getAttribute('data-open')).toBe('true');
   expect(host.querySelector('[aria-label="Step settings"]')?.hasAttribute('inert')).toBe(false);
@@ -513,7 +513,7 @@ test('AppSumo: repeated interruption stops retrying and offers recovery in the e
   expect(retry.disabled).toBe(false);
   await React.act(async () => retry.click());
   expect(attempts).toBe(3);
-  expect(host.textContent).toContain('Saved draft');
+  expect(host.textContent).toContain("Needs setup");
   expect(host.textContent).not.toContain('Workflow unavailable');
 });
 
@@ -542,11 +542,11 @@ test('invalid JSON stays dirty across node changes, blocks commands and can be d
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(field(), text);
     field().dispatchEvent(new Event('input', { bubbles: true }));
   }); };
-  expect(button('Publish version').disabled).toBe(false);
+  expect(button('Save and turn on').disabled).toBe(false);
   await select('draft'); await type('{bad json');
   expect(dirty).toBe(true); expect(host.textContent).toContain('Fix the invalid JSON (payload in step draft)');
   expect(field().getAttribute('aria-invalid')).toBe('true');
-  for (const name of ['Save changes', 'Publish version', 'Run workflow', 'Workflows']) expect(button(name).disabled).toBe(true);
+  for (const name of ['Save changes', 'Save and turn on', 'Run workflow', 'Workflows']) expect(button(name).disabled).toBe(true);
   await select('notes'); await select('draft'); expect(field().value).toBe('{bad json');
   await React.act(async () => button('Discard').click());
   expect(dirty).toBe(false); expect(JSON.parse(field().value)).toEqual({ source: '{{notes.content}}' });
@@ -632,7 +632,7 @@ test('CODE source survives edit, save and reopen with real fields, separate perm
   await React.act(async () => render());
   expect(host.textContent).toContain('Custom JavaScript'); expect(host.textContent).not.toContain('Action not selected');
   expect(host.textContent).not.toContain('Unconfigured'); expect(host.textContent).toContain('CODE steps: not allowed');
-  expect(button('Publish version').disabled).toBe(true); expect(button('Run workflow').disabled).toBe(true);
+  expect(button('Save and turn on').disabled).toBe(true); expect(button('Run workflow').disabled).toBe(true);
   await React.act(async () => host.querySelector<HTMLElement>('[data-id="calculate"]')!.click());
   const area = host.querySelector<HTMLTextAreaElement>('#code-source-calculate')!; expect(area.value).toBe(source.code);
   const next = 'export const code = async (inputs) => ({ value: inputs.value, active: false });';
@@ -646,7 +646,7 @@ test('CODE source survives edit, save and reopen with real fields, separate perm
   expect(host.querySelector<HTMLTextAreaElement>('#code-source-calculate')!.value).toBe(next);
   // A server-confirmed grant enables publishing without rewriting code or auto-running it.
   permissions.codeSteps = { enabled: true, grantedBy: 'user', grantedAt: 1 };
-  await React.act(async () => render()); expect(button('Publish version').disabled).toBe(false);
+  await React.act(async () => render()); expect(button('Save and turn on').disabled).toBe(false);
 });
 
 test('CODE package errors are source setup errors, never missing connector actions', async () => {
@@ -693,4 +693,48 @@ test('Brief grants CODE steps only after the full-access confirmation, through t
     expect(posts).toEqual([{ path: '/api/workflows/meeting/code-steps', body: { enabled: true } }]);
     expect(refreshed).toBe(1);
   } finally { window.confirm = originalConfirm; globalThis.fetch = originalFetch; }
+});
+
+test('U2: the page header says On or Off and Draft changes not live yet, never Saved draft or Published version', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  fixture = makeCanvasFixture(false);
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  const feedback = async (flow: Record<string, unknown>) => {
+    const binding = { source: 'fixture' as const, scopeId: 'canvas-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps,
+      request: fixture.request, permissions: { id: 'meeting', displayName: 'Meeting', codeSteps: { enabled: false, grantedBy: null, grantedAt: null }, ...flow } as any,
+      publish: async () => {} };
+    await React.act(async () => root.render(<WorkflowCanvasRoom shell={shell} binding={binding} />));
+    await React.act(async () => new Promise(r => setTimeout(r, 50)));
+    return host.querySelector('.brief-canvas-feedback')!.textContent;
+  };
+  expect(await feedback({ status: 'DISABLED', publishedVersionId: null })).toBe('Off');
+  expect(await feedback({ status: 'ENABLED', publishedVersionId: null })).toBe('On');
+  expect(await feedback({ status: 'ENABLED', publishedVersionId: 'older' })).toBe('On · Draft changes not live yet');
+  expect([...host.querySelectorAll('button')].some(b => b.textContent?.includes('Save and turn on'))).toBe(true);
+});
+
+test('U2: a live workflow whose draft needs setup reads On · Draft changes not live yet, with setup shown apart', async () => {
+  const { WorkflowCanvasRoom } = await import('./WorkflowCanvasRoom');
+  fixture = makeCanvasFixture(false);
+  const saved = fixture.snapshot().version;
+  saved.trigger = { name: 'trigger', displayName: 'Receive form submissions', type: 'PIECE_TRIGGER',
+    settings: { pieceName: 'webhook', input: { submission_id_field: '', submission_email_field: '', secret: 'fixture-signature' } } };
+  await fixture.request(`/api/workflows/meeting/versions/${fixture.versionId}`, { method: 'PATCH', body: JSON.stringify({ ...saved, uiMeta: fixture.snapshot().uiMeta }) });
+  const shell = { mode: 'preview', route: { room: 'workflow', selection: { flowId: 'meeting' } }, navigate() {} } as unknown as BriefShellPort;
+  const feedback = async (flow: Record<string, unknown>) => {
+    const binding = { source: 'fixture' as const, scopeId: 'canvas-test', flowId: 'meeting', versionId: fixture.versionId, capabilities: caps,
+      request: fixture.request, permissions: { id: 'meeting', displayName: 'Meeting', codeSteps: { enabled: false, grantedBy: null, grantedAt: null }, ...flow } as any,
+      publish: async () => {} };
+    await React.act(async () => root.render(<WorkflowCanvasRoom shell={shell} binding={binding} />));
+    await React.act(async () => new Promise(r => setTimeout(r, 50)));
+    return host.querySelector('.brief-canvas-feedback')!.textContent;
+  };
+  // The running published version is not what needs setup, so On is not qualified by it.
+  expect(await feedback({ status: 'ENABLED', publishedVersionId: 'older' })).toBe('On · Draft changes not live yet');
+  expect([...host.querySelectorAll('.brief-canvas-setup > summary')].map(s => s.textContent)).toContain('Needs setup');
+  const save = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Save and turn on'))!;
+  expect(save.disabled).toBe(true);
+  // Off, or never published: the setup gap is what stands between this draft and On.
+  expect(await feedback({ status: 'DISABLED', publishedVersionId: 'older' })).toBe('Off · Needs setup');
+  expect(await feedback({ status: 'DISABLED', publishedVersionId: null })).toBe('Off · Needs setup');
 });

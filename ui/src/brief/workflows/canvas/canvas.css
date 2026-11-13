@@ -310,6 +310,15 @@
 }
 .brief-root .brief-workflow-canvas .wf-node__body {
   padding-left: 40px;
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* At most three lines: auto-layout places cards 140px apart, so an
+     unbounded subtitle would run under the next card. The full text stays
+     in the step's panel. */
+  row-gap: 0;
+  line-height: 16px;
+  max-height: 48px;
 }
 .brief-root .brief-workflow-canvas .wf-props__header > .wf-node-identity {
   margin-bottom: 10px;
@@ -379,10 +388,20 @@
 .brief-root .wf-library__search input { flex: 1; min-width: 0; }
 
 /* Setup is part of the saved draft, with links into its existing inspector. */
-.brief-root .brief-canvas-setup { margin-block: 4px 12px; max-height: 200px; overflow: auto; font-size: 14px; }
+.brief-root .brief-canvas-setup { margin-block: 4px 12px; max-height: min(60vh, 420px); overflow: auto; font-size: 14px; }
 .brief-root .brief-canvas-setup summary { cursor: pointer; font-weight: 600; }
 .brief-root .brief-canvas-setup p { margin-block: 8px; max-width: 75ch; color: var(--brief-secondary); }
 .brief-root .brief-canvas-setup ul { margin: 0; padding: 0; list-style: none; }
 .brief-root .brief-canvas-setup li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-block: 4px; }
 .brief-root .brief-canvas-setup li span { overflow-wrap: anywhere; color: var(--brief-secondary); }
 .brief-root .brief-canvas-setup summary:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 2px; }
+
+/* The workflow in a sentence, above the tools. */
+.brief-root .brief-workflow-summary {
+  margin: 4px 0 0;
+  max-width: 75ch;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+}
