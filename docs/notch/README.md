@@ -484,6 +484,66 @@ And these are behind the switch:
   that waits for an answer** (`__notch_asking`, `notchShouldHide`): an
   approval or a question back. It hides again once answered. Windows only.
 
+## Where you are, and looking away
+
+The resting notch shows three things, and one rule decides them:
+
+- **Eyes open, an app's icon beside them:** this is the app in front, and it
+  is being watched.
+- **Eyes turned aside, no icon:** it is looking away by itself. A password
+  is being typed, or the window is a bank's. Nothing is captured.
+- **Eyes closed, no icon:** it sees nothing here. The app is on the
+  person's "never watch" list, or watching is switched off, or it is asleep.
+
+Home has a row ("I see Notepad.") that opens "What I see": the same in
+plain words, a button to never watch the app in front (or to watch it
+again), and one to sleep.
+
+45. **Looking away is decided on the machine, before anything is captured.**
+    The desktop app hears from the system which app is in front and where
+    the keyboard is (`sidecar/notch_where_windows.go`, a window event hook;
+    `notch_where_darwin.go`, NSWorkspace). It looks away for an app on the
+    list, for a password field, and for a bank, known by its window's title
+    (`notchLookFor`). The screen observer asks before it takes the
+    screenshot and the window observer before it reads a title
+    (`screenObservationHeld`, `WindowObserver.poll`): the picture is not
+    taken and thrown away, it is not taken. What an observer reads by
+    itself a moment later is judged by the same rule, and a capture already
+    made is deleted (`NotchWhere.Refuses`). The brain is told what was
+    decided (`notch.where`). It does not decide, and a brain that is late or
+    wrong cannot make the desktop app look.
+46. **The "never watch" list is the machine's.** It is in the desktop app's
+    own settings file (`notch_never_watch`). The brain asks for a change
+    (`notch.never_watch`) and shows the list it is answered with. A list
+    that cannot be saved is not changed.
+47. **A second door in the brain.** A capture that was already on its way
+    when looking away began is not kept: before the brain keeps a
+    screenshot, a change of window or an idle report it asks whether that
+    machine is looking away, whether the app is on its list, and whether
+    Jarvis is asleep (`awareness/capture-guard.ts`, `NotchWhere.mayKeep`).
+    `notch.where` is not queued behind other events, so the brain knows
+    before it reads what was queued ahead of it.
+48. **A window's title goes no further than the sheet.** It is text from the
+    screen. The desktop app does not send it while it looks away. The brain
+    shows it on "What I see" and gives it to nobody else from the notch.
+    What is logged is that the machine looked away and why, never what was
+    in front. `notch.where` is not passed to the dashboards.
+49. **An icon is a picture.** The app's own icon travels as a small PNG and
+    is drawn as an `<img>` from a data URL, checked for exactly that
+    (`notchIconUrl`). Nothing from the machine is ever set as markup.
+50. **Sleep means it sees nothing.** With the notch on, while everything is
+    stopped (Esc twice, the tray's Pause, "Sleep" on the sheet) the desktop
+    apps' observers are paused too (`whileAsleep`, pushed on every change of
+    the pause and to every desktop app that connects). The pause used to
+    freeze what Jarvis does and leave it watching.
+51. **With the notch off none of it runs.** The desktop app starts
+    listening only when the brain says the notch is on, and the observers'
+    checks answer "watch" until then (`NotchWhere.Look`, `Refuses`).
+
+What "never watch" does not do: it stops Jarvis watching by itself. If the
+person asks Jarvis to read that app, it reads it: saying it is the approval
+(44).
+
 ## The keys
 
 | What | Keys | How it is told |
@@ -540,6 +600,24 @@ And these are behind the switch:
   with one in front the notch's own keys do not reach the notch either
   (Windows keeps them from every ordinary program). The agent now says so
   instead of reporting success; the limit itself is Windows'.
+- A bank is known by its window's title, from a list of words and names
+  (`notchBankWords`). The desktop app cannot read the address a browser is
+  on. A bank whose title says nothing is watched like any page until a
+  password field takes the keyboard; a page that only mentions a bank is
+  not watched. It errs towards looking away.
+- A password field is known when the program says so. A plain Windows edit
+  box does by its style; a browser or a modern app is asked through UI
+  Automation, with 700 ms to answer. A program that draws its own field and
+  tells nobody is not known.
+- The "hands are still" signal (four seconds without a key or the mouse) is
+  sent and kept, and nothing uses it yet. It is for the proposals of the
+  passes after this one.
+- On the Mac this is written and compiled and has never run. There a
+  window's title, and so a bank, is only known when the person has allowed
+  screen recording.
+- Some apps have no icon of their own to read (many Store apps), and the
+  notch then shows none. The name shown is what the program's file says of
+  itself, which is sometimes not what a person calls it.
 - Start menu names are in the language of Windows. "Settings" finds nothing
   on a Windows in Italian, where it is "Impostazioni".
 - On the Mac the notch does not yet come back over a fullscreen video for a
@@ -650,9 +728,11 @@ And these are behind the switch:
 | brain to desktop app | `notch.open_dashboard` | none | `{opened: boolean}`. Opens the dashboard's window, as the tray's entry does. Decides nothing |
 | desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
 | desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
+| desktop app to brain | event `notch.where` | `{app, name, title, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters, `icon` a key; the icon itself comes once per connection as a PNG. `title` is empty while it looks away. Sent on every change | none |
+| brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}` | `{never: string[]}`, the list as it now is |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
-The page talks to the desktop app through six functions on `window`:
+The page talks to the desktop app through seven functions on `window`:
 
 | Function | Meaning |
 |---|---|
@@ -660,6 +740,7 @@ The page talks to the desktop app through six functions on `window`:
 | `__notch_focus(true \| false)` | Take the keyboard for a text field, or give it back. Answers whether the notch has it |
 | `__notch_send(text)` | One message for the brain, as JSON text |
 | `__notch_esc(true \| false)` | Whether Esc would do anything on the notch right now. Only then is it taken from the app in front |
+| `__notch_asking(true \| false)` | Whether a question that needs a yes or a no is on the notch. While one is, the window does not stay hidden behind a fullscreen video |
 | `__notch_keys()` | Answers the machine's two pairs, `{talk: [a, b], yes: [a, b]}`, each key one of `ctrl`, `alt`, `meta`, `shift` |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
 
@@ -680,11 +761,12 @@ time; a new `show` replaces it.
 | From | Message | Meaning |
 |---|---|---|
 | page | `hello {v}` | The page is up. Answered with `state` |
-| brain | `state {line, count, born, face}` | Everything the notch should show, at once |
+| brain | `state {line, count, born, face, where}` | Everything the notch should show, at once |
 | brain | `show {line}` | Put this on the notch |
 | brain | `rest` | Back to the eyes |
 | brain | `count {count}` | How many things wait |
-| brain | `face {mood}` | The face the notch has at rest until told otherwise: `closed` while everything is stopped. Kept by the brain, unlike a mood given with `act` |
+| brain | `face {mood}` | The face the notch has at rest until told otherwise: `closed` while it sees nothing (asleep, an app never to be watched, watching off), `away` while it looks away by itself. Kept by the brain, unlike a mood given with `act` |
+| brain | `where {app}` | The app in front, `{name, icon}`, for the icon beside the resting eyes; `null` takes it away. The icon is a PNG data URL. Kept by the brain |
 | brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
 | brain | `act {...}` | A face, a movement, a birth, the watching eye, the mouth, sounds. Not remembered |
 | page | `answer {id, act, ...}` | What the person did with the line `id` |
