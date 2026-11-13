@@ -47,8 +47,8 @@ async function ensureConfigFile(): Promise<void> {
 
     await copyFile(EXAMPLE_CONFIG, CONFIG_PATH);
     console.log(`✓ Config file created: ${CONFIG_PATH}`);
-    console.log('\n⚠️  Please edit the config file and add your API keys:');
-    console.log(`   nano ${CONFIG_PATH}\n`);
+    console.log('\nAI providers and API keys are not set in this file.');
+    console.log('Start Jarvis (jarvis start -d), enroll a device (jarvis enroll "my-desktop") and choose a provider in the dashboard setup screen.\n');
   } else {
     console.log(`✓ Config file exists: ${CONFIG_PATH}\n`);
   }
@@ -155,7 +155,7 @@ async function testProviders(config: any): Promise<void> {
 
   if (!hasProvider) {
     console.log('⚠️  No working providers found!');
-    console.log('   Please add at least one API key to your config.\n');
+    console.log('   Add a provider in the dashboard (Settings > LLM). Keys in config.yaml are ignored.\n');
     return;
   }
 
@@ -201,9 +201,9 @@ async function main() {
 
   console.log('Setup complete! 🚀\n');
   console.log('Next steps:');
-  console.log('  1. Edit config if needed: nano ~/.jarvis/config.yaml');
-  console.log('  2. Run tests: bun run src/llm/test.ts');
-  console.log('  3. Try examples: bun run examples/llm-integration.ts');
+  console.log('  1. Start Jarvis: jarvis start -d');
+  console.log('  2. Enroll this device: jarvis enroll "my-desktop"');
+  console.log('  3. Choose your AI provider in the dashboard setup screen');
   console.log('');
 }
 

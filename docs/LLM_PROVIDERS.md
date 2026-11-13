@@ -30,46 +30,51 @@ The J.A.R.V.I.S. LLM provider system provides a unified abstraction layer for mu
 
 ### Supported Providers
 
-| Provider | Models | Features | Cost |
-|----------|--------|----------|------|
-| **Anthropic** | Claude Opus 4.6, Sonnet 4.5 | Text, Streaming, Tools | Paid |
-| **OpenAI** | GPT-4o, GPT-4 Turbo | Text, Streaming, Functions | Paid |
-| **Ollama** | Llama 3, Mistral, etc. | Text, Streaming, Tools | Free |
+Add and configure providers in the dashboard: onboarding on first run, or **Settings > LLM** later. Keys and URLs are stored in the database and encrypted keychain. See [QUICKSTART.md](../QUICKSTART.md) for the first-run path.
+
+| Provider | What it needs | Notes |
+|----------|---------------|-------|
+| **Anthropic** | API key | Optional custom endpoint URL (and auth token) for a gateway |
+| **OpenAI** | API key | |
+| **Gemini** | API key | |
+| **Groq** | API key | Model list is loaded from Groq |
+| **OpenRouter** | API key | One key, many vendors' models |
+| **NVIDIA NIM** | API key | Catalog includes non-chat models; the connection test checks chat support |
+| **Ollama** | Base URL (default `http://localhost:11434`) | Local, no key. Pull a model first (`ollama pull <model>`) and keep `ollama serve` running |
+| **OpenAI-compatible** | Base URL, key optional | Any server that speaks `/v1/chat/completions` (LM Studio, llama.cpp, vLLM) |
+| **LiteLLM** | Proxy URL, key optional | The model name must match an alias on your proxy |
+| **OmniRoute** | API URL, key optional | Loads routes and combos from your instance |
+
+Local and compatible providers have in-dashboard [setup guides](provider-guides/README.md). The model picker loads a live catalog for Groq, NVIDIA NIM, Ollama and OmniRoute; for Anthropic, OpenAI, Gemini and OpenRouter it suggests the curated list in `src/llm/model-catalog.ts`, and **Settings > LLM** also offers **Custom...** for another model id. OpenAI-compatible and LiteLLM take a model name you enter.
+
+On hosted installs a system-managed Usejarvis AI provider is added for you; it is not user-creatable.
 
 ## Quick Start
 
-See [QUICKSTART.md](~/jarvis/QUICKSTART.md) for detailed setup instructions.
-
-### 1. Install
+### 1. Install and start
 
 ```bash
-cd ~/jarvis
-bun install
+curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
+jarvis start -d --no-open
 ```
 
-### 2. Configure
+### 2. Open the dashboard
 
-```bash
-bun run setup
-```
+Run `jarvis enroll "my-laptop"` and use the token in the desktop app, or follow [QUICKSTART.md](../QUICKSTART.md#3-get-into-the-dashboard) for the browser-only path. The dashboard is on port 3142 by default.
 
-This will:
-- Create `~/.jarvis/` directory
-- Copy example config
-- Test provider connections
+### 3. Choose a provider
 
-### 3. Use
+Pick one in the setup screen, enter its key or URL, and test the connection. `config.yaml` has no LLM settings: an `llm:` block is ignored, and the old provider-key environment variables are not read.
+
+### 4. Use the layer from code
+
+For contributors. Inside the daemon, providers come from the saved configuration. A standalone script constructs them directly:
 
 ```typescript
-import { loadConfig } from './src/config/index.ts';
 import { LLMManager, AnthropicProvider } from './src/llm/index.ts';
 
-const config = await loadConfig();
 const manager = new LLMManager();
-
-manager.registerProvider(
-  new AnthropicProvider(config.llm.anthropic.api_key)
-);
+manager.registerProvider(new AnthropicProvider(process.env.MY_SCRIPT_KEY!));
 
 const response = await manager.chat([
   { role: 'user', content: 'Hello!' }
@@ -123,22 +128,19 @@ console.log(response.content);
 
 ### Anthropic (Claude)
 
-**Implementation**: `~/jarvis/src/llm/anthropic.ts`
+**Implementation**: `../src/llm/anthropic.ts`
 
 ```typescript
 import { AnthropicProvider } from './llm/index.ts';
 
 const provider = new AnthropicProvider(
   'sk-ant-...',                        // API key
-  'claude-sonnet-4-5-20250929'         // Model (optional)
+  'claude-sonnet-5-5'                  // Model (optional)
 );
 ```
 
 **Available Models**:
-- `claude-opus-4-6` - Most capable, highest cost
-- `claude-sonnet-4-5-20250929` - Balanced (default)
-- `claude-3-5-sonnet-20241022` - Fast and capable
-- `claude-3-haiku-20240307` - Fastest, lowest cost
+Suggested models are listed in `src/llm/model-catalog.ts` and shown in the dashboard model picker. With a custom endpoint URL, the connection test reads the endpoint's own model list.
 
 **API Endpoint**: `https://api.anthropic.com/v1/messages`
 
@@ -149,7 +151,7 @@ const provider = new AnthropicProvider(
 
 ### OpenAI (GPT)
 
-**Implementation**: `~/jarvis/src/llm/openai.ts`
+**Implementation**: `../src/llm/openai.ts`
 
 ```typescript
 import { OpenAIProvider } from './llm/index.ts';
@@ -160,11 +162,7 @@ const provider = new OpenAIProvider(
 );
 ```
 
-**Available Models**:
-- `gpt-4o` - Latest GPT-4 optimized (default)
-- `gpt-4-turbo` - Fast GPT-4
-- `gpt-4` - Original GPT-4
-- `gpt-3.5-turbo` - Fastest, cheapest
+**Available Models**: see `src/llm/model-catalog.ts` and the dashboard model picker.
 
 **API Endpoint**: `https://api.openai.com/v1/chat/completions`
 
@@ -175,7 +173,7 @@ const provider = new OpenAIProvider(
 
 ### Ollama (Local Models)
 
-**Implementation**: `~/jarvis/src/llm/ollama.ts`
+**Implementation**: `../src/llm/ollama.ts`
 
 ```typescript
 import { OllamaProvider } from './llm/index.ts';
@@ -208,66 +206,11 @@ ollama serve
 
 ## Configuration
 
-### Configuration File
+Providers, credentials, the default model, and per-tier routing are set in the dashboard (onboarding or **Settings > LLM**). They live in the database and encrypted keychain.
 
-Location: `~/.jarvis/config.yaml`
+`~/.jarvis/config.yaml` holds system settings only (port, public URL, timezone, logging). It has no LLM settings: an `llm:` block is ignored on load (the brain never writes this file), and the old provider-key environment variables are not read. See [config.example.yaml](../config.example.yaml) and [the config README](../src/config/README.md).
 
-```yaml
-daemon:
-  port: 7777
-  data_dir: "~/.jarvis"
-  db_path: "~/.jarvis/jarvis.db"
-
-llm:
-  primary: "anthropic"
-  fallback: ["openai", "ollama"]
-
-  anthropic:
-    api_key: "sk-ant-..."
-    model: "claude-sonnet-4-5-20250929"
-
-  openai:
-    api_key: "sk-..."
-    model: "gpt-4o"
-
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3"
-
-personality:
-  core_traits:
-    - "loyal"
-    - "efficient"
-    - "proactive"
-    - "respectful"
-    - "adaptive"
-
-authority:
-  default_level: 3
-
-active_role: "default"
-```
-
-### Loading Configuration
-
-```typescript
-import { loadConfig } from './src/config/index.ts';
-
-const config = await loadConfig();
-// OR with custom path
-const config = await loadConfig('/path/to/config.yaml');
-```
-
-### Saving Configuration
-
-```typescript
-import { saveConfig } from './src/config/index.ts';
-
-config.daemon.port = 8888;
-await saveConfig(config);
-```
-
-See [~/jarvis/src/config/README.md](~/jarvis/src/config/README.md) for complete config documentation.
+The daemon listens on port 3142 by default (`daemon.port`).
 
 ## Usage Examples
 
@@ -447,34 +390,27 @@ bun test src/config/loader.test.ts
 
 ### Manual Testing
 
-```bash
-# Setup config and test providers
-bun run setup
+Add a provider in **Settings > LLM** and use its connection test, then send a message in chat.
 
-# Test LLM functionality
-bun run test:llm
-
-# Run integration examples
-bun run examples
-```
+From a source checkout, `bun run test:llm` (`src/llm/test.ts`) loads the providers and tiers saved in the dashboard from the same database and runs a chat, a streaming and a prompt-cache check on the medium tier.
 
 ## Troubleshooting
 
 ### Common Issues
 
 **"No LLM providers configured"**
-- Add at least one API key to `~/.jarvis/config.yaml`
+- Add a provider in the dashboard (Settings > LLM). Keys in `config.yaml` are ignored
 
 **"Provider 'X' not registered"**
 - Ensure provider is registered before setting as primary
-- Check API key is present in config
+- Check the provider is added and its key saved in Settings > LLM
 
 **"Ollama not available"**
 - Start Ollama: `ollama serve`
 - Check it's running: `curl http://localhost:11434/api/tags`
 
 **"Invalid API key"**
-- Verify key in config file
+- Re-enter the key in Settings > LLM and test the connection
 - Check account has credits (for paid APIs)
 - Ensure no extra spaces or quotes
 
@@ -663,16 +599,13 @@ class Conversation {
 
 ### Documentation
 
-- [LLM Provider README](~/jarvis/src/llm/README.md)
-- [Config System README](~/jarvis/src/config/README.md)
-- [Quick Start Guide](~/jarvis/QUICKSTART.md)
-- [Implementation Summary](~/jarvis/IMPLEMENTATION_SUMMARY.md)
+- [LLM Provider README](../src/llm/README.md)
+- [Config System README](../src/config/README.md)
+- [Quick Start Guide](../QUICKSTART.md)
 
 ### Examples
 
-- [Integration Example](~/jarvis/examples/llm-integration.ts)
-- [Test Suite](~/jarvis/src/llm/test.ts)
-- [Setup Script](~/jarvis/scripts/setup-config.ts)
+- [Provider tests](../src/llm/provider.test.ts)
 
 ### External Resources
 
