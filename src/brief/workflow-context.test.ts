@@ -7,6 +7,7 @@ import { initWorkflowDb, getWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../
 import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { claimNextJob, enqueue as enqueueJob } from '../workflows/db/repos/job-queue';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
 import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
@@ -614,4 +615,14 @@ test('failed expression inspection explains the repair without leaking expressio
   expect(description).not.toContain('validate the draft');
   const exposed = JSON.stringify(detail);
   for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError:']) expect(exposed).not.toContain(secret);
+});
+test('a run waiting for a free worker says what it is waiting behind', () => {
+  const ahead = run(), mine = run();
+  enqueueJob({ jobType: 'RUN_FLOW', flowRunId: ahead.id, payload: { runId: ahead.id } });
+  enqueueJob({ jobType: 'RUN_FLOW', flowRunId: mine.id, payload: { runId: mine.id } });
+  expect(service.detail(flowId, mine.id).summary).toContain('Waiting for another workflow run to finish (1 ahead).');
+  claimNextJob();
+  expect(service.detail(flowId, mine.id).summary).toContain('Waiting for another workflow run to finish (1 ahead).');
+  claimNextJob();
+  expect(service.detail(flowId, mine.id).summary).not.toContain('Waiting for another');
 });

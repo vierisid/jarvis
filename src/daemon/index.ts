@@ -158,7 +158,7 @@ import {
 import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
-import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
+import { Worker as WorkflowWorker, WORKFLOW_WORKER_CONCURRENCY } from "../workflows/queue/worker.ts";
 import { recoverOrphanedJobs } from "../workflows/db/repos/job-queue.ts";
 import { TimerWaitpointScheduler } from "../workflows/timer-scheduler.ts";
 import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
@@ -5755,7 +5755,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // recipient) tells the owner once per workflow and reason.
           onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)) }) },
       });
-      workflowWorker.start();
+      workflowWorker.start({ concurrency: WORKFLOW_WORKER_CONCURRENCY });
 
       // Resume TIMER waitpoints whose delay has elapsed (incl. during downtime).
       // A card the sweep closes for a run that ended before it parked is

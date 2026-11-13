@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db';
 import { createFlowRun } from '../workflows/db/repos/flow-run';
-import { enqueue } from '../workflows/db/repos/job-queue';
+import { enqueue, queueWait } from '../workflows/db/repos/job-queue';
 import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
@@ -344,8 +344,10 @@ export class WorkflowContext {
     // (its workflow turned off or removed, or Kill) names that reason first.
     const run = getFlowRun(r.id)!, failure = runFailure(run), recovery = getRunRecovery(r.id);
     const stoppedBy = run.failedStep?.name === '<lifecycle>' ? `${run.failedStep.displayName}.` : null;
+    const wait = queueWait(r.id);
+    const waiting = wait && wait.ahead > 0 ? `Waiting for another workflow run to finish (${wait.ahead} ahead).` : null;
     const summary = failure ? [stoppedBy, failure.headline, failure.outcome].filter(Boolean).join(' ')
-      : this.summary(r).note ?? 'Recorded execution evidence; success alone does not verify goal progress.';
+      : waiting ?? this.summary(r).note ?? 'Recorded execution evidence; success alone does not verify goal progress.';
     return { ...this.summary(r), summary,
       failure: failure ? { category: failure.category, effect: failure.effect, headline: stoppedBy ?? failure.headline,
         outcome: failure.outcome, next: failure.next, code: failure.code } : null,
