@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -395,6 +396,18 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 
 	appName, windowTitle := observerActiveWindow()
 
+	// The observer read the window in front by itself, a moment after the
+	// check at the top. If what it found is an app the person said never to
+	// watch, or a bank, the capture that was just made is not kept and
+	// nothing is said about it (notch_where.go).
+	if notchWhere.Refuses(appName, windowTitle) {
+		if imagePath != "" {
+			_ = os.Remove(imagePath)
+		}
+		log.Printf("[screen] capture #%d dropped: looking away", captureId)
+		return
+	}
+
 	log.Printf("[screen] Change detected (%.1f%%), capture #%d (%d bytes, ocr %dms, %d chars)",
 		changePct*100, captureId, len(imageData), ocrDurationMs, len(ocrText))
 
@@ -501,7 +514,15 @@ func (o *WindowObserver) poll(ctx context.Context, send EventSender) {
 	if screenObserversPaused.Load() {
 		return
 	}
+	// Looking away (notch_where.go): the title of a window nobody is to read
+	// is not read out either.
+	if notchWhere.Look() != notchLooking {
+		return
+	}
 	appName, windowTitle := observerActiveWindow()
+	if notchWhere.Refuses(appName, windowTitle) {
+		return
+	}
 
 	o.mu.Lock()
 	prevApp := o.lastApp
