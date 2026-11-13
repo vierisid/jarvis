@@ -95,7 +95,7 @@ export function makeManagementFixture(
     ),
   );
   if (mode === "long list")
-    for (let i = 1; i <= 32; i++)
+    for (let i = 1; i <= 120; i++)
       records.set(`long-${i}`, {
         ...records.get("inbox")!,
         flowId: `long-${i}`,
