@@ -29,6 +29,20 @@ func observerSeams(t *testing.T, app, title string) (shots, windows *atomic.Int3
 	shots, windows = &atomic.Int32{}, &atomic.Int32{}
 	prevCap, prevWin := observerCaptureScreen, observerActiveWindow
 	t.Cleanup(func() { observerCaptureScreen, observerActiveWindow = prevCap, prevWin })
+	// Nothing else may be holding the observers back: a pause the brain sent
+	// or a voice turn, left behind by another test, would make these tests
+	// pass or fail for a reason that is not theirs.
+	prevPaused := screenObserversPaused.Swap(false)
+	ambientMu.Lock()
+	prevDepth, prevUntil := ambientDepth, ambientHoldUntil
+	ambientDepth, ambientHoldUntil = 0, time.Time{}
+	ambientMu.Unlock()
+	t.Cleanup(func() {
+		screenObserversPaused.Store(prevPaused)
+		ambientMu.Lock()
+		ambientDepth, ambientHoldUntil = prevDepth, prevUntil
+		ambientMu.Unlock()
+	})
 	observerCaptureScreen = func() ([]byte, error) { shots.Add(1); return []byte("a picture of the screen"), nil }
 	observerActiveWindow = func() (string, string) { windows.Add(1); return app, title }
 	return shots, windows
