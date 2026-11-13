@@ -125,9 +125,39 @@ export function wireOwnerWord(): void {
   setOwnerWordProbe((toolName, params) => notchPressReads(toolName, params, notchWhereDeps));
 }
 
+const OS_NAMES: Record<string, string> = { windows: 'Windows', win32: 'Windows', darwin: 'macOS', macos: 'macOS', linux: 'Linux' };
+
+/**
+ * Which computer the desktop tools go to right now, said to the agent so that
+ * it does not spend a whole step asking. The tool guide tells it to call
+ * `list_sidecars` before acting on a machine, because the guide is written
+ * once and cannot know who is connected. A turn from the notch can: its
+ * record showed 13 of 14 asks beginning with that call, two to six seconds
+ * each, before anything the person asked for had started. Empty when no
+ * connected computer can take desktop tools: then asking is the right step.
+ */
+export function notchMachineNote(): string {
+  try {
+    const manager = getSidecarManager();
+    const target = manager ? resolveToolTarget(undefined, 'desktop', 'notch', { quiet: true }) : null;
+    const machine = manager && target ? findSidecar(target, manager.listSidecars()) : null;
+    if (!machine || !machine.connected) return '';
+    // A name the owner gave their own computer: kept to one plain run of text.
+    const name = [...String(machine.name ?? '').replace(/["\u201c\u201d\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim()].slice(0, 60).join('');
+    if (!name) return '';
+    const os = OS_NAMES[String(machine.os ?? '').toLowerCase()];
+    return `Desktop, screen and app tools go to the computer "${name}"${os ? ` (${os})` : ''} when you give no target. `
+      + 'It is connected right now, so do not call list_sidecars before using them.';
+  } catch {
+    return '';
+  }
+}
+
 /** The note for a turn, by its request id: only a turn started on the notch has one. */
 export function notchTurnNote(requestId: string): string | undefined {
-  return notchEnabled() && NOTCH_REQUEST_ID.test(requestId) ? NOTCH_TURN_NOTE : undefined;
+  if (!notchEnabled() || !NOTCH_REQUEST_ID.test(requestId)) return undefined;
+  const machine = notchMachineNote();
+  return machine ? `${NOTCH_TURN_NOTE} ${machine}` : NOTCH_TURN_NOTE;
 }
 
 export interface NotchAskOptions {
