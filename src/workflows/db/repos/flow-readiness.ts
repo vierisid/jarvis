@@ -3,7 +3,7 @@ import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '
 import { assertFlowVersionOwnership } from './flow-version-ownership';
 import { workflowReadinessServices } from './readiness-services';
 import { isTurnedOff } from './flow-turn-off';
-import { bindingPinIssues } from './binding-pins';
+import { bindingPinIssues, readBindingPins } from './binding-pins';
 import { flowIngredientIssues, hasFlowIngredients } from './composition-ingredients';
 import { managedConnectionMisuse, managedSourceFor } from '../../credentials/adapter';
 import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from './flow-run';
@@ -104,6 +104,18 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
     tool: configured?.tool,
     roles: configured?.roles,
     ...(configured?.machines ? { machines: configured.machines } : {}),
+    // Only when the daemon reports its computers: with none reported, nothing is claimed.
+    // Asked the way a run picks its computer (machine-binding.ts): a pinned flow
+    // runs on its pinned computer or nowhere; an unpinned one on any connected
+    // computer, else on this one while local tools are on. A warning only, never
+    // a refusal, so a computer that is asleep for a while changes no readiness.
+    computerOnline: configured?.machines ? () => {
+      const inventory = configured.machines!();
+      const local = configured.localTools?.() ?? true;
+      const pin = readBindingPins(flowId)?.machine;
+      if (pin) return pin.sidecarId === null ? local : inventory.some(s => s.id === pin.sidecarId && s.connected);
+      return inventory.some(s => s.connected) || local;
+    } : undefined,
     connection(externalId, pieceName, path, settings, nodeType) {
       if (externalId.startsWith('jarvis:')) {
         const source = managedSourceFor(configured?.credentials?.list(), externalId);
