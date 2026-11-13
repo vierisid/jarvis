@@ -143,11 +143,18 @@ async function runCases(saved: any, fixture: any) {
           if (condition.operator === 'BOOLEAN_IS_TRUE') return !!a;
           if (condition.operator === 'BOOLEAN_IS_FALSE') return !a;
           if (condition.operator.startsWith('NUMBER_')) {
-            // Same parseStringToNumber semantics as the production router:
-            // numeric strings are parsed; nonnumeric strings remain strings.
+            // Same semantics as the production router: numeric strings are
+            // parsed, and an operand that is not a number fails the step.
             // This compares route operands, never coerces product fields.
-            const parse = (value: any) => Number.isNaN(Number(value)) ? value : Number(value);
-            const left = parse(a), right = parse(b);
+            // The message clips and quotes the operand as the engine does.
+            const parse = (value: any, which: string) => {
+              if (!Number.isNaN(Number(value))) return Number(value);
+              const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+              const chars = Array.from(text.slice(0, 121)), clipped = chars.slice(0, 60).join('');
+              const shown = (typeof value === 'string' ? JSON.stringify(clipped) : clipped) + (chars.length > 60 ? '...' : '');
+              throw new Error(`The ${which} value ${shown} is not a number. A number condition needs a number on both sides.`);
+            };
+            const left = parse(a, 'first'), right = parse(b, 'second');
             if (condition.operator === 'NUMBER_IS_GREATER_THAN') return left > right;
             if (condition.operator === 'NUMBER_IS_LESS_THAN') return left < right;
             return left == right;

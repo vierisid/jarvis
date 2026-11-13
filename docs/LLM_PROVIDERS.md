@@ -418,6 +418,7 @@ From a source checkout, `bun run setup` runs every saved provider through the sa
 
 **"Provider 'X' not registered"**
 - Only from scripts: register the provider before `setTierMap` (or `setPrimary` / `setFallbackChain`)
+- Check the provider is added and its key saved in Settings > LLM
 
 **Ollama connection fails**
 - Start Ollama: `ollama serve`
