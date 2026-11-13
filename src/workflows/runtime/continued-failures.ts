@@ -38,6 +38,18 @@ function failedRecords(steps: Record<string, unknown>, out: string[], budget: { 
   }
 }
 
+/**
+ * Whether a run's raw step trace holds a FAILED step, here or in a loop round,
+ * without reading anything else. A trace too large to read to the end counts
+ * as failed, so a caller never treats an unread step as clean.
+ */
+export function hasFailedStep(steps: unknown): boolean {
+  if (steps === null || typeof steps !== 'object' || Array.isArray(steps)) return false;
+  const found: string[] = [], budget = { left: MAX_STEPS };
+  failedRecords(steps as Record<string, unknown>, found, budget);
+  return found.length > 0 || budget.left < 0;
+}
+
 /** The failed steps of a SUCCEEDED run, once each, in step order; empty for any other run. */
 export function continuedFailures(run: FlowRun): ContinuedFailure[] {
   if (run.status !== 'SUCCEEDED' || !run.steps) return [];

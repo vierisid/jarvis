@@ -11,6 +11,7 @@ import { withOwnedFlowVersion } from "./flow-version-ownership";
 import { assertFlowCodeStepsAllowed } from "./flow-code-steps";
 import { assertFlowReady, assertVersionReady } from './flow-readiness';
 import { pinFlowBindings } from './binding-pins';
+import { MAX_TIME_SAVED_PER_RUN } from '../../time-saved-estimate';
 
 export type FlowStatus = "ENABLED" | "DISABLED";
 
@@ -243,6 +244,15 @@ export function updateFlowMetadata(id: string, metadata: Record<string, unknown>
     [metadata ? JSON.stringify(metadata) : null, now(), id],
   );
   if (res.changes === 0) throw new Error(`updateFlowMetadata: flow not found (id=${id})`);
+}
+
+/** Minutes one run of this flow saves, as set by its owner. Null clears it (the estimate applies again). */
+export function updateFlowTimeSavedPerRun(id: string, minutes: number | null): void {
+  if (minutes !== null && (!Number.isInteger(minutes) || minutes < 0 || minutes > MAX_TIME_SAVED_PER_RUN)) {
+    throw new Error(`time saved per run must be a whole number of minutes from 0 to ${MAX_TIME_SAVED_PER_RUN}, or null`);
+  }
+  const res = db().run(`UPDATE flow SET time_saved_per_run = ?, updated = ? WHERE id = ?`, [minutes, now(), id]);
+  if (res.changes === 0) throw new Error(`updateFlowTimeSavedPerRun: flow not found (id=${id})`);
 }
 
 export function deleteFlow(id: string): void {

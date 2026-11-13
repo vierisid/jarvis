@@ -73,6 +73,13 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/** A day id is a calendar date in the owner's timezone, so its weekday is read as a plain date in the user's locale. */
+export function dayLabels(id: string): { label: string; title: string } {
+  const at = Date.parse(`${id}T12:00:00Z`);
+  if (!Number.isFinite(at)) return { label: id, title: id };
+  return { label: new Intl.DateTimeFormat(undefined, { weekday: 'short', timeZone: 'UTC' }).format(at),
+    title: new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeZone: 'UTC' }).format(at) };
+}
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
   const { scopeId, transport, reconciliation } = host;
@@ -144,7 +151,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
         queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
-          today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),
+          today: data.today, week: data.week, todayBasis: data.todayBasis, weekBasis: data.weekBasis, days: data.days.map(day => ({ ...day, ...dayLabels(day.id) })),
           chartMaxMinutes: Math.max(60, ...data.days.map(day => day.time?.value ?? 0)), goal: null,
           coverage: data.coverage.complete ? 'complete' : 'partial', basis: data.basis })) }} />,
         activity: <RecentActivity mode="live" onOpen={shell.navigate} binding={{ source: 'live', state: mergeActivity(view(runs, rows => rows),

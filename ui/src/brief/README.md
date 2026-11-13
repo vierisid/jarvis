@@ -298,8 +298,11 @@ is unchanged.
   identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
-  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
-  never sums runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
+  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value, and may also
+  be `estimated`: the server counts every successful production root run (not one that continued past a failure) at the workflow's owner-set
+  minutes or an estimate from its steps, and the view labels it "estimated" and shows the basis in the
+  bar tooltips and "Data basis". An estimate never qualifies a goal figure. A started day with no runs renders an empty zero bar ("No time saved"); a future day is blank. Bars carry the short weekday, the full date is in the tooltip. The view itself never sums
+  runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
   not measured yet", and a measured zero shows 0. "Data basis" lists each figure's qualification, as-of
   time and evidence count.
 - Only changed digits fade (`BRIEF_MOTION.selection.enter`); mount, remount and a new window or goal do

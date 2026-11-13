@@ -15,6 +15,7 @@ import {
   type WorkflowRequest,
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
+import { TimeSavedPerRun } from "./TimeSavedPerRun";
 import "./canvas.css";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
 
@@ -274,6 +275,8 @@ function CanvasHeader({
                       : needsSetup ? "Saved draft · Setup required" : "Saved draft")}
         </span>
       </div>
+      {binding.permissions && <TimeSavedPerRun key={`time-${binding.flowId}`} flow={binding.permissions} request={binding.request as typeof fetch}
+        onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Time saved could not be refreshed. Reopen this workflow to check.')); }} />}
       {binding.permissions && <details className="brief-canvas-setup" open={hasCode || undefined}>
         <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
         <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}

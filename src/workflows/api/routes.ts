@@ -52,6 +52,7 @@ import {
   parseFlowMetadata,
   setFlowCodeStepsEnabled,
   updateFlowMetadata,
+  updateFlowTimeSavedPerRun,
   updateFlowStatus,
   type FlowStatus,
 } from "../db/repos/flow";
@@ -123,6 +124,7 @@ import type { PieceLookup } from "../runtime/piece-catalog";
 import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
+import { estimateMinutesPerRun, MAX_TIME_SAVED_PER_RUN } from "../time-saved-estimate";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
 import {
   installPiece,
@@ -1690,6 +1692,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const body = read.body as {
             status?: FlowStatus;
             metadata?: Record<string, unknown> | null;
+            timeSavedPerRun?: number | null;
           };
           // BOTH fields are validated before EITHER is written. They used to be
           // checked one at a time as they were applied, so a request carrying a
@@ -1700,9 +1703,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
+          if (body.timeSavedPerRun !== undefined && body.timeSavedPerRun !== null
+            && (!Number.isInteger(body.timeSavedPerRun) || body.timeSavedPerRun < 0 || body.timeSavedPerRun > MAX_TIME_SAVED_PER_RUN)) {
+            return err(`timeSavedPerRun must be a whole number of minutes from 0 to ${MAX_TIME_SAVED_PER_RUN}, or null`);
+          }
           // Turning a workflow off stops its queued and waiting runs (Q-06).
           if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
+          if (body.timeSavedPerRun !== undefined) updateFlowTimeSavedPerRun(id, body.timeSavedPerRun);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
@@ -2616,6 +2624,10 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
     publishedVersionId: row.published_version_id,
     displayName: version?.displayName ?? null,
     metadata: parseFlowMetadata(row),
+    // What Today's time saved counts per successful run: the owner's number
+    // when set, else this estimate from the steps of the version shown here.
+    timeSavedPerRun: row.time_saved_per_run,
+    estimatedTimeSavedPerRun: version ? estimateMinutesPerRun(version.trigger) : null,
     // Surfaced so the dashboard can show that this flow may run CODE and,
     // when `grantedBy` is `upgrade`, that the permission was inherited from a
     // flow that already ran one rather than chosen. A grant nobody can see is

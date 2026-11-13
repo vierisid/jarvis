@@ -2,7 +2,7 @@ import React from "react";
 import { BriefTooltip } from "../../components/controls";
 import { useBriefReducedMotion } from "../../motion";
 import { OutcomeNumber, GoalSegments } from "./Values";
-import { outcomeView, qualified, qualifiedTime, qualifiedProgress, formatNumber, formatAsOf, weekTime, type OutcomeBinding, type OutcomeSummary } from "./model";
+import { outcomeView, qualified, qualifiedTime, qualifiedProgress, qualificationLabel, formatNumber, formatAsOf, weekTime, type OutcomeBinding, type OutcomeSummary } from "./model";
 import "./outcomes.css";
 
 export function OutcomeReadNotice({ status, reason }: { status: string; reason?: string }) {
@@ -56,10 +56,11 @@ function TimeBar({ day, maximum }: { day: OutcomeSummary["days"][number]; maximu
   const known = qualifiedTime(day.time), scale = Number.isFinite(maximum) && maximum > 0 ? maximum : null;
   const value = known ? day.time!.value : null;
   const overflow = value !== null && scale !== null && value > scale;
-  const label = `${day.label}: ${value === null ? "time not available" : `${formatNumber(value)} min saved · estimated`}${overflow ? " · above chart scale" : ""}`;
+  const name = day.title ?? day.label, future = day.future === true && !known;
+  const label = `${name}: ${future ? "not yet" : value === null ? "time not available" : value === 0 ? "No time saved" : `${formatNumber(value)} min saved · estimated${day.basis ? `. ${day.basis}` : ""}`}${overflow ? " · above chart scale" : ""}`;
   return <BriefTooltip label={label}><button type="button" className="brief-outcome-bar-target" aria-label={label} data-current={day.current} data-known={known} data-overflow={overflow}>
     <span className="brief-outcome-bar-space" aria-hidden="true"><i className="brief-outcome-bar" style={{ height: value !== null && scale ? `${Math.min(1, value / scale) * 100}%` : 0 }} />
-      {value === null || scale === null ? <span className="brief-outcome-bar-unknown">?</span> : overflow ? <span className="brief-outcome-bar-overflow">+</span> : null}</span>
+      {future ? null : value === null || scale === null ? <span className="brief-outcome-bar-unknown">?</span> : overflow ? <span className="brief-outcome-bar-overflow">+</span> : null}</span>
     <span className="brief-type-utility brief-secondary">{day.label}</span>
   </button></BriefTooltip>;
 }
@@ -69,9 +70,11 @@ function OutcomeEvidence({ data }: { data: OutcomeSummary }) {
     <div className="brief-type-utility"><p>{data.basis}</p><p>{data.coverage === "partial" ? "Incomplete coverage" : "Reported coverage complete"} · {data.window.timezone}</p>
       <p>{formatAsOf(data.window.start, data.window.timezone)} to {formatAsOf(data.window.end, data.window.timezone)}</p>
       <dl>{metrics.map(([label, measurement]) => <React.Fragment key={label}><dt>{label}</dt><dd>{(label === "Today" || label === "This week" ? qualifiedTime(measurement) : qualified(measurement)) && measurement
-        ? `${measurement.qualification === "user_reported" ? "User reported" : "Measured"} · ${formatAsOf(measurement.asOf, data.window.timezone)} · ${measurement.provenance.length} evidence ${measurement.provenance.length === 1 ? "reference" : "references"}`
+        ? `${qualificationLabel(measurement)} · ${formatAsOf(measurement.asOf, data.window.timezone)} · ${measurement.provenance.length} evidence ${measurement.provenance.length === 1 ? "reference" : "references"}`
         : "No qualified measurement"}</dd></React.Fragment>)}</dl>
-      {data.days.map(day => <p key={day.id}>{day.label}: {qualifiedTime(day.time) ? `${formatNumber(day.time.value)} min · estimated` : "No time evidence"}</p>)}
+      {data.todayBasis && <p>Today: {data.todayBasis}</p>}
+      {data.weekBasis && <p>This week: {data.weekBasis}</p>}
+      {data.days.map(day => <p key={day.id}>{day.label}: {qualifiedTime(day.time) ? `${formatNumber(day.time.value)} min · ${qualificationLabel(day.time).toLowerCase()}` : "No time evidence"}</p>)}
     </div>
   </details>;
 }

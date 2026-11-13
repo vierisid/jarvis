@@ -148,7 +148,8 @@ export interface BriefMeasurement {
   target: number | null;
   asOf: BriefTimestamp;
   provenance: BriefEvidenceRef[];
-  qualification: 'measured' | 'user_reported';
+  /** `estimated`: derived from counted runs times assumed minutes per run (owner-set or estimated from steps). Never a measurement. */
+  qualification: 'measured' | 'user_reported' | 'estimated';
 }
 export interface BriefGoal {
   /** F-15 additive fields; a child never implicitly contributes to its parent. */

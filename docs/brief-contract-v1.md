@@ -43,8 +43,19 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   historical readiness. Providers must revalidate revision, readiness, permissions
   and bindings at the time of an action; a capability snapshot is not authorization.
 - Goals/outcomes carry value, unit, baseline, target, as-of time, provenance and
-  qualification. A legacy goal score is not a measurement. Time back needs a
-  defensible manual baseline and measured intervention, not engine duration.
+  qualification (`measured`, `user_reported` or `estimated`). A legacy goal score is
+  not a measurement. Time back has two tiers and counts a run once: a checked work
+  item with the owner's time record (a manual baseline minus observed intervention,
+  `user_reported`), and otherwise every successful production root run of a
+  workflow in the project (not a test, sample-data or child run, and not one that
+  continued past a failed step or an unsuccessful child run) counted at the minutes per run
+  the owner set on the workflow, or a deterministic estimate from the run's flow
+  version steps. A default estimate adds at most 60 minutes per workflow per local
+  day (`MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY`), so a frequent schedule cannot
+  claim a full day from a guess; owner-set minutes are never capped. Run-derived
+  time is always `estimated`, never `measured`, and is shown with its basis. A day
+  that has started with no counted runs is a known zero; a future day is unknown.
+  Engine duration is never used.
 - Memory identifies the canonical fact and source, qualifications, permissions and
   actual selected/supplied/outcome-verified uses. Supplied does not mean relied upon.
   Connections retain their store kind, source/account IDs and permissions. An
