@@ -183,7 +183,17 @@ Practical consequences:
   until its draft workflow is attached: after that a failure fails as before,
   and a job dismissed meanwhile keeps its spent attempt), and
   prepared-opportunity discovery and the opportunity notification outbox
-  hold on the switch itself, so nothing queued is lost; and a flow's
+  hold on the switch itself, so nothing queued is lost; the automatic help
+  that sends screen text to the background agent (error and struggle
+  research, and the event reactor's turns on awareness events) does not
+  start while awareness is off, stops before its next model call, provider
+  retry or tool run once it turns off, runs on a thread of its own so the
+  screen text never enters the background agent's history, and a result
+  that finishes after the switch is not shown, toasted or spoken; a
+  suggestion's or a fix's spoken copy stops before its next sentence and
+  its channel copies (the urgent echo included) before their next retry; an
+  awareness event that arrives after the switch (a capture still in flight)
+  is dropped, so no `awareness.*` flow or dashboard gets it; and a flow's
   `awarenessRecent` context returns no activity. Vault entities and goal notes once written from awareness are
   ordinary data and stay visible (owner decision). Nothing is deleted; it shows
   again when awareness is turned back on. Not covered: shell commands
@@ -522,7 +532,11 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters. All of
+  `displayName` that is not a non-empty string or exceeds 512 characters, or
+  that holds a control character, a line or paragraph separator or a lone
+  surrogate (a name the flow already stores is let through, so a workflow
+  named before that rule can still be saved; every writer stores a name on one
+  line without the bidi controls, `storedDisplayName`). All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -723,6 +737,11 @@ of offering an unusable webhook resume URL.
 Canceling a run atomically stops its required descendants, retires waitpoints
 and closes undispatched approval cards. An already-dispatched effect retains
 its receipt or uncertainty; cancellation never claims remote rollback.
+A parent continues as soon as its child ends or the parent parks: after each
+finished run of a child, or of a run waiting on one, the worker runs the same
+child sweep, so the wait is not the 15 s timer poll. The poll stays the safety
+net for a crash or restart, and the sweep consumes each waitpoint once, so the
+two cannot resume a parent twice.
 Recovery polling also stops required children whose parent failed or was deleted.
 For required children that already ended, it retires remaining waitpoints and
 undispatched approvals before continuing the parent. The child's terminal status,
@@ -738,6 +757,24 @@ installing this version. Before downgrading, cancel or finish active required
 parent/child runs and remove their `waitForCompletion` settings. Older binaries
 ignore that input and would otherwise restore asynchronous behavior. Retain the
 additive table and historical receipts; never retry an uncertain run as rollback.
+
+### Reusable workflow calls fail by default
+
+The "Jarvis: Reusable workflows" `call` step fails when its child does not give
+a usable result: the child failed, timed out, stopped uncertain, returned
+nothing (no `return_result` step), or returned output that does not match the
+step's expected result shape. The failure names the child workflow and says why
+in plain words, and it fails the run. Only a succeeded child with a valid result
+continues the parent.
+
+Authors who want to branch on the child's outcome turn on **Continue when the
+child fails** (`continueOnChildFailure`). The step then returns the status object
+(`status` of `failed`, `invalid_output`, `timeout` or `uncertain`, a `code` and
+the child `runId`) and the parent stays green. An absent setting means the safe
+default, so saved flows that never set it fail on a bad child. The setting is
+not part of the invocation fingerprint: it changes how the parent treats the
+receipt, never what is sent to the child. `require_success` still works after a
+`call`, but a default `call` already fails first.
 
 ### Governed pieces
 
@@ -810,7 +847,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -841,6 +878,39 @@ HTTP request specifics:
   redacted receipt carries `receiptRedacted: true`. The step
   itself still hands the flow the whole response; only a replay of a recorded
   step reads the receipt.
+- **Failures read as sentences.** A failed request fails the step with one
+  plain sentence, never the upstream JSON envelope: `The server answered 404 Not
+  Found.` plus `It said:` and the first 300 characters of the reply in quotes,
+  redacted by the same credential rules as the card and the receipt, with frame
+  delimiters defanged (the reply is the server's text, never Jarvis's own
+  words); `The request timed out after 2 seconds.` for the step's own timeout
+  (never shown as a server 500); `Could not reach api.example.com.` only when
+  no connection was made (the name did not resolve, or the address refused or
+  could not be routed to). Any other failure with no answer (a reset, a TLS or
+  redirect failure) reads `The connection to api.example.com failed before an
+  answer came back (ECONNRESET).`, since the request may have been sent. Only
+  the host name is named, never the path, query or login. The text is built in
+  `runtime/http-failure.ts`.
+- **Retries.** "Retry on errors" tries again on a 5xx, a timeout, a network
+  error, a 408 or a 429, and never on another 4xx: the same request would be
+  refused the same way. "Retry on internal errors (5xx)" tries again on a 5xx,
+  a timeout or a network error and continues the flow on any other answer
+  (408 and 429 included), as before. Only a read is tried again at all (up to
+  three times, see "No resend").
+- **Continuing past a failure** ("Continue flow on ..." modes, and an answer
+  below 500 under "Retry on internal errors") returns the same fields as a
+  success, `status`, `headers` and `body`, plus `ok: false` and `error` (the
+  sentence), so `{{step_1.body}}` and `{{step_1.status}}` keep working. A
+  success carries `ok: true`. With no response (a timeout, an unreachable host)
+  `status` is `null` and `body` is `null`. The old keys stay for saved flows:
+  `response: { status, body }` (the body redacted and cut to 300 characters
+  when long; `status` stays 500 with no response, as it was) and `request: {}`
+  (the request body is no longer echoed).
+- **GraphQL.** An HTTP 200 answer whose `errors` array is not empty fails the
+  step with `The GraphQL server reported an error:` and the first error's
+  message in quotes. With "No Error on Failure" on, the step returns the
+  response with `ok: false` and `error` instead. A non-2xx answer reads as
+  above.
 - **Size.** A response (and an engine file download) is read up to 7.3 MiB,
   `(10 MiB - 256 KiB) * 3/4`: the engine fails a run whose step data passes
   10 MiB less a 256 KiB offset, and a binary response is stored as base64. A
@@ -901,6 +971,39 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **What the card says, and what is refused before it.** An HTTP or GraphQL
+  request's card (and its Needs you entry) says what will happen in words,
+  naming the method, the host and the path ("Jarvis wants to send a POST
+  request to api.stripe.com/v1/refunds", "Jarvis wants to read
+  api.example.com/status", "Jarvis wants to send a GraphQL request to ...").
+  The path is taken from the URL after #1318's redaction, so the query,
+  fragment and userinfo never appear and a webhook's secret segment reads
+  `[redacted]`. A path segment of 20 or more token characters with a digit or
+  mixed case (#1318's Bearer-token shape, narrowed for paths) is masked as
+  `[redacted]` too; a long id such as a UUID is masked with it, and the
+  arguments keep the redacted URL whole. A segment is percent-decoded only
+  when the result is plain (letters, digits and the characters a path may hold
+  unencoded); anything else stays encoded. A `{{...}}` the engine has not
+  resolved reads `[set when the step runs]`, and an unresolved or unparsable
+  host reads "a web address set when the step runs". A sentence over 600
+  characters, or a URL the input projection cut, is refused
+  (`CARD_CANNOT_SHOW`) rather than shown cut. The sentence rides in the effect
+  target's `intent`, like every other per-step card sentence.
+  Its reason line says why in words ("not on the workflow's list of sites it
+  may read without asking", "Sending a request to another server needs your
+  approval") in place of the engine's generic governed-category sentence only;
+  an override's, a context rule's or a profile's reason is shown as before,
+  and so is the engine's own reason for a listed read that asks because reads
+  are governed. A request whose URL names `localhost` or an address the rules above never
+  allow (and, on a hosted install, any private address) is refused before a
+  card is raised: "Jarvis does not send requests to addresses on this computer
+  or local network." A name that only resolves to such an address is still
+  refused by the guard when it connects. A step already recorded (a card
+  raised before the install's rule changed) is not refused early: the guard
+  refuses it when it runs, and a tracked send is recorded as not sent.
+  `parse_url` makes no request, so it
+  never asks and is never held to the read list. The read list refuses the
+  same hosts when a person adds them (400), since a read there could never run.
 - **Read list (#1153).** A body-less GET or HEAD still carries what its URL and
   headers hold to the host it names, so it runs without a card only when that
   host is on the flow's read list (`POST /api/workflows/:id/read-hosts`
@@ -1671,6 +1774,51 @@ What that means in practice:
 Durable per-effect receipts and reconciliation-based recovery are follow-up
 work; this policy is containment, not exactly-once execution.
 
+### Step options: "Continue on failure" and "Retry on failure"
+
+The editor offers both on every piece and CODE step (right-click a node, or
+Advanced settings). They are saved as `settings.errorHandlingOptions` and
+`flow-version-adapter.ts` hands them to the engine's own handling
+(`helper/error-handling.ts`). The rules:
+
+- **Continue on failure** is honoured for every piece and CODE step. The step
+  keeps its recorded outcome (`FAILED`, with its message, and no output, so a
+  later step can test `{{step}}` with `DOES_NOT_EXIST`, as the "Add error
+  handling" template does), and the steps after it run. The run ends
+  `SUCCEEDED` with the step still failed: the runs API adds
+  `continuedFailures` (name and display name of each failed step, no error
+  text) to a run and the Runs list, and the dashboard reads "Finished with a
+  failed step" instead of a clean success. The Brief Runs list and run detail
+  show "Finished with a failed step: <step name>" (`note` on the run), and
+  All workflows shows it as the latest run. Effect records and Authority
+  decisions are written the same way as for a failing run. A refusal is never
+  continued past, so it cannot be skipped: a step the daemon refused to run (a
+  denied or held dispatch, `authorizePieceDispatch` failing), and a Jarvis
+  step or approval that heard a refusal from inside its run (a `blocked`
+  outcome such as `APPROVAL_DENIED` or `EMERGENCY_STOPPED`, or an untyped
+  error; `continuableFailure` in `piece-effect-guard.ts`). Such a step goes on
+  only on a typed outcome that ran and failed (`error` or `unknown`).
+- **Continue on failure** does not apply at all to a step that asks a person
+  (Ask for input, Ask for approval, Create approval links, Wait for Approval:
+  `canContinuePastStep` in `step-admission.ts`). A rejection, cancellation or
+  expiry stops the run there, so the steps after it run only after a yes. The
+  adapter drops the option, the editor disables it and hides "Add error
+  handling" for those steps, and readiness reports a non-blocking
+  `CONTINUE_UNAVAILABLE` warning.
+- **Retry on failure** is honoured only for the built-in steps that work on
+  data inside the run (`RETRY_SAFE_PIECES` in `step-admission.ts`: the
+  in-run steps except approval, delay, schedule and store). It tries up to 4
+  times with 2 s, 4 s and 8 s waits. Every other step, CODE steps and every
+  step that can act outside Jarvis included, is run once, so a request is never
+  sent twice; this is the rule that keeps automatic replay of uncertain
+  effects off. The adapter drops the option for those steps, the editor
+  disables the checkbox and says so, and readiness reports a
+  `RETRY_UNAVAILABLE` entry in `warnings` ("Retry is not available for steps
+  that act outside Jarvis, so a request is never sent twice."). A warning does
+  not make a flow not ready, so a flow that saved the option earlier keeps
+  running.
+- The HTTP step's own "On failure" setting is separate and unchanged.
+
 ## Pieces
 
 Two flavors:
@@ -1721,7 +1869,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
-| GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
+| GET | `/api/workflow-runs/:runId` | One run, including its machine binding, cancellation and `continuedFailures` |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
@@ -1889,7 +2037,7 @@ user steps.
 
 All workflow tables live in `~/.jarvis/jarvis.db` (the same SQLite file as the rest of Jarvis). Schema: `src/workflows/db/schema.ts`. Repos: `src/workflows/db/repos/`.
 
-Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1a:<base64(iv | tag | ciphertext)>`, with the row's `(id, project_id, piece_name, external_id)` passed as GCM associated data so a stored value only authenticates against the row it was written for. The older unbound `enc1:` format is still read; convert it with `bun scripts/migrate-native-credentials.ts bind`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env), `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE` (an explicit file), or `<data dir>/workflow-encryption.key` (auto-generated, `chmod 0600`) -- the data dir being `JARVIS_SECRETS_DIR` or `JARVIS_HOME` when set and `~/.jarvis` otherwise, the same resolution `.secrets.key` uses. It sits at the data-dir ROOT so any backup of the data dir carries it and `jarvis export --full` lists it; it used to live under `cache/`, which is excluded from exports and documented as disposable. A key still found at the old path is read, and relocated once at daemon boot. Legacy plaintext rows are accepted transparently for backwards compat; set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` once conversion is done to refuse them.
+Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1a:<base64(iv | tag | ciphertext)>`, with the row's `(id, project_id, piece_name, external_id)` passed as GCM associated data so a stored value only authenticates against the row it was written for. The older unbound `enc1:` format is still read; convert it with `bun scripts/migrate-native-credentials.ts bind`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env), `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE` (an explicit file), or `<data dir>/workflow-encryption.key` (auto-generated, `chmod 0600`) -- the data dir being `JARVIS_SECRETS_DIR` or `JARVIS_HOME` when set and `~/.jarvis` otherwise, the same resolution `.secrets.key` uses. It sits at the data-dir ROOT so any backup of the data dir carries it and `jarvis export` includes it; it used to live under `cache/`, which is excluded from exports and documented as disposable. A key still found at the old path is read, and relocated once at daemon boot. Legacy plaintext rows are accepted transparently for backwards compat; set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` once conversion is done to refuse them.
 
 If `app_connection` holds encrypted rows in either envelope and no key can be resolved, the daemon refuses to start rather than generating a fresh one: a new key cannot decrypt those rows, and writing with it would overwrite the last copy of the ciphertext. Restore the key file (or set the env var) and start again.
 

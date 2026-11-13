@@ -11,7 +11,8 @@ import { AUTHENTICATION_PROPERTY_NAME, EngineGenericError, ExecutionType, FlowAc
 import type { ToolSet } from 'ai'
 import dayjs from 'dayjs'
 import { authorizePieceDispatch, executeAuthorizedPiece } from '../../../../../../../runtime/piece-effect-guard'
-import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'
+import { continuableFailure } from '../../../../../../../runtime/piece-effect-guard'
+import { continueIfFailureHandler, refusedDispatches, runWithExponentialBackoff } from '../helper/error-handling'
 import { pieceLoader } from '../helper/piece-loader'
 import { createFileUploader } from '../piece-context/file-uploader'
 import { createFlowsContext } from '../piece-context/flows'
@@ -59,6 +60,10 @@ export const pieceExecutor: BaseExecutor<PieceAction> = {
 
 const executeAction: ActionHandler<PieceAction> = async ({ action, executionState, constants }) => {
     const stepStartTime = performance.now()
+    // Jarvis: whether the dispatch check refused this step, and whether it let
+    // it run (see refusedDispatches and continuableFailure).
+    let dispatchRefused = false
+    let dispatched = false
     const stepOutput = GenericStepOutput.create({
         input: {},
         type: FlowActionType.PIECE,
@@ -201,7 +206,13 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         }
         // A reviewed decision document is applied to processedInput (which the
         // context's propsValue is) by this call, before the action runs.
-        const governance = await authorizePieceDispatch(dispatchParams)
+        const governance = await authorizePieceDispatch(dispatchParams).catch((error: unknown) => {
+            // === JARVIS PATCH: a refused dispatch is never continued past ===
+            dispatchRefused = true
+            // === END JARVIS PATCH ===
+            throw error
+        })
+        dispatched = true
         // Parked: for an approval, or held while Jarvis is paused (Q-08).
         const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')
         if (parked) {
@@ -255,7 +266,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             .setErrorMessage(utils.formatError(executionStateError))
             .setDuration(performance.now() - stepStartTime)
 
-        return executionState
+        const failedContext = executionState
             .upsertStep(action.name, failedStepOutput)
             .setVerdict({
                 status: FlowRunStatus.FAILED, failedStep: {
@@ -264,6 +275,11 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
                     message: utils.formatError(executionStateError),
                 },
             })
+        // === JARVIS PATCH: a refused dispatch is never continued past ===
+        // A Jarvis step that heard a refusal from inside its run is one too.
+        if (dispatchRefused || (dispatched && !continuableFailure(action.settings.pieceName, executionStateError))) refusedDispatches.add(failedContext)
+        return failedContext
+        // === END JARVIS PATCH ===
     }
 
     return executionStateResult
