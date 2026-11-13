@@ -964,6 +964,46 @@ describe("through the engine, as production runs triggers", () => {
     await d.stop();
   });
 
+  test("a leap-day schedule, more than a year from its next time, registers and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const f = schedule("0 0 29 2 *");
+    const d = await daemon(at("2026-11-11T12:00:00Z")); // 2028-02-29 is 475 days away
+    expect(d.manager.registrationProblem(f.flowId)).toBeNull();
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId: f.flowId, kind: "cron" })]);
+    expect(d.cron.getJobs()[0]?.nextRun).toBe(at("2028-02-29T00:00:00Z"));
+    await d.poll(f.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(f.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("the schedule piece's leap-day schedule registers through the engine and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ date: "leap" }] });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationState(p.flowId, p.versionId)).toBe("registered");
+    await d.poll(p.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("a schedule that cannot be registered says why instead of reading as on", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    // The engine answers with a schedule that has no time to run (February 31).
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toContain("The schedule could not be started");
+    await d.stop();
+  });
+
+  test("a trigger whose schedule fails but whose webhook still delivers is not said to be not running", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: { listeners: [{ events: ["x"], identifierValue: "x" }], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toBeNull();
+    await d.stop();
+  });
+
   test("a schedule piece step left at its pre-filled UTC fires at Jarvis's wall time, and says so", async () => {
     setCronTimezone("Europe/Rome");
     const p = pieceSchedule("0 9 * * *", "UTC");

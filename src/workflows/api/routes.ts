@@ -1,6 +1,7 @@
 import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
+import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion } from './editor-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
@@ -35,6 +36,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
@@ -83,6 +85,7 @@ import {
   createFlowRun,
   getFlowRun,
   getFlowRunInProject,
+  listRecentRuns,
   listRuns,
   type FlowRunStatus,
   type RunEnvironment,
@@ -587,8 +590,13 @@ const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
  * The caller's `displayName`, or the refusal. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
  * validate and then pass the unnarrowed value on.
+ *
+ * `flowId` names the flow a version route writes to. A name that flow already
+ * stores is let through the character rule, so a workflow named before the
+ * rule existed can still be saved: the editor sends the current name with
+ * every save, and refusing it would lock the workflow until it was renamed.
  */
-function validDisplayName(raw: unknown): { name: string } | { error: Response } {
+function validDisplayName(raw: unknown, flowId?: string): { name: string } | { error: Response } {
   if (typeof raw !== "string" || raw.length === 0) {
     return { error: err("displayName is required and must be a non-empty string") };
   }
@@ -600,7 +608,18 @@ function validDisplayName(raw: unknown): { name: string } | { error: Response } 
       ),
     };
   }
+  // A name is one line of plain text: a control character in it (NUL, a bell,
+  // an escape, a line break, C1, the line and paragraph separators) breaks
+  // lists and logs, and a lone surrogate is not text. The rule a task's text is
+  // stored under (vault/commitment-text.ts). Refused as a plain 400.
+  if ((!raw.isWellFormed() || NOT_ONE_LINE.test(raw)) && !(flowId && nameStoredOnFlow(flowId, raw))) {
+    return { error: err("displayName cannot contain control characters") };
+  }
   return { name: raw };
+}
+
+function nameStoredOnFlow(flowId: string, name: string): boolean {
+  return getWorkflowDb().query("SELECT 1 FROM flow_version WHERE flow_id = ? AND display_name = ? LIMIT 1").get(flowId, name) !== null;
 }
 
 /**
@@ -1744,7 +1763,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName);
+          const named = validDisplayName(body.displayName, id);
           if ("error" in named) return named.error;
           // `uiMeta` is checked BEFORE the insert, not after (#632). There is
           // no transaction around the two writes below, so a malformed `uiMeta`
@@ -1865,7 +1884,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // transaction, so a bad name cannot half-apply a patch.
           const uiMeta = body.uiMeta;
           if (body.displayName !== undefined) {
-            const named = validDisplayName(body.displayName);
+            const named = validDisplayName(body.displayName, scopedFlow(req, id) ? id : undefined);
             if ("error" in named) return named.error;
             // The NARROWED value goes on, so this cannot validate one string
             // and forward another. Identical today because the validator
@@ -2335,6 +2354,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Today's "Recent activity": the latest production, top-level run of each
+    // flow in the caller's project, newest first. One bounded read, so Today
+    // does not list every flow and fetch each flow's runs. Identity, status and
+    // time only; never step output.
+    "/api/workflow-runs/recent": {
+      GET: req =>
+        trapErrors(() => {
+          const { limit } = clampPage(new URL(req.url).searchParams, 5);
+          // The name is model- or person-authored text shown on Today: invisible
+          // and bidi control characters are dropped and it is capped, as on a card.
+          const items = listRecentRuns(callerProject(req), limit)
+            .map(row => ({ ...row, name: forCard(row.name, RECENT_RUN_NAME_MAX) }));
+          return ok({ items });
+        }),
+    },
+
     // Q-19: what Today's "Waiting on you" shows, and dismissing it.
     "/api/failures/open": {
       GET: req => trapErrors(() => ok(listOpenFailures(Date.now(), callerProject(req)))),
@@ -2614,6 +2649,8 @@ function numParam(raw: string | null): number | null {
  * moves, move `LIST_RUNS_MAX_LIMIT` with it.
  */
 const LISTING_MAX_LIMIT = 100;
+/** Longest workflow name Today's Recent activity shows. */
+const RECENT_RUN_NAME_MAX = 120;
 
 /**
  * A listing's `limit` and `offset`, clamped. Three listings were doing this

@@ -231,8 +231,8 @@ describe('evidence snapshots', () => {
 
   test('bounds context, preserves other goals and discloses omissions including escaped text', () => {
     const noisyText = '\u0001'.repeat(10_000);
-    // Goal titles are limited to 200 characters on write now. A goal saved before that limit can
-    // still hold such text, so it is written straight to the table to keep
+    // Goal text is limited on write now (200 character titles, no control characters). A goal saved
+    // before those limits can still hold such text, so it is written straight to the table to keep
     // the bundle bound tested.
     const many = Array.from({ length: 21 }, () => {
       const goal = vault.createGoal('Noisy goal', 'task', { status: 'active' });
