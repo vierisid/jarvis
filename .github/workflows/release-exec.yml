@@ -211,7 +211,7 @@ jobs:
   # GHCR directly: publish-docker, the only job that can write to it at all
   # since #868, waits for publish-brain by the `needs:` order in this file.
   validate-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions: {}
     timeout-minutes: 5
     outputs:
@@ -255,7 +255,7 @@ jobs:
   # ─── Gate: run tests before anything else ───────────────────────
   test:
     needs: validate-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -338,7 +338,7 @@ jobs:
   # publish-docker), where #680 pushed it straight to GHCR from here.
   build-image:
     needs: [validate-tag, test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # One cold two-platform build (arm64 under QEMU) plus an SBOM scan per
@@ -457,7 +457,7 @@ jobs:
   # token. It logs in to nothing.
   smoke-image:
     needs: [validate-tag, build-image]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     # An archive load, three smoke phases and a local push. docker-build.yml
@@ -488,11 +488,11 @@ jobs:
       # there would prove less than it appears to. An arm64-only runtime
       # defect is a gap this gate does not close, deliberately.
       #
-      # `docker load` on the runner (Docker 28, classic image store) cannot
-      # read a multi-platform OCI archive -- it fails with "blobs/json: no
-      # such file or directory", measured on 28.0.4, the runner version -- so
-      # this writes the docker-archive manifest.json for the one amd64 image
-      # over the same blobs.
+      # `docker load` on the classic image store (Docker 28.0.4, the
+      # ubuntu-24.04 runner) cannot read a multi-platform OCI archive -- it
+      # fails with "blobs/json: no such file or directory" -- so this writes
+      # the docker-archive manifest.json for the one amd64 image over the
+      # same blobs, which both image stores load.
       - name: Load the image from its archive
         env:
           DIGEST: ${{ needs.build-image.outputs.digest }}
@@ -536,15 +536,57 @@ jobs:
           # the push rehearsal below reads it.
           jq -r '.[0].Config, .[0].Layers[]' "${dir}/layout/manifest.json" >"${dir}/amd64.files"
           tar -cf "${dir}/amd64.tar" -C "${dir}/layout" manifest.json -T "${dir}/amd64.files"
+          # The image ID docker load reports depends on the image store, so
+          # the store is read rather than assumed, and each store has exactly
+          # one ID it may report. Both IDs are content addresses that docker
+          # load computes from the bytes it ingested, so either equality
+          # closes the chain from the index down to the layers:
+          # - classic (Storage Driver overlay2, no driver-type; Docker 28.0.4
+          #   on ubuntu-24.04): the ID is the config digest, and docker load
+          #   checks each layer against the config.
+          # - containerd (driver-type io.containerd.snapshotter.v1; Docker
+          #   29.4.2 on ubuntu-26.04, which ubuntu-latest resolved to by run
+          #   42868738162 on 2026-11-10; this job is pinned to ubuntu-24.04
+          #   since, so the classic store, Docker 28.0.4 on that image, is
+          #   what it meets today; the image under a pinned label still
+          #   updates weekly, which is why both stores stay handled): docker
+          #   load hashes the config and every layer itself, writes a
+          #   Docker schema 2 manifest naming
+          #   them by digest and size, and the ID is that manifest digest
+          #   (the containerd v2.2.3 importer vendored in dockerd 29.4.2,
+          #   core/images/archive/importer.go). It is rebuilt here, byte for
+          #   byte, from the checked amd64 manifest; on that run's archive it
+          #   gives sha256:afb8de5a..., the ID the run reported. A store that
+          #   writes it differently, or a layer that is not gzip, fails here.
+          # - anything else is refused before anything is loaded.
+          info="$(docker info --format '{{json .}}')"
+          store="$(jq -r '[.DriverStatus[]? | select(.[0] == "driver-type") | .[1]] as $t
+            | if $t == ["io.containerd.snapshotter.v1"] then "containerd"
+              elif $t == [] and .Driver == "overlay2" then "classic"
+              else "unknown" end' <<<"$info")"
+          case "$store" in
+            classic) want="$config" ;;
+            containerd)
+              jq -cj '{schemaVersion: 2, mediaType: "application/vnd.docker.distribution.manifest.v2+json",
+                  config: {mediaType: "application/vnd.docker.container.image.v1+json", digest: .config.digest, size: .config.size},
+                  layers: [.layers[] | if .mediaType == "application/vnd.oci.image.layer.v1.tar+gzip"
+                    then {mediaType: "application/vnd.docker.image.rootfs.diff.tar.gzip", digest: .digest, size: .size}
+                    else error("an amd64 layer is not an OCI gzip layer") end]}
+                | if ([.config.size, .layers[].size] | all(tojson | test("^[0-9]+$"))) then . else error("a size is not written as a whole number") end' \
+                "$(blob "$manifest")" >"${dir}/docker-manifest.json" ||
+                { echo "::error::cannot rebuild the manifest the containerd image store writes for the amd64 image of ${DIGEST}"; exit 1; }
+              want="sha256:$(sha256sum <"${dir}/docker-manifest.json" | cut -d' ' -f1)"
+              ;;
+            *)
+              echo "::error::the runner has an image store this step does not know ($(jq -c '{Driver, DriverStatus}' <<<"$info")); refusing to guess which ID docker load reports"
+              exit 1
+              ;;
+          esac
+          [[ "$want" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no image ID to expect on the ${store} image store"; exit 1; }
           docker load -i "${dir}/amd64.tar"
-          rm -rf "${dir}/layout" "${dir}/amd64.tar"
-          # The image ID is the config digest; docker load checks each layer
-          # against the config, so this closes the chain down to the layers.
-          # (That equality holds for the classic image store the runner uses.
-          # On the containerd store the ID is a manifest digest, so this check
-          # fails closed after such a runner change rather than passing.)
+          rm -rf "${dir}/layout" "${dir}/amd64.tar" "${dir}/docker-manifest.json"
           got="$(docker image inspect --format '{{.Id}}' "$GATE_IMAGE_TAG")"
-          [ "$got" = "$config" ] || { echo "::error::the loaded image is ${got}, not ${config}, the amd64 image of ${DIGEST}"; exit 1; }
+          [ "$got" = "$want" ] || { echo "::error::the loaded image is ${got}, not ${want}, the amd64 image of ${DIGEST} on the ${store} image store (config ${config})"; exit 1; }
 
       # Runs with no DRY_RUN condition on purpose: a dry run exists to rehearse
       # the release, and skipping the only check that starts the image would
@@ -815,7 +857,7 @@ jobs:
   # bounds how long anything it starts can linger.
   pack-brain:
     needs: [validate-tag, test, smoke-image]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -923,7 +965,7 @@ jobs:
   # publishes it.
   publish-brain:
     needs: [validate-tag, sidecar-build, pack-brain]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # npm Trusted Publishing for @usejarvis/brain requires this environment, so
     # the OIDC token this job mints must carry the claim or npm refuses the
     # publish (#679). It is also the gate: the environment's required reviewers
@@ -1028,7 +1070,7 @@ jobs:
   github-release:
     needs: [validate-tag, sidecar-build, publish-docker, publish-sidecar]
     if: ${{ !cancelled() && needs.validate-tag.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-docker.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Creating the release (and its generated notes) is a contents write. The
     # sidecar artifacts come from this same run, which needs no token scope.
     permissions:
@@ -1187,7 +1229,7 @@ jobs:
   publish-docker:
     needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-sidecar, publish-brain]
     if: ${{ !cancelled() && needs.validate-tag.result == 'success' && needs.build-image.result == 'success' && needs.smoke-image.result == 'success' && needs.sidecar-build.result == 'success' && needs.publish-brain.result == 'success' && (needs.publish-sidecar.result == 'success' || (needs.publish-sidecar.result == 'skipped' && needs.sidecar-build.outputs.released == 'false' && needs.sidecar-build.outputs.digests == '')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # No checkout and no build: the registry write is the whole job.
     permissions:
       packages: write
@@ -1262,7 +1304,7 @@ jobs:
   discord-notify:
     needs: [validate-tag, github-release]
     if: ${{ !cancelled() && inputs.dry_run != true && needs.validate-tag.result == 'success' && needs.github-release.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -1404,7 +1446,7 @@ jobs:
   release-complete:
     needs: [publish-brain, publish-docker, github-release]
     if: ${{ !cancelled() && needs.publish-brain.result == 'success' && (needs.publish-docker.result != 'success' || needs.github-release.result != 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
     steps:
