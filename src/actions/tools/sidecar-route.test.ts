@@ -113,6 +113,18 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('keys refused because the window in front runs as administrator are not started', async () => {
+    // sidecar/desktop_windows.go asks before the first key: Windows would drop
+    // them without an error, and the reply used to say success.
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_TARGET_UNREACHABLE',
+        'type_text refused: the window in front runs as administrator and Jarvis does not, so Windows drops every key sent to it: nothing was typed.');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'type_text', { text: 'hello' }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_TARGET_UNREACHABLE', effect: 'not_started' },
+    });
+  });
+
   test('a reviewed browser action refused for a superseded snapshot is not started (#676)', async () => {
     // sidecar/browser_snapshot.go's refuseStaleElement sends
     // BROWSER_SNAPSHOT_SUPERSEDED before its first CDP command

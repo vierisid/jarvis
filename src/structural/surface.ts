@@ -34,8 +34,23 @@ export type CaptureOptions = {
   full?: boolean;
 };
 
+/**
+ * What the machine said about the window besides its elements, as typed facts
+ * and nothing read from the screen. Each is why a read can come back empty or
+ * short, and each used to be reported as "custom-drawn, use a screenshot".
+ */
+export type CaptureWindowState = {
+  /** The window is minimised: nothing in it has a size, so nothing is listed. */
+  minimized?: true;
+  /** It runs as administrator and the desktop app does not: it can be neither read nor driven. */
+  elevated?: true;
+  /** It has more elements than one read lists: the list stops short. */
+  truncated?: true;
+};
+
 export type CaptureResult = {
   surface: SemanticSurface;
+  window?: CaptureWindowState;
 };
 
 const CAPTURE_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
@@ -131,6 +146,7 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
   const sidecarId = sidecar?.id ?? target;
 
   let surface: SemanticSurface;
+  let window: CaptureWindowState | undefined;
   if (opts.kind === 'browser') {
     const raw = (await manager.dispatchRPC(sidecarId, 'browser_ax_snapshot', {}, CAPTURE_RPC_TIMEOUT)) as {
       url?: string;
@@ -149,12 +165,19 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
       'get_window_tree',
       { pid: opts.pid, depth: opts.depth ?? 8, semantic: true },
       CAPTURE_RPC_TIMEOUT,
-    )) as { window_title?: string; pid?: number; elements?: UiaSemanticElement[] };
+    )) as { window_title?: string; pid?: number; elements?: UiaSemanticElement[];
+      window_minimized?: unknown; window_elevated?: unknown; truncated?: unknown };
     surface = surfaceFromUia({
       window_title: raw.window_title ?? '',
       pid: raw.pid ?? opts.pid ?? 0,
       elements: raw.elements ?? [],
     });
+    // Exactly `true`, or it was not said.
+    window = {
+      ...(raw.window_minimized === true ? { minimized: true as const } : {}),
+      ...(raw.window_elevated === true ? { elevated: true as const } : {}),
+      ...(raw.truncated === true ? { truncated: true as const } : {}),
+    };
   }
 
   // Coverage is scored over the whole surface, then the salience filter
@@ -163,5 +186,5 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
   surface.coverage = computeCoverage(surface.nodes);
   if (!opts.full) surface.nodes = salienceFilter(surface.nodes);
 
-  return { surface };
+  return window && Object.keys(window).length > 0 ? { surface, window } : { surface };
 }

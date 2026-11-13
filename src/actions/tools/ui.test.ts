@@ -629,3 +629,48 @@ describe('ui_act get_value says whether its id still names what it named (#677)'
     expect(out).not.toContain('take a fresh ui_snapshot');
   });
 });
+
+describe('ui_snapshot says why a window read came back empty or short', () => {
+  beforeEach(() => resetUiSnapshots());
+
+  /** A sidecar whose read of the window carries what the machine said about it. */
+  function windowManager(elements: UiaSemanticElement[], facts: Record<string, unknown>): SidecarManager {
+    return {
+      listSidecars: () => [{ id: 'sc1', name: 'desktop-pc', connected: true, capabilities: ['desktop'], unavailable_capabilities: [] }],
+      dispatchRPC: async () => ({ window_title: 'Task Manager', pid: 42, elements, ...facts }),
+    } as unknown as SidecarManager;
+  }
+
+  it('a minimised window is to be brought forward, not looked at in a picture', async () => {
+    setSidecarManagerRef(windowManager([], { window_minimized: true }));
+    const out = await uiSnapshotTool.execute({ kind: 'desktop', pid: 42 }) as string;
+    expect(out).toContain('this window is minimised');
+    expect(out).toContain('desktop_focus_window');
+    expect(out).not.toContain('custom-drawn');
+    expect(out).not.toContain('screenshot');
+  });
+
+  it('a window that runs as administrator is out of reach, and is said to be', async () => {
+    setSidecarManagerRef(windowManager([], { window_elevated: true, window_minimized: true }));
+    const out = await uiSnapshotTool.execute({ kind: 'desktop', pid: 42 }) as string;
+    expect(out).toContain('runs as administrator');
+    expect(out).toContain('by hand');
+    expect(out).not.toContain('custom-drawn');
+  });
+
+  it('an empty window nothing was said about is still reported as custom-drawn', async () => {
+    // Only exactly `true` counts: a reply that says anything else has not said it.
+    setSidecarManagerRef(windowManager([], { window_minimized: 'true', window_elevated: 1 }));
+    const out = await uiSnapshotTool.execute({ kind: 'desktop', pid: 42 }) as string;
+    expect(out).toContain('custom-drawn');
+  });
+
+  it('a window too large for one read says its list stops short', async () => {
+    setSidecarManagerRef(windowManager([el(1, 'File')], { truncated: true }));
+    const out = await uiSnapshotTool.execute({ kind: 'desktop', pid: 42 }) as string;
+    expect(out).toContain('"File"');
+    expect(out).toContain('stops short');
+    setSidecarManagerRef(windowManager([el(1, 'File')], {}));
+    expect(await uiSnapshotTool.execute({ kind: 'desktop', pid: 42 }) as string).not.toContain('stops short');
+  });
+});
