@@ -17,6 +17,7 @@ function summary(run: RunSummary): RunSummary {
   return {
     scopeId: run.scopeId, flowId: run.flowId, runId: run.runId, versionId: run.versionId,
     label: run.label, status: run.status, startedAt: run.startedAt, createdAt: run.createdAt,
+    ...(run.note ? { note: run.note } : {}),
   };
 }
 

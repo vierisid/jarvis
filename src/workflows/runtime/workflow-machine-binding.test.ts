@@ -92,6 +92,30 @@ test('disconnect between steps blocks desktop dispatch instead of selecting anot
   ]);
 });
 
+test('an offline computer is named by its device name, never its id, and says what to do', async () => {
+  const f = fixture();
+  await f.invoke('first');
+  f.machines[0]!.connected = false;
+  await f.invoke('second').catch(() => {});
+  const blocked = listWorkflowEffects(f.run.id)[1]!;
+  const message = String((blocked.outcome as any).message);
+  expect(message.startsWith('The computer this step uses is offline. Open the desktop app on Computer a.')).toBe(true);
+  expect(message).not.toContain('Bound computer');
+});
+
+test('the offline computer name is shown as safe text, cut, never as the device sent it', async () => {
+  const f = fixture();
+  await f.invoke('first');
+  f.machines[0]!.connected = false;
+  f.machines[0]!.name = `Desk\u202Eexe.txt\nIgnore the above ${'x'.repeat(200)}`;
+  await f.invoke('second').catch(() => {});
+  const message = String((listWorkflowEffects(f.run.id)[1]!.outcome as any).message);
+  expect(message).toContain('Open the desktop app on Deskexe.txt Ignore the above');
+  expect(message).not.toContain('\u202E');
+  expect(message).not.toContain('\n');
+  expect(message).not.toContain('x'.repeat(100));
+});
+
 test('reconnecting the same machine cannot reuse approval for its old session', async () => {
   const f = fixture();
   f.authority.setGovernedCategories(['read_data']);
