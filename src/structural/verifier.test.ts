@@ -85,6 +85,21 @@ describe('verifyPostcondition', () => {
     expect(failr.detail).toContain('nobody@example.com');
   });
 
+  it('value_equals does not fail on line endings, or on text longer than what is read back', () => {
+    const check = (value: string, expected: string): boolean =>
+      verifyPostcondition({ kind: 'value_equals', ref: ref('Edit', 'Body', 'b'), value: expected }, ctx({ after: [node({ role: 'Edit', name: 'Body', sig: 'b', value })] })).satisfied;
+    // A box given "a\nb" may hand back "a\r\nb", and the other way round.
+    expect(check('a\r\nb', 'a\nb')).toBe(true);
+    expect(check('a\nb', 'a\r\nb')).toBe(true);
+    expect(check('a\rb', 'a\r\nb')).toBe(true);
+    // Only the first 200 characters of a value are read back.
+    const long = 'The morning spills its gold across the sea. '.repeat(8);
+    expect(check([...long].slice(0, 200).join(''), long)).toBe(true);
+    // A read-back that differs is still a failure, long or short.
+    expect(check(`${[...long].slice(0, 199).join('')}X`, long)).toBe(false);
+    expect(check('short', 'short and more')).toBe(false);
+  });
+
   it('title_changed requires a different non-empty title', () => {
     expect(verifyPostcondition({ kind: 'title_changed', from: 'Untitled' }, ctx({ afterTitle: 'doc1' })).satisfied).toBe(true);
     expect(verifyPostcondition({ kind: 'title_changed', from: 'Untitled' }, ctx({ afterTitle: 'Untitled' })).satisfied).toBe(false);

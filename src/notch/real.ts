@@ -140,6 +140,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     deny: deps.deny,
     openDashboard: deps.openDashboard,
     describe: deps.asks?.describeApproval,
+    mine: (requestId) => asks?.mine(requestId) === true,
     clock: deps.clock,
     log,
   });
@@ -154,6 +155,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       understand: deps.asks.understand,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
+      // The instruction is over: what it was still asking for is asked no more.
+      withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },
+      attention: () => surface.act({ gesture: 'shake' }),
       openDashboard: deps.openDashboard,
       today: () => notchTodayBlocks(notchToday(todayDeps)),
       log,
