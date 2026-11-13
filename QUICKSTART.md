@@ -1,307 +1,65 @@
-# J.A.R.V.I.S. LLM Providers - Quick Start Guide
+# Quick start (self-hosted)
 
-Get up and running with J.A.R.V.I.S. LLM providers in 5 minutes.
+From zero to your first workflow in about 10 minutes. This is the path for a new self-hosted install on Linux, macOS, or WSL2. On Windows, run the brain in WSL2 or Docker.
 
-## Prerequisites
-
-- Bun runtime installed (`curl -fsSL https://bun.sh/install | bash`)
-- At least one of:
-  - Anthropic API key (recommended)
-  - OpenAI API key
-  - Ollama installed locally
-
-## Step 1: Install Dependencies
+## 1. Install
 
 ```bash
-cd ~/jarvis
-bun install
+curl -fsSL https://raw.githubusercontent.com/vierisid/jarvis/main/install.sh | bash
 ```
 
-## Step 2: Create Configuration
+This installs Bun if it is missing, puts the code in `~/.jarvis/daemon`, and adds the `jarvis` command. If the installer says your PATH changed, restart your terminal first.
+
+Prefer a global install? It needs Bun 1.3.11 or later, which `bun install -g` does not check, so run `bun upgrade` first, then `bun install -g @usejarvis/brain`. On Linux, also install the libc development headers (`libc6-dev` on Debian/Ubuntu). Docker is covered in the [README](README.md#docker).
+
+## 2. Start
 
 ```bash
-# Create config directory
-mkdir -p ~/.jarvis
-
-# Copy example config
-cp config.example.yaml ~/.jarvis/config.yaml
-
-# Edit config with your API keys
-nano ~/.jarvis/config.yaml
+jarvis start -d --no-open
 ```
 
-### Option A: Using Anthropic Claude (Recommended)
+Jarvis serves on port **3142** by default. Check with `curl http://localhost:3142/health`.
 
-1. Get API key from: https://console.anthropic.com/
-2. Edit `~/.jarvis/config.yaml`:
+## 3. Get into the dashboard
 
-```yaml
-llm:
-  primary: "anthropic"
-  fallback: ["openai", "ollama"]
-  anthropic:
-    api_key: "sk-ant-YOUR_KEY_HERE"
-    model: "claude-sonnet-4-5-20250929"
-```
-
-### Option B: Using OpenAI
-
-1. Get API key from: https://platform.openai.com/
-2. Edit `~/.jarvis/config.yaml`:
-
-```yaml
-llm:
-  primary: "openai"
-  fallback: ["anthropic", "ollama"]
-  openai:
-    api_key: "sk-YOUR_KEY_HERE"
-    model: "gpt-4o"
-```
-
-### Option C: Using Ollama (Local, Free)
-
-1. Install Ollama: https://ollama.ai/
-2. Pull a model:
-   ```bash
-   ollama pull llama3
-   ```
-3. Edit `~/.jarvis/config.yaml`:
-
-```yaml
-llm:
-  primary: "ollama"
-  fallback: []
-  ollama:
-    base_url: "http://localhost:11434"
-    model: "llama3"
-```
-
-## Step 3: Test the Setup
+Opening `http://localhost:3142` on its own shows a 401 page. Jarvis has no password. Each device gets an enrollment token.
 
 ```bash
-bun run src/llm/test.ts
+jarvis enroll "my-laptop"
 ```
 
-You should see:
-- Configuration loaded
-- Providers registered
-- A test chat response
-- A streaming response
+Pick one:
 
-## Step 4: Run Examples
+- **Desktop app (recommended).** Install it from [usejarvis.dev/download](https://usejarvis.dev/download/), launch it, and paste the token. It opens the dashboard already signed in.
+- **Browser only.** Trade the token for a short-lived link. The link must be opened within 10 minutes; the browser then keeps its own session:
 
-```bash
-bun run examples/llm-integration.ts
-```
+  ```bash
+  curl -s -X POST http://localhost:3142/sidecar/token \
+    -H "Authorization: Bearer <enrollment-token>"
+  ```
 
-This demonstrates:
-- Simple chat completions
-- Streaming responses
-- Tool/function calling
-- Provider fallback
-- Model overrides
+  Open `http://localhost:3142/?token=<access_token>` using the `access_token` from the reply. The browser session ends when you close the browser or after 12 hours at most; run the `curl` again for a new link.
 
-## Basic Usage
+Keep the enrollment token private. It grants access to your Jarvis. See the [self-hosting guide](docs/SELF_HOSTING.md) for LAN and VPS setups and 401 troubleshooting.
 
-### In Your Code
+## 4. Choose an AI provider
 
-```typescript
-import { loadConfig } from './src/config/index.ts';
-import {
-  LLMManager,
-  AnthropicProvider,
-  OpenAIProvider,
-  OllamaProvider,
-} from './src/llm/index.ts';
+The dashboard setup screen asks which AI provider to use. This is where your API key goes. Keys are stored encrypted in the database. Nothing about providers goes in `config.yaml`: an `llm:` block there is ignored, and so are the old key environment variables.
 
-// Load config and initialize
-const config = await loadConfig();
-const manager = new LLMManager();
+Chat and workflows need a provider. If you leave setup without one, add it later in **Settings > LLM**, where you can also change providers. See [LLM providers](docs/LLM_PROVIDERS.md) for what each one needs.
 
-// Register providers
-if (config.llm.anthropic?.api_key) {
-  manager.registerProvider(
-    new AnthropicProvider(
-      config.llm.anthropic.api_key,
-      config.llm.anthropic.model
-    )
-  );
-}
+## 5. Build your first workflow
 
-manager.setPrimary(config.llm.primary);
-manager.setFallbackChain(config.llm.fallback);
+1. Finish the setup screen (voice and a short intro to your work).
+2. In **Workflows** (or in chat), describe a routine in one sentence, for example: "Every Monday at 9, summarize my unread email and send it to me."
+3. Connect the apps it asks for. Jarvis shows the workflow on the canvas.
+4. Run it once by hand and read the result before turning on the schedule.
 
-// Use it
-const response = await manager.chat([
-  { role: 'user', content: 'Hello!' }
-]);
+More on how workflows run: [workflow guide](docs/WORKFLOW_AUTOMATION.md).
 
-console.log(response.content);
-```
+## Troubleshooting
 
-## Common Issues
-
-### "No LLM providers configured"
-
-**Solution**: Add at least one API key to `~/.jarvis/config.yaml`
-
-### "Ollama not available"
-
-**Solution**: Start Ollama daemon:
-```bash
-ollama serve
-```
-
-### "Config file not found"
-
-**Solution**: Ensure config exists at `~/.jarvis/config.yaml`
-```bash
-cp config.example.yaml ~/.jarvis/config.yaml
-```
-
-### "API key invalid"
-
-**Solution**:
-- Check API key is correct
-- Ensure no extra spaces or quotes
-- Verify account has credits (for paid APIs)
-
-## Next Steps
-
-1. **Read the Documentation**:
-   - `~/jarvis/src/llm/README.md` - LLM providers
-   - `~/jarvis/src/config/README.md` - Configuration
-
-2. **Explore Examples**:
-   - `~/jarvis/examples/llm-integration.ts`
-   - `~/jarvis/src/llm/test.ts`
-
-3. **Integrate into Daemon**:
-   - Import `LLMManager` in your daemon code
-   - Initialize on startup
-   - Use for agent/role interactions
-
-4. **Customize Configuration**:
-   - Adjust personality traits
-   - Set authority levels
-   - Configure active role
-
-## Configuration Overview
-
-```yaml
-# Daemon settings
-daemon:
-  port: 7777
-  data_dir: "~/.jarvis"
-  db_path: "~/.jarvis/jarvis.db"
-
-# LLM provider settings
-llm:
-  primary: "anthropic"      # Primary provider
-  fallback: ["openai"]      # Backup providers
-  anthropic:
-    api_key: "sk-ant-..."
-    model: "claude-sonnet-4-5-20250929"
-
-# Personality traits
-personality:
-  core_traits:
-    - "loyal"
-    - "efficient"
-    - "proactive"
-
-# Permission level (0-5)
-authority:
-  default_level: 3
-
-# Active role
-active_role: "default"
-```
-
-## Testing Different Providers
-
-### Test Anthropic Only
-
-```typescript
-const manager = new LLMManager();
-manager.registerProvider(new AnthropicProvider('sk-ant-...'));
-manager.setPrimary('anthropic');
-```
-
-### Test OpenAI Only
-
-```typescript
-const manager = new LLMManager();
-manager.registerProvider(new OpenAIProvider('sk-...'));
-manager.setPrimary('openai');
-```
-
-### Test Ollama Only
-
-```typescript
-const manager = new LLMManager();
-manager.registerProvider(new OllamaProvider());
-manager.setPrimary('ollama');
-```
-
-### Test with Fallback
-
-```typescript
-// Primary: Anthropic, Fallback: OpenAI
-manager.registerProvider(new AnthropicProvider('sk-ant-...'));
-manager.registerProvider(new OpenAIProvider('sk-...'));
-manager.setPrimary('anthropic');
-manager.setFallbackChain(['openai']);
-
-// Will use Anthropic first, OpenAI if Anthropic fails
-const response = await manager.chat(messages);
-```
-
-## Performance Tips
-
-1. **Use Streaming**: For better UX in interactive applications
-   ```typescript
-   for await (const event of manager.stream(messages)) {
-     if (event.type === 'text') process.stdout.write(event.text);
-   }
-   ```
-
-2. **Set Temperature**: Lower = more focused, higher = more creative
-   ```typescript
-   await manager.chat(messages, { temperature: 0.7 });
-   ```
-
-3. **Limit Tokens**: Control response length and cost
-   ```typescript
-   await manager.chat(messages, { max_tokens: 500 });
-   ```
-
-4. **Use Local for Development**: Free and fast
-   ```yaml
-   llm:
-     primary: "ollama"  # No API costs
-   ```
-
-## Security Best Practices
-
-1. **Never commit API keys**: Keep them in `~/.jarvis/config.yaml` only
-2. **Use environment variables**: For production deployments
-3. **Restrict config permissions**: `chmod 600 ~/.jarvis/config.yaml`
-4. **Monitor usage**: Track token usage to control costs
-5. **Use fallbacks**: Always configure backup providers
-
-## Getting Help
-
-- Check `~/jarvis/src/llm/README.md` for detailed docs
-- Review `~/jarvis/IMPLEMENTATION_SUMMARY.md` for architecture
-- Run test file to verify setup: `bun run src/llm/test.ts`
-- Check config: `cat ~/.jarvis/config.yaml`
-
-## Resources
-
-- **Anthropic**: https://console.anthropic.com/
-- **OpenAI**: https://platform.openai.com/
-- **Ollama**: https://ollama.ai/
-- **Bun Runtime**: https://bun.sh/
-
-You're all set! Start building with J.A.R.V.I.S. 🚀
+- **401 page.** You opened the dashboard without a session. Follow step 3.
+- **`jarvis: command not found`.** Restart your terminal, or run `export PATH="$HOME/.bun/bin:$PATH"`.
+- **Provider test fails.** Check the key and that the account has credit. For Ollama, make sure `ollama serve` is running.
+- **Where is my data?** In `~/.jarvis`. System settings (ports, public URL) are in `~/.jarvis/config.yaml`; see [config.example.yaml](config.example.yaml).
