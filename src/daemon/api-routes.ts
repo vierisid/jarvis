@@ -44,7 +44,8 @@ import { authorityConfigPatchError, isActionCategory } from '../authority/config
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
 import { matchEntityByName } from './room-action-targets.ts';
-import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
+import { findFacts, createFact, FactInputError, FACT_TEXT_LIMIT } from '../vault/facts.ts';
+import { refuseVaultText, cleanVaultText, ENTITY_NAME_MAX_CHARS, FACT_PREDICATE_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
 import { listFlows } from '../workflows/db/repos/flow.ts';
@@ -58,6 +59,7 @@ import { getOrCreateConversation, getMessages, getRecentConversation } from '../
 import { telegramAllowList, discordAllowList, channelOwnerId } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
+import { listUnreadDashboardNotifications, markDashboardNotificationRead } from '../vault/dashboard-notifications.ts';
 import { getPersonality } from '../personality/model.ts';
 import { getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import { forgetUserProfile } from '../onboarding-next/runtime/forget.ts';
@@ -511,6 +513,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             source?: string;
           };
           if (!body.name || typeof body.name !== 'string') return error('name is required', 400);
+          const badName = refuseVaultText(body.name, 'name', ENTITY_NAME_MAX_CHARS);
+          if (badName) return error(badName, 400);
+          // Nothing a person can see once the characters that hide text are gone.
+          if (!cleanVaultText(body.name, ENTITY_NAME_MAX_CHARS).trim()) return error('name is required', 400);
           if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
             return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
           }
@@ -603,6 +609,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
             return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
           }
+          if (typeof body.predicate !== 'string' || typeof body.object !== 'string') {
+            return error('predicate and object must be text', 400);
+          }
+          const badFact = refuseVaultText(body.predicate, 'predicate', FACT_PREDICATE_MAX_CHARS)
+            ?? refuseVaultText(body.object, 'object', FACT_TEXT_LIMIT, true);
+          if (badFact) return error(badFact, 400);
           const subject = getEntity(body.subject_id);
           if (!subject) return error(`Unknown subject_id: ${body.subject_id}`, 404);
           const fact = createFact(body.subject_id, body.predicate, body.object, {
@@ -639,6 +651,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.from_id || !body.to_id || !body.type) {
             return error('from_id, to_id, and type are required', 400);
           }
+          if (typeof body.type !== 'string') return error('type must be text', 400);
+          const badType = refuseVaultText(body.type, 'type', RELATIONSHIP_TYPE_MAX_CHARS);
+          if (badType) return error(badType, 400);
           const from = getEntity(body.from_id);
           const to = getEntity(body.to_id);
           if (!from) return error(`Unknown from_id: ${body.from_id}`, 404);
@@ -1085,6 +1100,28 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const events = listAgentActivity(req.params.id, { limit, offset });
           const total = countAgentActivity(req.params.id);
           return json({ events, total });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    // Notifications a workflow sent to the dashboard, unread ones first-class so
+    // one sent while no dashboard was open is there on the next visit.
+    '/api/dashboard-notifications': {
+      GET: () => {
+        try {
+          return json({ notifications: listUnreadDashboardNotifications() });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    '/api/dashboard-notifications/:id/read': {
+      POST: (req: Request & { params: { id: string } }) => {
+        try {
+          return markDashboardNotificationRead(req.params.id) ? json({ ok: true }) : error('Notification not found', 404);
         } catch (err) {
           return errorFromException(err);
         }
@@ -4613,16 +4650,62 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Turn screen awareness on or off. The same switch as the pebble
+     * long-press: it sets awareness.enabled live and persists it as the
+     * user's choice, then runs the awareness applier, which starts or stops
+     * the service, closes switched-off workflow cards and pushes the pebble
+     * glyph and the observer pause to every sidecar. Toggling only the service
+     * left the setting (and every guard that reads it: screen reads, history,
+     * held research) and the sidecar observers saying the opposite.
+     */
     '/api/awareness/toggle': {
       POST: async (req: Request) => {
-        if (!ctx.awarenessService) return error('Awareness service not available', 503);
+        const service = ctx.awarenessService;
+        if (!service) return error('Awareness service not available', 503);
+        let body: unknown;
         try {
-          const body = await req.json() as { enabled: boolean };
-          ctx.awarenessService.toggle(body.enabled);
-          return json({ ok: true, enabled: body.enabled });
+          body = await req.json();
         } catch {
           return error('Invalid request body');
         }
+        // Only a real true or false. Screen watching must never start from a
+        // string like "false" that happens to be truthy.
+        const enabled = (body as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== 'boolean') return error('enabled must be true or false', 400);
+        const { persistAwarenessChoice } = await import('./user-settings.ts');
+        const setLive = () => {
+          const current = ctx.config.awareness;
+          if (typeof current === 'object' && current !== null) current.enabled = enabled;
+          else (ctx.config as { awareness?: unknown }).awareness = { enabled };
+        };
+        const apply = async () => {
+          if (ctx.settingsReload) return ctx.settingsReload.applyNow('awareness');
+          service.toggle(enabled);
+          return null;
+        };
+        // Off fails closed, like desktop control: it takes effect now even if
+        // it cannot be saved. On is saved first and applied only once it is.
+        let saveFailure: unknown = null;
+        if (!enabled) {
+          setLive();
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+        } else {
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+          if (saveFailure !== null) {
+            console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+            return error('Screen awareness could not be saved, so it was not turned on.', 500);
+          }
+          setLive();
+        }
+        const applyErr = await apply();
+        if (saveFailure !== null) {
+          console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+          return error('Screen awareness is off for now, but the choice could not be saved: it may come back on at the next restart or settings reload.', 500);
+        }
+        return json(applyErr
+          ? { ok: false, enabled, message: `Saved, but applying it failed: ${applyErr.error}` }
+          : { ok: true, enabled });
       },
     },
 

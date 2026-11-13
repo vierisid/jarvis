@@ -71,6 +71,11 @@ export function connectionLabel(data: BriefNavigationData): string {
     : data.connection === "offline" ? `${subject} offline` : "Connection status unavailable";
 }
 
+/** Short visible word for a state that is not healthy; colour is never the only signal. */
+export function connectionWord(connection: BriefNavigationData["connection"]): string {
+  return connection === "reconnecting" ? "Reconnecting" : connection === "offline" ? "Offline" : connection === "unknown" ? "Status unavailable" : "";
+}
+
 export type NavRoom = "today" | "workflows" | "opportunities" | "needs-you" | "goals" | "memory" | "connected-workspace" | "authority";
 export const PRIMARY_NAV: readonly NavRoom[] = ["today", "workflows", "opportunities", "needs-you"];
 export const DIRECTION_NAV: readonly NavRoom[] = ["goals", "memory"];

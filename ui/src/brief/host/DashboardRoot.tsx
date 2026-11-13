@@ -13,6 +13,7 @@ import { RoomActionBusProvider } from '../../v2/rooms/useRoomActionBus';
 import { RoomActionBridge } from '../../v2/shell/RoomActionBridge';
 import { BriefConversationProvider, useBriefConversation } from '../chat/provider';
 import { HostConversation } from './conversation';
+import { ConnectionLostBanner, useConnectionLost } from './ConnectionLost';
 import { createDashboardOwner, readHost, type DashboardOwner, type HostDescriptor } from './owner';
 import { createHostTransport } from './http';
 import { useBriefProjection } from '../reconciliation/react';
@@ -21,7 +22,9 @@ import { useBilling } from '../../v2/billing/useBilling';
 import type { BriefRoute, BriefShellPort } from '../contracts';
 import { useNotificationCenter } from '../../hooks/useNotificationCenter';
 import { AttentionRoutes } from '../navigation/AttentionRoutes';
-import { dashboardAttentionSnapshot, dashboardToastNotice } from '../navigation/notifications';
+import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
+import { ReminderToast, useReminderToast } from './ReminderToast';
+import { dashboardAttentionSnapshot } from '../navigation/notifications';
 import { ViewHost } from '../../onboarding-next/host/ViewHost';
 import { createSession, type Session } from '../../onboarding-next/host/session';
 import { createTransport } from '../../onboarding-next/host/transport';
@@ -173,9 +176,19 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false }); useBriefProjection(host.refresh);
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
-  const emergency = useEmergencyStatus(host.transport, owner.emergencyRevision);
+  const toast = useReminderToast(notices.items);
+  // Retry and every socket open or close read the status again at once: a socket that
+  // comes back before the next poll must not show a stale "status unavailable" notice.
+  const [retries, setRetries] = useState(0);
+  const emergency = useEmergencyStatus(host.transport, `${owner.emergencyRevision}:${owner.isConnected}:${retries}`);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // Socket closed and the status read failing: Jarvis cannot be reached. Counts read
+  // from before the outage are then stale, so they are hidden rather than shown as current.
+  const lost = useConnectionLost(!owner.isConnected && emergency === 'unavailable');
+  // Reconnect the socket now instead of after its backoff, and read again what the outage left stale.
+  const retryConnection = () => { window.dispatchEvent(new Event('jarvis:ws-reconnect')); setRetries(n => n + 1);
+    void host.reconciliation.refresh(); void humanInputs.refresh(); };
   const [attentionMessage, setAttentionMessage] = useState('');
   const resolveAttention = async (kind: 'clarifier' | 'repeat-back', id: string, decision: 'confirm' | 'cancel') => {
     try {
@@ -192,8 +205,13 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
-  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} /><AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())}
-    navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} />
+  // A reminder a workflow sent is for the founder: unread ones lead the Needs you room, the rest stay below.
+  const isNewStored = (item: { stored?: boolean; unread: boolean }) => item.stored === true && item.unread;
+  const storedNew = notices.items.filter(isNewStored);
+  const attentionFor = (items: typeof notices.items, heading?: string) => <AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, items, host.capabilities())}
+    navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} heading={heading} />;
+  const storedNotices = { count: storedNew.length, list: storedNew.length ? attentionFor(storedNew, 'New messages from your workflows') : null };
+  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
       {owner.repeatBacks.map(item => <RepeatBackCard key={item.id} {...item}
@@ -206,22 +224,22 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
-  return <EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
+  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
     forceIdle={() => {}} wsRef={owner.wsRef} beforeDispatch={async request => {
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
-    {!!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
-    <BriefHost route={route} rooms={rooms} notice={<EmergencyStatusBanner state={emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+    {!lost && !!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
+    <BriefHost route={route} rooms={rooms} notice={lost ? <ConnectionLostBanner retry={retryConnection} /> : <EmergencyStatusBanner state={!owner.isConnected && emergency === 'unavailable' ? 'loading' : emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
     }}
       navigation={{ capabilities: host.capabilities(), view: { source: 'live', state: { status: 'ready', data: {
         ...UNKNOWN_NAVIGATION, workspaceName: null, hosting: host.descriptor().installMode,
-        connection: owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
+        connection: lost ? 'offline' : owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
         account: { name: profile.base?.answers.preferred_name ?? null, plan: planFromBilling(billing) },
-        badges: { 'needs-you': notices.items.length + humanPending || undefined },
+        badges: { 'needs-you': lost ? undefined : notices.items.length + humanPending || undefined },
       } } } }} conversation={{ source: 'live', content: <HostConversation host={host} /> }}>
       {children ?? (RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
         notices: owner.notices, taskEvents: owner.taskEvents, contentEvents: owner.contentEvents, agentActivity: owner.agentActivity,
@@ -231,11 +249,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         </section>
       </LiveDataProvider>)}
     </BriefHost>
-    {route.room !== 'needs-you' && dashboardToastNotice(notices.items) && (() => {
-      const notice = dashboardToastNotice(notices.items)!;
-      return <aside className="brief-root brief-host-toast" role="status" aria-label="New Jarvis notification"><strong>{notice.title}</strong><p>{notice.text}</p>
-        <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>View notifications</button>
-        <button onClick={() => notices.markRead(notice.id)}>Dismiss</button></aside>;
-    })()}
-  </HumanInputsContext.Provider></EmergencyStatusContext.Provider>;
+    {route.room !== 'needs-you' && toast.notice && <ReminderToast notice={toast.notice} onDismiss={() => { notices.markRead(toast.notice!.id); toast.hide(); }}
+      onView={() => { toast.hide(); void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null })); }} />}
+  </HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
 }

@@ -23,6 +23,8 @@ export interface RunSummary extends RunIdentity {
   status: RunStatus;
   startedAt: number | null;
   createdAt: number;
+  /** "Finished with a failed step: <name>", set on a succeeded run that went on past a failed step. */
+  note?: string;
 }
 export interface RunPage {
   items: RunSummary[];
@@ -133,7 +135,8 @@ export function validSummary(v: RunSummary, scope: RunScope): boolean {
     RUN_STATES.includes(v.status) &&
     time(v.startedAt) &&
     typeof v.createdAt === "number" &&
-    Number.isFinite(v.createdAt)
+    Number.isFinite(v.createdAt) &&
+    (v.note === undefined || string(v.note))
   );
 }
 export function validatePage(page: RunPage, scope: RunScope): RunPage {

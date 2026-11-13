@@ -364,6 +364,8 @@ export type SystemNotice = {
   timestamp?: number;
   /** Set on notices Jarvis sent on its own (heartbeat, reactor, opportunities); unset on client warnings. */
   source?: "proactive";
+  /** Also saved on the daemon (a workflow's dashboard notification): reading it there too keeps it read after a reload. */
+  stored?: true;
 };
 
 const WARNING_NOTICE_LIMIT = 3;
@@ -395,6 +397,11 @@ export function proactiveNotice(id: string, text: string, urgent: boolean, times
   const title = lead ? plain(lead[1]!).replace(/:$/, "") : "";
   return { id, title: title || "Jarvis notification", text: plain(lead ? text.trim().slice(lead[0].length) : text) || title,
     level: urgent ? "warning" : "info", source: "proactive", ...(timestamp !== undefined ? { timestamp } : {}) };
+}
+
+/** One saved, unread dashboard notification from `/api/dashboard-notifications`, as a notice. */
+export function storedNotice(row: { id: string; message: string; priority: string; created_at: number }): SystemNotice {
+  return { ...proactiveNotice(row.id, row.message, row.priority === "urgent", row.created_at), stored: true };
 }
 
 export type ApprovalImpact = "read" | "write" | "destructive" | "external";
@@ -813,6 +820,20 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
         if (approvalWindowRef.current === approvalWindow) approvalWindowRef.current = null;
       }
 
+      // Workflow notifications sent while no dashboard was open: the daemon
+      // kept them, so they show up here as unread on the next visit.
+      try {
+        const resp = await fetch("/api/dashboard-notifications");
+        if (resp.ok) {
+          const body = (await resp.json()) as { notifications?: Array<{ id: string; message: string; priority: string; created_at: number }> };
+          if (wsRef.current !== ws || !mountedRef.current) return;
+          const saved = (body.notifications ?? []).map(storedNotice);
+          if (saved.length) setNotices(prev => saved.reduceRight((all, notice) => addNotice(all, notice), prev));
+        }
+      } catch (err) {
+        console.warn("[WS] Failed to load saved notifications:", err);
+      }
+
       // Take down every voice card that ended while this socket was down
       // (#1011): the notices went out while it could not hear them, and its
       // own holds were dropped when it went. A click on one would 404.
@@ -995,6 +1016,7 @@ export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boo
     if (msg.type === "chat" && msg.payload?.source) {
       if (msg.payload.source === "proactive" && typeof msg.payload.text === "string" && msg.payload.text.trim()) {
         const notice = proactiveNotice(msg.id || uuid(), msg.payload.text, msg.priority === "urgent", msg.timestamp);
+        if (msg.payload.stored === true) notice.stored = true;
         setNotices(prev => addNotice(prev, notice));
       }
       // Proactive message (heartbeat or reactor notification)

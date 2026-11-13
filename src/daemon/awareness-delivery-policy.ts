@@ -1,5 +1,5 @@
 import type { AwarenessEvent, Suggestion } from '../awareness/types.ts';
-import { awarenessHistoryVisible } from '../awareness/history-guard.ts';
+import { AwarenessHeldError, awarenessHistoryVisible } from '../awareness/history-guard.ts';
 import type { BackgroundAgentService } from './background-agent-service.ts';
 import type { ChannelService } from './channel-service.ts';
 import type { WebSocketService } from './ws-service.ts';
@@ -45,6 +45,10 @@ export class AwarenessDeliveryPolicy {
 
   handleEvent(event: AwarenessEvent): void {
     const { sockets: wsService, channels: channelService, reactor, coalescer, eventBus: sharedEventBus } = this.deps;
+    // An event that arrives after awareness was turned off (a capture still in
+    // flight, #1314 follow-up) carries what was read from the screen: it is
+    // dropped, so no flow, dashboard, model, channel, toast or voice gets it.
+    if (!awarenessHistoryVisible()) return;
     const awarenessWarnedTypes = this.awarenessWarnedTypes;
     const sendDesktopNotification = this.deps.desktop ?? defaultDesktop;
     // Republish onto the workflow event bus so flows with `on_event`
@@ -66,6 +70,8 @@ export class AwarenessDeliveryPolicy {
     // Never feed ambient awareness into an automatic assistant in quiet mode.
     if (this.quiet) return;
     const bgAgent = this.deps.agent();
+    // Asked at each sentence and each send retry: a flip mid-delivery stops what is left.
+    const stillOn = { shouldContinue: awarenessHistoryVisible };
     const screenAlerts = this.screenAlerts;
 
     // Route awareness events through existing event pipeline
@@ -97,15 +103,15 @@ export class AwarenessDeliveryPolicy {
         wsService.broadcastNotification(text, 'normal');
       } else if (hasWsClients) {
         // Primary: deliver via WebSocket + voice
-        wsService.broadcastNotification(text, 'urgent');
+        wsService.broadcastNotification(text, 'urgent', stillOn);
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'normal' });
-        wsService.broadcastProactiveVoice(body).catch(err =>
+        wsService.broadcastProactiveVoice(body, stillOn).catch(err =>
           console.error('[Daemon] Awareness TTS error:', err)
         );
       } else {
         // Fallback: no dashboard clients; deliver via external channels + persistent desktop
         console.log('[Daemon] No WS clients; routing suggestion to external channels');
-        channelService.broadcastToAll(text).catch(err =>
+        channelService.broadcastToAll(text, undefined, stillOn).catch(err =>
           console.error('[Daemon] Channel broadcast error:', err)
         );
         sendDesktopNotification(`JARVIS: ${title}`, body, { urgency: 'critical', expireMs: 30000 });
@@ -131,7 +137,8 @@ export class AwarenessDeliveryPolicy {
           wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
           `Search the web and vault for a solution. Be concise and actionable. ` +
           `Start your response with the fix, not a question.`,
-          'awareness'
+          // Held by the switch, on a thread of its own (#1314 follow-up).
+          'awareness', { screenDerived: true },
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
           if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(errorKey); return; }
@@ -145,7 +152,7 @@ export class AwarenessDeliveryPolicy {
               wsService.broadcastNotification(solutionText, 'normal');
               return;
             }
-            wsService.broadcastNotification(solutionText, 'urgent');
+            wsService.broadcastNotification(solutionText, 'urgent', stillOn);
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             // Strip markdown for TTS; voice should sound natural
             const voiceText = solution
@@ -162,7 +169,8 @@ export class AwarenessDeliveryPolicy {
             wsService.broadcastProactiveVoice(
               awaiting
                 ? `I need your approval to fix the error in ${appName}. ${voiceText}`
-                : `I found a fix for the error in ${appName}. ${voiceText}`
+                : `I found a fix for the error in ${appName}. ${voiceText}`,
+              stillOn,
             ).then(() =>
               console.log('[Daemon] Error solution TTS delivered')
             ).catch(err =>
@@ -173,7 +181,8 @@ export class AwarenessDeliveryPolicy {
           }
         }).catch(err => {
           screenAlerts.researchEnded(errorKey);
-          console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
+          if (err instanceof AwarenessHeldError) console.log('[Daemon] Error auto-research held: screen awareness is off');
+          else console.error('[Daemon] Error auto-research failed:', err instanceof Error ? err.message : err);
         });
       }
     }
@@ -198,7 +207,7 @@ export class AwarenessDeliveryPolicy {
           wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
           `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +
           `Provide a specific, actionable fix. Start with the solution, not a question.`,
-          'awareness'
+          'awareness', { screenDerived: true },
         ).then(solution => {
           // Awareness turned off while the research ran (#1314): its result is screen-derived, so nothing is shown, sent or spoken.
           if (!awarenessHistoryVisible()) { screenAlerts.researchEnded(struggleKey); return; }
@@ -210,7 +219,7 @@ export class AwarenessDeliveryPolicy {
               wsService.broadcastNotification(solutionText, 'normal');
               return;
             }
-            wsService.broadcastNotification(solutionText, 'urgent');
+            wsService.broadcastNotification(solutionText, 'urgent', stillOn);
             sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
             const voiceText = solution
               .replace(/#{1,6}\s*/g, '')
@@ -225,7 +234,8 @@ export class AwarenessDeliveryPolicy {
             wsService.broadcastProactiveVoice(
               awaiting
                 ? `I need your approval to help with what you're working on in ${sAppName}. ${voiceText}`
-                : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
+                : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`,
+              stillOn,
             ).catch(err =>
               console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
             );
@@ -234,7 +244,8 @@ export class AwarenessDeliveryPolicy {
           }
         }).catch(err => {
           screenAlerts.researchEnded(struggleKey);
-          console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
+          if (err instanceof AwarenessHeldError) console.log('[Daemon] Struggle auto-research held: screen awareness is off');
+          else console.error('[Daemon] Struggle auto-research failed:', err instanceof Error ? err.message : err);
         });
       }
     }
@@ -248,7 +259,7 @@ export class AwarenessDeliveryPolicy {
     // No toast or spoken copy of a recording once awareness is off (#1314 review).
     if (channel === 'websocket' && !this.quiet && awarenessHistoryVisible()) {
       (this.deps.desktop ?? defaultDesktop)(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
-      this.deps.sockets.broadcastProactiveVoice(suggestion.body).catch(err => console.error('[Daemon] Awareness TTS error:', err));
+      this.deps.sockets.broadcastProactiveVoice(suggestion.body, { shouldContinue: awarenessHistoryVisible }).catch(err => console.error('[Daemon] Awareness TTS error:', err));
     }
     return channel;
   }

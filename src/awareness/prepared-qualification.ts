@@ -30,6 +30,7 @@ import { getWorkflowComposition } from '../workflows/db/repos/workflow-compositi
 import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect.ts';
 import { managedConnectionMisuse, managedSourceFor, type CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
+import { isOwnerOnlyNotify } from '../workflows/jarvis-pieces/types.ts';
 import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
 import { governedPieceToolDefinition, HTTP_PIECE, httpReadHostListed, PIECE_ABOVE_LEVEL_ASKS, PIECE_ABOVE_LEVEL_FLOOR, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
 import { IN_RUN_STEP_PIECES } from '../workflows/runtime/step-admission.ts';
@@ -445,8 +446,12 @@ function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 
     const name = piece.slice(JARVIS.length);
     if (PURE_PIECES.has(name)) return null;
     // The routes below mirror `service-backends.ts`; the parity test runs both.
-    if (name === 'notify') return fact(['send_message'], decide(services.authority,
-      { toolName: 'workflow_notify', toolCategory: 'notification', category: 'send_message' }));
+    if (name === 'notify') {
+      // Owner-only channels are judged as `read_data`, as the notify route does.
+      const category: ActionCategory = isOwnerOnlyNotify(input.channels) ? 'read_data' : 'send_message';
+      // Still an effect the preview names, though judged as a read.
+      return { ...fact([category], decide(services.authority, { toolName: 'workflow_notify', toolCategory: 'notification', category })), role: 'effect' };
+    }
     if (name === 'ask') return fact(['read_data'], decide(services.authority,
       { toolName: 'workflow_ask', toolCategory: 'llm', category: 'read_data' }));
     if (name === 'context') return fact(['read_data'], decide(services.authority,

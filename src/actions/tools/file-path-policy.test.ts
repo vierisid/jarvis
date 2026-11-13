@@ -661,7 +661,7 @@ describe('write_file is rated execute_command for paths that run as code', () =>
     setSiteProjectsDir(join(data, 'projects'));
     for (const p of ['cache/engine/abc/main.js', 'config.yaml', 'sidecar.yaml', '.secrets.key', '.secrets.enc', 'jarvis.db',
       'jarvis.db-wal', 'google-tokens.json', 'sidecar-keys/k', 'workflow-codes/v/s/index.js', 'webapp-templates/x.js',
-      'browser/Default/Preferences', 'pieces/x/index.js', 'sidecar/desktop-bridge.exe', 'daemon/src/index.ts', 'jarvis.pid']) {
+      'browser/Default/Preferences', 'pieces/x/index.js', 'sidecar/desktop-bridge.exe', 'daemon/src/index.ts', 'jarvis.pid', 'jarvis.launch.json']) {
       expect(gateFor(join(data, p)).actionCategory).toBe('execute_command');
     }
     for (const p of ['notes.md', 'logs/jarvis.log', 'content/x.md', 'workflow-files/f/s/out.csv', 'projects/app/src/App.tsx']) {
