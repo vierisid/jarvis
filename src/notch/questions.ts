@@ -9,8 +9,8 @@
  * What the notch does with one depends on whether it can show it whole,
  * which is the rule every surface smaller than the dashboard follows:
  *
- *   - approve or reject, and it fits one line: yes approves. Not now is
- *     never reject, and there is no key for reject.
+ *   - approve or reject, and it fits one line: yes approves, and Esc
+ *     rejects, through the same function.
  *   - one choice from a few short options, and it fits one line: a row of
  *     choices.
  *   - a yes-or-no field: two choices.
@@ -21,6 +21,12 @@
  * An answer burns a fuse first, like everything that goes out from the
  * notch, and goes through the product's own function for answering, which
  * refuses a second answer.
+ *
+ * Esc is a no. On approve-or-reject it rejects. On a question that is not a
+ * yes or a no (a choice, a form), there is no "no" to give: Esc takes it off
+ * the notch for good, and it stays in the dashboard, where it can still be
+ * answered until its deadline. A line left alone until it folds goes back to
+ * the count and comes round again.
  */
 import type { HumanRequest, InputField } from '../workflows/runtime/human-input-contract.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
@@ -43,7 +49,7 @@ export interface NotchQuestionDeps {
   pending(): HumanRequest[];
   get(id: string): HumanRequest | null;
   /** Answers through the product's own function. `status` is 200 when it was taken. */
-  answer(id: string, input: { decision: 'approve' | 'submit'; generation: number; answers?: Record<string, unknown> }): { status: number; error?: string };
+  answer(id: string, input: { decision: 'approve' | 'reject' | 'submit'; generation: number; answers?: Record<string, unknown> }): { status: number; error?: string };
   openDashboard?: (sidecarId: string | null) => void;
   now?: () => number;
   fuseMs?: number;
@@ -94,6 +100,8 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
   const known = new Map<string, HumanRequest>();
   /** Questions being answered on the notch, from the answer until the notch has said what came of it. */
   const answering = new Set<string>();
+  /** Questions taken off the notch with Esc that the product still holds: not shown again. */
+  const dismissed = new Set<string>();
 
   const stillPending = (request: HumanRequest): HumanRequest | null => {
     const current = deps.get(request.id);
@@ -131,6 +139,31 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
     }
   }
 
+  /** Esc on an approve-or-reject question: reject it, and go on without a word. */
+  function reject(request: HumanRequest, stage: NotchStage): NotchItemEnd | Promise<NotchItemEnd> {
+    let result: { status: number; error?: string };
+    try {
+      result = deps.answer(request.id, { decision: 'reject', generation: request.generation ?? 0 });
+    } catch (error) {
+      log(`[notch] a workflow question could not be rejected: ${error instanceof Error ? error.message : String(error)}`);
+      return stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' }).then(() => 'waits' as const);
+    }
+    // Rejected here, or already answered somewhere else: it no longer waits.
+    if (result.status === 200 || result.status === 409 || result.status === 404) {
+      stage.surface.act({ gesture: 'shake' });
+      return 'settled';
+    }
+    log(`[notch] a workflow question refused the rejection (${result.status}): ${result.error ?? ''}`);
+    return stage.say(['It did not take that. Open it in the dashboard.'], 3200, { mood: 'careful', mark: 'fail' }).then(() => 'waits' as const);
+  }
+
+  /** Esc on a question with no "no" to give: off the notch for good, still in the dashboard. */
+  function dismiss(request: HumanRequest, stage: NotchStage): NotchItemEnd {
+    dismissed.add(itemId(request));
+    stage.surface.act({ gesture: 'shake' });
+    return 'settled';
+  }
+
   async function play(first: HumanRequest, stage: NotchStage): Promise<NotchItemEnd> {
     for (;;) {
       const request = stillPending(first);
@@ -142,6 +175,7 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
         const title = oneLine(request.title);
         const cut = [...title].length > WHOLE_CHARS ? `${[...title].slice(0, WHOLE_CHARS - 1).join('')}…` : title;
         const answer = await stage.offer(['Needs an answer in the dashboard: ', em(cut)], 'open', { mood: 'curious', who });
+        if (answer.act === 'no') return dismiss(request, stage);
         if (answer.act !== 'yes') return 'waits';
         deps.openDashboard?.(stage.from());
         await stage.say(['It is open in the dashboard.'], 1800);
@@ -149,12 +183,14 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
       }
       if (shape.way === 'yes') {
         const answer = await stage.offer([/[?]$/.test(words) ? words : `${words.replace(/[.]+$/, '')}?`], 'approve', { mood: 'curious', who });
+        if (answer.act === 'no') return reject(request, stage);
         if (answer.act !== 'yes') return 'waits';
         const end = await send(request, stage, ['Approving…'], { decision: 'approve' });
         if (end === 'again') continue;
         return end;
       }
       const answer = await stage.choose([words], shape.options, { mood: 'curious', who });
+      if (answer.act === 'no') return dismiss(request, stage);
       if (answer.act !== 'pick' || answer.index === undefined || answer.index >= shape.options.length) return 'waits';
       const picked = shape.options[answer.index]!;
       const end = await send(request, stage, ['Answering ', em(picked), '…'], { decision: 'submit', answers: { [shape.field.key]: shape.values[answer.index] } });
@@ -185,14 +221,16 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
       return;
     }
     const ids = new Set(pending.map((request) => itemId(request)));
+    // What is no longer pending needs no remembering.
+    for (const id of dismissed) if (!ids.has(id)) dismissed.delete(id);
     for (const request of [...pending].sort((a, b) => a.created - b.created)) {
       const id = itemId(request);
-      if (known.has(id)) continue;
+      if (known.has(id) || dismissed.has(id)) continue;
       known.set(id, request);
       inbox.add(item(request));
     }
     for (const id of [...known.keys()]) {
-      if (ids.has(id) || answering.has(id)) continue;
+      if ((ids.has(id) && !dismissed.has(id)) || answering.has(id)) continue;
       known.delete(id);
       inbox.remove(id);
     }

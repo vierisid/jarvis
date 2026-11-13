@@ -46,7 +46,7 @@ function harness(options: { start?: 'paused' | 'killed' } = {}) {
   const approvals = new ApprovalManager();
   const real = attachNotchReal(surface, {
     approvalManager: approvals,
-    approve: async () => ({ status: 'already_decided' }),
+    approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
     emergency: controller,
     promises: { executor, create: (what, opts) => createCommitment(what, opts), kept: () => findCommitments({ status: 'completed' }) },
     lookMs: 3_600_000,

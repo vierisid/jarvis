@@ -49,7 +49,7 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive' } = 
   const approvals = new ApprovalManager();
   const real: NotchReal = attachNotchReal(surface, {
     approvalManager: approvals,
-    approve: async () => ({ status: 'already_decided' }),
+    approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
     promises: {
       executor,
       create: (what, opts) => createCommitment(what, opts),
@@ -265,7 +265,7 @@ describe('the promise fixture', () => {
   test('two made one after the other are two promises', async () => {
     const h = harness();
     const real = attachNotchReal(h.surface, {
-      approvalManager: h.approvals, approve: async () => ({ status: 'already_decided' }),
+      approvalManager: h.approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
       promises: { executor: h.executor, create: (what, opts) => createCommitment(what, opts), kept: () => [], appendFixtureLog: () => {} },
       lookMs: 3_600_000, log: () => {},
     });
@@ -280,7 +280,7 @@ describe('the promise fixture', () => {
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} }, () => {});
     const executor = new CommitmentExecutor('aggressive');
     const real = attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
       promises: { executor, create: (what, opts) => createCommitment(what, opts), kept: () => [] },
       lookMs: 3_600_000, log: () => {},
     });

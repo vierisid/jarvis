@@ -35,6 +35,8 @@ export interface NotchRealDeps {
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
+  /** Denies through the same function, as the notch: what Esc on an approval's line does. */
+  deny(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Approves as a click on the dashboard card does. Given only when fixtures may be made, and used by them only. */
   approveAsDashboard?: (requestId: string) => Promise<ApprovalDecisionOutcome>;
   /** The brain's own tools, once loaded. Used by the shell command fixture only, and given only when fixtures may be made. */
@@ -105,6 +107,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const approvals = attachNotchApprovals(inbox, {
     approvalManager: deps.approvalManager,
     approve: deps.approve,
+    deny: deps.deny,
     openDashboard: deps.openDashboard,
     log,
   });

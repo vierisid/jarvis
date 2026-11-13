@@ -42,7 +42,7 @@ function harness() {
       const current = store.get(id);
       if (!current || current.status !== 'pending') return { status: 409, error: 'This request is closed' };
       answers.push({ id, input });
-      store.set(id, { ...current, status: input.decision === 'approve' ? 'approved' : 'submitted' });
+      store.set(id, { ...current, status: input.decision === 'approve' ? 'approved' : input.decision === 'reject' ? 'rejected' : 'submitted' });
       return { status: 200 };
     },
     openDashboard: (from) => { opened.push(from); },
@@ -112,16 +112,54 @@ describe('a workflow asks', () => {
     expect(h.count()).toBe(0);
   });
 
-  test('not now is never reject, and the fuse can be taken back', async () => {
+  test('the fuse can be taken back, and a line left alone is not a reject', async () => {
     const h = harness();
     h.ask(request());
     await h.sync();
     await h.answer('yes');
     await h.answer('undo');
     expect(h.line()).toMatchObject({ kind: 'offer' });
-    await h.answer('no');
+    await h.answer('fold');
     expect(h.answers).toEqual([]);
     expect(h.count()).toBe(1);
+  });
+
+  test('Esc on approve-or-reject rejects it through the same function, and it is gone', async () => {
+    const h = harness();
+    const q = h.ask(request());
+    await h.sync();
+    await h.answer('no');
+    expect(h.answers).toEqual([{ id: q.id, input: { decision: 'reject', generation: 0 } }]);
+    expect(h.store.get(q.id)!.status).toBe('rejected');
+    expect(h.line()).toBeNull();
+    await h.sync();
+    expect(h.count()).toBe(0);
+  });
+
+  test('Esc on a choice has no "no" to give: it leaves the notch for good and still waits in the dashboard', async () => {
+    const h = harness();
+    const q = h.ask(request({ kind: 'input', title: 'Which tone for the reply?', fields: [select(['Warm', 'Short'], 'tone')] }));
+    await h.sync();
+    await h.answer('no');
+    expect(h.answers).toEqual([]);
+    expect(h.store.get(q.id)!.status).toBe('pending');
+    expect(h.line()).toBeNull();
+    // Looked at again and again: it does not come back.
+    await h.sync();
+    await h.sync();
+    expect(h.count()).toBe(0);
+    expect(h.line()).toBeNull();
+  });
+
+  test('Esc on one that only points at the dashboard takes it off the notch the same way', async () => {
+    const h = harness();
+    const q = h.ask(request({ kind: 'input', title: 'What should the subject line be?', fields: [{ key: 's', label: 'Subject', type: 'text', required: true }] }));
+    await h.sync();
+    await h.answer('no');
+    await h.sync();
+    expect(h.count()).toBe(0);
+    expect(h.opened).toEqual([]);
+    expect(h.store.get(q.id)!.status).toBe('pending');
   });
 
   test('a few options: the pick is submitted under the field\'s own key', async () => {
