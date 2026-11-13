@@ -890,8 +890,11 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Conversation (voice), Check-ins and
-  Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
+- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Permissions and
+  approvals (the Authority link, second section), Conversation (voice) and Workspace controls.
+  Check-in preferences and active hours are not shown: the profile-settings contract always
+  answers `check_in_not_supported` and the daemon ignores `heartbeat.active_hours`. Appearance is
+  the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.
@@ -903,8 +906,7 @@ actions only change local fixture state.
   separately from live application (applied, restart required, failed, unconfirmed). A lost or
   failed save keeps the selection; Retry re-reads first and reports a conflict instead of
   overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
-  settings only navigate through host callbacks. Check-in frequency and active hours are shown as
-  unavailable. Hosted installs never expose provider setup.
+  settings only navigate through host callbacks. Hosted installs never expose provider setup.
 - It reads and writes only through `SettingsPort`. `createSettingsPort(scopeId, host)`
   (`account/settings/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings`
   and `PATCH /api/brief/profile-settings/voice` (default off). No production host builds this
