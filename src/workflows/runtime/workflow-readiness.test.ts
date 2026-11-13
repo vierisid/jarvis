@@ -118,6 +118,25 @@ test('manual invoke graphs require known tool identities and their actual parame
   action.settings.input = { toolName: 'list' };
   expect(compileWorkflow(graph(action), { pieces: catalog, tool: () => ({ params: [] }) }).ready).toBe(true);
 });
+test('bracket access to a forbidden key is refused at publish and a computed key is a runtime check', () => {
+  const catalog = new PieceCatalog([...pieces.list(), { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }]);
+  const action = step(); action.settings = { pieceName: 'jarvis-tool', actionName: 'invoke', input: { toolName: 'send', params: { recipient: "{{trigger['__proto__']}}" } } };
+  const context = { pieces: catalog, tool: () => ({ params: [{ name: 'recipient', type: 'string', required: true }] }) };
+  const refused = compileWorkflow(graph(action), context);
+  expect(refused.ready).toBe(false);
+  expect(refused.issues.some(i => i.code === 'EXPRESSION' && i.message.includes('prototype access'))).toBe(true);
+  action.settings.input.params.recipient = '{{trigger[trigger.key]}}';
+  const computed = compileWorkflow(graph(action), context);
+  expect(computed.ready).toBe(true);
+  expect(computed.runtimeChecks.some(c => c.guard === 'expression' && c.message.includes('property name taken from run data'))).toBe(true);
+});
+test('a skill name taken from run data is a runtime check with a plain explanation', () => {
+  const catalog = new PieceCatalog([...pieces.list(), { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }]);
+  const action = step(); action.settings = { pieceName: 'jarvis-tool', actionName: 'invoke', input: { toolName: 'run_skill', params: { name: '{{trigger.skill}}' } } };
+  const context = { pieces: catalog, tool: () => ({ params: [{ name: 'name', type: 'string', required: true }] }) };
+  const result = compileWorkflow(graph(action), context);
+  expect(result.runtimeChecks.some(c => c.guard === 'tool-input' && c.path.endsWith('params.name') && c.message.includes('skill name is taken from run data'))).toBe(true);
+});
 test('native cron triggers receive the same schedule check as the built-in primitive', () => {
   const catalog = new PieceCatalog([{ name: '@activepieces/piece-schedule', displayName: '', description: '', actions: {}, triggers: { cron_expression: { name: 'cron_expression', displayName: '', description: '' } } }]);
   const trigger = { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: '@activepieces/piece-schedule', triggerName: 'cron_expression', input: { cronExpression: '61 * * * *', timezone: 'UTC' } } };
@@ -739,6 +758,60 @@ test('built-in schedule validates explicit DST policy',()=>{
  const g=cron();g.settings.input.dst_policy='skip_missing_first_repeated';
  expect(compileWorkflow(g,{phase:'composition'}).issues.filter(x=>x.code==='DST_POLICY')).toEqual([]);
  g.settings.input.dst_policy='guess';expect(compileWorkflow(g,{phase:'composition'}).issues.some(x=>x.code==='DST_POLICY')).toBe(true);
+});
+
+const routerOf = (after: any): any => ({ name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'CONDITION', conditions: [[{ operator: 'EXISTS', firstValue: '{{trigger.email}}' }]] }, { branchType: 'FALLBACK' }] }, children: [step('a'), step('b')], nextAction: after });
+const branchNotice = (r: { runtimeChecks: { message: string }[] }) => r.runtimeChecks.filter(c => c.message.includes('does not run every time'));
+test('a step after a router reading a branch step without a fallback gets a notice that says how to fix it, and stays publishable', () => {
+  const noted = compile(graph(routerOf(step('after', '{{a.out}}'))));
+  // Not a refusal: readiness is checked again when a trigger fires, and a workflow that always takes the branch works.
+  expect(noted.ready).toBe(true);
+  expect(noted.runtimeChecks).toContainEqual(expect.objectContaining({ node: 'after', path: 'settings.input.to', guard: 'expression', message: expect.stringContaining('does not run every time') }));
+  // Inside text, and through an expression with no fallback, it is noted too.
+  expect(branchNotice(compile(graph(routerOf(step('after', 'Hi {{a.out}}')))))).toHaveLength(1);
+  expect(branchNotice(compile(graph(routerOf(step('after', '{{a.out + 1}}')))))).toHaveLength(1);
+  // A step of the same branch, and a value that is not from a branch, get no notice.
+  const inBranch: any = routerOf(step('after', '{{trigger.email}}'));
+  inBranch.children[0].nextAction = step('a2', '{{a.out}}');
+  expect(compile(graph(inBranch)).issues).toEqual([]);
+  expect(branchNotice(compile(graph(inBranch)))).toEqual([]);
+});
+test('a branch reference wrapped in a fallback gets no notice', () => {
+  expect(branchNotice(compile(graph(routerOf(step('after', "{{a.out ?? 'none'}}")))))).toEqual([]);
+  expect(branchNotice(compile(graph(routerOf(step('after', '{{a.out ?? b.out}}')))))).toEqual([]);
+  const textHelper = new PieceCatalog([{ name: '@activepieces/piece-text-helper', displayName: '', description: '', actions: { defaultValue: { name: 'defaultValue', displayName: '', description: '' } } }]);
+  const fallback = (value: string): any => ({ name: 'fb', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', actionName: 'defaultValue', input: { value, defaultString: 'x' } } });
+  expect(branchNotice(compileWorkflow(graph(routerOf(fallback('{{a.out}}'))), { pieces: textHelper }))).toEqual([]);
+  expect(branchNotice(compileWorkflow(graph(routerOf(fallback('Hi {{a.out}}'))), { pieces: textHelper }))).toHaveLength(1);
+});
+test('a nested router branch is not readable from after the outer router either', () => {
+  const inner = routerOf(step('after_inner', '{{trigger.email}}')); inner.name = 'inner'; inner.children = [step('x'), step('y')];
+  const outer: any = routerOf(step('after', '{{x.out}}')); outer.children = [inner, step('b')]; inner.nextAction.name = 'after_inner';
+  expect(branchNotice(compile(graph(outer)))).toContainEqual(expect.objectContaining({ node: 'after' }));
+});
+
+const subflowCatalog = new PieceCatalog([{ name: 'jarvis-subflow', displayName: '', description: '', actions: { call: { name: 'call', displayName: '', description: '' } } }]);
+const callStep = (invocationKey: string): any => ({ name: 'child', type: 'PIECE', settings: { pieceName: 'jarvis-subflow', actionName: 'call', input: { flow: 'flow_1', invocationKey, payload: '{{loop.item}}', outputSchema: { type: 'object' }, timeoutSeconds: 60 } } });
+const inLoop = (key: string): any => graph({ name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.rows}}' }, firstLoopAction: callStep(key) });
+test('a child call in a loop needs an invocation key that changes per item', () => {
+  for (const key of ['lc-const', '{{trigger.request_id}}', 'order-{{trigger.id}}']) {
+    const result = compileWorkflow(inLoop(key), { pieces: subflowCatalog });
+    expect(result.issues).toContainEqual(expect.objectContaining({ node: 'child', path: 'settings.input.invocationKey', message: expect.stringContaining('changes per item') }));
+  }
+  for (const key of ['{{loop.item.id}}', 'order-{{loop.index}}', '{{trigger.id}}-{{loop.item}}']) {
+    expect(compileWorkflow(inLoop(key), { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
+  }
+  // A constant key with a payload that is the same on every pass is one deduplicated call, not a refusal.
+  for (const payload of [{ order: '{{trigger.id}}' }, 'fixed']) {
+    const same = inLoop('{{trigger.request_id}}'); same.nextAction.firstLoopAction.settings.input.payload = payload;
+    expect(compileWorkflow(same, { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
+  }
+  // A payload that reads the loop item inside an object is still per pass.
+  const nested = inLoop('lc-const'); nested.nextAction.firstLoopAction.settings.input.payload = { row: { id: '{{loop.item.id}}' } };
+  expect(compileWorkflow(nested, { pieces: subflowCatalog }).issues).toContainEqual(expect.objectContaining({ path: 'settings.input.invocationKey' }));
+  // Outside a loop a fixed or request-wide key is exactly what is wanted.
+  const outside = graph(callStep('{{trigger.request_id}}'));
+  expect(compileWorkflow(outside, { pieces: subflowCatalog }).issues.filter(i => i.path === 'settings.input.invocationKey')).toEqual([]);
 });
 
 test('readiness says "Retry on failure" cannot apply to a step that acts outside Jarvis, without refusing the flow', () => {

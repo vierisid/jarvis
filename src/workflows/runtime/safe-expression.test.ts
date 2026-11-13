@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { evaluateWorkflowExpression as evaluate, workflowExpressionReferences, WorkflowExpressionError } from './safe-expression';
+import { evaluateWorkflowExpression as evaluate, workflowExpressionHasComputedKey, workflowExpressionReferences, WorkflowExpressionError } from './safe-expression';
 import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
 
 /** Upper bound on the guidance suffix, so the excerpt assertion stays meaningful. */
@@ -98,4 +98,26 @@ test('typeof safely inspects invalid urgency and does not call accessors',()=>{
   for(const value of [true,false,'false',0,1,null,undefined,{},[]])
     expect(evaluate('typeof (trigger.urgent ?? null) !== "boolean"',{trigger:{urgent:value}})).toBe(typeof value !== 'boolean');
   expect(()=>evaluate('typeof trigger.urgent',{trigger:Object.defineProperty({},'urgent',{get(){throw Error('accessed');}})})).toThrow('accessor');
+});
+
+test('bracket access to a forbidden key is refused like the dot form', () => {
+  for (const source of ["trigger['__proto__']", 'trigger["constructor"]', "trigger?.['prototype']", "trigger.a['__proto__'].x"]) {
+    expect(() => workflowExpressionReferences(source)).toThrow(/prototype access/);
+  }
+  expect([...workflowExpressionReferences("trigger['name']")]).toEqual(['trigger']);
+  // Escaped, concatenated, nested or conditional keys made only of literals are worked out and refused too.
+  for (const source of ["trigger['\\u005f_proto__']", "trigger['__pro' + 'to__']", "trigger[('con' + 'struc') + 'tor']",
+    "trigger.a[trigger.b['proto' + 'type']]", "trigger[1 ? 'constructor' : 'x']", "trigger['proto' + \"type\"]"]) {
+    expect(() => workflowExpressionReferences(source)).toThrow(/prototype access/);
+  }
+  expect(workflowExpressionHasComputedKey("trigger['na' + 'me']")).toBe(false);
+  expect(evaluate("trigger['na' + 'me']", { trigger: { name: 'ok' } })).toBe('ok');
+  expect(evaluate('trigger.rows[1 + 1]', { trigger: { rows: [0, 1, 2] } })).toBe(2);
+});
+
+test('a property name computed from data is reported so it can be checked at run time', () => {
+  expect(workflowExpressionHasComputedKey('trigger[trigger.key]')).toBe(true);
+  expect(workflowExpressionHasComputedKey('x ? a[b] : 1')).toBe(true);
+  expect(workflowExpressionHasComputedKey("trigger['name'].rows[0]")).toBe(false);
+  expect(() => evaluate('trigger[trigger.key]', { trigger: { key: '__proto__' } })).toThrow(/prototype access/);
 });

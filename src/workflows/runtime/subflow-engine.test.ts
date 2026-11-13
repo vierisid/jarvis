@@ -44,6 +44,7 @@ import {configuredSubflowGraphs,validateSubflowFixtures} from './subflow-fixture
 import {HUMAN_INPUT_PIECE} from './human-input-contract';
 import {listHumanInputs,resolveHumanInput,resumeHumanInputs} from './human-input';
 import {SUBFLOW_PIECE} from './subflow-contract';
+import {projectFailure} from '../../failures/projection';
 import {JarvisWorkflowRunnerAdapter} from '../adapters/workflow-runner';
 
 let dir:string,api:SandboxApi,runtime:EngineRuntime,worker:Worker,catalog:PieceCatalog,authority:AuthorityEngine,approvals:ApprovalManager;
@@ -230,6 +231,16 @@ test('a child turned off after its call was approved is refused at dispatch',asy
  let again:any=await services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},laterCtx);
  if(again.approval){approvals.approve(again.approval.approvalId,'fixture');again=await services.subflowCall!({...node.settings.input,invocationKey:'approved-request',payload},laterCtx);}
  expect(again.approval).toBeUndefined();expect(f.children()).toHaveLength(1);
+});
+test('a repeated invocation key with different data is refused as not started, with a typed code',async()=>{
+ const f=await fixture();authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});
+ const node:any=f.pv.trigger.nextAction,call=(runId:string,data:unknown)=>services.subflowCall!({...node.settings.input,invocationKey:'lc-const',payload:data},{runId,projectId:DEFAULT_IDS.project,stepName:node.name,executionPath:[] as Array<[string,number]>});
+ const first=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'}),second=createFlowRun({flowId:f.parent.id,flowVersionId:f.pv.id,status:'RUNNING'});runIds.push(first.id,second.id);
+ await call(first.id,payload);
+ await expect(call(second.id,{...(payload as object),other:2})).rejects.toThrow('Include something that changes per item');
+ expect(listWorkflowEffects(second.id)[0]!.outcome).toMatchObject({status:'blocked',code:'INVOCATION_KEY_REUSED',effect:'not_started'});
+ expect(projectFailure({source:'action',outcome:listWorkflowEffects(second.id)[0]!.outcome! as any},{label:'The step "child"',sideEffects:true}))
+  .toMatchObject({code:'INVOCATION_KEY_REUSED',effect:'none',next:[{step:'edit_and_run_again'},{step:'open_details'}]});
 });
 test('a published child saved off and never turned on is still called',async()=>{
  const g=configuredSubflowGraphs(parentTestGraph('placeholder-only-in-fixture'),childTestGraph());mode='success';authority.updateConfig({...authority.getConfig(),overrides:[],governed_categories:[]});

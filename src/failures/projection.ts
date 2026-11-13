@@ -135,6 +135,8 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
+  // A child call reused an invocation key for a different payload (for example a constant key in a loop); nothing was started.
+  INVOCATION_KEY_REUSED: { category: 'invalid_input', why: 'its invocation key was already used for different data. Include something that changes per item in the key', step: 'edit_and_run_again' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
