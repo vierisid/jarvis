@@ -135,7 +135,7 @@ jobs:
   # publish_only is null, which is not true, so it runs.
   resolve:
     if: inputs.publish_only != true || inputs.publish == false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
@@ -271,7 +271,7 @@ jobs:
           - goos: linux
             goarch: amd64
             npm_pkg: linux-x64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             setup: linux
     steps: &build-sidecar-leg-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -434,7 +434,7 @@ jobs:
           - goos: darwin
             goarch: arm64
             npm_pkg: darwin-arm64
-            runner: macos-latest
+            runner: macos-26
             setup: darwin
     steps: *build-sidecar-leg-steps
 
@@ -453,7 +453,7 @@ jobs:
           - goos: darwin
             goarch: amd64
             npm_pkg: darwin-x64
-            runner: macos-latest
+            runner: macos-26
             setup: darwin
     steps: *build-sidecar-leg-steps
 
@@ -481,7 +481,7 @@ jobs:
   sign-sidecar-darwin:
     needs: [resolve, build-sidecar-darwin-arm64, build-sidecar-darwin-x64]
     if: needs.resolve.outputs.build == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     # See "Who can sign" above sign-sidecar-windows: main and the v* / installer-v*
     # tags only, no reviewers; static, so a dry run is gated as a real run is.
     environment: signing
@@ -767,7 +767,7 @@ jobs:
   verify-sidecar-darwin:
     needs: [resolve, sign-sidecar-darwin]
     if: needs.resolve.outputs.build == 'true'
-    runs-on: macos-latest
+    runs-on: macos-26
     permissions:
       contents: read
     steps:
@@ -864,7 +864,7 @@ jobs:
   build-sidecar-windows:
     needs: resolve
     if: needs.resolve.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -980,7 +980,7 @@ jobs:
     # which holds the KMS-federating token, must not run even if someone
     # later adds a status function that would carry it past its skipped need.
     if: needs.resolve.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # See "Who can sign" above sign-sidecar-windows: main and the v* / installer-v*
     # tags only, no reviewers; static, so a dry run is gated as a real run is.
     environment: signing
@@ -1140,7 +1140,7 @@ jobs:
   verify-sidecar-windows:
     needs: [resolve, sign-sidecar-windows]
     if: needs.resolve.outputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -1248,7 +1248,7 @@ jobs:
     # functions away from every other call: release-exec.test.sh pins this
     # line byte for byte.
     if: (needs.resolve.outputs.publish == 'true' && success()) || (inputs.publish_only == true && inputs.publish == true && inputs.digests != '' && !cancelled() && !failure())
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
