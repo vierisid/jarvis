@@ -657,3 +657,57 @@ describe('the rest of the edge-case audit, on the page', () => {
     expect(asking).toEqual([true, false, true, false]);
   });
 });
+
+describe('pass 6 on the page: where you are, beside the eyes', () => {
+  // A 1 by 1 PNG.
+  const ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  const icon = (): HTMLImageElement | null => $<HTMLImageElement>('.appicon img');
+  const shown = (): boolean => $('.nin')!.dataset.icon === '1';
+
+  test('at rest the front app\'s icon is drawn as a picture, and follows the app', () => {
+    surface.receive({ type: 'where', app: { name: 'Notepad', icon: ICON } });
+    expect(shown()).toBe(true);
+    expect(icon()?.getAttribute('src')).toBe(ICON);
+    // Another app with no icon: nothing is drawn rather than the old one.
+    surface.receive({ type: 'where', app: { name: 'Steam' } });
+    expect(shown()).toBe(false);
+    expect(icon()).toBeNull();
+    surface.receive({ type: 'where', app: { name: 'Notepad', icon: ICON } });
+    surface.receive({ type: 'where', app: null });
+    expect(shown()).toBe(false);
+  });
+
+  test('an icon is only ever a PNG picture: anything else is not drawn', () => {
+    for (const bad of ['<svg onload=alert(1)>', 'javascript:alert(1)', 'https://example.com/a.png', 'data:image/svg+xml;base64,PHN2Zz4=', `data:image/png;base64,${'A'.repeat(70_000)}`, 42]) {
+      surface.receive({ type: 'where', app: { name: 'X', icon: bad as string } });
+      expect([String(bad).slice(0, 30), shown(), icon()]).toEqual([String(bad).slice(0, 30), false, null]);
+    }
+    expect($('.appicon')!.innerHTML).toBe('');
+  });
+
+  test('a line takes the icon\'s place, and the icon is back when the notch rests again', () => {
+    surface.receive({ type: 'where', app: { name: 'Notepad', icon: ICON } });
+    show({ id: 's', kind: 'say', say: ['Done.'], ms: 4000 });
+    expect(icon()).toBeNull();
+    surface.receive({ type: 'rest' });
+    expect(icon()?.getAttribute('src')).toBe(ICON);
+  });
+
+  test('with the eyes closed or turned aside no app is shown: I am not watching it', () => {
+    surface.receive({ type: 'where', app: { name: 'Notepad', icon: ICON } });
+    surface.receive({ type: 'face', mood: 'away' });
+    expect(shown()).toBe(false);
+    expect($('.nin')!.dataset.mood).toBe('away');
+    surface.receive({ type: 'face', mood: 'closed' });
+    expect(shown()).toBe(false);
+    surface.receive({ type: 'face', mood: 'idle' });
+    expect(icon()?.getAttribute('src')).toBe(ICON);
+  });
+
+  test('a page that comes up later is told where you are with everything else', () => {
+    surface.receive({ type: 'state', line: null, count: 0, where: { name: 'Notepad', icon: ICON } });
+    expect(icon()?.getAttribute('src')).toBe(ICON);
+    surface.receive({ type: 'state', line: null, count: 0 });
+    expect(shown()).toBe(false);
+  });
+});

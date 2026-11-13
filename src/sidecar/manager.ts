@@ -105,6 +105,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'notch.message',
   // A recording made while the notch's talk keys were held (src/notch/talk.ts).
   'notch.talk',
+  // Which app is in front, and whether the desktop app is looking (src/notch/where.ts).
+  'notch.where',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */
@@ -308,7 +310,9 @@ export class SidecarManager implements Service {
       // update_progress too: it is rare and carries state (a failure with the
       // command to run by hand), so it must not be the event a full queue
       // evicts.
-      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame', 'update_progress']);
+      // notch.where too: "looking away" has to be known here before the
+      // capture that was queued ahead of it is looked at.
+      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame', 'update_progress', 'notch.where']);
 
       this.rpcTracker.onDetachedComplete((rpcId, result, error) => {
         if (error) {

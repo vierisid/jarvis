@@ -97,6 +97,8 @@ export interface NotchAsksDeps {
   openDashboard?: (sidecarId: string | null) => void;
   /** Rows for Home, under the text field: what was done today. */
   today?: () => NotchBlock[];
+  /** Where the person is and whether Jarvis is looking: Home's row about it, and the sheet it opens (where.ts). */
+  see?: { row(): NotchBlock; open(stage: NotchStage): Promise<void> };
   heardMs?: number;
   log?: (line: string) => void;
 }
@@ -771,6 +773,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
           ...(recent ? [{ kind: 'row' as const, id: 'last', lead: 'Last answer', say: [shortened(recent.answer ?? '', 90)], go: true }] : []),
+          ...(deps.see ? [deps.see.row()] : []),
           ...today,
           { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }] },
         ],
@@ -781,6 +784,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         const again = stage.id();
         stage.put({ id: again, kind: 'sheet', say: [recent.source === 'spoken' ? 'You said' : 'You typed'], blocks: ledgerDetail(recent), stay: true });
         await stage.answer(again, ['no']);
+        continue;
+      }
+      if (answer.act === 'go' && answer.row === 'see' && deps.see) {
+        await deps.see.open(stage);
         continue;
       }
       if (answer.act === 'ask') {
