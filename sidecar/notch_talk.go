@@ -331,10 +331,10 @@ func (t *notchTalker) end(reason string) {
 	}
 	voiced := t.measure(id, dur, func(heard notchTalkHeard) string {
 		switch {
-		case reason == "cap":
-			return "ran into the limit, not sent"
 		case heard.VoicedMs < notchTalkMinVoicedMs:
 			return "too little voice, not sent"
+		case reason == "cap":
+			return "ran into the limit, sent as far as it got"
 		}
 		return "sent"
 	}).VoicedMs
@@ -347,12 +347,15 @@ func (t *notchTalker) end(reason string) {
 		"format":      "pcm_s16le",
 		"reason":      reason,
 	}
-	if voiced < notchTalkMinVoicedMs || reason == "cap" {
-		// Too little to be an instruction, or one that ran into the limit:
-		// the brain is told, and the sound stays here.
+	if voiced < notchTalkMinVoicedMs {
+		// Too little to be an instruction: the brain is told, and the sound
+		// stays here.
 		send("end", payload, nil)
 		return
 	}
+	// One that ran into the limit is sent as far as it got, marked as that
+	// (reason "cap"): the brain asks before acting on words that may stop in
+	// the middle of a sentence. The whole minute used to be thrown away.
 	send("end", payload, pcm)
 }
 

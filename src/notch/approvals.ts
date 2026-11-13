@@ -50,7 +50,7 @@ import type { ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
-import type { NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 
 /** How long the fuse burns between a yes and the decision. */
@@ -94,6 +94,24 @@ export const NOTCH_SHEET_COLUMNS = 3000;
 export const NOTCH_APPROVAL_SHEET_MS = 30_000;
 /** How long the plain words are waited for before the line is shown without them. */
 export const NOTCH_APPROVAL_WORDS_MS = 4000;
+
+/** How long a sheet waits to hear what on the screen its action would land on. It is a read on the same machine. */
+export const NOTCH_APPROVAL_WHERE_MS = 1500;
+
+/** The most of a place on the screen a sheet shows. */
+const PLACE_COLUMNS = 160;
+
+/**
+ * A place on the screen as a sheet shows it. It is text the screen wrote, so
+ * what cannot be seen is taken out of it and it is kept to one short line.
+ */
+export function notchApprovalPlace(place: string | null | undefined): string | null {
+  if (typeof place !== 'string') return null;
+  const clean = place.replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+  const points = [...clean];
+  return points.length <= PLACE_COLUMNS ? clean : `${points.slice(0, PLACE_COLUMNS - 1).join('').trimEnd()}…`;
+}
 
 /** What is asked when nobody could say it in plain words: by what kind of thing it is. */
 export function notchApprovalFallback(request: Pick<ApprovalRequest, 'action_category'>): string {
@@ -222,6 +240,16 @@ export interface NotchApprovalDeps {
    */
   describe?: (request: ApprovalRequest) => Promise<string | null>;
   /**
+   * What on the screen the request would land on, as that machine reads it
+   * now: 'Button "Send" in "Inbox - Outlook"'. A click or a key press is
+   * approved by what it lands on, and "element 12" or "x 640, y 300" says
+   * nothing about that. It is text from the screen: it goes on the sheet's
+   * paper for the person to read, as it is, and to nobody else. Null when the
+   * request acts on nothing on screen, or it cannot be said.
+   */
+  where?: (request: ApprovalRequest) => Promise<string | null>;
+  whereMs?: number;
+  /**
    * Whether an instruction the person gave on the notch is stopped at this
    * request right now. Then it does not fold and its sheet does not time
    * out: it is the one thing they are waiting on, and if it left the notch
@@ -303,6 +331,42 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     return made;
   }
 
+  /** What on the screen a request would land on, once the machine has said. Null: it could not, or nothing. */
+  const places = new Map<string, string | null>();
+  const locating = new Map<string, Promise<void>>();
+  const whereMs = deps.whereMs ?? NOTCH_APPROVAL_WHERE_MS;
+
+  /** Has the place on the screen read for a request that will be shown on a sheet. Never waits longer than `whereMs`. */
+  function locate(request: ApprovalRequest): Promise<void> {
+    const where = deps.where;
+    if (!where || places.has(request.id) || notchApprovalWay(request) !== 'sheet') return Promise.resolve();
+    const running = locating.get(request.id);
+    if (running) return running;
+    const made = new Promise<void>((resolve) => {
+      let settled = false;
+      const done = (place: string | null): void => {
+        if (settled) return;
+        settled = true;
+        places.set(request.id, notchApprovalPlace(place));
+        locating.delete(request.id);
+        resolve();
+      };
+      after(() => done(null), whereMs);
+      where(request).then(done, (error: unknown) => {
+        log(`[notch] where an approval would land could not be read: ${error instanceof Error ? error.message : String(error)}`);
+        done(null);
+      });
+    });
+    locating.set(request.id, made);
+    return made;
+  }
+
+  /** The paper under the question: where on the screen it lands, when that is known, then the exact action. */
+  const paper = (request: ApprovalRequest): NotchPart[][] => {
+    const place = places.get(request.id);
+    return [...(place ? [`On screen: ${place}`] : []), ...notchApprovalExact(request)].map((line): NotchPart[] => [line]);
+  };
+
   /** The question a request is asked with: its plain words, or what kind of thing it is. */
   const question = (request: ApprovalRequest): string => words.get(request.id) ?? notchApprovalFallback(request);
 
@@ -381,13 +445,21 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       const asked = question(request);
       const destructive = impactFromCategory(request.action_category) === 'destructive';
       const id = stage.id();
+      const blocks = (): NotchBlock[] => [
+        { kind: 'paper', lines: paper(request) },
+        { kind: 'note', say: ['Under the question is exactly what will be done.'] },
+      ];
       stage.put({
         id, kind: 'sheet', say: [asked], yes: 'approve', stay: true, ...(destructive ? { mood: 'careful' as const } : {}),
-        blocks: [
-          { kind: 'paper', lines: notchApprovalExact(request).map((line): NotchPart[] => [line]) },
-          { kind: 'note', say: ['Under the question is exactly what will be done.'] },
-        ],
+        blocks: blocks(),
       });
+      // Opened before the machine had said where it lands: the place is added
+      // to the paper when it is in.
+      if (deps.where && !places.has(requestId)) {
+        void locate(request).then(() => {
+          if (!stage.ended() && places.get(requestId)) stage.surface.update(id, { blocks: blocks() });
+        });
+      }
       // Opened before anybody had worded it: the question is the kind of
       // thing it is, and becomes the plain words when they are in. The exact
       // action under it does not change.
@@ -531,6 +603,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       if (ids.has(requestId) || answering.has(requestId)) continue;
       known.delete(requestId);
       words.delete(requestId);
+      places.delete(requestId);
       // Decided, expired or withdrawn somewhere else: the line leaves by itself.
       inbox.remove(itemId(requestId));
     }
@@ -557,8 +630,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     // up) is not worded now: that would be a model call for every old
     // request at every start. It is worded when it is opened.
     const speaks = raised || now() - request.created_at < FRESH_MS;
-    if (!speaks || !deps.describe || words.has(request.id) || notchApprovalWay(request) !== 'sheet') { add(); return; }
-    void prepare(request).then(add);
+    if (!speaks || (!deps.describe && !deps.where) || notchApprovalWay(request) !== 'sheet') { add(); return; }
+    void Promise.all([prepare(request), locate(request)]).then(add);
   }
 
   return { sync, itemId, raise };

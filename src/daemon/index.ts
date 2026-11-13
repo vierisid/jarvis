@@ -3414,6 +3414,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'desktop_click':        return `Clicking ${trim(args.element_id || args.label || 'element', 50)}`;
           case 'desktop_type':         return `Typing "${trim(args.text, 50)}"`;
           case 'desktop_press_keys':   return `Pressing ${trim(args.keys || args.key, 20)}`;
+          case 'desktop_pointer':      return args.action === 'drag' ? 'Dragging on screen'
+            : String(args.action ?? '').startsWith('scroll') ? 'Scrolling' : 'Clicking on screen';
           case 'desktop_launch_app':   return `Launching ${trim(args.name || args.app || args.path, 40)}`;
           case 'desktop_focus_window': return `Focusing ${trim(args.title || args.window || (args.pid ? `PID ${args.pid}` : 'window'), 40)}`;
           // Filesystem / shell

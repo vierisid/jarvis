@@ -829,3 +829,51 @@ describe('second batch of the edge-case audit', () => {
     expect(h.line()).toMatchObject({ kind: 'sheet', stay: true });
   });
 });
+
+describe('a spoken instruction that ran past a minute', () => {
+  const cutShort = async (h: ReturnType<typeof harness>, words: string): Promise<void> => {
+    h.asks.listen('t1');
+    await settle();
+    h.asks.released('t1');
+    await settle();
+    h.asks.words('t1', words, { cut: true });
+    await settle();
+    await h.advance(900);
+  };
+
+  test('is shown whole and asked about before anything runs, and a yes runs it once', async () => {
+    const h = harness();
+    await cutShort(h, 'delete the old exports in Downloads but not');
+    // Nothing has run: the words may stop in the middle of a sentence.
+    expect(h.door.texts()).toEqual([]);
+    const sheet = h.line();
+    expect(sheet).toMatchObject({ kind: 'sheet', yes: 'go on', stay: true });
+    expect(h.said()).toBe('I stopped listening after a minute. Go on with what I heard?');
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    expect(paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : []).toEqual(['delete the old exports in Downloads but not']);
+    expect(row(h).state).toBe('heard');
+    await h.answer('yes');
+    expect(h.door.texts()).toEqual(['delete the old exports in Downloads but not']);
+    expect(row(h).state).toBe('running');
+    expect(h.line()).toMatchObject({ kind: 'work' });
+  });
+
+  test('a no turns it away: nothing runs, then or later', async () => {
+    const h = harness();
+    await cutShort(h, 'delete the old exports in Downloads but not');
+    await h.answer('no');
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'dismissed', note: 'It ran past a minute, and you turned it away.' });
+    expect(h.line()).toBeNull();
+    await h.advance(60_000);
+    expect(h.door.texts()).toEqual([]);
+  });
+
+  test('words that were not cut short run as before, with no question', async () => {
+    const h = harness();
+    await h.speak('t1', 'what is two plus two');
+    await h.advance(900);
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    expect(h.door.texts()).toEqual(['what is two plus two']);
+  });
+});

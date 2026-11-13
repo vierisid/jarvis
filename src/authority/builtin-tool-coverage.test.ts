@@ -45,7 +45,7 @@ describe('builtin tool Authority coverage', () => {
   test('a tool that acts on the desktop or browser is never gated as a read', () => {
     // Tools whose effect reaches outside the daemon must clear more than
     // level 1. This is the property `ui_act` violated.
-    const actors = ['ui_act', 'desktop_click', 'desktop_type', 'desktop_press_keys',
+    const actors = ['ui_act', 'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_pointer',
       'desktop_launch_app', 'desktop_focus_window', 'browser_click', 'browser_type', 'run_command',
       'run_skill', 'record_skill'];
     for (const name of actors) {
@@ -153,8 +153,8 @@ describe('daemon-registered tool Authority coverage', () => {
     'capture_screen', 'commitments', 'content_pipeline', 'create_document',
     'delegate_task',
     'desktop_click', 'desktop_find_element', 'desktop_focus_window', 'desktop_launch_app',
-    'desktop_list_windows', 'desktop_press_keys', 'desktop_screenshot', 'desktop_snapshot',
-    'desktop_type',
+    'desktop_list_windows', 'desktop_pointer', 'desktop_press_keys', 'desktop_screenshot',
+    'desktop_snapshot', 'desktop_type',
     'get_clipboard', 'get_system_info', 'list_directory', 'list_sidecars',
     'manage_agents', 'manage_goals', 'manage_skills', 'manage_workflow',
     'read_file', 'record_skill', 'request_approval', 'research_queue',

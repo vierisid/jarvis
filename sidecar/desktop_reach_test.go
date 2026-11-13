@@ -44,6 +44,26 @@ func TestKeysBlockedErrorIsNotStartedOnlyWhenNothingWasDone(t *testing.T) {
 	}
 }
 
+func TestTypeLineBreakIsSoft(t *testing.T) {
+	for _, c := range []struct {
+		params map[string]any
+		soft   bool
+		ok     bool
+	}{
+		{map[string]any{}, false, true},
+		{map[string]any{"line_break": nil}, false, true},
+		{map[string]any{"line_break": "enter"}, false, true},
+		{map[string]any{"line_break": "shift_enter"}, true, true},
+		{map[string]any{"line_break": "ctrl_enter"}, false, false},
+		{map[string]any{"line_break": true}, false, false},
+	} {
+		soft, err := typeLineBreakIsSoft(c.params)
+		if soft != c.soft || (err == nil) != c.ok {
+			t.Errorf("typeLineBreakIsSoft(%v) = %v, %v; want %v, ok %v", c.params, soft, err, c.soft, c.ok)
+		}
+	}
+}
+
 func TestPickWindowOfPid(t *testing.T) {
 	wins := []pidWindow{{Hwnd: 10, Minimized: true}, {Hwnd: 11}, {Hwnd: 12}}
 	if got := pickWindowOfPid(wins, 12); got != 12 {

@@ -79,6 +79,11 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 	if text == "" {
 		return nil, fmt.Errorf("missing required parameter: text")
 	}
+	// How a line break in the text is typed (desktop_reach.go).
+	softBreak, err := typeLineBreakIsSoft(params)
+	if err != nil {
+		return nil, fmt.Errorf("type_text refused, nothing was typed: %w", err)
+	}
 
 	// If element_id is given, click it first to focus
 	clicked := ""
@@ -105,7 +110,7 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 	// Native SendInput — replaces a per-call PowerShell spawn running
 	// SendKeys, which was slow (~250-500ms overhead), lossy on long/fast
 	// text, and required metacharacter escaping.
-	if err := typeTextNative(text); err != nil {
+	if err := typeTextNative(text, softBreak); err != nil {
 		return nil, fmt.Errorf("type_text failed: %w", err)
 	}
 	// Which window that was, as a number and a fixed word: nothing read from

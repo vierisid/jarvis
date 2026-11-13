@@ -31,7 +31,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; mine?: (id: string) => boolean } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; where?: (request: ApprovalRequest) => Promise<string | null>; mine?: (id: string) => boolean } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -80,6 +80,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
     openDashboard: (from) => { opened.push(from); },
     log: (line) => logs.push(line),
     describe: options.describe,
+    where: options.where,
     mine: options.mine,
     clock,
   });
@@ -635,6 +636,60 @@ describe('what the sheet says will be done', () => {
       'Review click on browser element [12] "Send" in Gmail. UI hints: send_email.', 'write_file', 'element_id: 12', 'action: click',
     ]);
     expect(h.approvals.getRequest(made.id)!.status).toBe('pending');
+  });
+
+  const click = (h: ReturnType<typeof harness>) => h.approvals.createRequest({
+    agentId: 'agent-1', agentName: 'PA', toolName: 'desktop_click', toolArguments: { element_id: 12 },
+    actionCategory: 'control_app', urgency: 'normal', reason: 'needs review',
+    context: JSON.stringify({ confirm: 'always', intent: 'Review desktop_click on element [12].' }),
+    executionMode: 'deferred', principal: PRINCIPAL,
+  });
+  const paperOf = (h: ReturnType<typeof harness>): string[] => {
+    const sheet = h.line();
+    const paper = sheet?.kind === 'sheet' ? sheet.blocks.find((block) => block.kind === 'paper') : null;
+    return paper?.kind === 'paper' ? paper.lines.map((parts) => parts.join('')) : [];
+  };
+
+  test('a click says what on the screen it lands on, above the exact action', async () => {
+    const asked: string[] = [];
+    const h = harness({ where: async (request) => { asked.push(request.tool_name); return 'Button "Send" in "Inbox - Outlook" (olk)'; } });
+    click(h);
+    await h.sync();
+    expect(asked).toEqual(['desktop_click']);
+    expect(paperOf(h)).toEqual([
+      'On screen: Button "Send" in "Inbox - Outlook" (olk)', 'Review desktop_click on element [12].', 'desktop_click', 'element_id: 12',
+    ]);
+  });
+
+  test('what the screen calls it is shown as one short line with nothing hidden in it', async () => {
+    const h = harness({ where: async () => `Button "Pay\u200b now"\r\n\u202eevil ${'x'.repeat(400)}` });
+    click(h);
+    await h.sync();
+    const first = paperOf(h)[0]!;
+    expect(first.startsWith('On screen: Button "Pay now" evil x')).toBe(true);
+    expect(/[\u200b\u202e\r\n]/.test(first)).toBe(false);
+    expect([...first].length).toBeLessThanOrEqual('On screen: '.length + 160);
+  });
+
+  test('a machine that cannot say, or says it too late, leaves the sheet as it was', async () => {
+    const silent = harness({ where: async () => null });
+    click(silent);
+    await silent.sync();
+    expect(paperOf(silent)).toEqual(['Review desktop_click on element [12].', 'desktop_click', 'element_id: 12']);
+
+    const broken = harness({ where: async () => { throw new Error('the desktop app does not know describe_target'); } });
+    click(broken);
+    await broken.sync();
+    expect(paperOf(broken)).toEqual(['Review desktop_click on element [12].', 'desktop_click', 'element_id: 12']);
+    expect(broken.logs.some((line) => line.includes('could not be read'))).toBe(true);
+
+    const slow = harness({ where: () => new Promise<string | null>(() => {}) });
+    click(slow);
+    await slow.sync();
+    // Nothing on the notch yet: it waits for the place, but not for long.
+    expect(slow.line()).toBeNull();
+    await slow.advance(1500);
+    expect(paperOf(slow)).toEqual(['Review desktop_click on element [12].', 'desktop_click', 'element_id: 12']);
   });
 
   test('a tool that wrote no sentence of its own is never one line with its name: its arguments are on the sheet', async () => {

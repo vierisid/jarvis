@@ -130,7 +130,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   const filler = (said: string): boolean =>
     NOTCH_TALK_FILLER.has(said.toLowerCase().normalize('NFD').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim());
 
-  async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number, voicedMs: number): Promise<void> {
+  async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number, voicedMs: number, cut = false): Promise<void> {
     const provider = deps.stt();
     if (!provider) { deps.asks.nothing(talkKey, 'no_stt'); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -143,6 +143,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       // The length, never the words: a log is not the place for what was said.
       log(`[notch] a recording was made into ${said.length} characters`);
       if (!hasSpokenContent(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) deps.asks.nothing(talkKey, 'silence');
+      else if (cut) deps.asks.words(talkKey, said, { cut: true });
       else deps.asks.words(talkKey, said);
     } catch (error) {
       log(`[notch] a recording could not be made into words: ${error instanceof Error ? error.message : String(error)}`);
@@ -194,13 +195,17 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     // What was measured, never what was said. The desktop app's own log has
     // the levels it judged the voice by (sidecar/notch_talk.go).
     log(`[notch] a recording ended: ${Number(payload.duration_ms ?? 0)} ms long, ${voicedMs} ms of voice, ${pcm.length} bytes of sound, ${String(payload.reason ?? 'released')}`);
-    if (payload.reason === 'cap') { deps.asks.nothing(talkKey, 'too_long'); return; }
+    // Listening stopped by itself at the limit. The minute that was said is
+    // made into words and asked about (asks.ts); it used to be thrown away.
+    // A desktop app from before that sends no sound for it: then it is said.
+    const cut = payload.reason === 'cap';
+    if (cut && pcm.length < 3200) { deps.asks.nothing(talkKey, 'too_long'); return; }
     if (!(voicedMs >= NOTCH_TALK_MIN_VOICED_MS) || pcm.length < 3200) {
       deps.asks.nothing(talkKey, voicedMs > 0 ? 'too_little' : 'silence');
       return;
     }
     const sampleRate = Number(payload.sample_rate ?? 16_000) || 16_000;
-    void transcribe(talkKey, pcm, sampleRate, voicedMs);
+    void transcribe(talkKey, pcm, sampleRate, voicedMs, cut);
   });
 
   let pretended = 0;

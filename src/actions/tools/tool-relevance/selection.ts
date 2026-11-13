@@ -98,10 +98,10 @@ export const TRIGGER_GROUPS: readonly TriggerGroup[] = [
   },
   {
     tools: ['desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app',
-      'desktop_focus_window', 'ui_act'],
+      'desktop_focus_window', 'desktop_pointer', 'ui_act'],
     words: ['open', 'launch', 'start', 'click', 'type', 'press', 'key', 'keyboard',
       'notepad', 'app', 'application', 'close', 'focus', 'switch', 'element',
-      'foreground', 'minimize', 'maximize'],
+      'foreground', 'minimize', 'maximize', 'scroll', 'drag'],
   },
   {
     tools: ['run_command'],

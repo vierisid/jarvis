@@ -1,7 +1,7 @@
 /**
  * Desktop Tools — Desktop Automation via Sidecar RPC or Local Execution
  *
- * 9 tools for controlling desktop applications. Each tool accepts a `target`
+ * 10 tools for controlling desktop applications. Each tool accepts a `target`
  * parameter to route to a specific sidecar. Without `target`, executes locally
  * via the platform AppController when available. Respects --no-local-tools flag.
  *
@@ -14,7 +14,7 @@ import { recordActionVerification, observedWindow } from '../action-verification
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget, captureMachineApprovalGuard } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, routeToSidecarPrepared, resolveToolTarget, captureMachineApprovalGuard, lastScreenPicture } from './sidecar-route.ts';
 import { withTrustedTrailer } from '../../roles/untrusted.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
@@ -504,7 +504,7 @@ export const desktopClickTool: ToolDefinition = {
  */
 export const desktopTypeTool: ToolDefinition = {
   name: 'desktop_type',
-  description: 'Type text into a UI element. Optionally provide an element_id to click and focus it first. Without element_id, types into whatever is currently focused, so bring the window you mean to the front first. On Windows the reply names the window that received the text as foreground_pid: check it is the PID you meant, and if it is not, say that the text went to another window. delivery \"unconfirmed\" means that window could not be checked and probably did not receive the text: verify with a snapshot before going on.',
+  description: 'Type text into a UI element. Optionally provide an element_id to click and focus it first. Without element_id, types into whatever is currently focused, so bring the window you mean to the front first. A line break in the text is typed as the Enter key, which in a chat app sends the message: see line_break. On Windows the reply names the window that received the text as foreground_pid: check it is the PID you meant, and if it is not, say that the text went to another window. delivery \"unconfirmed\" means that window could not be checked and probably did not receive the text: verify with a snapshot before going on.',
   category: 'desktop',
   failureIsOutsideContent: true,
   parameters: {
@@ -522,6 +522,12 @@ export const desktopTypeTool: ToolDefinition = {
       type: 'number',
       description: 'Optional [id] of element to click before typing (from desktop_snapshot)',
       required: false,
+    },
+    line_break: {
+      type: 'string',
+      description: 'How a line break in the text is typed (Windows): "enter" (default) presses Enter, "shift_enter" presses Shift+Enter. In a chat app (WhatsApp, Slack, Teams, Discord) Enter SENDS the message, so text of several lines must use "shift_enter" there, or its first line is sent alone.',
+      required: false,
+      enum: ['enter', 'shift_enter'],
     },
   },
   execute: async (params) => {
@@ -790,6 +796,129 @@ export const desktopFindElementTool: ToolDefinition = {
   },
 };
 
+/** The actions `desktop_pointer` takes. Pinned to the sidecar's own list by tool-enums.test.ts. */
+export const DESKTOP_POINTER_ACTIONS = ['click', 'double_click', 'right_click', 'scroll_up', 'scroll_down', 'drag'] as const;
+
+/**
+ * Where a pixel of a picture is, as a fraction of the picture: the middle of
+ * that pixel. Null when it is not a pixel of the picture at all.
+ */
+export function pictureFraction(pixel: unknown, size: number): number | null {
+  if (typeof pixel !== 'number' || !Number.isFinite(pixel) || pixel < 0 || pixel >= size) return null;
+  return (Math.floor(pixel) + 0.5) / size;
+}
+
+/**
+ * A `desktop_pointer` call as the sidecar takes it: the place as fractions of
+ * the main display, worked out from the picture the model last saw of that
+ * machine's screen. A string is why it cannot be worked out; nothing has been
+ * done then.
+ */
+export function pointerRequest(
+  params: Record<string, unknown>,
+  picture: { width: number; height: number } | null,
+): Record<string, unknown> | string {
+  if (!picture) {
+    return 'there is no recent desktop_screenshot of that screen to read a place off, so nothing was done. '
+      + 'Take a desktop_screenshot, then give x and y as pixels in that picture.';
+  }
+  const size = `${picture.width}x${picture.height}`;
+  const fx = pictureFraction(params.x, picture.width);
+  const fy = pictureFraction(params.y, picture.height);
+  if (fx === null || fy === null) {
+    return `x and y must be a pixel of the last desktop_screenshot, which is ${size} (x from 0 to ${picture.width - 1}, y from 0 to ${picture.height - 1}), so nothing was done.`;
+  }
+  const action = typeof params.action === 'string' && params.action ? params.action : 'click';
+  const request: Record<string, unknown> = { action, fx, fy };
+  if (action === 'drag') {
+    const toFx = pictureFraction(params.to_x, picture.width);
+    const toFy = pictureFraction(params.to_y, picture.height);
+    if (toFx === null || toFy === null) {
+      return `a drag needs to_x and to_y, a pixel of the last desktop_screenshot (${size}) where it ends, so nothing was done.`;
+    }
+    request.to_fx = toFx;
+    request.to_fy = toFy;
+  }
+  if (action === 'scroll_up' || action === 'scroll_down') {
+    const amount = params.amount ?? 3;
+    if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > 30) {
+      return 'amount must be a whole number of wheel notches from 1 to 30, so nothing was done.';
+    }
+    request.amount = amount;
+  }
+  return request;
+}
+
+/**
+ * Acting at a place on the screen, for windows that list no element to act on.
+ *
+ * Its success reply is `{success, action, screen_x, screen_y, window_pid}`: our
+ * own words and numbers, nothing the target machine wrote, so like desktop_type
+ * and desktop_press_keys it is not framed by name and declares only that its
+ * failure text may carry outside content. What is at the place is never read
+ * back to the model here; the person who approves it is shown that
+ * (`describe_target`, on the notch's sheet).
+ */
+export const desktopPointerTool: ToolDefinition = {
+  name: 'desktop_pointer',
+  description: 'Click, double-click, right-click, scroll or drag at a place on the screen. For windows whose snapshot lists nothing to act on: a game, a store or launcher page, a canvas, a video. Take a desktop_screenshot first: x and y are pixels in that picture, counted from its top left corner (its size is in its caption). Whenever desktop_snapshot does list the element, use desktop_click with its [id] instead: an [id] is exact, a place read off a picture is not. After acting, take a new desktop_screenshot to see what happened; never assume it worked. Windows only.',
+  category: 'desktop',
+  failureIsOutsideContent: true,
+  parameters: {
+    target: {
+      type: 'string',
+      description: 'Sidecar name or ID to route this command to',
+      required: false,
+    },
+    x: {
+      type: 'number',
+      description: 'Pixels from the left edge of the last desktop_screenshot',
+      required: true,
+    },
+    y: {
+      type: 'number',
+      description: 'Pixels from the top edge of the last desktop_screenshot',
+      required: true,
+    },
+    action: {
+      type: 'string',
+      description: 'What to do there (default click). scroll_up and scroll_down turn the wheel over that place; drag presses there and lets go at to_x, to_y.',
+      required: false,
+      enum: [...DESKTOP_POINTER_ACTIONS],
+    },
+    to_x: {
+      type: 'number',
+      description: 'For drag: pixels from the left edge of the picture where the drag ends',
+      required: false,
+    },
+    to_y: {
+      type: 'number',
+      description: 'For drag: pixels from the top edge of the picture where the drag ends',
+      required: false,
+    },
+    amount: {
+      type: 'number',
+      description: 'For scroll_up and scroll_down: wheel notches, 1 to 30 (default 3; one notch is about three lines)',
+      required: false,
+    },
+  },
+  execute: async (params) => {
+    const refuse = (code: string, message: string): never => {
+      throw new ActionOutcomeError({ status: 'blocked', code, message: `Error: ${message}`, effect: 'not_started' });
+    };
+    const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_pointer');
+    if (!target) {
+      return refuse('DESKTOP_POINTER_UNSUPPORTED', 'desktop_pointer needs the Jarvis desktop app on a Windows computer, and none is connected, so nothing was done.');
+    }
+    // The place is worked out once the machine is known to be there to act
+    // on: a machine that is offline is said to be offline, not to lack a picture.
+    return routeToSidecarPrepared(target, 'pointer_action', 'desktop', (sidecarId) => {
+      const request = pointerRequest(params, lastScreenPicture(sidecarId));
+      return typeof request === 'string' ? { refuse: request, code: 'DESKTOP_POINTER_PLACE' } : request;
+    });
+  },
+};
+
 /**
  * All desktop tools in a single array — platform-agnostic.
  */
@@ -803,10 +932,11 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   desktopScreenshotTool,
   desktopFocusWindowTool,
   desktopFindElementTool,
+  desktopPointerTool,
 ];
 
 // The approval stays on the device/session the user reviewed. This also refuses
 // a local-to-remote default change; native element guards remain authoritative.
-for (const tool of [desktopClickTool, desktopTypeTool, desktopPressKeysTool, desktopLaunchAppTool, desktopFocusWindowTool]) {
+for (const tool of [desktopClickTool, desktopTypeTool, desktopPressKeysTool, desktopLaunchAppTool, desktopFocusWindowTool, desktopPointerTool]) {
   tool.captureApprovalGuard = params => captureMachineApprovalGuard(params.target, 'desktop', tool.name);
 }

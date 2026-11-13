@@ -232,8 +232,9 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('- `desktop_list_windows` — list all visible windows (titles, PIDs, positions)');
   lines.push('- `desktop_snapshot` — get the UI element tree of a window. Each element has an [id]. Optional `depth` param to control tree depth (default: 8).');
   lines.push('- `desktop_click` — click or interact with an element by [id]. Optional `action` param: click (default), double_click, right_click, invoke, toggle, select, set_value, get_value, expand, collapse, scroll_into_view, focus. Optional `value` param for set_value.');
-  lines.push('- `desktop_type` — type text into the focused element. Optional `element_id` to click-focus first.');
+  lines.push('- `desktop_type` — type text into the focused element. Optional `element_id` to click-focus first. A line break is typed as Enter, which sends the message in a chat app: pass `line_break: "shift_enter"` there.');
   lines.push('- `desktop_press_keys` — press key combos (e.g., "ctrl,s", "alt,f4", "enter")');
+  lines.push('- `desktop_pointer` — click, double-click, right-click, scroll or drag at a place read off a `desktop_screenshot` (Windows). Only for windows whose snapshot lists nothing to act on (a game, a store page, a canvas, a video): an element [id] is exact, a place read off a picture is not.');
   lines.push('- `desktop_find_element` — search for elements by property (name, control_type, class_name, automation_id) without scanning the full tree');
   lines.push('- `desktop_launch_app` — launch an application by name or path');
   lines.push('- `desktop_focus_window` — bring a window to the foreground by PID');

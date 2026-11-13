@@ -183,7 +183,8 @@ const INERT_TOOLS: ReadonlySet<string> = new Set([
   // `{success, chars}` on Windows and `{success: true}` elsewhere for
   // type_text, `{success, keys}` for press_keys plus our own `xdotool_combo`
   // conversion of those keys on Linux. Nothing the target machine wrote, on
-  // any of the three platforms. They are NOT floor-eligible -- at rank 505 they fail
+  // any of the three platforms. (On Windows both now add `foreground_pid`, a
+  // number, and `delivery`, one of two fixed words: still nothing it wrote.) They are NOT floor-eligible -- at rank 505 they fail
   // `isFloorEligible` -- but they are correctly `inert` because they bring
   // nothing in. Their FAILURE text can carry remote bytes, which is a
   // `failureIsOutsideContent` declaration on each tool and deliberately not a
@@ -199,6 +200,10 @@ const INERT_TOOLS: ReadonlySet<string> = new Set([
   // the opposite of the truth.
   'desktop_type',
   'desktop_press_keys',
+  // The same holds for acting at a place on the screen: its reply is
+  // `{success, action, screen_x, screen_y, window_pid}`, our own words and
+  // numbers. What is at the place is never read back into it.
+  'desktop_pointer',
 ]);
 
 /**

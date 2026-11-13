@@ -12,7 +12,7 @@ function harness(stt: NotchTalkDeps['stt'] = () => ({ transcribe: async () => 's
   const asks: NotchTalkDeps['asks'] = {
     listen: (id) => { calls.push(`listen ${id}`); return id; },
     released: (id) => { calls.push(`released ${id}`); return !turnedAway.has(id); },
-    words: (id, text) => { calls.push(`words ${id} "${text}"`); },
+    words: (id, text, more) => { calls.push(`words ${id} "${text}"${more?.cut ? ' cut' : ''}`); },
     nothing: (id, why) => { calls.push(`nothing ${id} ${why}`); },
     dropped: (id) => { calls.push(`dropped ${id}`); },
     tell: (parts) => { calls.push(`tell ${parts.join('')}`); },
@@ -108,10 +108,19 @@ describe('a recording from the desktop app', () => {
     }
   });
 
-  test('a recording that ran into the limit is not acted on', async () => {
+  test('a recording that ran into the limit is made into words, marked as cut short', async () => {
     const h = harness();
     h.event({ phase: 'start', talk_id: 'a1' });
     h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 50_000, reason: 'cap' }, true);
+    await settle();
+    // The minute is not thrown away, and is not taken as a whole instruction either.
+    expect(h.calls.at(-1)).toBe('words pc:a1 "send Leo the numbers" cut');
+  });
+
+  test('from a desktop app that sends no sound at the limit, it is said to have been too long', async () => {
+    const h = harness();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 50_000, reason: 'cap' });
     await settle();
     expect(h.calls.at(-1)).toBe('nothing pc:a1 too_long');
   });
