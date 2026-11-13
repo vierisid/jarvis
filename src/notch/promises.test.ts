@@ -158,7 +158,7 @@ describe('the line with its fuse', () => {
   test('a fuse takes the notch from whatever is on it, which goes back to the count', async () => {
     const h = harness();
     h.approvals.createRequest({ agentId: 'a', agentName: 'PA', toolName: 'write_file', toolArguments: {}, actionCategory: 'write_data',
-      urgency: 'normal', reason: 'Write the note', context: '' });
+      urgency: 'normal', reason: 'Write the note', context: JSON.stringify({ intent: 'Write file' }) });
     h.real.approvals.sync();
     await settle();
     expect(h.line()?.kind).toBe('offer');

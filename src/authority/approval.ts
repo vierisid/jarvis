@@ -170,8 +170,11 @@ export function approvalIsPayment(request: Pick<ApprovalRequest, 'action_categor
  * the executor's own check all ask here.
  */
 export function approvalDashboardOnly(request: Pick<ApprovalRequest, 'context' | 'action_category'>): 'click_only' | 'payment' | null {
-  if (approvalNeedsClick(request)) return 'click_only';
+  // A payment first: one that is also an action on screen (a click on "Pay
+  // now") is still a payment, and what may approve an action on screen may
+  // not approve it.
   if (approvalIsPayment(request)) return 'payment';
+  if (approvalNeedsClick(request)) return 'click_only';
   return null;
 }
 

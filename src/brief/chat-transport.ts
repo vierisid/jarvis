@@ -46,6 +46,9 @@ function ref(value: Record<string, unknown>): BriefTurnRef {
   return { conversationId: id(value.conversationId), turnId: id(value.turnId), requestId: id(value.requestId) };
 }
 
+/** Turn and request ids only the brain itself may make (submit). */
+const RESERVED_TURN_ID = /^notch-/i;
+
 /** Rejections echo only valid routing IDs, never arbitrary client payloads. */
 export function safeChatIdentity(payload: unknown): Partial<BriefTurnRef> {
   const data = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
@@ -144,6 +147,9 @@ export class BriefChatTransport implements BriefProvider {
           const ids = attachmentIds(data.attachmentIds);
           if (ids.length && !capabilities.snapshot().capabilities.chatAttachments.enabled) throw new ConversationRequestError('Attachments are not enabled', 409);
           const identity = ref(data);
+          // Ids that begin "notch-" are made inside the brain, for a turn the
+          // owner started on the notch (submit, below). A socket cannot claim one.
+          if (RESERVED_TURN_ID.test(identity.turnId) || RESERVED_TURN_ID.test(identity.requestId)) throw new ConversationRequestError('Invalid chat identity');
           if (typeof data.text !== 'string' || (!data.text.trim() && !ids.length) || Buffer.byteLength(data.text) > 65_536 ||
               (data.speak !== undefined && typeof data.speak !== 'boolean')) throw new ConversationRequestError('Invalid chat text or speech setting');
           const input: BriefSendTurn = { ...identity, text: data.text, speak: Boolean(data.speak), attachmentIds: ids };

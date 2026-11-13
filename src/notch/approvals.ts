@@ -45,7 +45,7 @@
  * the toast find them: nothing in the product announces them to listeners.
  */
 import { approvalIntentParts, boundedApprovalLabel, toastColumns, toastLookAlike } from '../authority/approval-delivery.ts';
-import { approvalDashboardOnly, executionState } from '../authority/approval.ts';
+import { approvalDashboardOnly, approvalIntentFromContext, approvalNeedsClick, executionState } from '../authority/approval.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { impactFromCategory } from '../roles/authority.ts';
@@ -113,6 +113,16 @@ export function notchApprovalFallback(request: Pick<ApprovalRequest, 'action_cat
   }
 }
 
+/** Whether the call carries any argument at all. One that cannot be read counts as carrying some. */
+function hasArguments(request: Pick<ApprovalRequest, 'tool_arguments'>): boolean {
+  try {
+    const args: unknown = JSON.parse(request.tool_arguments);
+    return !(args && typeof args === 'object' && !Array.isArray(args) && Object.keys(args).length === 0);
+  } catch {
+    return true;
+  }
+}
+
 /**
  * The exact action, for the paper under the plain words. For a command it is
  * the gate's own sentence, which holds every character of it. For an action
@@ -120,8 +130,20 @@ export function notchApprovalFallback(request: Pick<ApprovalRequest, 'action_cat
  * arguments are written out as they will be used.
  */
 export function notchApprovalExact(request: ApprovalRequest): string[] {
-  if (approvalDashboardOnly(request) !== 'click_only') return [notchApprovalSentence(request)];
-  const lines = [request.tool_name];
+  // The model's own one-line intent is the whole of what it declared.
+  if (request.tool_name === 'request_approval') return [notchApprovalSentence(request)];
+  const gate = approvalIntentFromContext(request);
+  const onScreen = approvalNeedsClick(request);
+  // A sentence the tool's own gate wrote for a card holds the action whole
+  // (a command with every character of it): it is the exact action.
+  if (gate && !onScreen) return [notchApprovalSentence(request)];
+  // An action on screen: the gate's sentence says what is acted on (the
+  // element's label, the app, what it may send or delete), and the arguments
+  // say with what. Both are shown. A tool with no sentence of its own is
+  // never shown by its name alone: its arguments are what is approved.
+  // (With no arguments at all its name is the whole of it.)
+  if (!gate && !onScreen && !hasArguments(request)) return [notchApprovalSentence(request)];
+  const lines = gate ? [notchApprovalSentence(request), request.tool_name] : [request.tool_name];
   try {
     const args: unknown = JSON.parse(request.tool_arguments);
     if (args && typeof args === 'object' && !Array.isArray(args)) {
@@ -163,9 +185,11 @@ export function notchApprovalWay(request: ApprovalRequest): NotchApprovalWay {
   // that screen: plain words, and the exact action under them.
   if (only === 'click_only') return 'sheet';
   // The model's own one-line intent is already plain words.
-  if (request.tool_name !== 'request_approval' && columns > NOTCH_PLAIN_LINE_COLUMNS) return 'sheet';
-  if (columns > NOTCH_APPROVABLE_COLUMNS) return 'sheet';
-  return 'key';
+  if (request.tool_name === 'request_approval') return columns > NOTCH_APPROVABLE_COLUMNS ? 'sheet' : 'key';
+  // A tool that wrote no sentence of its own would be a line with its name
+  // and nothing else ("Write file?"): it is a sheet, with its arguments.
+  if (approvalIntentFromContext(request) === null && hasArguments(request)) return 'sheet';
+  return columns > NOTCH_PLAIN_LINE_COLUMNS ? 'sheet' : 'key';
 }
 
 /** A sentence cut for a line that only points at the dashboard, with a mark that it was cut. */

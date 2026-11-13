@@ -19,9 +19,12 @@ describe('what the agent is told about a turn from the notch', () => {
   test('it says an app is opened without asking, and what still needs a yes', () => {
     expect(NOTCH_TURN_NOTE).toContain('Opening an app needs no approval');
     expect(NOTCH_TURN_NOTE).toContain('do not call request_approval before opening an app');
-    for (const still of ['deleting', 'sending an email or a message', 'paying', 'installing', 'changing a setting']) {
+    for (const still of ['deletes', 'sends an email or a message', 'pays', 'installs or removes software', 'changes a setting']) {
       expect(NOTCH_TURN_NOTE).toContain(still);
     }
+    // A send or a payment made by a click is still one: the model must say so first.
+    expect(NOTCH_TURN_NOTE).toContain('a click or a key press in an app or a browser that sends or pays is a send or a payment');
+    expect(NOTCH_TURN_NOTE).not.toContain('clicking where they told you to');
   });
 });
 

@@ -192,7 +192,17 @@ What holds for all of them:
     chat reply or a toast cannot show what it would do. The notch is on the
     screen the action happens on and shows it as in 38, so its yes counts
     (`approvalDecidableBy`, asked by the decision function and by the
-    executor). Every other surface is refused as before.
+    executor). Every other surface is refused as before. A click that pays
+    is a payment before it is an action on screen: never the notch. On the
+    sheet, what the product says is acted on (the element's label, the app,
+    what it may send or delete) comes first, then the tool and its
+    arguments. A tool that wrote no sentence of its own is never shown by
+    its name alone when it has arguments: they are what is approved.
+41. **The notch's standing cannot be borrowed.** Turn and request ids that
+    begin `notch-` are made only inside the brain (`BriefChatTransport.submit`);
+    a dashboard socket that sends one is refused. What the notch starts on
+    hearing a turn's event runs outside that turn, so it does not keep the
+    turn's standing after the turn is over.
 40. **Opening an app is not asked about.** Decided by the owner on 13
     November 2026, with the operating system as the measure: it does not ask
     before it opens an app; it asks before a delete, a payment, or a program
