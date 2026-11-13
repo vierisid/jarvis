@@ -15,6 +15,10 @@ import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
 import type { ComposerLlmClient } from '../actions/tools/workflow-composer';
+import { LLMProviderError } from '../llm/provider';
+import { LLMManager } from '../llm/manager';
+import { UsejarvisAIProvider } from '../llm/usejarvis';
+import { createComposerLlmClient } from '../actions/tools/composer-llm';
 import { currentOrigin, runWithOrigin } from '../llm/origin';
 import { currentAdmission, runWithAdmission } from '../llm/background-budget';
 
@@ -170,6 +174,45 @@ test('report_blocked preserves actionable reasons without attaching or running a
   const { job } = p.submit(input); await p.idle();
   expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', blocker: { code: 'composition_blocked', details: [expect.stringContaining('destination')] } });
   expect(count('flow')).toBe(0); expect(count('flow_run')).toBe(0);
+});
+
+test.each([
+  ['auth', 'provider_auth', 'credentials'],
+  ['rate_limit', 'provider_rate_limit', 'limit'],
+] as const)('a %s provider failure gets the chat guidance and its code, never the provider body', async (code, blockerCode, wording) => {
+  const p = provider({ async chat(): Promise<{ text: string }> { throw new LLMProviderError('PRIVATE BODY sk-secret', code); } });
+  const { job } = p.submit({ ...input, requestId: `provider-${code}` }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', workflow: null, blocker: { code: blockerCode, message: expect.stringContaining(wording), details: [] }, specification: { prompt: input.prompt } });
+  expect(JSON.stringify(failed)).not.toContain('PRIVATE'); expect(JSON.stringify(failed)).not.toContain('saved request');
+});
+
+test('a hosted plan failure through the real manager shows the hosted sentence and the billing code, never the body', async () => {
+  const manager = new LLMManager();
+  manager.registerProvider(Object.assign(new UsejarvisAIProvider('https://llm.usejarvis.test', 'sk-uj-secret'), {
+    async chat(): Promise<never> { throw new LLMProviderError('Usejarvis AI API error (401): PRIVATE sk-uj-secret', 'auth', undefined, undefined, 'Usejarvis AI needs an active plan.'); },
+  }));
+  manager.setTierMap({ high: { provider: 'usejarvis_ai', model: 'uj-chat' } });
+  const p = provider(createComposerLlmClient(manager));
+  const { job } = p.submit({ ...input, requestId: 'hosted-plan' }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', blocker: { code: 'provider_plan_inactive', message: expect.stringContaining('Usejarvis AI needs an active plan.'), details: [] } });
+  expect(JSON.stringify(failed)).not.toContain('PRIVATE'); expect(JSON.stringify(failed)).not.toContain('sk-uj');
+});
+
+test('an unclassified model call failure does not blame the request', async () => {
+  const p = provider({ async chat(): Promise<{ text: string }> { throw Error('PRIVATE PROVIDER DIAGNOSTIC'); } });
+  const { job } = p.submit({ ...input, requestId: 'unclassified' }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', blocker: { code: 'composition_failed', message: 'Jarvis could not finish preparing this workflow. Send the request again.' } });
+});
+
+test('an invalid composition says so in plain words and points back to the request', async () => {
+  const p = provider({ async chat() { return { text: '{PRIVATE MODEL RESPONSE' }; } });
+  const { job } = p.submit({ ...input, requestId: 'invalid-composition' }); await p.idle();
+  const failed = p.get(job.jobId);
+  expect(failed).toMatchObject({ state: 'failed', blocker: { code: 'composition_failed' }, specification: { prompt: input.prompt } });
+  expect(failed.blocker!.message).toContain('Edit the request'); expect(failed.blocker!.message).not.toContain('saved request');
 });
 
 test('provider errors and malformed responses stay out of the public failure receipt', async () => {

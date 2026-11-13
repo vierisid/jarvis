@@ -7,6 +7,8 @@ import { Plus } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import { BriefButton, BriefTooltip } from "../../components/controls";
 import { ConversationComposer } from "../../chat/composer/ConversationComposer";
+import { failureLinks } from "../../chat/message/ConversationMessages";
+import { targetHref } from "../../navigation/destinations";
 import type { BriefShellPort } from "../../contracts";
 import { RecentWorkflows } from "../recent-rows/RecentWorkflows";
 import type { RecentWorkflowBinding } from "../recent-rows/model";
@@ -91,6 +93,8 @@ function BoundCreation({ shell, binding, reducedMotion }: { shell: BriefShellPor
         <p>{notice}</p>
         {job?.blocker?.code === AI_PROVIDER_NEEDED_CODE && <AiSettingsLink />}
         {job?.blocker?.details?.length ? <ul>{job.blocker.details.map((detail, i) => <li key={i}>{detail}</li>)}</ul> : null}
+        {!unresolved && job?.blocker && Object.hasOwn(failureLinks, job.blocker.code) &&
+          <a data-failure-link href={targetHref(window.location.href, failureLinks[job.blocker.code]!.target)}>{failureLinks[job.blocker.code]!.label}</a>}
         {state.error && unresolved && !state.storageFailed && enabled && <BriefButton size="sm" disabled={state.busy} onClick={() => void controller.recover()}>Check request</BriefButton>}
         {!unresolved && job?.state === "draft_ready" && job.workflow && <BriefButton size="sm" variant="text" onClick={() => navigate({room:"workflow-draft",selection:{flowId:job.workflow!.flowId,versionId:job.workflow!.versionId}})}>Open draft</BriefButton>}
       </div>
