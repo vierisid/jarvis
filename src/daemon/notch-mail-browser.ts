@@ -11,6 +11,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { MailBrowser } from '../notch/mail/browser.ts';
 import type { NotchStudyDeps } from '../notch/mail/study-route.ts';
+import { servesCapability } from '../sidecar/capability-predicate.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 
 /** A page of mail can take a while to come up the first time. */
@@ -18,9 +19,7 @@ const MAIL_RPC_TIMEOUT = { initial: 45_000, max: 60_000 };
 
 /** The browser of the first connected desktop app that has one, or null. */
 export function notchMailBrowser(manager: Pick<SidecarManager, 'listSidecars' | 'dispatchRPC'>): MailBrowser | null {
-  const machine = manager.listSidecars().find((sidecar) => sidecar.connected
-    && sidecar.capabilities?.includes('browser')
-    && !sidecar.unavailable_capabilities?.some((missing) => missing.name === 'browser'));
+  const machine = manager.listSidecars().find((sidecar) => servesCapability(sidecar, 'browser'));
   if (!machine) return null;
   return {
     async navigate(url, options) {

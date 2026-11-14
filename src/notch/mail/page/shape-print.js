@@ -3,7 +3,9 @@
 // what comes back. Tags, classes, attribute names and counts. No text.
 const main = [...document.querySelectorAll('div[role="main"]')].find((node) => node.offsetParent !== null);
 const row = main ? main.querySelectorAll('tr.zA')[(args && args.row) || 0] : null;
-const hex = row && row.querySelector('[data-legacy-thread-id]') ? row.querySelector('[data-legacy-thread-id]').getAttribute('data-legacy-thread-id') : null;
+// args.id names a thread outright (an id is sixteen hex digits and says nothing of the mail).
+const hex = args && /^[0-9a-f]{16}$/.test(args.id || '') ? args.id
+  : row && row.querySelector('[data-legacy-thread-id]') ? row.querySelector('[data-legacy-thread-id]').getAttribute('data-legacy-thread-id') : null;
 if (!hex) throw new Error('no thread in that row');
 const key = typeof GLOBALS !== 'undefined' && Array.isArray(GLOBALS) && typeof GLOBALS[9] === 'string' ? GLOBALS[9] : null;
 if (!key) throw new Error('no key for this mailbox in the page');
@@ -27,20 +29,32 @@ const skeleton = (node, depth) => {
   }
   return head + (groups.length ? '{' + groups.map((group) => (group.times > 1 ? group.times + '×' : '') + group.text).join(' ') + '}' : '');
 };
+// Gmail lets no script turn text into a page (Trusted Types), so the browser is
+// asked to do the parsing itself: a request whose answer is a document.
+const fetchDocument = (url) => new Promise((resolve, reject) => {
+  const request = new XMLHttpRequest();
+  request.open('GET', url);
+  request.responseType = 'document';
+  request.withCredentials = true;
+  request.timeout = 20000;
+  request.onload = () => resolve(request);
+  request.onerror = () => reject(new Error('request failed'));
+  request.ontimeout = () => reject(new Error('request timed out'));
+  request.send();
+});
 const found = {};
 for (const [name, url] of Object.entries(ways)) {
   try {
     const started = Date.now();
-    const res = await fetch(url, { credentials: 'include' });
-    const html = await res.text();
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const request = await fetchDocument(url);
+    const doc = request.responseXML;
+    if (!doc) { found[name] = { status: request.status, document: false, type: (request.getResponseHeader('content-type') || '').split(';')[0] }; continue; }
     const messages = [...doc.querySelectorAll('table.message')];
     found[name] = {
-      status: res.status,
+      status: request.status,
       ms: Date.now() - started,
-      type: (res.headers.get('content-type') || '').split(';')[0],
-      length: html.length,
-      landed: new URL(res.url).hostname === 'mail.google.com' ? 'mail' : 'elsewhere',
+      type: (request.getResponseHeader('content-type') || '').split(';')[0],
+      landed: new URL(request.responseURL).hostname === 'mail.google.com' ? 'mail' : 'elsewhere',
       messages: messages.length,
       recipients: doc.querySelectorAll('.recipient').length,
       body: messages.length ? null : skeleton(doc.body, 5).slice(0, 1500),
@@ -52,7 +66,8 @@ for (const [name, url] of Object.entries(ways)) {
       }),
     };
   } catch (error) {
-    found[name] = { failed: String(error && error.name || 'error') };
+    // The reason in the browser's own words, without any address it may carry.
+    found[name] = { failed: String(error && error.name || 'error'), why: String(error && error.message || '').replace(/\S+:\/\/\S+/g, '(an address)').slice(0, 160) };
   }
 }
-return { rowCount: row.querySelector('span.bx0') ? 'has a count' : 'single', found };
+return { rowCount: row && row.querySelector('span.bx0') ? 'has a count' : 'single', found };

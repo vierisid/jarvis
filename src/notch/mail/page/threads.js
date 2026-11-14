@@ -41,41 +41,59 @@ const textOf = (root) => {
   return out.split('\n').map((line) => line.trim()).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 };
 
+// Gmail lets no script turn text into a page (Trusted Types), so the browser is
+// asked to do the parsing itself: a request whose answer is a document.
+const printed = (id) => new Promise((resolve) => {
+  const request = new XMLHttpRequest();
+  request.open('GET', `${base}?ui=2&ik=${key}&view=pt&search=all&th=${id}&hl=en`);
+  request.responseType = 'document';
+  request.withCredentials = true;
+  request.timeout = 25000;
+  request.onload = () => resolve(request);
+  request.onerror = () => resolve(null);
+  request.ontimeout = () => resolve(null);
+  request.send();
+});
+
 const one = async (id) => {
   const fail = (failed) => ({ id, failed, subject: '', messages: [] });
   if (!/^[0-9a-f]{16}$/.test(id)) return fail('no thread id');
-  let res;
-  try {
-    res = await fetch(`${base}?ui=2&ik=${key}&view=pt&search=all&th=${id}&hl=en`, { credentials: 'include' });
-  } catch {
-    return fail('could not be fetched');
-  }
-  if (!res.ok) return fail('status ' + res.status);
-  if (new URL(res.url).hostname !== 'mail.google.com') return fail('sent elsewhere');
-  const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+  const request = await printed(id);
+  if (!request) return fail('could not be fetched');
+  if (request.status !== 200) return fail('status ' + request.status);
+  if (new URL(request.responseURL).hostname !== 'mail.google.com') return fail('sent elsewhere');
+  const doc = request.responseXML;
+  if (!doc) return fail('not a page');
   const tables = [...doc.querySelectorAll('table.message')];
   if (!tables.length) return fail('no messages in the print page');
   const title = doc.querySelector('.maincontent font[size="+1"] b, .maincontent b');
   const messages = tables.map((table) => {
-    const head = table.querySelector('tr');
-    const cells = head ? [...head.querySelectorAll('td')] : [];
+    // The first row: who wrote it, and when. The second: who it went to. The third: what it says.
+    const rows = [...table.querySelectorAll(':scope > tbody > tr')];
+    const head = rows[0];
+    const cells = head ? [...head.children].filter((cell) => cell.tagName === 'TD') : [];
     const lines = [...table.querySelectorAll('.recipient div')].map((div) => div.textContent.trim());
     const line = (label) => (lines.find((entry) => entry.toLowerCase().startsWith(label + ':')) || '').slice(label.length + 1).trim();
-    const body = table.querySelector('table td') || table.querySelector('tr:last-child td');
+    // The third row holds a table of one cell: the message in its first block, and under it the list of files that came with it.
+    const cell = rows[2] ? rows[2].querySelector(':scope > td > table > tbody > tr > td') : null;
+    const body = cell ? (cell.querySelector(':scope > div') || cell) : null;
     return {
       from: cells[0] ? cells[0].textContent.trim() : '',
       to: line('to'),
       cc: line('cc'),
       at: when(cells[1] ? cells[1].textContent : ''),
       text: body ? textOf(body) : '',
+      files: cell ? cell.querySelectorAll('table.att').length : 0,
     };
   });
   return { id, subject: title ? title.textContent.trim() : '', messages };
 };
 
 const out = [];
-// A few at a time: Gmail answers these quickly, and not all at once.
-for (let at = 0; at < args.ids.length; at += 3) {
-  out.push(...await Promise.all(args.ids.slice(at, at + 3).map(one)));
+// Two at a time, with a breath between: asked faster than this for long, Gmail
+// starts answering with pages that have no mail in them.
+for (let at = 0; at < args.ids.length; at += 2) {
+  out.push(...await Promise.all(args.ids.slice(at, at + 2).map(one)));
+  await new Promise((resolve) => setTimeout(resolve, 250));
 }
 return out;

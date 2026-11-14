@@ -5,7 +5,8 @@
  *
  *   bun scripts/notch/mail-study.ts go [#place]        open Gmail in Jarvis's own browser
  *   bun scripts/notch/mail-study.ts shape <name> [json] run src/notch/mail/page/shape-<name>.js and print what it found
- *   bun scripts/notch/mail-study.ts export [--days 30]  read the month's threads from Gmail into the study folder
+ *   bun scripts/notch/mail-study.ts export [--days 30] [--resume]
+ *                                                      read the month's threads from Gmail into the study folder
  *   bun scripts/notch/mail-study.ts calendar           read the calendar, when one is connected, into the study folder
  *   bun scripts/notch/mail-study.ts replay [--want 45] [--most 160] [--tier medium]
  *                                                      put the month's moments to the proposer and keep its drafts
@@ -36,6 +37,7 @@ const STUDY = join(DATA, 'study');
 /** The files of the study. Mail is in them: they are read and written, never printed. */
 const files = {
   owner: 'owner.json',        // { name, addresses, readAt }
+  rows: 'rows.json',          // the month's list: { rows, filed, listedAt }
   threads: 'threads.json',    // MailThread[]
   calendar: 'calendar.json',  // MailCalendarEvent[]
   tried: 'tried.json',        // StudyTried[]: every moment put to the proposer, with what came of it
@@ -173,8 +175,53 @@ async function main(argv: string[]): Promise<number> {
     console.log(JSON.stringify(answer, null, 2));
     return 0;
   }
+  if (verb === 'unread') {
+    // Threads the list shows that the study folder does not have: how many on the first
+    // pages of the month's search, and what Gmail's print page of one of them is built like.
+    const have = new Set(read<MailThread[]>(files.threads, []).map((thread) => thread.id));
+    const rows = await gmailSearch(brain, `newer_than:${Number(flag(rest, 'days') ?? 30)}d -category:promotions -category:social`, { pages: Number(flag(rest, 'pages') ?? 2) });
+    const machines = (row: GmailRow) => row.people.length > 0 && row.people.every((who) => mailMachine(who));
+    const missing = rows.filter((row) => !have.has(row.id) && !machines(row));
+    console.log(`${rows.length} rows on those pages, ${rows.filter(machines).length} machines only, ${missing.length} others not in the study folder.`);
+    // Where they fall in the list, in runs: one stretch means Gmail stopped answering for a while, scattered means a kind of thread.
+    const runs: string[] = [];
+    let from = -1;
+    rows.forEach((row, at) => {
+      const out = !have.has(row.id) && !machines(row);
+      if (out && from < 0) from = at;
+      if ((!out || at === rows.length - 1) && from >= 0) { runs.push(`${from}-${out ? at : at - 1}`); from = -1; }
+    });
+    console.log(`Runs of missing rows: ${runs.slice(0, 60).join(' ')}${runs.length > 60 ? ` and ${runs.length - 60} more` : ''}`);
+    console.log(`Of the missing: ${missing.filter((row) => row.count > 1).length} have more than one message; people per row ${JSON.stringify([...new Set(missing.map((row) => row.people.length))])}; machines only: ${missing.filter((row) => row.people.length > 0 && row.people.every((who) => mailMachine(who))).length}.`);
+    for (const row of missing.slice(0, 2)) {
+      const shape = await brain.run<{ found: Record<string, unknown> }>('shape-print', { id: row.id });
+      console.log(JSON.stringify(shape.found.old).slice(0, 1800));
+    }
+    return 0;
+  }
+  if (verb === 'try') {
+    // The reader on a handful of real threads, described without a word of them:
+    // how many messages, whether each has a sender and a date, how long its text is.
+    const place = rest.find((arg) => arg.startsWith('#')) ?? '#inbox';
+    const many = Number(flag(rest, 'n') ?? 8);
+    await brain.run('go', { place });
+    const listed = await brain.run<{ there: boolean; rows: GmailRow[] }>('list', { place, not: '' });
+    console.log(`The list showed: ${listed.there}. ${listed.rows.length} rows; ${listed.rows.filter((row) => row.draft).length} with a draft; ${listed.rows.filter((row) => row.count > 1).length} with more than one message.`);
+    const { address } = await brain.run<{ address: string }>('owner');
+    const picked = [...listed.rows.filter((row) => row.count > 1).slice(0, Math.ceil(many / 2)), ...listed.rows.filter((row) => row.count === 1).slice(0, Math.floor(many / 2))];
+    const started = Date.now();
+    const { threads, failed } = await gmailThreads(brain, picked);
+    console.log(`${threads.length} of ${picked.length} read in ${Date.now() - started} ms. Not read: ${JSON.stringify(failed)}`);
+    for (const thread of threads) {
+      const row = picked.find((entry) => entry.id === thread.id)!;
+      console.log(`  list says ${row.count}, read ${thread.messages.length}; subject ${thread.subject.length} chars; `
+        + thread.messages.map((message) => `[${message.from.address === address ? 'owner' : 'other'} to:${message.to.length} cc:${message.cc.length} text:${message.text.length}]`).join(' '));
+    }
+    return 0;
+  }
   if (verb === 'export') {
     const days = Number(flag(rest, 'days') ?? 30);
+    const resume = rest.includes('--resume');
     await brain.go('#inbox');
     const signed = await brain.run<{ host: string; main: boolean }>('shape-signin');
     if (signed.host !== 'mail' || !signed.main) {
@@ -184,14 +231,25 @@ async function main(argv: string[]): Promise<number> {
     const { address } = await brain.run<{ address: string }>('owner');
     const step = (what: string) => (page: number, rows: number) => process.stdout.write(`\r${what}: page ${page}, ${rows} rows   `);
 
-    // Everything but chats and what Gmail filed as advertising or social notices.
-    const window = `newer_than:${days}d -in:chats`;
-    const rows = await gmailSearch(brain, `${window} -category:promotions -category:social`, { each: step('The month') });
-    const filed = new Map<string, 'updates' | 'forums'>();
-    for (const kind of ['updates', 'forums'] as const) {
-      for (const row of await gmailSearch(brain, `${window} category:${kind}`, { each: step(`Filed under ${kind}`) })) filed.set(row.id, kind);
+    // The list of the month. Kept, so that a reading cut short goes on from the threads and not from the list.
+    type Listed = { rows: GmailRow[]; filed: Record<string, 'updates' | 'forums'>; listedAt: number };
+    let listed = resume ? read<Listed | null>(files.rows, null) : null;
+    if (!listed) {
+      // Everything but what Gmail filed as advertising or social notices. Chats are not named:
+      // a search that speaks of them, even to leave them out, is shown under Gmail's chat tab, with no mail in it.
+      const window = `newer_than:${days}d`;
+      const PAGES = 300;
+      const rows = await gmailSearch(brain, `${window} -category:promotions -category:social`, { pages: PAGES, each: step('The month') });
+      if (rows.length >= PAGES * 50) console.log(`\nThe list was cut at ${rows.length} threads: the oldest days of the month are not all in it.`);
+      const filed: Listed['filed'] = {};
+      for (const kind of ['updates', 'forums'] as const) {
+        for (const row of await gmailSearch(brain, `${window} category:${kind}`, { pages: PAGES, each: step(`Filed under ${kind}`) })) filed[row.id] = kind;
+      }
+      process.stdout.write('\n');
+      listed = { rows, filed, listedAt: Date.now() };
+      write(files.rows, listed);
     }
-    process.stdout.write('\n');
+    const { rows, filed } = listed;
 
     // The owner's addresses: the account's own, and any other Gmail shows under the same word ("me").
     const words = new Set(rows.flatMap((row) => row.people).filter((who) => who.address === address).map((who) => who.name));
@@ -200,10 +258,22 @@ async function main(argv: string[]): Promise<number> {
     // A thread where only machines wrote and the owner never did can be neither a moment nor a sample.
     const worth = (row: GmailRow) => row.people.length === 0 || row.people.some((who) => mine.has(who.address) || !mailMachine(who));
     const wanted = rows.filter(worth);
-    console.log(`${rows.length} threads in ${days} days; ${rows.length - wanted.length} are machines only and are not read.`);
-    const { threads, failed } = await gmailThreads(brain, wanted, { each: (done, of) => process.stdout.write(`\rReading threads: ${done} of ${of}   `) });
+    const have = new Map((resume ? read<MailThread[]>(files.threads, []) : []).map((thread) => [thread.id, thread]));
+    const todo = wanted.filter((row) => !have.has(row.id));
+    console.log(`${rows.length} threads in ${days} days; ${rows.length - wanted.length} are machines only and are not read; ${have.size} already read; ${todo.length} to read.`);
+    let unsaved = 0;
+    const { failed } = await gmailThreads(brain, todo, {
+      each: (done, of) => process.stdout.write(`\rReading threads: ${done} of ${of}   `),
+      got: (read) => {
+        for (const thread of read) have.set(thread.id, thread);
+        unsaved += read.length;
+        // Kept as it goes: a reading that is stopped has lost a minute, not the month.
+        if (unsaved >= 120) { write(files.threads, [...have.values()]); unsaved = 0; }
+      },
+    });
     process.stdout.write('\n');
-    for (const thread of threads) { const kind = filed.get(thread.id); if (kind) thread.filed = kind; }
+    const threads = wanted.flatMap((row) => { const thread = have.get(row.id); return thread ? [thread] : []; });
+    for (const thread of threads) { const kind = filed[thread.id]; if (kind) thread.filed = kind; }
 
     const own = threads.flatMap((thread) => thread.messages).filter((message) => mine.has(message.from.address));
     const names = new Map<string, number>();
@@ -211,12 +281,13 @@ async function main(argv: string[]): Promise<number> {
     const full = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
     const name = full ? mailFirstName({ name: full, address }) : address.split('@')[0]!;
     write(files.threads, threads);
-    write(files.owner, { name, addresses: [...mine], readAt: Date.now() });
+    write(files.owner, { name, addresses: [...mine], readAt: listed.listedAt });
     const all = threads.flatMap((thread) => thread.messages);
-    console.log(`${threads.length} threads read, ${all.length} messages, ${own.length} of them the owner's, from ${mine.size} address${mine.size === 1 ? '' : 'es'} of theirs.`);
+    const span = all.length ? Math.round((Math.max(...all.map((message) => message.at)) - Math.min(...all.map((message) => message.at))) / 86_400_000) : 0;
+    console.log(`${threads.length} of ${wanted.length} threads read, ${all.length} messages over ${span} days, ${own.length} of them the owner's, from ${mine.size} address${mine.size === 1 ? '' : 'es'} of theirs.`);
     console.log(`Not read, by reason: ${JSON.stringify(failed)}`);
     console.log(`Filed by Gmail: ${JSON.stringify({ updates: threads.filter((thread) => thread.filed === 'updates').length, forums: threads.filter((thread) => thread.filed === 'forums').length })}`);
-    console.log(`Kept in ${STUDY}.`);
+    console.log(`Threads with a draft of the owner's: ${threads.filter((thread) => thread.draft).length}. Kept in ${STUDY}.`);
     return 0;
   }
   if (verb === 'calendar') {
