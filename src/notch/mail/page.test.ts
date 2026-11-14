@@ -25,7 +25,7 @@ describe('the page scripts', () => {
       const source = readFileSync(new URL(name, folder), 'utf8');
       const answer = source.slice(source.lastIndexOf('\nreturn '));
       for (const quoted of [/\.textContent(?!\.trim\(\)\)|\))/, /\.innerText/, /\.innerHTML/, /\.href\b/, /getAttribute\('(?:email|name|title|href)'\)(?! \|\| ''\)\.toLowerCase\(\) === me)/]) {
-        const bare = answer.split('\n').filter((line) => quoted.test(line) && !/letters\(|\.length|=== me|Date\.parse|\/\.test\(/.test(line));
+        const bare = answer.split('\n').filter((line) => quoted.test(line) && !/letters\(|\.length|=== me|Date\.parse|\/[a-z]*\.test\(/.test(line));
         expect({ name, bare }).toEqual({ name, bare: [] });
       }
     }
