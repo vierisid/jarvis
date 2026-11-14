@@ -109,6 +109,31 @@ describe("tool guide: install advice follows who owns the pieces catalog", () =>
   });
 });
 
+// The owner's rule: a missing connection is never, by itself, "I can't". The browser is signed in as them.
+describe("tool guide: no tool or connection for a service", () => {
+  it("sends the agent to the signed-in browser before it says it cannot, with or without machines", () => {
+    for (const hasSidecars of [false, true]) {
+      const guide = buildToolGuide({ hasSidecars, piecesManaged: false });
+      expect(guide).toContain("look in the browser before you say you cannot");
+      expect(guide).toContain("Do this before you say you cannot, and before you ask the user to connect anything.");
+      // The one thing that stops it is a sign-in page, and it does not work around one.
+      expect(guide).toContain("Only a sign-in page stops you");
+      expect(guide).toContain("Never type a password and never work around a sign-in.");
+      // It is about finding and reading: the rules for sending, buying and deleting are not loosened by it.
+      expect(guide).toContain("The usual rules still hold for anything that sends, buys, deletes or changes something");
+    }
+  });
+
+  it("stands in the Browser section, after how the browser is used", () => {
+    const guide = buildToolGuide({ hasSidecars: true, piecesManaged: false });
+    const browser = guide.indexOf("## Browser");
+    const rule = guide.indexOf("look in the browser before you say you cannot");
+    expect(browser).toBeGreaterThan(-1);
+    expect(rule).toBeGreaterThan(browser);
+    expect(rule).toBeLessThan(guide.indexOf("## Sidecars"));
+  });
+});
+
 describe("tool guide: machines and their OS", () => {
   const machines = [
     { name: "Lapo's MacBook", os: "macOS", arch: "arm64" },

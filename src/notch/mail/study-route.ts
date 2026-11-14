@@ -14,8 +14,13 @@
  * that mail. So the owner's word is asked before the study is run, and what
  * the study reads is kept in the brain's own data folder.
  *
- * Three things can be asked:
+ * Four things can be asked:
  *  - `navigate`: go to an address at mail.google.com, and nowhere else.
+ *    (One page script, ./page/site.js, takes the same signed-in browser on
+ *    to Google Calendar and Google Drive: a calendar or a file with no
+ *    connection behind it is looked for there. ./page.test.ts holds that it
+ *    is the only script that leaves a site, and that those are the only two
+ *    other places.)
  *  - `run`: run one of the page scripts in ./page, by name. The script is
  *    read from the source folder at that moment, so that it can be corrected
  *    against the real page without restarting the brain. What the caller
@@ -23,7 +28,8 @@
  *  - `think`: one call to the brain's own model, counted under its own name,
  *    so that the study drafts with the model the product would draft with.
  *  - `calendar`: what is in the calendar between two moments, through the
- *    brain's Google connection when there is one.
+ *    brain's Google connection when there is one. When there is none the
+ *    script reads the same calendar in the browser (../ways.ts, ./calendar.ts).
  */
 import { readFileSync } from 'node:fs';
 import { evaluateLong, gmailAddress, withoutAddresses, type MailBrowser } from './browser.ts';

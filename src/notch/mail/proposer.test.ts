@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mailPerson, type MailMessage, type MailThread } from './thread.ts';
 import {
-  MAIL_MESSAGE_CHARS, MAIL_REPLY_MAX, MAIL_THREAD_CHARS, mailProposalMessages, mailThreadText, mailVoiceSamples, parseMailProposal, proposeMail,
+  MAIL_MESSAGE_CHARS, MAIL_REPLY_MAX, MAIL_THREAD_CHARS, mailCalendarLine, mailProposalMessages, mailThreadText, mailVoiceSamples, parseMailProposal, proposeMail,
   type MailProposalInput,
 } from './proposer.ts';
 
@@ -50,6 +50,12 @@ describe('what the model is given', () => {
     expect(mailProposalMessages(input({ calendar: [] }))[1]!.content).toContain('Nothing is in the calendar for these days.');
   });
 
+  // A whole day is said as a whole day: "midnight to midnight" reads as a busy night.
+  test('a whole-day event is given as its day, or its days', () => {
+    expect(mailCalendarLine({ summary: 'Offsite', start: '2026-11-19T00:00:00Z', end: '2026-11-20T00:00:00Z', allDay: true }, 'UTC')).toBe('Thu, 19 Nov 2026, all day: Offsite');
+    expect(mailCalendarLine({ summary: 'Fair', start: '2026-11-19T00:00:00Z', end: '2026-11-22T00:00:00Z', allDay: true }, 'UTC')).toBe('Thu, 19 Nov 2026 to Sat, 21 Nov 2026, all day: Fair');
+  });
+
   test('gives up to three samples of the owner\'s writing, each cut short', () => {
     const user = mailProposalMessages(input({ samples: ['Ciao Leo,\nva bene.\nSam', 'x'.repeat(5000), 'three', 'four'] }))[1]!.content;
     expect(user).toContain('--- Sample 1 ---\nCiao Leo,');
@@ -78,18 +84,22 @@ describe('what the model answers', () => {
   const answer = (fields: Record<string, unknown>) => JSON.stringify({ needs_reply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: '', ...fields });
 
   test('a reply is taken as written', () => {
-    expect(parseMailProposal(answer({}))).toEqual({ needsReply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: null });
+    expect(parseMailProposal(answer({}))).toEqual({ needsReply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: null, lookFor: '' });
     // Wrapped in a code fence or a sentence, it is still found.
     expect(parseMailProposal('Here you go:\n```json\n' + answer({}) + '\n```')?.needsReply).toBe(true);
   });
 
   test('no reply needed is an answer too', () => {
-    expect(parseMailProposal('{"needs_reply": false, "why": "Thanks only.", "reply": "ignored"}')).toEqual({ needsReply: false, why: 'Thanks only.', reply: '', missing: '', time: null });
+    expect(parseMailProposal('{"needs_reply": false, "why": "Thanks only.", "reply": "ignored"}')).toEqual({ needsReply: false, why: 'Thanks only.', reply: '', missing: '', time: null, lookFor: '' });
   });
 
   // The lit time word must be in the reply, once, or there is nothing to light.
   test('the time counts only when those words are in the reply once', () => {
     expect(parseMailProposal(answer({ time: 'Thursday at 10:00' }))?.time).toBe('Thursday at 10:00');
+    // What to look for is a few words for a search box: marks a search would read as more are taken out, and a sentence is not a search.
+    expect(parseMailProposal(answer({ look_for: '  Northwind "pricing deck" -secret OR owner:eve ' }))?.lookFor).toBe('Northwind pricing deck -secret OR owner eve');
+    expect(parseMailProposal(answer({ look_for: 'x'.repeat(81) }))?.lookFor).toBe('');
+    expect(parseMailProposal(answer({ look_for: 7 }))?.lookFor).toBe('');
     expect(parseMailProposal(answer({ time: 'Friday at 9:00' }))?.time).toBeNull();
     expect(parseMailProposal(answer({ reply: 'Thursday at 10:00? Yes, Thursday at 10:00.', time: 'Thursday at 10:00' }))?.time).toBeNull();
   });
