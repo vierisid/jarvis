@@ -393,7 +393,11 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 		// Per-browser profile dir: a profile created by Chrome can't be reused by
 		// Edge/Brave (Chromium refuses a profile from a different brand with a
 		// "can't use this profile" alert), so key it on the executable.
-		profileDir = filepath.Join(os.TempDir(), browserProfileName(exe))
+		//
+		// In the temporary folder, unless the notch is on: then it is kept
+		// under the person's own folder, because a sign-in lives in it
+		// (browser_profile_dir.go).
+		profileDir = browserProfileDir(exe)
 	}
 
 	proc, err := startBrowserPipe(exe, chromiumLaunchArgs(profileDir, headless))

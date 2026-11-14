@@ -477,6 +477,12 @@ And these are behind the switch:
   and 35).
 - **Typed and spoken notch events are not broadcast to dashboards.**
 - **Approval and task-complete toasts are not raised** while a notch page is up.
+- **Jarvis's own browser keeps its profile for good**
+  (`sidecar/browser_profile_dir.go`): under `~/.jarvis/browser/`, where it
+  was the system's temporary folder. A sign-in lives in the profile, mail is
+  read through this browser, and a temporary folder is what Windows and
+  cleaning tools empty. A profile already in the temporary folder is moved
+  once; one that cannot be moved is used where it is.
 - **Saying it is the approval** (44): in a turn asked on the notch only a
   delete and a payment are asked about, and a recognised delete is asked
   about even where the ordinary rules would let it run.
