@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<title>Mail proposals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400..700;1,400&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  /* The notch's own colours and type (ui/src/notch/notch.css), so that a
+     proposal is judged looking the way it would look. */
+  :root {
+    --notch: #0B0D10; --notch-raise: #1C2028; --notch-hover: #2A303A; --notch-rule: #343B47; --notch-line: #252A33;
+    --n-ink: #EEF1F4; --n-ink2: #B4BAC3; --n-dim: #7C838D;
+    --citron: #D6FF5C; --citron-hi: #C8F23F; --citron-ink: #1B2400; --citron-soft: rgba(214,255,92,.13);
+    --fail: #FF6A5C;
+    --paper: #F6F8FA; --paper-ink: #13161A; --paper-ink2: #535B63; --paper-rule: #E2E7EC;
+    --sans: 'Familjen Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'Spline Sans Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+    --corner: 14px 3px 14px 14px; --corner-sm: 8px 2px 8px 8px; --corner-xs: 6px 2px 6px 6px;
+    --ease: cubic-bezier(.2,.7,.2,1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--notch); color: var(--n-ink); font: 400 15px/22px var(--sans); -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; display: flex; flex-direction: column; }
+  button { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  .top { position: sticky; top: 0; z-index: 2; background: var(--notch); border-bottom: 1px solid var(--notch-line); }
+  .top .in { max-width: 720px; margin: 0 auto; padding: 14px 16px 12px; display: flex; align-items: baseline; gap: 16px; }
+  .top h1 { margin: 0; font: 600 15px/20px var(--sans); }
+  .top .count { margin-left: auto; font: 500 13px/20px var(--mono); color: var(--n-ink2); font-variant-numeric: tabular-nums; }
+  .top .tally { font: 500 13px/20px var(--sans); color: var(--n-dim); }
+  .bar { height: 2px; background: var(--notch-line); }
+  .bar i { display: block; height: 2px; width: 0; background: var(--citron); transition: width .3s var(--ease); }
+
+  main { flex: 1 1 auto; width: 100%; max-width: 720px; margin: 0 auto; padding: 28px 16px 148px; }
+
+  .line { display: inline-block; max-width: 100%; margin: 0; padding: 12px 18px 13px; border-radius: 22px; background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); font: 600 18px/24px var(--sans); text-wrap: balance; }
+  .line em { font-style: normal; color: var(--citron); }
+  .when { margin: 12px 2px 20px; color: var(--n-dim); font-size: 13px; line-height: 18px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+  .chip { padding: 1px 8px 2px; border-radius: var(--corner-xs); background: var(--citron-soft); color: var(--citron); font-weight: 600; font-size: 12px; }
+
+  h2 { margin: 26px 2px 8px; font: 600 12px/16px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--n-dim); }
+  .paper { background: var(--paper); color: var(--paper-ink); border-radius: var(--corner); padding: 16px 18px 18px; font: 400 15px/22px var(--sans); }
+  .paper .to { color: var(--paper-ink2); font-size: 12.5px; line-height: 17px; padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--paper-rule); overflow-wrap: anywhere; }
+  .paper .to b { color: var(--paper-ink); font-weight: 600; }
+  .paper .to div + div { margin-top: 2px; }
+  .text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .paper .time { background: var(--citron); color: var(--citron-ink); border-radius: 4px; padding: 0 3px; }
+  .gap { margin: 10px 2px 0; color: var(--n-dim); font-size: 13px; line-height: 18px; }
+  .gap b { color: var(--n-ink2); font-weight: 600; }
+
+  .said { background: var(--notch-raise); border-radius: var(--corner); box-shadow: inset 0 0 0 1px var(--notch-line); padding: 14px 18px 16px; color: var(--n-ink2); }
+  .said .who { color: var(--n-dim); font-size: 12.5px; line-height: 17px; margin-bottom: 8px; overflow-wrap: anywhere; }
+  .said .who b { color: var(--n-ink); font-weight: 600; }
+  .said .text { max-height: 260px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--notch-rule) transparent; }
+  .said.open .text { max-height: none; }
+  .more { appearance: none; background: none; border: 0; padding: 8px 0 0; color: var(--n-dim); font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .more:hover, .more:focus-visible { color: var(--n-ink); }
+
+  .foot { position: fixed; left: 0; right: 0; bottom: 0; background: linear-gradient(to top, var(--notch) 72%, transparent); padding: 28px 16px 18px; }
+  .foot .in { max-width: 688px; margin: 0 auto; }
+  .marks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .mark { appearance: none; cursor: pointer; min-height: 52px; padding: 8px 12px; border: 0; border-radius: var(--corner-sm); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); display: flex; align-items: center; justify-content: center; gap: 10px; font: 600 15px/20px var(--sans); transition: background-color .15s, box-shadow .15s, color .15s; }
+  .mark:hover { background: var(--notch-hover); }
+  .start:focus-visible { outline: 2px solid var(--n-ink); outline-offset: 3px; }
+  .mark:focus-visible, .more:focus-visible, .nav button:focus-visible, .why button:focus-visible { outline: 2px solid var(--citron); outline-offset: 2px; }
+  .mark[aria-pressed="true"] { background: var(--citron); color: var(--citron-ink); box-shadow: none; }
+  .mark.wrong[aria-pressed="true"] { background: var(--fail); color: #2A0500; }
+  .cap { flex: none; min-width: 22px; height: 22px; padding: 0 6px; border-radius: var(--corner-xs); display: inline-flex; align-items: center; justify-content: center; font: 600 12px/1 var(--mono); color: var(--n-ink2); background: var(--notch); box-shadow: inset 0 0 0 1px var(--notch-rule), inset 0 -2px 0 var(--notch-rule); }
+  .mark[aria-pressed="true"] .cap { background: rgba(0,0,0,.14); color: inherit; box-shadow: none; }
+  .why { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--n-dim); font-size: 13px; }
+  .why button { appearance: none; cursor: pointer; height: 30px; padding: 0 10px; border: 0; border-radius: var(--corner-xs); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); font: 600 13px/1 var(--sans); color: var(--n-ink2); display: inline-flex; align-items: center; gap: 8px; }
+  .why button[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--fail); color: var(--n-ink); }
+  .nav { margin-top: 10px; display: flex; justify-content: space-between; color: var(--n-dim); font-size: 13px; }
+  .nav button { appearance: none; background: none; border: 0; padding: 2px 0; color: var(--n-dim); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .nav button:hover { color: var(--n-ink); }
+  .nav button:disabled { opacity: .35; cursor: default; }
+
+  .card { animation: in .28s var(--ease) both; }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .card { animation: none; } .bar i { transition: none; } }
+
+  .plain { max-width: 560px; }
+  .plain h3 { margin: 0 0 14px; font: 600 26px/32px var(--sans); text-wrap: balance; }
+  .plain p { margin: 0 0 14px; color: var(--n-ink2); text-wrap: pretty; }
+  .plain dl { margin: 22px 0; display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; }
+  .plain dt { font-weight: 600; white-space: nowrap; }
+  .plain dd { margin: 0; color: var(--n-ink2); }
+  .start { appearance: none; cursor: pointer; border: 0; height: 44px; padding: 0 18px; border-radius: var(--corner-sm); background: var(--citron); color: var(--citron-ink); font: 600 15px/1 var(--sans); display: inline-flex; align-items: center; gap: 10px; }
+  .start .cap { background: rgba(0,0,0,.14); color: inherit; box-shadow: none; }
+  .verdict { margin: 18px 0; padding: 14px 18px; border-radius: var(--corner); background: var(--notch-raise); box-shadow: inset 0 0 0 1px var(--notch-rule); font: 600 17px/24px var(--sans); }
+  .verdict.yes { box-shadow: inset 0 0 0 1px var(--citron); }
+  .verdict.no { box-shadow: inset 0 0 0 1px var(--fail); }
+  .failed { color: var(--fail); }
+
+  @media (max-width: 520px) {
+    main { padding-top: 20px; }
+    .line { font-size: 16.5px; line-height: 22px; }
+    .mark { flex-direction: column; gap: 4px; min-height: 60px; font-size: 14px; }
+    .top .tally { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="in">
+    <h1>Mail proposals</h1>
+    <span class="tally" id="tally"></span>
+    <span class="count" id="count"></span>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+</header>
+
+<main id="main" aria-live="polite"></main>
+
+<footer class="foot" id="foot" hidden>
+  <div class="in">
+    <div class="marks" role="group" aria-label="Your mark">
+      <button class="mark" data-score="useful" aria-pressed="false"><span class="cap">1</span>Useful</button>
+      <button class="mark" data-score="not" aria-pressed="false"><span class="cap">2</span>Not useful</button>
+      <button class="mark wrong" data-score="wrong" aria-pressed="false"><span class="cap">3</span>Wrong</button>
+    </div>
+    <div class="why" id="why" hidden>
+      <span>What was wrong?</span>
+      <button data-wrong="person" aria-pressed="false"><span class="cap">P</span>The person</button>
+      <button data-wrong="content" aria-pressed="false"><span class="cap">C</span>What it says</button>
+    </div>
+    <div class="nav">
+      <button id="back"><span class="cap">←</span>Back</button>
+      <button id="next">Next<span class="cap">→</span></button>
+    </div>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const main = document.getElementById('main');
+  const foot = document.getElementById('foot');
+  const why = document.getElementById('why');
+  let proposals = [];
+  let marks = {};
+  // -1 is the first page, proposals.length is the last.
+  let at = -1;
+
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const person = (who) => (who.name ? `${who.name} <${who.address}>` : who.address);
+  const day = (ms) => new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }).format(ms);
+  const firstUnmarked = () => { const found = proposals.findIndex((entry) => !marks[entry.id]); return found < 0 ? proposals.length : found; };
+
+  function head() {
+    const done = proposals.filter((entry) => marks[entry.id]).length;
+    const tally = { useful: 0, not: 0, wrong: 0 };
+    for (const entry of proposals) if (marks[entry.id]) tally[marks[entry.id].score]++;
+    document.getElementById('count').textContent = proposals.length ? `${done} of ${proposals.length} scored` : '';
+    document.getElementById('tally').textContent = done ? `${tally.useful} useful · ${tally.not} not · ${tally.wrong} wrong` : '';
+    document.getElementById('bar').style.width = proposals.length ? `${(done / proposals.length) * 100}%` : '0';
+  }
+
+  function intro() {
+    const box = el('section', 'plain card');
+    box.append(el('h3', '', `${proposals.length} replies Jarvis would have drafted for you`));
+    box.append(el('p', '', 'These come from your last 30 days of mail, replayed as if the notch had been running. Each one is a moment where Jarvis would have said the line you see, with the draft under it.'));
+    box.append(el('p', '', 'For each, one question: at that moment, would this have helped you?'));
+    const list = el('dl');
+    for (const [name, meaning] of [
+      ['Useful', 'I would have sent it, as it is or after a small change.'],
+      ['Not useful', 'No reply was needed, or it is not what I would say.'],
+      ['Wrong', 'It would go to the wrong person, or it says something untrue.'],
+    ]) list.append(el('dt', '', name), el('dd', '', meaning));
+    box.append(list);
+    box.append(el('p', '', 'About a minute each. Every mark is saved as you make it, so you can stop and come back.'));
+    const start = el('button', 'start');
+    start.append(document.createTextNode(Object.keys(marks).length ? 'Carry on' : 'Start'), el('span', 'cap', 'Enter'));
+    start.addEventListener('click', () => show(firstUnmarked()));
+    box.append(start);
+    main.replaceChildren(box);
+    foot.hidden = true;
+    start.focus();
+  }
+
+  function outro(result) {
+    const box = el('section', 'plain card');
+    box.append(el('h3', '', result.passes === null ? 'Not all scored yet' : 'Done. Thank you.'));
+    const verdict = el('div', `verdict ${result.passes === true ? 'yes' : result.passes === false ? 'no' : ''}`,
+      result.passes === true ? `It passes: ${result.why}`
+      : result.passes === false ? `It does not pass: ${result.why}`
+      : result.why);
+    box.append(verdict);
+    box.append(el('p', '', `${result.useful} useful, ${result.not} not useful, ${result.wrong} wrong, out of ${result.scored} scored.`));
+    if (firstUnmarked() < proposals.length) {
+      const left = proposals.filter((entry) => !marks[entry.id]).length;
+      const go = el('button', 'start');
+      go.append(document.createTextNode(`Score the ${left} left`), el('span', 'cap', 'Enter'));
+      go.addEventListener('click', () => show(firstUnmarked()));
+      box.append(go);
+    } else {
+      box.append(el('p', '', 'Your marks are saved. You can close this page. Use Back if you want to change one.'));
+    }
+    main.replaceChildren(box);
+    foot.hidden = false;
+    foot.querySelector('.marks').hidden = true;
+    why.hidden = true;
+    document.getElementById('next').disabled = true;
+    document.getElementById('back').disabled = proposals.length === 0;
+  }
+
+  function card(entry) {
+    const box = el('article', 'card');
+    const line = el('p', 'line');
+    // "You have not replied to Leo. I drafted a reply.": the name is lit, as on the notch.
+    const cut = entry.line.indexOf(entry.first);
+    if (cut >= 0) line.append(entry.line.slice(0, cut), el('em', '', entry.first), entry.line.slice(cut + entry.first.length));
+    else line.textContent = entry.line;
+    box.append(line);
+
+    const when = el('div', 'when');
+    when.append(el('span', '', `Would have been said on ${day(entry.at)}, ${entry.waited} after ${entry.first} wrote.`));
+    if (entry.live) when.append(el('span', 'chip', 'Still unanswered today'));
+    box.append(when);
+
+    box.append(el('h2', '', 'The draft'));
+    const paper = el('div', 'paper');
+    const to = el('div', 'to');
+    const toLine = el('div');
+    toLine.append('To ', el('b', '', entry.to.map(person).join(', ')));
+    to.append(toLine);
+    if (entry.cc.length) { const cc = el('div'); cc.append('Copy to ', el('b', '', entry.cc.map(person).join(', '))); to.append(cc); }
+    to.append(el('div', '', `Re: ${entry.subject}`));
+    paper.append(to);
+    const draft = el('p', 'text');
+    const timeAt = entry.time ? entry.draft.indexOf(entry.time) : -1;
+    if (timeAt >= 0) draft.append(entry.draft.slice(0, timeAt), el('span', 'time', entry.time), entry.draft.slice(timeAt + entry.time.length));
+    else draft.textContent = entry.draft;
+    paper.append(draft);
+    box.append(paper);
+    if (entry.missing) { const gap = el('p', 'gap'); gap.append(el('b', '', 'Jarvis did not know: '), entry.missing); box.append(gap); }
+
+    box.append(el('h2', '', `What ${entry.first} wrote`));
+    const said = el('div', 'said');
+    const who = el('div', 'who');
+    who.append(el('b', '', person(entry.last.from)), `  ·  ${day(entry.last.at)}`);
+    if (entry.earlier) who.append(`  ·  ${entry.earlier} earlier message${entry.earlier === 1 ? '' : 's'} in the thread`);
+    said.append(who, el('p', 'text', entry.last.text));
+    box.append(said);
+
+    box.append(el('h2', '', 'What happened next'));
+    const next = el('div', 'said');
+    if (entry.after.kind === 'owner-replied') {
+      next.append(el('div', 'who', `You replied ${entry.after.after} later.`));
+      const text = el('p', 'text', entry.after.text);
+      text.hidden = true;
+      const more = el('button', 'more', 'Show what you wrote');
+      more.addEventListener('click', () => { text.hidden = !text.hidden; more.textContent = text.hidden ? 'Show what you wrote' : 'Hide what you wrote'; });
+      next.append(text, more);
+    } else if (entry.after.kind === 'other-wrote') {
+      next.append(el('div', 'who', `Someone else wrote in the thread ${entry.after.after} later, before you did.`));
+    } else {
+      next.append(el('div', 'who', 'Nothing yet. Nobody has written in the thread since.'));
+    }
+    box.append(next);
+    return box;
+  }
+
+  function buttons() {
+    const entry = proposals[at];
+    const mark = entry ? marks[entry.id] : null;
+    foot.querySelector('.marks').hidden = false;
+    for (const button of foot.querySelectorAll('.mark')) {
+      button.setAttribute('aria-pressed', String(!!mark && mark.score === button.dataset.score));
+    }
+    why.hidden = !mark || mark.score !== 'wrong';
+    for (const button of why.querySelectorAll('button')) button.setAttribute('aria-pressed', String(!!mark && mark.wrong === button.dataset.wrong));
+    document.getElementById('back').disabled = at <= 0;
+    document.getElementById('next').disabled = false;
+  }
+
+  async function show(index) {
+    at = Math.max(-1, Math.min(index, proposals.length));
+    // The place is kept in the address, so that a refresh comes back to the same card.
+    history.replaceState(null, '', at < 0 ? location.pathname : `#${at + 1}`);
+    head();
+    if (at < 0) return intro();
+    if (at >= proposals.length) {
+      const result = await fetch('result').then((res) => res.json());
+      return outro(result);
+    }
+    main.replaceChildren(card(proposals[at]));
+    foot.hidden = false;
+    buttons();
+    window.scrollTo({ top: 0 });
+  }
+
+  async function save(id, mark) {
+    const res = await fetch('mark', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, ...mark }) });
+    if (!res.ok) throw new Error('not saved');
+  }
+
+  async function score(value) {
+    const entry = proposals[at];
+    if (!entry) return;
+    const before = marks[entry.id];
+    marks[entry.id] = { score: value };
+    buttons(); head();
+    try {
+      await save(entry.id, marks[entry.id]);
+    } catch {
+      // Not saved is said, and the mark is taken back: a mark that looks made and is not is the worst outcome.
+      if (before) marks[entry.id] = before; else delete marks[entry.id];
+      buttons(); head();
+      document.getElementById('tally').textContent = 'That mark was not saved. Is the study still running?';
+      document.getElementById('tally').classList.add('failed');
+      return;
+    }
+    document.getElementById('tally').classList.remove('failed');
+    // "Wrong" stays on the card for the second question. The others move on.
+    if (value !== 'wrong') setTimeout(() => { if (proposals[at] === entry) show(at + 1); }, 180);
+  }
+
+  async function wrong(kind) {
+    const entry = proposals[at];
+    if (!entry || !marks[entry.id] || marks[entry.id].score !== 'wrong') return;
+    marks[entry.id] = { score: 'wrong', wrong: kind };
+    buttons();
+    try { await save(entry.id, marks[entry.id]); } catch { return; }
+    setTimeout(() => { if (proposals[at] === entry) show(at + 1); }, 180);
+  }
+
+  for (const button of foot.querySelectorAll('.mark')) button.addEventListener('click', () => score(button.dataset.score));
+  for (const button of why.querySelectorAll('button')) button.addEventListener('click', () => wrong(button.dataset.wrong));
+  document.getElementById('back').addEventListener('click', () => show(at - 1));
+  document.getElementById('next').addEventListener('click', () => show(at + 1));
+  document.addEventListener('keydown', (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // On the first page and the last, Enter goes to the first one not scored yet.
+    if (event.key === 'Enter' && (at < 0 || at >= proposals.length) && firstUnmarked() < proposals.length) { event.preventDefault(); show(firstUnmarked()); return; }
+    if (at < 0) return;
+    const key = event.key.toLowerCase();
+    if (key === 'arrowleft') show(at - 1);
+    else if (key === 'arrowright') show(at + 1);
+    else if (at >= proposals.length) return;
+    else if (key === '1') score('useful');
+    else if (key === '2') score('not');
+    else if (key === '3') score('wrong');
+    else if (key === 'p') wrong('person');
+    else if (key === 'c') wrong('content');
+    else return;
+    event.preventDefault();
+  });
+
+  fetch('proposals').then((res) => res.json()).then((data) => {
+    proposals = data.proposals;
+    marks = data.marks;
+    head();
+    if (!proposals.length) {
+      const box = el('section', 'plain card');
+      box.append(el('h3', '', 'Nothing to score yet'), el('p', '', 'The study has not made its proposals. Run the replay first.'));
+      main.replaceChildren(box);
+      return;
+    }
+    const place = Number(location.hash.slice(1));
+    if (Number.isInteger(place) && place >= 1 && place <= proposals.length + 1) show(place - 1);
+    else intro();
+  }).catch(() => {
+    const box = el('section', 'plain');
+    box.append(el('h3', '', 'This page could not load the proposals'), el('p', '', 'Start it again from the study script.'));
+    main.replaceChildren(box);
+  });
+})();
+</script>
+</body>
+</html>
