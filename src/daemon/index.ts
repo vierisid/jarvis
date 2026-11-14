@@ -1164,7 +1164,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.
         notchDemo = createNotchDemo(notchSurface, { real: true, onEnd: () => notchReal?.inbox.refresh() });
-        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences, can make the fixed test items of src/notch/fixtures.ts, and, while this brain has no real model, can load a script into the stand-in model and send it words (src/notch/script.ts). Nothing else.`);
+        console.warn(`[notch] JARVIS_NOTCH_DEMO is set: ${NOTCH_DEMO_PATH} is OPEN (secret-gated). Whoever holds the secret can make the notch show sample sentences, can make the fixed test items of src/notch/fixtures.ts, and, while this brain has no real model, can load a script into the stand-in model and send it words (src/notch/script.ts). On a brain whose owner signed in to Gmail in Jarvis's own browser it can also read that mail, read the connected calendar and call the model, for the mail study (src/notch/mail/study-route.ts). Keep the secret to this computer.`);
       }
     }
     if (notchDemoState === 'too-short') {

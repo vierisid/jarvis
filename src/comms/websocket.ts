@@ -1,7 +1,7 @@
 import type { Server, ServerWebSocket } from 'bun';
 import { markPanelSession } from './panel-session-marker.ts';
 import { debugRpcGate } from '../daemon/debug-rpc-gate.ts';
-import { NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, notchDemoGate } from '../notch/demo-gate.ts';
+import { notchGatedPath } from '../notch/demo-gate.ts';
 import { timingSafeEqual } from 'node:crypto';
 import { isOpenAccessHostAllowed } from './open-access-host.ts';
 import path from 'node:path';
@@ -118,7 +118,7 @@ function isPublicRoute(pathname: string, method: string): boolean {
     (pathname === '/api/debug/rpc' && debugRpcGate() !== null) ||
     // The notch's demo endpoint, on the same terms: no session, its own
     // secret, and absent unless that gate is open (notch/demo-gate.ts).
-    ((pathname === NOTCH_DEMO_PATH || pathname === NOTCH_FIXTURE_PATH || pathname === NOTCH_SCRIPT_PATH) && notchDemoGate() !== null) ||
+    notchGatedPath(pathname) ||
     method === 'OPTIONS'
   );
 }
