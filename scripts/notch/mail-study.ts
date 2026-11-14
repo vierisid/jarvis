@@ -175,6 +175,61 @@ async function main(argv: string[]): Promise<number> {
     console.log(JSON.stringify(answer, null, 2));
     return 0;
   }
+  if (verb === 'selfcheck') {
+    // The owner said yes to this on 14 November 2026: one mail from them to themselves, one reply
+    // draft in that thread, and the draft thrown away. Each step refuses unless the mail goes to
+    // the owner's own address and to nobody else.
+    const stage = rest[0];
+    const { address } = await brain.run<{ address: string }>('owner');
+    const kept = read<{ subject: string } | null>('selfcheck.json', null);
+    const find = async (subject: string) => (await gmailSearch(brain, `subject:"${subject}"`, { pages: 1 }));
+    const describe = (rows: GmailRow[]) => `${rows.length} thread${rows.length === 1 ? '' : 's'} with that subject; `
+      + rows.map((row) => `[messages:${row.count} draft:${row.draft} people:${row.people.length} all the owner:${row.people.every((who) => who.address === address)}]`).join(' ');
+    if (stage === 'send') {
+      const subject = `Jarvis mail check ${new Date().toISOString().slice(11, 16).replace(':', '')}${Math.random().toString(36).slice(2, 5)}`;
+      write('selfcheck.json', { subject });
+      const body = 'A test from Jarvis: sent by you, to yourself, to check that it can send mail from its own browser. You can delete it.';
+      await brain.ask({ op: 'navigate', url: `${GMAIL}?view=cm&fs=1&tf=1&to=${encodeURIComponent(address)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}` });
+      const state = await brain.run<{ subject: number | null; body: number | null; send: boolean; saved: boolean }>('shape-compose', { wait: 9000 });
+      console.log(`Writing window: ${JSON.stringify(state)}`);
+      if (state.subject !== subject.length || !state.body || !state.send) {
+        console.error('The writing window is not as expected. Nothing was sent.');
+        return 1;
+      }
+      const sent = await brain.run<{ sent: boolean; why: string }>('compose-send', { subject, to: address });
+      console.log(`Send: ${JSON.stringify(sent)}`);
+      await brain.go('#inbox');
+      console.log(`After sending: ${describe(await find(subject))}`);
+      return sent.sent ? 0 : 1;
+    }
+    if (!kept) { console.error('Run "selfcheck send" first.'); return 1; }
+    const rows = await find(kept.subject);
+    if (rows.length !== 1) { console.error(`Expected one thread with the check's subject, found ${rows.length}.`); return 1; }
+    const thread = rows[0]!;
+    if (stage === 'find') { console.log(describe(rows)); return 0; }
+    if (stage === 'reply' || stage === 'discard') {
+      // The list of the search is on screen: the thread is opened from it, as a person would.
+      // Opening changes the address, and the desktop app throws away an answer when it does: both are fine.
+      const opened = await brain.run<{ opened: boolean }>('open-thread', { id: thread.id }).catch(() => null);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const view = await brain.run<{ legacyMessages: number }>('shape-thread-view');
+      console.log(`Thread open: ${JSON.stringify(opened)}; messages on screen: ${view.legacyMessages}`);
+      if (!view.legacyMessages) { console.error('The thread did not open.'); return 1; }
+      if (stage === 'reply') {
+        const text = 'A reply written by Jarvis as a draft, to check that it can. It is not sent.';
+        console.log(`Reply: ${JSON.stringify(await brain.run('reply-write', { to: address, text }))}`);
+        // Gmail keeps a draft a moment after the last key.
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      } else {
+        console.log(`Discard: ${JSON.stringify(await brain.run('reply-discard'))}`);
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+      }
+      console.log(`In the list now: ${describe(await find(kept.subject))}`);
+      return 0;
+    }
+    console.error('Usage: mail-study.ts selfcheck send | find | reply | discard');
+    return 2;
+  }
   if (verb === 'unread') {
     // Threads the list shows that the study folder does not have: how many on the first
     // pages of the month's search, and what Gmail's print page of one of them is built like.
