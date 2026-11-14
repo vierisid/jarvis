@@ -9,7 +9,8 @@
  * The routes are the demo, fixture and script endpoints, which exist only with
  * the switch on and their gate open (./demo-gate.ts).
  */
-import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
+import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
+import { notchStudyOp, type NotchStudyDeps } from './mail/study-route.ts';
 import { notchScriptOp } from './script.ts';
 import type { NotchScriptDeps } from './script.ts';
 
@@ -32,6 +33,8 @@ export interface NotchRouteDeps {
   } | null;
   /** The stand-in model's script, and words sent as if typed or spoken (./script.ts). */
   script?: NotchScriptDeps | null;
+  /** The mail study, run on a development brain (./mail/study-route.ts). */
+  study?: NotchStudyDeps | null;
   /** How many notch pages are up and listening. */
   pages?: () => number;
 }
@@ -91,6 +94,15 @@ export function notchRoutes(enabled: boolean, deps: NotchRouteDeps = {}): NotchR
         if (!gate || !script || !notchDemoTokenMatches(req.headers.get(NOTCH_DEMO_HEADER), gate)) return notFound();
         const answer = notchScriptOp(await req.json().catch(() => null), script);
         return Response.json({ ...answer.body, pages: deps.pages?.() ?? 0 }, { status: answer.status });
+      },
+    },
+    [NOTCH_STUDY_PATH]: {
+      POST: async (req) => {
+        const gate = notchDemoGate();
+        const study = deps.study;
+        if (!gate || !study || !notchDemoTokenMatches(req.headers.get(NOTCH_DEMO_HEADER), gate)) return notFound();
+        const answer = await notchStudyOp(await req.json().catch(() => null), study);
+        return Response.json(answer.body, { status: answer.status });
       },
     },
   };
