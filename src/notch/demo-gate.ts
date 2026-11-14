@@ -17,8 +17,16 @@
  * model it can also load a script into the stand-in model and send it words
  * as if typed or spoken (./script.ts); such a script may call three fixed,
  * harmless tools and nothing else, and none of that works once a real model
- * is set up. It reaches no data and chooses nothing that runs. It is still a
- * secret, because an open gate is a way to put words in Jarvis's mouth.
+ * is set up. Through those three routes it reaches no data and chooses nothing
+ * that runs.
+ *
+ * The fourth route, the mail study (./mail/study-route.ts), is worth more. On
+ * a brain whose owner signed in to Gmail in Jarvis's own browser, the secret
+ * reads that mail, reads the connected calendar, and calls the brain's model.
+ * It still sends nothing and goes nowhere but Gmail. So the secret is kept to
+ * the computer the brain runs on (scripts/notch/try.sh keeps it in the test
+ * data folder), and the brain says all of this when it starts with the gate
+ * open.
  */
 import { MIN_SECRET_LENGTH, debugRpcTokenMatches } from '../daemon/debug-rpc-gate.ts';
 
@@ -35,6 +43,19 @@ export const NOTCH_SCRIPT_PATH = '/api/notch/script';
  * the others never do: the secret is worth that much more there.
  */
 export const NOTCH_STUDY_PATH = '/api/notch/study';
+
+const GATED_PATHS: readonly string[] = [NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH];
+
+/**
+ * Whether a path is one of the routes behind this gate, with the gate open.
+ * The server lets such a path past its own sign-in, because the route asks
+ * for the gate's secret itself. Asked here, in one place, so that a route
+ * added behind the gate cannot be left unreachable behind the sign-in: the
+ * routes' own test holds every one of them to this.
+ */
+export function notchGatedPath(pathname: string): boolean {
+  return GATED_PATHS.includes(pathname) && notchDemoGate() !== null;
+}
 
 export type NotchDemoGateState = 'off' | 'too-short' | 'refused-hosted' | 'notch-off' | 'open';
 
