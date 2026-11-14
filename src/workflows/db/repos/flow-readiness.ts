@@ -10,6 +10,8 @@ import { ensureRunExecutionConfig, type FlowRun, type RunExecutionConfig } from 
 import { applyInputOverrides, walkFlowNodes } from '../flow-graph';
 import { HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from '../../runtime/human-input-contract';
 import type { FlowTriggerNode } from './flow-version';
+import { CODE_STEPS_REFUSAL_CODE } from './flow-code-steps';
+import { findCodeStepNames } from '../flow-graph';
 
 export { configureWorkflowReadiness, type ReadinessServices } from './readiness-services';
 
@@ -253,6 +255,35 @@ export function assertRunIngredientsReady(run: Pick<FlowRun, 'id' | 'flowId'>, t
   const effective = config.sampleInputOverride ? applyInputOverrides(trigger, config.sampleInputOverride) : trigger;
   const result = withIngredients(run.flowId, effective, { ready: true, issues: [], runtimeChecks: [] });
   if (!result.ready) throw new WorkflowReadinessError(result);
+}
+/**
+ * What a run or delivery refused for the revoked CODE-step permission says
+ * (#1426): which CODE steps, and how to allow them again.
+ */
+export function codeStepsRevokedMessage(stepNames: readonly string[]): string {
+  const shown = stepNames.slice(0, 3).map((name) => `"${name}"`).join(', ');
+  const more = stepNames.length > 3 ? ` and ${stepNames.length - 3} more` : '';
+  return `This workflow has ${stepNames.length > 1 ? 'CODE steps' : 'a CODE step'} (${shown}${more}), `
+    + 'and CODE steps are not allowed for it any more, so it did not run. '
+    + "Allow CODE steps in the workflow's permissions to run it again.";
+}
+
+/**
+ * The CODE-step permission, read when a run is about to execute or continue
+ * (#1426). Every flow that could be published held the grant, so this refuses
+ * only after the owner took it back: whatever queued the run (a trigger, a
+ * person, a parent workflow, a continuation) checked earlier, and the answer
+ * that counts is the one now. Throws a readiness refusal with code
+ * CODE_STEPS_NOT_ENABLED; nothing runs. A missing flow is the caller's to report.
+ */
+export function assertRunCodeStepsAllowed(flowId: string, trigger: FlowTriggerNode): void {
+  const flow = getWorkflowDb().query<{ code_steps_enabled: number }, [string]>(
+    'SELECT code_steps_enabled FROM flow WHERE id = ?').get(flowId);
+  if (!flow || flow.code_steps_enabled === 1) return;
+  const names = findCodeStepNames(trigger);
+  if (names.length === 0) return;
+  throw new WorkflowReadinessError({ ready: false, runtimeChecks: [],
+    issues: [{ node: names[0]!, path: 'graph', code: CODE_STEPS_REFUSAL_CODE, message: codeStepsRevokedMessage(names) }] });
 }
 export function assertVersionReady(flowId: string, versionId: string, preview?: ReadinessContext['preview'], mode: BindingPinMode = {}): void {
   const result = versionReadiness(flowId, versionId, preview, mode);
