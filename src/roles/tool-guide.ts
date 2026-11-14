@@ -51,6 +51,27 @@ export type ToolGuideMachine = {
   isHost?: boolean;
 };
 
+/**
+ * The rule for a service Jarvis has no tool or connection for: the browser
+ * is signed in as the user, so it looks there before it says it cannot. The
+ * owner's words for it: "Oh, there is no connection. Let me check if I can
+ * use the Chrome that is signed in to go and find it."
+ *
+ * It is the same order src/notch/ways.ts holds code to: a connection first,
+ * the signed-in browser second, "I could not" only after both.
+ */
+export function browserBeforeCannot(): string[] {
+  return [
+    '### No tool or connection for a service: look in the browser before you say you cannot',
+    'This browser stays signed in to the sites the user has signed in to in it: their mail, calendar, Drive, documents and other accounts. So a service you have no tool or connection for is still within reach. When a task needs something from one (what is in their calendar, a file that may be in their Drive, a message, a figure in a web app):',
+    '1. Use a tool or a connection for it when there is one and it works.',
+    "2. When there is none, or it answers that it is not connected, open the service's own site with `browser_navigate` and look there (calendar.google.com, drive.google.com, mail.google.com and the like). Do this before you say you cannot, and before you ask the user to connect anything.",
+    "3. Only a sign-in page stops you: say in one sentence that Jarvis's browser is not signed in to that service, ask the user to sign in there once, and stop. Never type a password and never work around a sign-in.",
+    'The usual rules still hold for anything that sends, buys, deletes or changes something: this is about finding and reading.',
+    'Say what you found, not which way you took. Say you could not reach something only after both ways failed, and then say what you tried.',
+  ];
+}
+
 export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGuideOptions): string {
   const lines: string[] = [];
 
@@ -158,6 +179,8 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('- Fill forms FIRST, verify in snapshot, THEN submit.');
   lines.push('- If an element isn\'t visible, scroll down and then SNAPSHOT AGAIN: scrolling (and PageUp/PageDown/Home/End) retires the previous [id]s, and so does the page moving under you.');
   lines.push('- Modern SPAs may need `browser_evaluate` for custom components.');
+  lines.push('');
+  lines.push(...browserBeforeCannot());
   lines.push('');
 
   // --- Sidecars ---
