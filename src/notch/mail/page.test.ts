@@ -19,6 +19,18 @@ describe('the page scripts', () => {
     }
   });
 
+  // The study's browser is signed in as the owner. Where it may be taken is written in one script, and held here.
+  test('one script takes the browser to another site, and only to Gmail, Google Calendar and Google Drive', () => {
+    const moves = /location\.href\s*=[^=]|location\.(?:assign|replace)\(|window\.open\(|\blocation\s*=[^=]/;
+    const moving = scripts.filter((name) => readFileSync(new URL(name, folder), 'utf8').split('\n').some((line) => !line.trim().startsWith('//') && moves.test(line)));
+    expect(moving).toEqual(['site.js']);
+    const site = readFileSync(new URL('site.js', folder), 'utf8');
+    const hosts = [...site.matchAll(/'([a-z.]+\.[a-z]+)'/g)].map((found) => found[1]);
+    expect(hosts.sort()).toEqual(['calendar.google.com', 'drive.google.com', 'mail.google.com']);
+    // It goes to the host it named and to no other, whatever path it was handed.
+    expect(site).toContain('if (to.hostname !== host) throw');
+  });
+
   // What a shape script answers is printed on a developer's screen: it may count and describe, never quote.
   test('a shape script never answers with text, an address or an attribute value from the page', () => {
     for (const name of scripts.filter((entry) => entry.startsWith('shape-'))) {

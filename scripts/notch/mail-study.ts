@@ -7,9 +7,12 @@
  *   bun scripts/notch/mail-study.ts shape <name> [json] run src/notch/mail/page/shape-<name>.js and print what it found
  *   bun scripts/notch/mail-study.ts export [--days 30] [--resume]
  *                                                      read the month's threads from Gmail into the study folder
- *   bun scripts/notch/mail-study.ts calendar           read the calendar, when one is connected, into the study folder
+ *   bun scripts/notch/mail-study.ts calendar           read the calendar into the study folder: through the brain's Google
+ *                                                      connection when there is one, else in the same signed-in browser
  *   bun scripts/notch/mail-study.ts replay [--want 45] [--most 160] [--tier medium]
  *                                                      put the month's moments to the proposer and keep its drafts
+ *   bun scripts/notch/mail-study.ts look               for each draft that named a file it did not have, look for it in the
+ *                                                      owner's Drive, in the same signed-in browser, and keep what was found
  *   bun scripts/notch/mail-study.ts sheet [--port 3144] serve the scoring sheet on this computer only
  *   bun scripts/notch/mail-study.ts score              what the marks add up to
  *
@@ -22,11 +25,14 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { browserCalendar, type CalendarRead } from '../../src/notch/mail/calendar.ts';
+import { browserDriveSearch, type DriveFile } from '../../src/notch/mail/drive.ts';
 import { gmailSearch, gmailThreads, type GmailRow } from '../../src/notch/mail/gmail.ts';
 import type { MailCalendarEvent, MailThought } from '../../src/notch/mail/proposer.ts';
 import { studyMoments, studyReplay, studyResult, type StudyMark, type StudyProposal, type StudyTried } from '../../src/notch/mail/study.ts';
 import { mailFirstName, type MailThread } from '../../src/notch/mail/thread.ts';
 import { mailMachine } from '../../src/notch/mail/waiting.ts';
+import { firstWay } from '../../src/notch/ways.ts';
 
 const DATA = process.env.NOTCH_DATA_DIR ?? join(homedir(), '.jarvis-notch');
 const PORT = Number(process.env.NOTCH_PORT ?? 3143);
@@ -348,14 +354,64 @@ async function main(argv: string[]): Promise<number> {
   if (verb === 'calendar') {
     // The month that is replayed, and the two weeks after today that a reply written today may speak of.
     const DAY = 24 * 60 * 60 * 1000;
-    const answer = await brain.ask({ op: 'calendar', from: new Date(Date.now() - 31 * DAY).toISOString(), to: new Date(Date.now() + 14 * DAY).toISOString() });
-    if (!answer.connected) {
-      console.log('No calendar is connected to this brain. The study runs without one: no reply will propose a time.');
+    const from = Date.now() - 31 * DAY;
+    const to = Date.now() + 14 * DAY;
+    let read: CalendarRead | null = null;
+    // A connection when there is one. When there is none, the same calendar in the browser the owner is signed in to.
+    const reached = await firstWay<MailCalendarEvent[]>([
+      { name: 'connection', get: async () => {
+        const answer = await brain.ask({ op: 'calendar', from: new Date(from).toISOString(), to: new Date(to).toISOString() });
+        return answer.connected ? answer.events as MailCalendarEvent[] : null;
+      } },
+      { name: 'browser', get: async () => {
+        try {
+          read = await browserCalendar(brain, from, to, { each: (weeks) => process.stdout.write(`\rReading the calendar in the browser: week ${weeks}   `) });
+        } finally {
+          process.stdout.write('\n');
+          // The browser is left where the study found it: on the mail.
+          await brain.run('site', { site: 'mail', path: '/mail/u/0/' }).catch(() => {});
+        }
+        return read ? read.events : null;
+      } },
+    ]);
+    for (const way of reached.tried) console.log(way.why === 'not-here' ? `Not there: ${way.name}.` : `Tried and failed: ${way.name} (${way.reason}).`);
+    if (!reached.value) {
+      console.log('The calendar could not be reached in any way. The study runs without one: no reply will propose a time.');
       return 0;
     }
-    const events = answer.events as MailCalendarEvent[];
-    write(files.calendar, events);
-    console.log(`A calendar is connected: ${events.length} events kept, from a month back to two weeks ahead.`);
+    write(files.calendar, reached.value);
+    const whole = reached.value.filter((event) => event.allDay).length;
+    console.log(`The calendar was read through the ${reached.through}: ${reached.value.length} events kept (${whole} of them whole days), from a month back to two weeks ahead.`);
+    const seen = read as CalendarRead | null;
+    if (seen) console.log(`${seen.weeks} weeks opened. Left out: ${seen.declined} the owner declined, ${seen.unread} written in a way the reader does not know.`);
+    return 0;
+  }
+  if (verb === 'look') {
+    // A draft that named a file it did not have: Jarvis looks for it where the owner keeps files, before
+    // it says the file is missing. There is no connection to Drive, so the way is the signed-in browser.
+    const into = flag(rest, 'into');
+    if (into && !/^[a-z0-9-]{1,30}$/.test(into)) { console.error('--into takes a short name: letters, digits and dashes.'); return 2; }
+    const triedFile = into ? `tried-${into}.json` : files.tried;
+    const tried = read<StudyTried[]>(triedFile, []);
+    const todo = proposalsOf(tried).filter((proposal) => proposal.lookFor && (!proposal.found || rest.includes('--again')));
+    let found = 0;
+    let nothing = 0;
+    let unreached = 0;
+    try {
+      for (const proposal of todo) {
+        const reached = await firstWay<DriveFile[]>([
+          { name: 'browser', get: () => browserDriveSearch(brain, proposal.lookFor!, { most: 4 }) },
+        ]);
+        proposal.found = { through: reached.through, files: reached.value ?? [] };
+        if (!reached.value) unreached++; else if (reached.value.length) found++; else nothing++;
+        write(triedFile, tried);
+        process.stdout.write(reached.value ? (reached.value.length ? '+' : '.') : '!');
+      }
+    } finally {
+      process.stdout.write('\n');
+      await brain.run('site', { site: 'mail', path: '/mail/u/0/' }).catch(() => {});
+    }
+    console.log(`${todo.length} drafts named a file to look for: ${found} found something in Drive, ${nothing} found nothing by those words, ${unreached} could not get to Drive.`);
     return 0;
   }
   if (verb === 'replay') {
@@ -372,7 +428,11 @@ async function main(argv: string[]): Promise<number> {
     const { moments, ruled } = studyMoments(threads, mine, owner.readAt);
     console.log(`${threads.length} threads. ${moments.length} moments where a person was waiting (${moments.filter((moment) => moment.live).length} still are).`);
     console.log(`Last messages that are not one, by reason: ${JSON.stringify(ruled)}`);
-    const already = read<StudyTried[]>(files.tried, []);
+    // `--into <name>` keeps this run beside the one on the scoring sheet, to be moved into its place when it is whole.
+    const into = flag(rest, 'into');
+    if (into && !/^[a-z0-9-]{1,30}$/.test(into)) { console.error('--into takes a short name: letters, digits and dashes.'); return 2; }
+    const triedFile = into ? `tried-${into}.json` : files.tried;
+    const already = read<StudyTried[]>(triedFile, []);
     const all = [...already];
     const tried = await studyReplay({
       threads,
@@ -388,7 +448,7 @@ async function main(argv: string[]): Promise<number> {
       each: (entry) => {
         // Kept after every one: a run that is stopped has lost nothing it paid for.
         all.push(entry);
-        write(files.tried, all);
+        write(triedFile, all);
         process.stdout.write(entry.outcome === 'proposed' ? '+' : entry.outcome === 'silent' ? '.' : '!');
       },
     });
@@ -399,7 +459,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`${tokens.input} tokens read and ${tokens.output} written in all, on ${[...new Set(tried.map((entry) => entry.cost.model))].join(', ')}.`);
     return 0;
   }
-  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | export | calendar | replay | sheet | score');
+  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | export | calendar | replay | look | sheet | score');
   return 2;
 }
 

@@ -105,9 +105,12 @@ itself, and `sidecar.yaml` has no setting for it.
     model (invariant 37). A fourth route behind the same secret, `POST
     /api/notch/study`, is for the mail study (below): on a brain whose owner
     signed in to Gmail in Jarvis's own browser it reads that mail, reads the
-    connected calendar and calls the model. It opens no address but
-    `https://mail.google.com/`, runs only the page scripts in
-    `src/notch/mail/page/`, and sends nothing. The server lets these four
+    calendar and calls the model. Its `navigate` opens no address but
+    `https://mail.google.com/`, and it runs only the page scripts in
+    `src/notch/mail/page/`. One of those, `site.js`, takes the same signed-in
+    browser to Google Calendar and Google Drive and nowhere else (a test
+    holds that no other script leaves the site it is on, and that these three
+    hosts are the whole list). It sends nothing. The server lets these four
     paths past its own sign-in only while the gate is open
     (`notchGatedPath`), and a test holds every route behind the gate to that.
 
@@ -922,8 +925,9 @@ after they signed in to Gmail once inside Jarvis's own browser:
 
 ```sh
 bun scripts/notch/mail-study.ts export      # 30 days of threads, read through the browser
-bun scripts/notch/mail-study.ts calendar    # the calendar, when one is connected
+bun scripts/notch/mail-study.ts calendar    # the calendar: a connection when there is one, else the same browser
 bun scripts/notch/mail-study.ts replay      # the month put to the proposer as if it had been running
+bun scripts/notch/mail-study.ts look        # a draft named a file it did not have: look for it in Drive
 bun scripts/notch/mail-study.ts sheet       # the scoring sheet, served to this computer only
 bun scripts/notch/mail-study.ts score       # what the marks add up to
 ```
@@ -938,7 +942,71 @@ without a model), `proposer.ts` (does it need a reply, and the reply; mail
 reaches the model marked as outside content, and the model never chooses who
 a reply goes to), `gmail.ts` and `page/` (the reading), `study.ts` (the replay
 and the score), `browser.ts` (a page's answer longer than the desktop app's
-20,000 characters, read in pieces).
+20,000 characters, read in pieces), `calendar.ts` and `drive.ts` (the
+calendar and the files, read in the same browser).
+
+### No connection is not "I can't"
+
+The owner's rule, in his words: "Oh, there is no connection. Let me check if
+I can use the Chrome that is signed in to go and find it." Jarvis's own
+browser is signed in as the person. A service it has no connection to is one
+address away there, so a missing connection is never by itself a reason to
+say something cannot be done. The order is always: a connection when there is
+one, the signed-in browser when there is none, and "I could not" only after
+both, with what was tried.
+
+It is held in three places:
+
+- **Code that reaches for something** uses `firstWay` in `src/notch/ways.ts`:
+  a list of ways, each answering with the thing, with null ("this way is not
+  here": nothing connected, browser not signed in) or with a throw (it is
+  here and failed). The first that answers is used and the rest are not
+  asked. An empty answer is an answer: an empty calendar is not a missing one.
+- **The agent** is told the same in its tool guide
+  (`browserBeforeCannot` in `src/roles/tool-guide.ts`): with no tool or
+  connection for a service, open the service's own site in the browser and
+  look, before saying it cannot and before asking for a connection. Only a
+  sign-in page stops it, and it never works around one. It is about finding
+  and reading: the rules for sending, buying, deleting and changing are not
+  loosened by it. A test holds the paragraph in the guide.
+- **The mail proposer** gets the calendar that way, and names in `look_for`
+  a file it would have needed, which Jarvis then looks for in Drive instead
+  of only reporting it missing.
+
+What was learned about the two pages, on a real account in November 2026
+(the `shape-cal*` and `shape-drive*` page scripts print these shapes again
+when Google changes them):
+
+- **Calendar** (`calendar.ts`, `page/cal-week.js`): the week view at
+  `/calendar/u/0/r/week/YYYY/M/D?hl=en`. Each day's column is a
+  `div[role="gridcell"][data-datekey]`, and the key is a number that holds
+  the date: `((year - 1970) << 9) | (month << 5) | day`. An event is a
+  `[data-eventchip]` with a `data-eventid`. Its hours are read from the line
+  Google writes for screen readers, the leaf that holds ", ": "9am to
+  10:30am, Title, ..., November 16, 2026" (asked for in English so that the
+  words are known). Its day is the column it is drawn in, never the words.
+  Whole-day events sit in a row above the hours, outside any day's column;
+  their line starts or ends with "All day", and their days are the columns
+  they lie over. The title has a place of its own in the event, and the
+  line repeats it. Events the owner declined carry "Declined" as a part of
+  the line and are left out. Anything written another way is counted as not
+  read and left out, never guessed at. The hours are in the calendar's time
+  zone and are turned into moments with the browser's, so the reader refuses
+  when the zone label on the page ("GMT+01") is not the browser's. What is
+  read is what the owner sees: every calendar they have switched on. A week
+  takes about three seconds; a full page load each, since an answer given
+  while the address changes is thrown away by the desktop app.
+- **Drive** (`drive.ts`, `page/drive-search.js`): the search at
+  `/drive/search?q=words&hl=en`. A result is a
+  `div[role="gridcell"][data-id][aria-label]`; `data-id` is the file's id.
+  Its name is the text of the `[data-tooltip]` inside it, and its label is
+  the name, then the kind ("Google Slides", "PDF"), then a five-word hint
+  about keys that is the same on every result. A search that finds nothing
+  shows a `[role="status"]` in the main area after about three seconds. The
+  words searched are words only: anything Drive would read as an instruction
+  (`owner:`, `-`, quotes) is taken out, because they come from a model that
+  read a stranger's mail. Finding is all it does: it opens no file, shares
+  none and attaches none.
 
 ### Asking without a model key
 

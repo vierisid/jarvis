@@ -187,6 +187,10 @@ export interface StudyProposal {
   draft: string;
   time: string | null;
   missing: string;
+  /** Words to find a missing file by, when the draft named one. */
+  lookFor?: string;
+  /** What Jarvis found when it looked, and through which way. Absent until it has looked. */
+  found?: { through: string | null; files: { id: string; name: string; kind: string }[] };
   why: string;
   at: number;
   /** How long the message had waited when the proposal would have been made. */
@@ -210,7 +214,7 @@ export interface StudyReplayOptions {
   threads: MailThread[];
   owner: MailOwner;
   ownerName: string;
-  /** Null when no calendar is connected. */
+  /** Null when the calendar could be reached in no way: no connection, and no signed-in browser. */
   calendar: MailCalendarEvent[] | null;
   /** When the mailbox was read. */
   now: number;
@@ -281,6 +285,7 @@ export async function studyReplay(options: StudyReplayOptions): Promise<StudyTri
         draft: proposal.reply,
         time: proposal.time,
         missing: proposal.missing,
+        ...(proposal.lookFor ? { lookFor: proposal.lookFor } : {}),
         why: proposal.why,
         at: moment.at,
         waited: studyHowLong(moment.at - waiting.at),
