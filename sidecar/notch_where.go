@@ -55,6 +55,9 @@ type notchFront struct {
 	Title    string // the window's title
 	Icon     string // the key of its icon, "" when it has none
 	Password bool   // a password field has the keyboard
+	// The site, when the app is a browser and its address bar could be read:
+	// "github.com". Only the site, never the rest of the address (notch_site.go).
+	Site string
 }
 
 // notchAppKey is a program's name as the list holds it.
@@ -100,8 +103,21 @@ func notchLookFor(front notchFront, never []string) notchLook {
 			}
 		}
 	}
+	if notchNeverHasSite(never, front.Site) {
+		return notchLookNever
+	}
 	if front.Password {
 		return notchLookPassword
+	}
+	// With the site known there is nothing to guess: a bank is a bank by its
+	// address, and a page about river banks is not one. Without it (another
+	// kind of program, or a bar that could not be read) the title is all
+	// there is.
+	if front.Site != "" {
+		if notchBankSite(front.Site) {
+			return notchLookBank
+		}
+		return notchLooking
 	}
 	if notchBankTitle(front.Title) {
 		return notchLookBank
@@ -109,12 +125,25 @@ func notchLookFor(front notchFront, never []string) notchLook {
 	return notchLooking
 }
 
+// notchNeverEntry is one entry of the list as it is kept: a program's name,
+// or a site with its mark in front ("site:github.com").
+func notchNeverEntry(entry string) string {
+	entry = strings.TrimSpace(entry)
+	if strings.HasPrefix(strings.ToLower(entry), notchSiteMark) {
+		if site := notchSiteOf(entry[len(notchSiteMark):]); site != "" {
+			return notchSiteEntry(site)
+		}
+		return ""
+	}
+	return notchAppKey(entry)
+}
+
 // notchNeverList is a list as it is kept: keys, no doubles, in order.
 func notchNeverList(list []string) []string {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, app := range list {
-		if key := notchAppKey(app); key != "" && !seen[key] {
+		if key := notchNeverEntry(app); key != "" && !seen[key] {
 			seen[key] = true
 			out = append(out, key)
 		}
@@ -200,10 +229,11 @@ func (w *NotchWhere) SetNever(list []string, save func(list []string) error) {
 	w.tell()
 }
 
-// NeverWatch puts an app on the list, or takes it off, and saves the list.
-// It answers with the list as it is now. If it cannot be saved nothing changes.
+// NeverWatch puts an app or a site on the list, or takes it off, and saves the
+// list. It answers with the list as it is now. If it cannot be saved nothing
+// changes.
 func (w *NotchWhere) NeverWatch(app string, watch bool) ([]string, error) {
-	key := notchAppKey(app)
+	key := notchNeverEntry(app)
 	w.mu.Lock()
 	next := []string{}
 	for _, have := range w.never {
@@ -298,18 +328,29 @@ func (w *NotchWhere) Refuses(app, title string) bool {
 	if !w.on {
 		return false
 	}
-	return notchLookFor(notchFront{App: notchAppKey(app), Title: title}, w.never) != notchLooking
+	seen := notchFront{App: notchAppKey(app), Title: title}
+	// The observer does not know the site. If it is looking at the browser
+	// this file last heard of, the site is the one heard then.
+	if seen.App == w.front.App {
+		seen.Site = w.front.Site
+	}
+	return notchLookFor(seen, w.never) != notchLooking
 }
 
 // payload is what the brain is told. While this program looks away the title
 // is not said: it is text from a window nobody is to read.
 func notchWherePayload(front notchFront, look notchLook, still bool, never []string) map[string]any {
-	title := front.Title
+	title, site := front.Title, front.Site
 	if look != notchLooking {
 		title = ""
 	}
+	// Nor is the site, for a password or a bank. For a site on the list it
+	// is: the person put it there by its name, and has to be able to take it off.
+	if look == notchLookPassword || look == notchLookBank {
+		site = ""
+	}
 	return map[string]any{
-		"app": front.App, "name": front.Name, "title": title, "icon": front.Icon,
+		"app": front.App, "name": front.Name, "title": title, "site": site, "icon": front.Icon,
 		"look": string(look), "still": still, "never": append([]string{}, never...),
 	}
 }
@@ -323,7 +364,7 @@ func (w *NotchWhere) tell() {
 	}
 	look := notchLookFor(w.front, w.never)
 	payload := notchWherePayload(w.front, look, w.still, w.never)
-	said := strings.Join([]string{w.front.App, w.front.Name, payload["title"].(string), w.front.Icon, string(look),
+	said := strings.Join([]string{w.front.App, w.front.Name, payload["title"].(string), payload["site"].(string), w.front.Icon, string(look),
 		map[bool]string{true: "still", false: "moving"}[w.still], strings.Join(w.never, ",")}, "\x00")
 	if said == w.last {
 		w.mu.Unlock()

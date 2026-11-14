@@ -62,6 +62,8 @@ interface Seen {
   app: string;
   /** The app as a person calls it. */
   name: string;
+  /** The site, when the app is a browser and the desktop app could tell: "github.com". */
+  site: string;
   title: string;
   look: NotchLook;
   still: boolean;
@@ -97,6 +99,35 @@ const oneLine = (value: unknown, most: number): string =>
 /** A program's name as the list holds it: small letters, no `.exe`. */
 export const notchAppKey = (value: unknown): string => oneLine(value, 80).toLowerCase().replace(/\.(exe|app)$/, '');
 
+/** How a site is told from a program on the "never watch" list: this mark in front of it. */
+export const NOTCH_SITE_MARK = 'site:';
+
+/** A site as the desktop app names it, "github.com", or '' when it is not one. */
+export function notchSite(value: unknown): string {
+  const site = oneLine(value, 253).toLowerCase();
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,24}$/.test(site) ? site : '';
+}
+
+/** One entry of the list: a program's name, or a site with its mark. '' when it is neither. */
+export function notchNeverEntry(value: unknown): string {
+  const raw = oneLine(value, 300);
+  if (raw.toLowerCase().startsWith(NOTCH_SITE_MARK)) {
+    const site = notchSite(raw.slice(NOTCH_SITE_MARK.length));
+    return site ? NOTCH_SITE_MARK + site : '';
+  }
+  return notchAppKey(raw);
+}
+
+/** Whether a site is on a list, itself or as part of a site that is ("google.com" covers "mail.google.com"). */
+export function notchNeverHasSite(never: readonly string[], site: string): boolean {
+  if (!site) return false;
+  return never.some((entry) => {
+    if (!entry.startsWith(NOTCH_SITE_MARK)) return false;
+    const listed = entry.slice(NOTCH_SITE_MARK.length);
+    return site === listed || site.endsWith(`.${listed}`);
+  });
+}
+
 function readLook(value: unknown): NotchLook {
   return value === 'password' || value === 'bank' || value === 'never' ? value : '';
 }
@@ -110,11 +141,14 @@ export function parseNotchWhere(payload: unknown): Omit<Seen, 'icon'> & { iconKe
   return {
     app,
     name: oneLine(raw.name, 60) || app,
+    // The site is not ours to have while it looks away for a password or a
+    // bank, whatever was sent. For a site on the list it is: the person named it.
+    site: look === 'password' || look === 'bank' ? '' : notchSite(raw.site),
     // While it looks away the title is not ours to have, whatever was sent.
     title: look ? '' : oneLine(raw.title, 160),
     look,
     still: raw.still === true,
-    never: Array.isArray(raw.never) ? [...new Set(raw.never.map(notchAppKey).filter(Boolean))].slice(0, 200) : [],
+    never: Array.isArray(raw.never) ? [...new Set(raw.never.map(notchNeverEntry).filter(Boolean))].slice(0, 200) : [],
     iconKey: oneLine(raw.icon, 80),
   };
 }
@@ -193,8 +227,25 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     const now = here();
     const say: NotchPart[] = deps.asleep() || face() === 'closed' ? ['I am ', em('not watching'), ' right now.']
       : face() === 'away' ? ['I am ', em('looking away'), '.']
-        : now?.app ? ['I see ', em(now.name), '.'] : ['I see ', em('no app'), ' in front.'];
+        : now?.site ? ['I see ', em(now.site), ', in ', now.name, '.']
+          : now?.app ? ['I see ', em(now.name), '.'] : ['I see ', em('no app'), ' in front.'];
     return { kind: 'row', id: 'see', say, go: true };
+  }
+
+  /** What "never watch" would be about: the site when one is known, else the app. Null when nothing is in front. */
+  function subject(now: Seen | null): { entry: string; label: string; listed: boolean } | null {
+    if (!now?.app) return null;
+    // An app that is on the list is offered first: taking it off is the only thing to do about it.
+    if (now.never.includes(now.app)) return { entry: now.app, label: now.name, listed: true };
+    if (now.site) {
+      // On the list as part of a bigger site ("google.com" for mail.google.com):
+      // what can be taken off is the entry that is there, by its own name.
+      const covering = now.never.find((entry) => entry.startsWith(NOTCH_SITE_MARK)
+        && (now.site === entry.slice(NOTCH_SITE_MARK.length) || now.site.endsWith(`.${entry.slice(NOTCH_SITE_MARK.length)}`)));
+      if (covering) return { entry: covering, label: covering.slice(NOTCH_SITE_MARK.length), listed: true };
+      return { entry: NOTCH_SITE_MARK + now.site, label: now.site, listed: false };
+    }
+    return { entry: now.app, label: now.name, listed: false };
   }
 
   /** The sheet's blocks for the state as it stands. */
@@ -202,21 +253,22 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     const now = here();
     const asleep = deps.asleep();
     const name = now?.name ?? '';
-    const listed = !!now?.app && now.never.includes(now.app);
+    const about = subject(now);
     const lead = asleep || !watchingOn() || now?.look === 'never' ? 'Not watching'
       : now?.look ? 'Looking away'
-        : now?.app ? name : 'No app in front';
+        : now?.site ? `${now.site}, in ${name}`
+          : now?.app ? name : 'No app in front';
     const small: NotchPart[] = asleep ? ['I am asleep. I see nothing until you wake me.']
       : !watchingOn() ? ['Watching is switched off in the settings. I see nothing.']
-        : now?.look === 'never' ? ['You told me never to watch ', em(name), '.']
+        : now?.look === 'never' ? ['You told me never to watch ', em(about?.label ?? name), '.']
           : now?.look === 'password' ? ['A password is being typed. Banks and passwords are never read. I look away by myself.']
             : now?.look === 'bank' ? ['This looks like your bank. Banks and passwords are never read. I look away by myself.']
               : now?.app ? [...(now.title ? [em(now.title), '. '] : []), 'I look at this screen about every 15 seconds, when it has changed, and read the text on it.']
                 : ['Nothing I can name is in front.'];
-    const never = now?.never ?? [];
+    const never = (now?.never ?? []).map((entry) => (entry.startsWith(NOTCH_SITE_MARK) ? entry.slice(NOTCH_SITE_MARK.length) : entry));
     const buttons = [
       ...(asleep ? [] : [{ id: 'sleep', label: 'Sleep' }]),
-      ...(now?.app && !asleep ? [{ id: 'never', label: listed ? `Watch ${name} again` : `Never watch ${name}` }] : []),
+      ...(about && !asleep ? [{ id: 'never', label: about.listed ? `Watch ${about.label} again` : `Never watch ${about.label}` }] : []),
     ];
     return [
       { kind: 'row', lead, say: small },
@@ -237,18 +289,20 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
       }
       if (answer.button === 'never') {
         const machine = front;
-        const now = here();
-        if (!machine || !now?.app) continue;
-        const watch = now.never.includes(now.app);
+        const about = subject(here());
+        if (!machine || !about) continue;
+        const watch = about.listed;
         try {
-          const reply = await port.dispatchRPC(machine, NOTCH_NEVER_WATCH_RPC, { app: now.app, watch });
+          // `app` holds the entry: a program's name, or a site with its mark.
+          const reply = await port.dispatchRPC(machine, NOTCH_NEVER_WATCH_RPC, { app: about.entry, watch });
           const list = (reply as { never?: unknown } | null)?.never;
           // The desktop app answers with its list and sends the new state too.
           // Until that arrives the sheet shows the answer.
           const current = seen.get(machine);
           if (current && Array.isArray(list)) {
-            current.never = [...new Set(list.map(notchAppKey).filter(Boolean))];
-            if (!watch) current.look = 'never';
+            current.never = [...new Set(list.map(notchNeverEntry).filter(Boolean))];
+            const off = current.never.includes(current.app) || notchNeverHasSite(current.never, current.site);
+            if (off) current.look = 'never';
             else if (current.look === 'never') current.look = '';
             refresh();
           }

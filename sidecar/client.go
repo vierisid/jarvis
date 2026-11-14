@@ -797,7 +797,8 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	c.setConnHandler("notch.never_watch", func(params map[string]any) (*RPCResult, error) {
 		app, _ := params["app"].(string)
 		watch, _ := params["watch"].(bool)
-		if notchAppKey(app) == "" {
+		// A program's name, or a site with its mark in front ("site:github.com").
+		if notchNeverEntry(app) == "" {
 			return nil, fmt.Errorf("notch.never_watch: missing app")
 		}
 		list, err := notchWhere.NeverWatch(app, watch)

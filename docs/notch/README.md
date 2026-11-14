@@ -540,6 +540,31 @@ again), and one to sleep.
     listening only when the brain says the notch is on, and the observers'
     checks answer "watch" until then (`NotchWhere.Look`, `Refuses`).
 
+52. **In a browser, the site says where the person is, and only the site is
+    kept.** Asked for by the owner on 14 November 2026: "Chrome" says little.
+    The desktop app reads the browser's own address bar, the way it reads
+    any control, and walks only the browser's own controls to find it: the
+    page is one control of the kind "document", and that one is passed by
+    (`uiaBrowserSite`). Of what the bar holds only the site is kept,
+    `github.com`: not the page, not what follows a `?`, which can be a name,
+    a search or a key. The rest never leaves the function that reads the bar
+    (`notchSiteOf`). The site is told to the brain as `site`, and not at all
+    while the notch looks away for a password or a bank.
+    With the site known, a bank is a bank by its address (`notchBankSite`)
+    and the title is not guessed from: a page about river banks is watched,
+    a bank whose title says nothing is not. The list can hold a site
+    (`site:github.com`), which covers the sites under it.
+53. **A site's icon comes from the site, once, and stays on the machine.**
+    The notch shows the site's own icon beside its eyes. The desktop app
+    asks the site itself for it (its `/favicon.ico`, else the icon its front
+    page names), draws it at one size and keeps it in
+    `~/.jarvis/site-icons`. It never asks a lookup service: that would tell a
+    third party every site the person opens. The request sends no cookie and
+    does not say who asks. Nothing is asked of a site while the notch looks
+    away, of a site on the list, or of an address that is a number or a
+    machine on the local network. A site that has no icon to give is not
+    asked again for six hours, and the browser's own icon is shown.
+
 What "never watch" does not do: it stops Jarvis watching by itself. If the
 person asks Jarvis to read that app, it reads it: saying it is the approval
 (44).
@@ -600,11 +625,23 @@ person asks Jarvis to read that app, it reads it: saying it is the approval
   with one in front the notch's own keys do not reach the notch either
   (Windows keeps them from every ordinary program). The agent now says so
   instead of reporting success; the limit itself is Windows'.
-- A bank is known by its window's title, from a list of words and names
-  (`notchBankWords`). The desktop app cannot read the address a browser is
-  on. A bank whose title says nothing is watched like any page until a
-  password field takes the keyboard; a page that only mentions a bank is
-  not watched. It errs towards looking away.
+- A bank is known by its address when the app is a browser whose address
+  bar could be read (Chrome, Edge, Brave, Firefox and their kin; checked on
+  Chrome only). Anywhere else, and in a browser window with no address bar,
+  it is known by the window's title, from a list of words and names
+  (`notchBankWords`), which errs towards looking away. Either list is a
+  list: a bank on neither is watched until a password field takes the
+  keyboard.
+- The site's icon is asked of the site by a plain request. A few sites
+  refuse one that is not a browser's, and some only have a vector drawing,
+  which is not read: the browser's icon is shown for those. Of twelve
+  well-known sites tried, eleven gave one.
+- While somebody types in the address bar it holds what they type, not an
+  address. The site last known for that window stands until the page
+  changes.
+- On the Mac the site is asked of the browser by a script, which the Mac
+  lets through only after asking the person once per browser. Firefox on
+  the Mac cannot be asked.
 - A password field is known when the program says so. A plain Windows edit
   box does by its style; a browser or a modern app is asked through UI
   Automation, with 700 ms to answer. A program that draws its own field and
@@ -728,8 +765,8 @@ person asks Jarvis to read that app, it reads it: saying it is the approval
 | brain to desktop app | `notch.open_dashboard` | none | `{opened: boolean}`. Opens the dashboard's window, as the tray's entry does. Decides nothing |
 | desktop app to brain | event `notch.message` | `{message: any JSON}`, from the page | none |
 | desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
-| desktop app to brain | event `notch.where` | `{app, name, title, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters, `icon` a key; the icon itself comes once per connection as a PNG. `title` is empty while it looks away. Sent on every change | none |
-| brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}` | `{never: string[]}`, the list as it now is |
+| desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
+| brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through seven functions on `window`:
