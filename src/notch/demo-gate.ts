@@ -29,6 +29,12 @@ export const NOTCH_DEMO_PATH = '/api/notch/demo';
 export const NOTCH_FIXTURE_PATH = '/api/notch/fixture';
 /** The third: the stand-in model's script, and words sent to it as if typed or spoken (./script.ts). */
 export const NOTCH_SCRIPT_PATH = '/api/notch/script';
+/**
+ * The fourth: the mail study (./mail/study-route.ts). On a brain whose owner
+ * signed in to Gmail in Jarvis's own browser this one reaches their mail, which
+ * the others never do: the secret is worth that much more there.
+ */
+export const NOTCH_STUDY_PATH = '/api/notch/study';
 
 export type NotchDemoGateState = 'off' | 'too-short' | 'refused-hosted' | 'notch-off' | 'open';
 

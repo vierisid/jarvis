@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
+import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH, initNotchDemoGate, notchDemoGate } from './demo-gate.ts';
 import { NOTCH_PAGE_PATH, notchRoutes } from './routes.ts';
 import type { NotchScriptDeps } from './script.ts';
 import type { ScriptedTurn } from '../llm/scripted.ts';
@@ -60,7 +60,7 @@ describe('the notch routes', () => {
 
   test('the page is a built file at the root, not a route', () => {
     expect(NOTCH_PAGE_PATH).toBe('/notch.html');
-    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH]);
+    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH]);
   });
 });
 

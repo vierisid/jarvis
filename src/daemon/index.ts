@@ -164,6 +164,7 @@ import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
+import { notchStudyDeps } from "./notch-mail-browser.ts";
 import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
@@ -5591,6 +5592,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           type: (text) => { notchReal?.asks?.typed(text); },
           say: (text) => { notchReal?.talk?.pretend(text); },
         }) : null,
+        // The mail study (the plan's Track B), through Jarvis's own browser.
+        study: notchStudyDeps({ manager: sidecarManager, llm: () => agentService.getLLMManager(), google: () => googleAuth }),
       }),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
