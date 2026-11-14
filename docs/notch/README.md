@@ -102,7 +102,14 @@ itself, and `sidecar.yaml` has no setting for it.
     request must echo the secret. Otherwise it answers 404. It can make the
     notch show sample sentences, make the fixed test items (below), and, on a
     development brain with no real model, load a script into the stand-in
-    model (invariant 37). Nothing else.
+    model (invariant 37). A fourth route behind the same secret, `POST
+    /api/notch/study`, is for the mail study (below): on a brain whose owner
+    signed in to Gmail in Jarvis's own browser it reads that mail, reads the
+    connected calendar and calls the model. It opens no address but
+    `https://mail.google.com/`, runs only the page scripts in
+    `src/notch/mail/page/`, and sends nothing. The server lets these four
+    paths past its own sign-in only while the gate is open
+    (`notchGatedPath`), and a test holds every route behind the gate to that.
 
 14. **The keyboard is watched only while the notch is on screen.** The watch
     starts when the notch's page is attached and ends when it is detached, so
@@ -905,6 +912,33 @@ promise is kept by adding one line to `notch-fixture.log` in the data
 directory, with no model: the file is the proof that it ran once. Before
 setup is complete the promise executor is not running; with the demo gate
 open it runs for fixture promises alone.
+
+### The mail study
+
+Before the notch proposes anything about mail, a study answers two questions:
+can Gmail be read reliably in Jarvis's own browser, and are the proposals any
+good. It is run from a script against the test brain, with the owner's word,
+after they signed in to Gmail once inside Jarvis's own browser:
+
+```sh
+bun scripts/notch/mail-study.ts export      # 30 days of threads, read through the browser
+bun scripts/notch/mail-study.ts calendar    # the calendar, when one is connected
+bun scripts/notch/mail-study.ts replay      # the month put to the proposer as if it had been running
+bun scripts/notch/mail-study.ts sheet       # the scoring sheet, served to this computer only
+bun scripts/notch/mail-study.ts score       # what the marks add up to
+```
+
+What it reads and makes is kept in `<data>/study` and nowhere else. The
+script prints counts, never mail: the only page scripts whose answers reach
+the screen are the `shape-` ones, written to answer with counts and yes or no.
+The gate it scores against: at least 60% useful and none to the wrong person.
+
+The parts, in `src/notch/mail/`: `waiting.ts` (is a person waiting, decided
+without a model), `proposer.ts` (does it need a reply, and the reply; mail
+reaches the model marked as outside content, and the model never chooses who
+a reply goes to), `gmail.ts` and `page/` (the reading), `study.ts` (the replay
+and the score), `browser.ts` (a page's answer longer than the desktop app's
+20,000 characters, read in pieces).
 
 ### Asking without a model key
 
