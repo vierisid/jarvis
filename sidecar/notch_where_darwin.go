@@ -99,6 +99,10 @@ static char *jarvis_where_title(int pid) {
 import "C"
 
 import (
+	"context"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,6 +117,76 @@ var (
 	darwinWherePid   int
 	darwinWhereIcon  []byte
 )
+
+// How each browser is asked which page its front window is on. The names are
+// written here, not taken from the system, so nothing that came from outside
+// is ever put into a script. Firefox has no such question to answer. The
+// first time a browser is asked, the Mac asks the person whether Jarvis may:
+// to be seen in pass 14.
+var darwinSiteScripts = map[string]string{
+	"safari":         `tell application "Safari" to get URL of front document`,
+	"google chrome":  `tell application "Google Chrome" to get URL of active tab of front window`,
+	"microsoft edge": `tell application "Microsoft Edge" to get URL of active tab of front window`,
+	"brave browser":  `tell application "Brave Browser" to get URL of active tab of front window`,
+	"vivaldi":        `tell application "Vivaldi" to get URL of active tab of front window`,
+	"chromium":       `tell application "Chromium" to get URL of active tab of front window`,
+	"arc":            `tell application "Arc" to get URL of active tab of front window`,
+}
+
+// darwinBrowserSite is the site a browser's front window is on, or "". Only
+// the site is kept of what the browser answers (notch_site.go).
+func darwinBrowserSite(app string) string {
+	script, ok := darwinSiteScripts[notchAppKey(app)]
+	if !ok {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "osascript", "-e", script).Output()
+	if err != nil {
+		return ""
+	}
+	return notchSiteOf(strings.TrimSpace(string(out)))
+}
+
+var (
+	darwinSiteIcons     *notchSiteIcons
+	darwinSiteIconsOnce sync.Once
+	darwinSiteAsking    atomic.Bool
+)
+
+// darwinWhereSite asks the browser in front for its site, in the background,
+// and tells w when it differs from what was known. The site's own icon is
+// shown when this machine has it; otherwise the site is asked for it once.
+func darwinWhereSite(w *NotchWhere, app string) {
+	if !notchIsBrowser(app) || !darwinSiteAsking.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer darwinSiteAsking.Store(false)
+		site := darwinBrowserSite(app)
+		darwinSiteIconsOnce.Do(func() {
+			darwinSiteIcons = newNotchSiteIcons(filepath.Join(homeDir(), ".jarvis", "site-icons"))
+		})
+		darwinWhereMu.Lock()
+		if darwinWhereFront.App != app {
+			darwinWhereMu.Unlock()
+			return // another app came to the front meanwhile
+		}
+		front, icon := darwinWhereFront, darwinWhereIcon
+		front.Site = site
+		darwinWhereFront = front
+		darwinWhereMu.Unlock()
+		if site != "" && notchLookFor(front, w.Never()) == notchLooking {
+			if siteIcon := darwinSiteIcons.Have(site); siteIcon != nil {
+				icon = siteIcon
+			} else {
+				darwinSiteIcons.Ask(site, func() { darwinWhereSite(w, app) })
+			}
+		}
+		w.SetFront(front, icon)
+	}()
+}
 
 // notchWhereFrontChanged is NSWorkspace saying another app is in front.
 func notchWhereFrontChanged(name, bundle string, pid int, icon []byte) {
@@ -130,6 +204,7 @@ func notchWhereFrontChanged(name, bundle string, pid int, icon []byte) {
 	darwinWhereFront, darwinWherePid, darwinWhereIcon = front, pid, icon
 	darwinWhereMu.Unlock()
 	w.SetFront(front, icon)
+	darwinWhereSite(w, front.App)
 }
 
 func platformNotchWhereStart(w *NotchWhere) (stop func()) {
@@ -152,6 +227,7 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 			darwinWhereMu.Lock()
 			front, pid, icon := darwinWhereFront, darwinWherePid, darwinWhereIcon
 			changed := front.Password != password
+			retitled := false
 			front.Password = password
 			// The title once a second: another tab or page changes it with no word from the system.
 			if beats%2 == 0 && pid != 0 {
@@ -163,12 +239,17 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 				if title != front.Title {
 					front.Title = title
 					changed = true
+					retitled = true
 				}
 			}
 			darwinWhereFront = front
 			darwinWhereMu.Unlock()
 			if changed && front.App != "" {
 				w.SetFront(front, icon)
+			}
+			// Another title in a browser is another page, and may be another site.
+			if retitled {
+				darwinWhereSite(w, front.App)
 			}
 		}
 	}()

@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/go-ole/go-ole"
 )
 
 var (
@@ -139,6 +141,12 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 	go func() {
 		defer close(workerDone)
 		apps := map[string]whereApp{}
+		sites := newWhereSites(func() {
+			select {
+			case signals <- 's':
+			default:
+			}
+		})
 		password := false
 		look := time.NewTicker(time.Second)
 		defer look.Stop()
@@ -148,7 +156,7 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 			if ask {
 				password = notchPasswordFocused(password, signals)
 			}
-			notchWhereRead(w, apps, password)
+			notchWhereRead(w, apps, sites, password)
 		}
 		read(true)
 		for {
@@ -189,7 +197,7 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 }
 
 // notchWhereRead reads the window in front and tells w.
-func notchWhereRead(w *NotchWhere, apps map[string]whereApp, password bool) {
+func notchWhereRead(w *NotchWhere, apps map[string]whereApp, sites *whereSites, password bool) {
 	front := win32GetForegroundWindow()
 	// The notch itself coming to the front (its text field) is not somewhere
 	// the person went: they are still where they were.
@@ -229,7 +237,23 @@ func notchWhereRead(w *NotchWhere, apps map[string]whereApp, password bool) {
 		}
 		apps[path] = app
 	}
-	w.SetFront(notchFront{App: app.key, Name: app.name, Title: title, Password: password}, app.icon)
+	where := notchFront{App: app.key, Name: app.name, Title: title, Password: password}
+	icon := app.icon
+	// In a browser the site says where the person is (notch_site.go). Its own
+	// icon is shown, from this machine if it was fetched before; otherwise the
+	// browser's, while the site is asked for its own. Nothing is asked of a
+	// site this program is looking away from.
+	if notchIsBrowser(app.key) {
+		where.Site = sites.siteOf(front, title)
+		if where.Site != "" && notchLookFor(where, w.Never()) == notchLooking {
+			if siteIcon := sites.icons.Have(where.Site); siteIcon != nil {
+				icon = siteIcon
+			} else {
+				sites.icons.Ask(where.Site, sites.again)
+			}
+		}
+	}
+	w.SetFront(where, icon)
 }
 
 func whereTitleCase(name string) string {
@@ -482,4 +506,142 @@ func notchPasswordFocused(last bool, again chan byte) bool {
 		}()
 		return last
 	}
+}
+
+// whereSites knows which site each browser window is on, and the sites' icons.
+type whereSites struct {
+	icons *notchSiteIcons
+	// Called when something asked for has arrived: the worker looks again.
+	again func()
+	// The site last read for a window, and the title it had then. A window
+	// whose title has not changed is on the page it was on.
+	known map[uintptr]whereSiteSeen
+	// One reading at a time (see notchPasswordFocused).
+	asking atomic.Bool
+}
+
+type whereSiteSeen struct{ title, site string }
+
+func newWhereSites(again func()) *whereSites {
+	return &whereSites{
+		icons: newNotchSiteIcons(filepath.Join(homeDir(), ".jarvis", "site-icons")),
+		again: again,
+		known: map[uintptr]whereSiteSeen{},
+	}
+}
+
+// siteOf is the site a browser window is on, or "" when its address bar could
+// not be read or names no site. The bar is asked through UI Automation, which
+// can be slow in a browser that is busy: it is given 600 ms, and if it has
+// not answered, what was known stands and its answer makes the worker look again.
+func (s *whereSites) siteOf(hwnd uintptr, title string) string {
+	if seen, ok := s.known[hwnd]; ok && seen.title == title {
+		return seen.site
+	}
+	last := s.known[hwnd].site
+	if !s.asking.CompareAndSwap(false, true) {
+		return last
+	}
+	answer := make(chan string, 1)
+	go func() {
+		defer s.asking.Store(false)
+		val, err := comThread.call(func(state *uiaState) (any, error) {
+			return uiaBrowserSite(state, hwnd), nil
+		})
+		site, _ := val.(string)
+		if err != nil {
+			site = ""
+		}
+		answer <- site
+	}()
+	select {
+	case site := <-answer:
+		if len(s.known) > 64 {
+			s.known = map[uintptr]whereSiteSeen{}
+		}
+		s.known[hwnd] = whereSiteSeen{title: title, site: site}
+		return site
+	case <-time.After(600 * time.Millisecond):
+		go func() {
+			<-answer
+			s.again()
+		}()
+		return last
+	}
+}
+
+const (
+	uiaEditControlType     = 50004
+	uiaDocumentControlType = 50030
+)
+
+// uiaBrowserSite reads the site out of a browser window's address bar.
+//
+// It walks the browser's own controls, level by level, and never steps into
+// the page: a page is one control of the kind "document", and that one is
+// passed by. So the page is not read, and the browser is not made to describe
+// it. The address bar is the text field among those controls whose text is an
+// address. Only the site is taken from it (notchSiteOf); the address itself
+// does not leave this function.
+func uiaBrowserSite(state *uiaState, hwnd uintptr) string {
+	window, err := uiaElementFromHandle(state.automation, hwnd)
+	if err != nil || window == nil {
+		return ""
+	}
+	defer window.Release()
+	all, err := uiaCreateTrueCondition(state.automation)
+	if err != nil || all == nil {
+		return ""
+	}
+	defer all.Release()
+
+	level := []*ole.IDispatch{window}
+	release := func(elems []*ole.IDispatch) {
+		for _, e := range elems {
+			if e != window {
+				e.Release()
+			}
+		}
+	}
+	looked := 0
+	for depth := 0; depth < 14 && len(level) > 0 && looked < 500; depth++ {
+		var next []*ole.IDispatch
+		for _, parent := range level {
+			children, err := uiaElementFindAll(parent, TreeScope_Children, all)
+			if err != nil || children == nil {
+				continue
+			}
+			count := uiaArrayLength(children)
+			for i := 0; i < count && looked < 500; i++ {
+				child := uiaArrayGetElement(children, i)
+				if child == nil {
+					continue
+				}
+				looked++
+				switch uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId) {
+				case uiaDocumentControlType:
+					// The page. Not entered.
+					child.Release()
+				case uiaEditControlType:
+					value, verr := patternGetValue(child)
+					child.Release()
+					if verr == nil {
+						if site := notchSiteOf(value); site != "" {
+							children.Release()
+							release(next)
+							release(level)
+							return site
+						}
+					}
+				default:
+					next = append(next, child)
+				}
+			}
+			children.Release()
+		}
+		release(level)
+		level = next
+	}
+	release(level)
+	return ""
 }

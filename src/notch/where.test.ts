@@ -77,7 +77,14 @@ const notepad = { app: 'notepad', name: 'Notepad', title: 'Untitled - Notepad', 
 describe('what a desktop app says about where you are', () => {
   test('is read carefully: a name of one line, a list of plain names, and no title while it looks away', () => {
     expect(parseNotchWhere({ app: 'Notepad.exe', name: ' Note\npad ', title: 'a\tb', look: '', still: true, never: ['Steam.EXE', 'steam', 7, ''], icon: 'k' }))
-      .toEqual({ app: 'notepad', name: 'Note pad', title: 'a b', look: '', still: true, never: ['steam'], iconKey: 'k' });
+      .toEqual({ app: 'notepad', name: 'Note pad', site: '', title: 'a b', look: '', still: true, never: ['steam'], iconKey: 'k' });
+    // A site, and a list that holds sites: kept as sites, whatever their ending.
+    expect(parseNotchWhere({ app: 'chrome', site: 'GitHub.com', never: ['site:Cash.App', 'site:not a site', 'Arc.app'] }))
+      .toMatchObject({ site: 'github.com', never: ['site:cash.app', 'arc'] });
+    expect(parseNotchWhere({ app: 'chrome', site: 'javascript:alert(1)' })?.site).toBe('');
+    // For a password or a bank the site is not kept, whatever was sent; for a site on the list it is.
+    expect(parseNotchWhere({ app: 'chrome', site: 'paypal.com', look: 'bank' })?.site).toBe('');
+    expect(parseNotchWhere({ app: 'chrome', site: 'reddit.com', look: 'never' })?.site).toBe('reddit.com');
     expect(parseNotchWhere({ app: 'chrome', title: 'My Bank - Chrome', look: 'bank' })?.title).toBe('');
     expect(parseNotchWhere({ app: 'chrome', look: 'sideways' })?.look).toBe('');
     expect(parseNotchWhere({ app: 'chrome' })?.name).toBe('chrome');
@@ -243,5 +250,44 @@ describe('the second door for what a desktop app captured', () => {
     }
     // With nothing set (the notch is off) everything is kept, as before.
     expect(captureMayBeKept('pc', { event_type: 'screen_capture', payload: { app_name: 'steam' } })).toBe(true);
+  });
+});
+
+describe('in a browser, the site says where you are', () => {
+  const github = { app: 'chrome', name: 'Google Chrome', site: 'github.com', title: 'vierisid/jarvis', look: '', still: false, never: [], icon: 'site-1' };
+
+  test('Home and the sheet name the site, and the icon is the site\'s own', async () => {
+    const h = harness();
+    h.tell(github, true);
+    expect(h.last('where')?.app).toEqual({ name: 'Google Chrome', icon: `data:image/png;base64,${PNG}` });
+    expect(h.rowText(h.where.row())).toBe('I see github.com, in Google Chrome.');
+    await h.open();
+    const [first, buttons] = h.blocks();
+    expect(h.rowText(first)).toBe('github.com, in Google Chrome: vierisid/jarvis. I look at this screen about every 15 seconds, when it has changed, and read the text on it.');
+    expect(buttons).toMatchObject({ buttons: [{ id: 'sleep' }, { id: 'never', label: 'Never watch github.com' }] });
+  });
+
+  test('"Never watch" is about the site, not the whole browser, and can be taken back', async () => {
+    const h = harness();
+    h.tell(github, true);
+    await h.open();
+    await h.answer('button', { button: 'never' });
+    expect(h.rpcs).toEqual([{ id: 'pc', method: NOTCH_NEVER_WATCH_RPC, params: { app: 'site:github.com', watch: false } }]);
+    expect(h.rowText(h.blocks()[0])).toBe('Not watching: You told me never to watch github.com.');
+    expect(h.rowText(h.blocks()[1])).toBe('Never watching: github.com.');
+    expect(h.blocks()[2]).toMatchObject({ buttons: [{ id: 'sleep' }, { id: 'never', label: 'Watch github.com again' }] });
+    expect(h.last('face')?.mood).toBe('closed');
+    // A page of the same site, on another address under it, is covered too.
+    h.tell({ ...github, site: 'gist.github.com', look: 'never', never: ['site:github.com'] });
+    expect(h.blocks().length).toBeGreaterThan(0);
+    await h.answer('button', { button: 'never' });
+    expect(h.rpcs[1]!.params).toEqual({ app: 'site:github.com', watch: true });
+  });
+
+  test('a browser that is itself on the list is offered back first', async () => {
+    const h = harness();
+    h.tell({ ...github, look: 'never', never: ['chrome'] });
+    await h.open();
+    expect(h.blocks().find((b) => b.kind === 'buttons')).toMatchObject({ buttons: [{ id: 'sleep' }, { id: 'never', label: 'Watch Google Chrome again' }] });
   });
 });
