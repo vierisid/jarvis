@@ -5,6 +5,7 @@
  *
  *   bun scripts/notch/mail-study.ts go [#place]        open Gmail in Jarvis's own browser
  *   bun scripts/notch/mail-study.ts shape <name> [json] run src/notch/mail/page/shape-<name>.js and print what it found
+ *   bun scripts/notch/mail-study.ts export [--days 30]  read the month's threads from Gmail into the study folder
  *   bun scripts/notch/mail-study.ts calendar           read the calendar, when one is connected, into the study folder
  *   bun scripts/notch/mail-study.ts replay [--want 45] [--most 160] [--tier medium]
  *                                                      put the month's moments to the proposer and keep its drafts
@@ -20,9 +21,11 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { gmailSearch, gmailThreads, type GmailRow } from '../../src/notch/mail/gmail.ts';
 import type { MailCalendarEvent, MailThought } from '../../src/notch/mail/proposer.ts';
 import { studyMoments, studyReplay, studyResult, type StudyMark, type StudyProposal, type StudyTried } from '../../src/notch/mail/study.ts';
-import type { MailThread } from '../../src/notch/mail/thread.ts';
+import { mailFirstName, type MailThread } from '../../src/notch/mail/thread.ts';
+import { mailMachine } from '../../src/notch/mail/waiting.ts';
 
 const DATA = process.env.NOTCH_DATA_DIR ?? join(homedir(), '.jarvis-notch');
 const PORT = Number(process.env.NOTCH_PORT ?? 3143);
@@ -170,6 +173,52 @@ async function main(argv: string[]): Promise<number> {
     console.log(JSON.stringify(answer, null, 2));
     return 0;
   }
+  if (verb === 'export') {
+    const days = Number(flag(rest, 'days') ?? 30);
+    await brain.go('#inbox');
+    const signed = await brain.run<{ host: string; main: boolean }>('shape-signin');
+    if (signed.host !== 'mail' || !signed.main) {
+      console.error('Jarvis\'s browser is not showing a signed-in Gmail. Sign in there first.');
+      return 1;
+    }
+    const { address } = await brain.run<{ address: string }>('owner');
+    const step = (what: string) => (page: number, rows: number) => process.stdout.write(`\r${what}: page ${page}, ${rows} rows   `);
+
+    // Everything but chats and what Gmail filed as advertising or social notices.
+    const window = `newer_than:${days}d -in:chats`;
+    const rows = await gmailSearch(brain, `${window} -category:promotions -category:social`, { each: step('The month') });
+    const filed = new Map<string, 'updates' | 'forums'>();
+    for (const kind of ['updates', 'forums'] as const) {
+      for (const row of await gmailSearch(brain, `${window} category:${kind}`, { each: step(`Filed under ${kind}`) })) filed.set(row.id, kind);
+    }
+    process.stdout.write('\n');
+
+    // The owner's addresses: the account's own, and any other Gmail shows under the same word ("me").
+    const words = new Set(rows.flatMap((row) => row.people).filter((who) => who.address === address).map((who) => who.name));
+    const mine = new Set([address, ...rows.flatMap((row) => row.people).filter((who) => words.has(who.name)).map((who) => who.address)]);
+
+    // A thread where only machines wrote and the owner never did can be neither a moment nor a sample.
+    const worth = (row: GmailRow) => row.people.length === 0 || row.people.some((who) => mine.has(who.address) || !mailMachine(who));
+    const wanted = rows.filter(worth);
+    console.log(`${rows.length} threads in ${days} days; ${rows.length - wanted.length} are machines only and are not read.`);
+    const { threads, failed } = await gmailThreads(brain, wanted, { each: (done, of) => process.stdout.write(`\rReading threads: ${done} of ${of}   `) });
+    process.stdout.write('\n');
+    for (const thread of threads) { const kind = filed.get(thread.id); if (kind) thread.filed = kind; }
+
+    const own = threads.flatMap((thread) => thread.messages).filter((message) => mine.has(message.from.address));
+    const names = new Map<string, number>();
+    for (const message of own) if (message.from.name) names.set(message.from.name, (names.get(message.from.name) ?? 0) + 1);
+    const full = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+    const name = full ? mailFirstName({ name: full, address }) : address.split('@')[0]!;
+    write(files.threads, threads);
+    write(files.owner, { name, addresses: [...mine], readAt: Date.now() });
+    const all = threads.flatMap((thread) => thread.messages);
+    console.log(`${threads.length} threads read, ${all.length} messages, ${own.length} of them the owner's, from ${mine.size} address${mine.size === 1 ? '' : 'es'} of theirs.`);
+    console.log(`Not read, by reason: ${JSON.stringify(failed)}`);
+    console.log(`Filed by Gmail: ${JSON.stringify({ updates: threads.filter((thread) => thread.filed === 'updates').length, forums: threads.filter((thread) => thread.filed === 'forums').length })}`);
+    console.log(`Kept in ${STUDY}.`);
+    return 0;
+  }
   if (verb === 'calendar') {
     // The month that is replayed, and the two weeks after today that a reply written today may speak of.
     const DAY = 24 * 60 * 60 * 1000;
@@ -224,7 +273,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`${tokens.input} tokens read and ${tokens.output} written in all, on ${[...new Set(tried.map((entry) => entry.cost.model))].join(', ')}.`);
     return 0;
   }
-  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | calendar | replay | sheet | score');
+  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | export | calendar | replay | sheet | score');
   return 2;
 }
 
