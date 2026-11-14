@@ -149,10 +149,44 @@ describe('a thread from what the page answered', () => {
       },
     };
     const steps: number[] = [];
-    const read = await gmailThreads(page, [1, 2, 3, 4, 5, 6, 7].map((n) => row(n)), { batch: 2, each: (done) => steps.push(done) });
+    const read = await gmailThreads(page, [1, 2, 3, 4, 5, 6, 7].map((n) => row(n)), { batch: 2, each: (done) => steps.push(done), pauses: [] });
     expect(asked.map((ids) => ids.length)).toEqual([2, 2, 2, 1]);
     expect(read.threads.map((thread) => thread.id)).toEqual([id(1), id(2), id(7)]);
     expect(read.failed).toEqual({ 'the page did not answer': 2, 'not in the answer': 1, 'status 500': 1 });
     expect(steps).toEqual([2, 4, 6, 7]);
+  });
+
+  // Gmail asked too fast answers with a page that has no mail in it. That says nothing about the thread.
+  test('what Gmail did not give because it was asked too fast is asked for again after a pause', async () => {
+    let calls = 0;
+    const slept: number[] = [];
+    const kept: string[] = [];
+    const page: GmailPage = {
+      run: async <T,>(_name: string, args?: unknown) => {
+        calls++;
+        const ids = (args as { ids: string[] }).ids;
+        // Throttled until the second pause has passed; thread 4 is truly unreadable.
+        return ids.map((entry) => (entry === id(4) ? raw({ id: entry, messages: [{ ...raw().messages[0]!, at: null }] })
+          : slept.length < 2 && entry !== id(1) ? { id: entry, failed: 'no messages in the print page', subject: '', messages: [] }
+          : raw({ id: entry }))) as T;
+      },
+    };
+    const read = await gmailThreads(page, [1, 2, 3, 4].map((n) => row(n)), {
+      batch: 4, pauses: [10, 20, 30], sleep: async (ms) => { slept.push(ms); }, got: (threads) => { kept.push(...threads.map((thread) => thread.id)); },
+    });
+    expect(slept).toEqual([10, 20]);
+    expect(calls).toBe(3);
+    expect(read.threads.map((thread) => thread.id).sort()).toEqual([id(1), id(2), id(3)]);
+    expect(kept.sort()).toEqual([id(1), id(2), id(3)]);
+    // A thread whose date cannot be read is not asked for again: waiting will not help it.
+    expect(read.failed).toEqual({ 'a message with no date': 1 });
+  });
+
+  test('gives up after the last pause and says how many it could not read', async () => {
+    const slept: number[] = [];
+    const page: GmailPage = { run: async <T,>(_name: string, args?: unknown) => (args as { ids: string[] }).ids.map((entry) => ({ id: entry, failed: 'no messages in the print page', subject: '', messages: [] })) as T };
+    const read = await gmailThreads(page, [1, 2].map((n) => row(n)), { pauses: [1, 2], sleep: async (ms) => { slept.push(ms); } });
+    expect(slept).toEqual([1, 2]);
+    expect(read).toEqual({ threads: [], failed: { 'no messages in the print page': 2 } });
   });
 });

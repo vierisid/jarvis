@@ -175,33 +175,79 @@ export function gmailThread(raw: GmailRawThread, row?: Pick<GmailRow, 'draft' | 
 }
 
 /**
+ * Failures that say nothing about the thread: Gmail was asked too much or
+ * too fast and answered with a page that has no mail in it, or not at all.
+ * Seen on 14 November 2026: after some 450 threads read as fast as they
+ * would come, Gmail answered 200 with an empty print page for most of the
+ * next thousand, and the same threads read without fault minutes later.
+ */
+const PASSING = /^(?:no messages in the print page|could not be fetched|the page did not answer|not in the answer|not a page|status (?:429|5\d\d))$/;
+
+/** How long to leave Gmail alone before asking again for what it did not give, round by round. */
+export const GMAIL_RETRY_PAUSES_MS = [20_000, 60_000, 120_000];
+
+/**
  * Threads in full, asked for a few at a time: each one is a page Gmail has
  * to make, and one answer has to come back within the desktop app's patience.
+ * What Gmail did not give because it was asked too fast is asked for again,
+ * after a pause, and a thread is counted as not read only when that is over.
  */
 export async function gmailThreads(
   page: GmailPage,
   rows: Pick<GmailRow, 'id' | 'draft' | 'subject'>[],
-  options: { batch?: number; each?: (done: number, of: number) => void } = {},
+  options: {
+    batch?: number;
+    each?: (done: number, of: number) => void;
+    /** Threads as they are read, a batch at a time: so that a long reading can be kept as it goes. */
+    got?: (threads: MailThread[]) => void | Promise<void>;
+    pauses?: number[];
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
 ): Promise<{ threads: MailThread[]; failed: Record<string, number> }> {
   const threads: MailThread[] = [];
-  const failed: Record<string, number> = {};
   const batch = Math.max(1, options.batch ?? 6);
-  for (let at = 0; at < rows.length; at += batch) {
-    const asked = rows.slice(at, at + batch);
-    let answered: GmailRawThread[];
-    try {
-      answered = await page.run<GmailRawThread[]>('threads', { ids: asked.map((row) => row.id) });
-    } catch {
-      // One bad batch is not the end of the reading: its threads are counted as not read.
-      answered = asked.map((row) => ({ id: row.id, failed: 'the page did not answer', subject: '', messages: [] }));
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  let done = 0;
+
+  /** One pass over some rows. Gives back the ones that failed, with why. */
+  const pass = async (wanted: typeof rows, count: boolean): Promise<Map<string, string>> => {
+    const failed = new Map<string, string>();
+    for (let at = 0; at < wanted.length; at += batch) {
+      const asked = wanted.slice(at, at + batch);
+      let answered: GmailRawThread[];
+      try {
+        answered = await page.run<GmailRawThread[]>('threads', { ids: asked.map((row) => row.id) });
+      } catch {
+        // One bad batch is not the end of the reading.
+        answered = asked.map((row) => ({ id: row.id, failed: 'the page did not answer', subject: '', messages: [] }));
+      }
+      const read: MailThread[] = [];
+      for (const row of asked) {
+        const raw = Array.isArray(answered) ? answered.find((entry) => entry && entry.id === row.id) : undefined;
+        const thread = raw ? gmailThread(raw, row) : { failed: 'not in the answer' };
+        if ('failed' in thread) failed.set(row.id, thread.failed);
+        else read.push(thread);
+      }
+      threads.push(...read);
+      if (read.length) await options.got?.(read);
+      if (count) { done = Math.min(at + batch, wanted.length); options.each?.(done, rows.length); }
     }
-    for (const row of asked) {
-      const raw = Array.isArray(answered) ? answered.find((entry) => entry && entry.id === row.id) : undefined;
-      const thread = raw ? gmailThread(raw, row) : { failed: 'not in the answer' };
-      if ('failed' in thread) failed[thread.failed] = (failed[thread.failed] ?? 0) + 1;
-      else threads.push(thread);
+    return failed;
+  };
+
+  let failed = await pass(rows, true);
+  for (const pause of options.pauses ?? GMAIL_RETRY_PAUSES_MS) {
+    const again = rows.filter((row) => PASSING.test(failed.get(row.id) ?? ''));
+    if (again.length === 0) break;
+    await sleep(pause);
+    const still = await pass(again, false);
+    for (const row of again) {
+      const why = still.get(row.id);
+      if (why) failed.set(row.id, why); else failed.delete(row.id);
     }
-    options.each?.(Math.min(at + batch, rows.length), rows.length);
+    options.each?.(rows.length - failed.size, rows.length);
   }
-  return { threads, failed };
+  const counted: Record<string, number> = {};
+  for (const why of failed.values()) counted[why] = (counted[why] ?? 0) + 1;
+  return { threads, failed: counted };
 }

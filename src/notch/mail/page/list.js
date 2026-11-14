@@ -32,9 +32,16 @@ return {
   there,
   rows: there ? rows.map((row) => ({
     id: idOf(row),
-    people: [...row.querySelectorAll('span[email]')].map((span) => ({ name: span.getAttribute('name') || span.textContent || '', address: span.getAttribute('email') || '' })),
+    // Gmail writes the people twice, once for the eye and once for a screen reader: the first is read.
+    people: [...(row.querySelector('div.yW') || row).querySelectorAll('span[email]')].map((span) => ({ name: span.getAttribute('name') || span.textContent || '', address: span.getAttribute('email') || '' })),
     count: Number((row.querySelector('span.bx0') || { textContent: '1' }).textContent) || 1,
-    draft: !!row.querySelector('.boq'),
+    // The newest message in the thread is one that was never sent: the owner has a draft waiting in it.
+    draft: (() => {
+      const node = row.querySelector('[data-legacy-last-message-id]');
+      const last = node ? node.getAttribute('data-legacy-last-message-id') : '';
+      const sent = node ? node.getAttribute('data-legacy-last-non-draft-message-id') : '';
+      return !!last && !!sent && last !== sent;
+    })(),
     subject: (row.querySelector('.bog') || { textContent: '' }).textContent || '',
   })) : [],
 };

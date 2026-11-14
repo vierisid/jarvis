@@ -95,6 +95,9 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
       'goals/rhythm.ts',
+      // The notch's mail proposer: a thread, a calendar and the owner's own
+      // mails, each cut to its own limit before it is framed into the prompt.
+      'notch/mail/proposer.ts',
       'roles/prompt-builder.ts',
       'sites/prompt-context.ts',
       // #1155: a forwarded channel message, framed into a turn's history or
