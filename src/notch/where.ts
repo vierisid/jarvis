@@ -60,6 +60,13 @@ export interface NotchWhereDeps {
    * per change, not while they stay.
    */
   arrived?(site: string): void;
+  /**
+   * The person's hands on the machine in front: `true` when they have been
+   * off the keyboard and the mouse for four seconds, `false` when they are
+   * back on them. Told on each change, and `true` when that machine goes
+   * away altogether (it sleeps, or its desktop app quits): nobody is there.
+   */
+  hands?(still: boolean): void;
   log?: (line: string) => void;
 }
 
@@ -215,12 +222,16 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     }
     const before = seen.get(sidecarId)?.look ?? '';
     const siteBefore = front === sidecarId ? seen.get(sidecarId)?.site ?? '' : '';
+    const stillBefore = front === sidecarId ? seen.get(sidecarId)?.still : undefined;
     const { iconKey, ...rest } = told;
     seen.set(sidecarId, { ...rest, icon: iconKey ? icons.get(iconKey) ?? null : null });
     front = sidecarId;
     refresh();
     if (told.site !== siteBefore && !deps.asleep()) {
       try { deps.arrived?.(told.site); } catch (error) { log(`[notch] hearing of a site failed: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    if (told.still !== stillBefore) {
+      try { deps.hands?.(told.still); } catch (error) { log(`[notch] hearing of still hands failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
     if (told.look !== before) {
       // What changed, never what is on the screen.
@@ -229,9 +240,12 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     }
   });
   port.onSidecarDisconnected?.((sidecarId) => {
+    const wasFront = front === sidecarId;
     seen.delete(sidecarId);
     if (front === sidecarId) front = seen.keys().next().value ?? null;
     refresh();
+    // The machine the person was at is gone: nobody is at it.
+    if (wasFront) { try { deps.hands?.(true); } catch { /* told as well as it can be */ } }
   });
 
   function row(): NotchBlock {

@@ -107,6 +107,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'notch.talk',
   // Which app is in front, and whether the desktop app is looking (src/notch/where.ts).
   'notch.where',
+  // Whether the person is on a call, and whether that machine is online (src/notch/around.ts).
+  'notch.around',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */

@@ -88,6 +88,14 @@ export interface NotchInboxOptions {
   busy?: () => boolean;
   /** What yes at rest opens when nothing waits. */
   home?: (stage: NotchStage) => Promise<void>;
+  /**
+   * Whether something may speak up by itself now (pass 8): the person's
+   * hands are still, and it is not their quiet hours. Asked for a line that
+   * nobody asked for and that has no window already running; what may not
+   * speak joins the count, and speaks when `calmed` says the answer may have
+   * changed. Without this, anything may speak whenever the notch is free.
+   */
+  maySpeak?: () => boolean;
 }
 
 interface Entry {
@@ -154,7 +162,12 @@ export class NotchInbox {
       this.start(entry, { unasked: wasPlaying.round === null }, wasPlaying.round);
       return;
     }
-    if (item.speaks && this.free()) { this.start(entry, { unasked: true }, null); return; }
+    if (item.speaks && this.free()) {
+      // Not while they are typing, and not in their quiet hours: it waits in the count for a still moment.
+      if (!this.quietEnough(item)) { entry.missed = true; this.pushCount(); return; }
+      this.start(entry, { unasked: true }, null);
+      return;
+    }
     if (item.speaks && item.urgent && this.playing && this.canShow()) {
       // A yes that is burning its fuse is not interrupted: the urgent thing
       // speaks the moment that is over.
@@ -181,10 +194,31 @@ export class NotchInbox {
     this.shownCount = -1;
     if (!this.free()) { this.pushCount(); return; }
     const missed = this.entries.filter((entry) => entry.missed).sort((a, b) => Number(b.item.urgent ?? false) - Number(a.item.urgent ?? false) || a.seq - b.seq);
-    for (const entry of missed) entry.missed = false;
-    const first = missed[0];
+    // What may not speak yet keeps its turn for the next still moment.
+    const may = missed.filter((entry) => this.quietEnough(entry.item));
+    for (const entry of may) entry.missed = false;
+    const first = may[0];
     if (first) { this.start(first, { unasked: true }, null); return; }
     this.pushCount();
+  }
+
+  /** Whether an item may speak up by itself now: one the person asked for, or with a window running, always may. */
+  private quietEnough(item: NotchItem): boolean {
+    return item.asked === true || item.urgent === true || this.options.maySpeak?.() !== false;
+  }
+
+  /**
+   * The answer to "may something speak" may have changed: the person's hands
+   * have gone still, or their quiet hours are over. What waited for that gets
+   * its say, one thing, if the notch is free.
+   */
+  calmed(): void {
+    if (this.free() && this.entries.some((entry) => entry.missed)) this.cameUp();
+  }
+
+  /** What a tap on the resting notch does: for a line that offers to show what waits. */
+  open(): void {
+    this.opened();
   }
 
   /** Nothing forbids showing: no hold, nothing else has the notch, and a page is up. */

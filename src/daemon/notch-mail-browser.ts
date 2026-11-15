@@ -81,7 +81,7 @@ export function notchMailLayerDeps(options: {
       const google = options.google();
       if (!google?.isAuthenticated()) return null;
       const events = await listUpcomingEvents(await google.getAccessToken(), 'primary', new Date(from).toISOString(), new Date(to).toISOString(), 250);
-      return events.map((event) => ({ summary: event.summary, start: event.start, end: event.end }));
+      return events.map((event) => ({ summary: event.summary, start: event.start, end: event.end, ...(event.attendees.length > 1 ? { withOthers: true } : {}) }));
     },
     modelReady: options.modelReady,
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone,

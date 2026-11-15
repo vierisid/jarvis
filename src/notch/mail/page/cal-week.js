@@ -94,7 +94,9 @@ for (const chip of document.querySelectorAll('[data-eventchip]')) {
     const key = `${id} ${start.getTime()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    events.push({ id, summary: title(chip, hidden, line), start: start.toISOString(), end: end.toISOString(), allDay: false });
+    // An event other people are in says how the owner answered it. One of their own alone says nothing of the kind.
+    const withOthers = parts.slice(1).some((part) => part === 'Accepted' || part === 'Maybe' || part === 'Needs RSVP');
+    events.push({ id, summary: title(chip, hidden, line), start: start.toISOString(), end: end.toISOString(), allDay: false, withOthers });
     continue;
   }
   // A whole-day event, in the row above the hours: its days are the columns it lies over.

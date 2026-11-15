@@ -43,8 +43,11 @@ describe('where a week is', () => {
 describe('an event the page answered', () => {
   test('is kept when it has an id, a title and an end after its start', () => {
     expect(calendarEvent(event('e1', '2026-11-16T09:00:00.000Z', '2026-11-16T10:00:00.000Z', '  Call   with Leo '))).toEqual(
-      { id: 'e1', summary: 'Call with Leo', start: '2026-11-16T09:00:00.000Z', end: '2026-11-16T10:00:00.000Z', allDay: false },
+      { id: 'e1', summary: 'Call with Leo', start: '2026-11-16T09:00:00.000Z', end: '2026-11-16T10:00:00.000Z', allDay: false, withOthers: false },
     );
+    // Other people in it is said only when the page said so.
+    expect(calendarEvent({ ...event('e1', '2026-11-16T09:00:00.000Z', '2026-11-16T10:00:00.000Z'), withOthers: true })!.withOthers).toBe(true);
+    expect(calendarEvent({ ...event('e1', '2026-11-16T09:00:00.000Z', '2026-11-16T10:00:00.000Z'), withOthers: 'yes' })!.withOthers).toBe(false);
   });
 
   test('is refused when it is not one: no dates, an end before the start, months long', () => {
