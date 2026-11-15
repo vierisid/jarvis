@@ -25,7 +25,7 @@
  * private (see the skip list where sidecar events are broadcast).
  */
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
-import type { NotchAsks } from './asks.ts';
+import type { NotchAskFile, NotchAsks } from './asks.ts';
 
 export const NOTCH_TALK_EVENT = 'notch.talk';
 /** Less voiced sound than this is not an instruction: nothing is transcribed. */
@@ -100,10 +100,37 @@ export interface NotchTalkDeps {
   sttTimeoutMs?: number;
   /** How long a recording may stay open with no end. For tests. */
   openMs?: number;
+  /**
+   * Looking at a thing (./look.ts) is done with the same keys held, so the
+   * microphone is open while a line is drawn. A hold in which something was
+   * circled and nothing was said is not a miss: the look answers by itself.
+   * One in which something was said is a question about what was circled, and
+   * the words carry it.
+   */
+  look?: NotchTalkLook;
+  now?: () => number;
   log?: (line: string) => void;
 }
 
+/** What talking needs of the look. */
+export interface NotchTalkLook {
+  /** Whether a look was begun on that desktop app since a moment, and has not had its say. */
+  during(sidecarId: string, since: number): boolean;
+  /** Nothing was said with it: it answers by itself. */
+  alone(sidecarId: string): void;
+  /** Something was said with it: the files that go with the words, or null when the look never came. */
+  files(sidecarId: string): Promise<NotchAskFile[] | null>;
+}
+
+/**
+ * A look made a moment before the keys had become talking belongs to that
+ * hold too: a click is quicker than the 150 ms the keys take.
+ */
+export const NOTCH_TALK_LOOK_BEFORE_MS = 1500;
+
 export interface NotchTalk {
+  /** Whether a recording is open on that desktop app: its talk keys are held. */
+  open(sidecarId: string): boolean;
   /**
    * For the hand test and the end-to-end run: goes through everything after
    * the microphone as if `words` had just been transcribed. Null is a
@@ -140,9 +167,38 @@ const REFUSALS: Record<string, string> = {
 export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): NotchTalk {
   const log = deps.log ?? ((line: string) => console.log(line));
   const timeoutMs = deps.sttTimeoutMs ?? NOTCH_STT_TIMEOUT_MS;
+  const now = deps.now ?? (() => Date.now());
   /** The recordings whose microphone is open now, by desktop app. */
   const open = new Map<string, string>();
+  /** When each recording was opened, by its key, for as long as it matters: until its words are in. */
+  const since = new Map<string, number>();
   const limits = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Whether something was looked at during the hold that made this recording. */
+  const looked = (sidecarId: string, talkKey: string): boolean =>
+    !!deps.look && deps.look.during(sidecarId, (since.get(talkKey) ?? now()) - NOTCH_TALK_LOOK_BEFORE_MS);
+  /** Nothing was said. With a look made in the same hold that is not a miss: the line leaves, and the look answers. */
+  const nothing = (sidecarId: string, talkKey: string, why: Parameters<NotchAsks['nothing']>[1]): void => {
+    const withLook = looked(sidecarId, talkKey);
+    since.delete(talkKey);
+    if (withLook && (why === 'silence' || why === 'too_little')) {
+      deps.asks.dropped(talkKey);
+      deps.look!.alone(sidecarId);
+      return;
+    }
+    deps.asks.nothing(talkKey, why);
+    // The words were lost, not absent: the look still has its one line.
+    if (withLook) deps.look!.alone(sidecarId);
+  };
+  /** Something was said. With a look made in the same hold, it is a question about that. */
+  const heard = async (sidecarId: string, talkKey: string, said: string, cut: boolean): Promise<void> => {
+    const withLook = looked(sidecarId, talkKey);
+    since.delete(talkKey);
+    let files: NotchAskFile[] | null = null;
+    if (withLook) {
+      try { files = await deps.look!.files(sidecarId); } catch { files = null; }
+    }
+    deps.asks.words(talkKey, said, { ...(cut ? { cut: true } : {}), ...(files?.length ? { files } : {}) });
+  };
   const closed = (sidecarId: string): void => {
     const limit = limits.get(sidecarId);
     if (limit) clearTimeout(limit);
@@ -156,6 +212,8 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     closed(sidecarId);
     log(`[notch] a recording was dropped: ${why}`);
     deps.asks.dropped(talkKey);
+    if (looked(sidecarId, talkKey)) deps.look!.alone(sidecarId);
+    since.delete(talkKey);
   };
   port.onSidecarDisconnected?.((sidecarId) => { lost(sidecarId, 'its desktop app disconnected'); });
   const key = (sidecarId: string, talkId: string): string => `${sidecarId}:${talkId}`;
@@ -164,9 +222,9 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   const filler = (said: string): boolean =>
     NOTCH_TALK_FILLER.has(said.toLowerCase().normalize('NFD').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim());
 
-  async function transcribe(talkKey: string, pcm: Buffer, sampleRate: number, voicedMs: number, cut = false): Promise<void> {
+  async function transcribe(sidecarId: string, talkKey: string, pcm: Buffer, sampleRate: number, voicedMs: number, cut = false): Promise<void> {
     const provider = deps.stt();
-    if (!provider) { deps.asks.nothing(talkKey, 'no_stt'); return; }
+    if (!provider) { nothing(sidecarId, talkKey, 'no_stt'); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const words = await Promise.race([
@@ -176,12 +234,11 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       const said = (words ?? '').trim();
       // The length, never the words: a log is not the place for what was said.
       log(`[notch] a recording was made into ${said.length} characters`);
-      if (!hasSpokenContent(said) || notchTalkSignOff(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) deps.asks.nothing(talkKey, 'silence');
-      else if (cut) deps.asks.words(talkKey, said, { cut: true });
-      else deps.asks.words(talkKey, said);
+      if (!hasSpokenContent(said) || notchTalkSignOff(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) nothing(sidecarId, talkKey, 'silence');
+      else await heard(sidecarId, talkKey, said, cut);
     } catch (error) {
       log(`[notch] a recording could not be made into words: ${error instanceof Error ? error.message : String(error)}`);
-      deps.asks.nothing(talkKey, 'failed');
+      nothing(sidecarId, talkKey, 'failed');
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -206,6 +263,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       if (before && before !== talkKey) deps.asks.dropped(before);
       closed(sidecarId);
       open.set(sidecarId, talkKey);
+      since.set(talkKey, now());
       const limit = setTimeout(() => { if (open.get(sidecarId) === talkKey) lost(sidecarId, 'no end arrived for it'); }, deps.openMs ?? NOTCH_TALK_OPEN_MS);
       (limit as { unref?: () => void }).unref?.();
       limits.set(sidecarId, limit);
@@ -215,11 +273,22 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     // Only the recording that is open on that desktop app can end or be cancelled.
     if (open.get(sidecarId) !== talkKey) return;
     closed(sidecarId);
-    if (phase === 'cancelled') { deps.asks.dropped(talkKey); return; }
-    if (phase !== 'end') return;
+    if (phase === 'cancelled') {
+      // A slip of the keys, or Esc on a line that was being drawn (then the
+      // look is gone too). What was circled before the slip still has its line.
+      deps.asks.dropped(talkKey);
+      if (looked(sidecarId, talkKey)) deps.look!.alone(sidecarId);
+      since.delete(talkKey);
+      return;
+    }
+    if (phase !== 'end') { since.delete(talkKey); return; }
     // Turned away while the keys were still held: its sound is dropped here,
     // and is never sent to be made into words.
-    if (!deps.asks.released(talkKey)) return;
+    if (!deps.asks.released(talkKey)) {
+      if (looked(sidecarId, talkKey)) deps.look!.alone(sidecarId);
+      since.delete(talkKey);
+      return;
+    }
     const voicedMs = Number(payload.voiced_ms ?? 0);
     const binary = event.binary as { type?: string; data?: string } | undefined;
     let pcm = Buffer.alloc(0);
@@ -233,17 +302,18 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     // made into words and asked about (asks.ts); it used to be thrown away.
     // A desktop app from before that sends no sound for it: then it is said.
     const cut = payload.reason === 'cap';
-    if (cut && pcm.length < 3200) { deps.asks.nothing(talkKey, 'too_long'); return; }
+    if (cut && pcm.length < 3200) { nothing(sidecarId, talkKey, 'too_long'); return; }
     if (!(voicedMs >= NOTCH_TALK_MIN_VOICED_MS) || pcm.length < 3200) {
-      deps.asks.nothing(talkKey, voicedMs > 0 ? 'too_little' : 'silence');
+      nothing(sidecarId, talkKey, voicedMs > 0 ? 'too_little' : 'silence');
       return;
     }
     const sampleRate = Number(payload.sample_rate ?? 16_000) || 16_000;
-    void transcribe(talkKey, pcm, sampleRate, voicedMs, cut);
+    void transcribe(sidecarId, talkKey, pcm, sampleRate, voicedMs, cut);
   });
 
   let pretended = 0;
   return {
+    open: (sidecarId) => open.has(sidecarId),
     pretend(words) {
       const talkKey = `pretend:${Date.now().toString(36)}-${++pretended}`;
       deps.asks.listen(talkKey);

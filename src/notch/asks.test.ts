@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { BriefChatEvent, BriefChatPayload, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
-import { NOTCH_NOT_CAUGHT, answerShape, attachNotchAsks, ledgerDetail, ledgerWord, plainLines, rememberSentence } from './asks.ts';
-import type { NotchAsksDeps, NotchRemembered, NotchTurnDoor } from './asks.ts';
+import { NOTCH_NOT_CAUGHT, NotchFilesNotKept, answerShape, attachNotchAsks, ledgerDetail, ledgerWord, plainLines, rememberSentence } from './asks.ts';
+import type { NotchAskFile, NotchAsksDeps, NotchRemembered, NotchTurnDoor } from './asks.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchItem } from './inbox.ts';
 import { NotchLedger } from './ledger.ts';
@@ -893,5 +893,76 @@ describe('a spoken instruction that ran past a minute', () => {
     await h.advance(900);
     expect(h.line()).toMatchObject({ kind: 'work' });
     expect(h.door.texts()).toEqual(['what is two plus two']);
+  });
+});
+
+// Pass 9: what was circled on the screen, or a file that was dropped, goes with the words.
+describe('an instruction that carries files', () => {
+  const file = (name: string): NotchAskFile => ({ kind: 'document', name, mediaType: 'text/plain', bytes: new Uint8Array([1, 2, 3]) });
+  /** Keeps what the door was given, and takes its time, as the real one does while it stores the files. */
+  function keeping(h: H, fail?: Error) {
+    const kept: string[][] = [];
+    const real = h.door.door.submit.bind(h.door.door);
+    h.door.door.submit = async (turn) => {
+      await Promise.resolve();
+      if (fail) throw fail;
+      kept.push((turn.files ?? []).map((entry) => entry.name));
+      await real(turn);
+    };
+    return kept;
+  }
+
+  test('a question about them runs as one turn, with them, and its answer is said', async () => {
+    const h = harness();
+    const kept = keeping(h);
+    h.asks.typed('What is this?', [file('circled-on-screen.txt'), file('circled-on-screen.png')]);
+    await settle();
+    expect(kept).toEqual([['circled-on-screen.txt', 'circled-on-screen.png']]);
+    expect(h.door.texts()).toEqual(['What is this?']);
+    expect(h.said()).toBe('On it: What is this?');
+    const turn = h.door.running();
+    h.door.say(turn, 'Invoice 114 from Acme, 9 days late.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('Invoice 114 from Acme, 9 days late.');
+    expect(row(h)).toMatchObject({ state: 'done', heard: 'What is this?' });
+  });
+
+  test('spoken words carry them too, and words without any carry none', async () => {
+    const h = harness();
+    const kept = keeping(h);
+    h.asks.listen('t1');
+    await settle();
+    h.asks.released('t1');
+    await settle();
+    h.asks.words('t1', 'is this one late', { files: [file('circled-on-screen.txt')] });
+    await settle();
+    await h.advance(900);
+    expect(kept).toEqual([['circled-on-screen.txt']]);
+    h.door.end(h.door.running());
+    await settle();
+    if (h.line()) await h.answer('done');
+    await h.speak('t2', 'what is two plus two');
+    await h.advance(900);
+    expect(kept).toEqual([['circled-on-screen.txt'], []]);
+  });
+
+  test('when they cannot be kept with it nothing is asked, and the reason is what is said', async () => {
+    const h = harness();
+    keeping(h, new NotchFilesNotKept('That is too large for me to read yet, so nothing was asked.'));
+    h.asks.typed('Summarise this file', [file('big.pdf')]);
+    await settle();
+    expect(h.door.texts()).toEqual([]);
+    expect(h.said()).toContain('That is too large for me to read yet, so nothing was asked.');
+    expect(row(h)).toMatchObject({ state: 'failed', note: 'That is too large for me to read yet, so nothing was asked.' });
+  });
+
+  test('a conversation that is busy is still said to be busy', async () => {
+    const h = harness();
+    keeping(h);
+    h.door.setBusy(true);
+    h.asks.typed('What is this?', [file('circled-on-screen.txt')]);
+    await settle();
+    expect(row(h)).toMatchObject({ state: 'failed', note: 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.' });
   });
 });

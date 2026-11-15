@@ -113,11 +113,14 @@ export class BriefChatTransport implements BriefProvider {
    * ConversationRequestError for what a socket send is refused for: a
    * conversation that already has a turn, a full queue, a reused identity.
    */
-  submit(input: BriefTurnRef & { text: string }): { turn: ChatTurn; created: boolean } {
+  submit(input: BriefTurnRef & { text: string; attachmentIds?: string[] }): { turn: ChatTurn; created: boolean } {
     if (this.stopped) throw new ConversationRequestError('Conversation chat is unavailable.', 409);
     const identity = { conversationId: id(input.conversationId), turnId: id(input.turnId), requestId: id(input.requestId) };
     if (typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 65_536) throw new ConversationRequestError('Invalid chat text or speech setting');
-    const accepted = this.repository.accept({ ...identity, text: input.text, speak: false, attachmentIds: [] });
+    // Attachments already kept in this conversation (what the owner circled on
+    // their screen, a file they dropped on the notch): bound to the turn as a
+    // dashboard send binds them, under the same limits.
+    const accepted = this.repository.accept({ ...identity, text: input.text, speak: false, attachmentIds: attachmentIds(input.attachmentIds) });
     for (const event of accepted.events) this.emit(event);
     if (accepted.created) this.schedule(accepted.turn, null, true);
     return { turn: accepted.turn, created: accepted.created };
