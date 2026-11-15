@@ -20,7 +20,9 @@ export interface NotchTodayRow {
   at: number;
   text: string;
   /** Where the row comes from, for the small word on its right. */
-  kind: 'approved' | 'promise';
+  kind: 'approved' | 'promise' | 'mail';
+  /** In place of the small word: what a sent mail cost. */
+  small?: string;
 }
 
 export interface NotchTodayDeps {
@@ -28,6 +30,8 @@ export interface NotchTodayDeps {
   executedApprovals(limit: number): ApprovalRequest[];
   /** Promises that were kept: `{ what, completed_at }`. */
   keptPromises?(): { what: string; completed_at: number | null }[];
+  /** Replies Jarvis sent from the notch since a moment, each with what it cost. */
+  sentMail?(since: number): { at: number; text: string; small: string }[];
   now?: () => number;
 }
 
@@ -76,6 +80,11 @@ export function notchToday(deps: NotchTodayDeps): NotchTodayRow[] {
     if (at === null || at < since || at > now) continue;
     rows.push({ at, text: promise.what, kind: 'promise' });
   }
+  for (const sent of deps.sentMail?.(since) ?? []) {
+    if (sent.at < since || sent.at > now) continue;
+    const points = [...sent.text];
+    rows.push({ at: sent.at, text: points.length <= ROW_CHARS ? sent.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'mail', small: sent.small });
+  }
   return rows.sort((a, b) => b.at - a.at);
 }
 
@@ -89,7 +98,7 @@ export function notchTodayBlocks(rows: NotchTodayRow[]): NotchBlock[] {
   if (rows.length === 0) return [{ kind: 'note', say: ['Nothing done yet today.'] }];
   const shown = rows.slice(0, NOTCH_TODAY_MAX);
   const blocks: NotchBlock[] = shown.map((row) => ({
-    kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'promise' ? 'promised' : 'approved',
+    kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'mail' ? `sent · ${row.small ?? ''}`.replace(/ · $/, '') : row.kind === 'promise' ? 'promised' : 'approved',
   }));
   if (rows.length > shown.length) blocks.push({ kind: 'note', say: [`And ${rows.length - shown.length} more, in the dashboard.`] });
   return blocks;

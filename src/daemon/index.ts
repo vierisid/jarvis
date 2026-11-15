@@ -167,13 +167,13 @@ import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
-import { notchStudyDeps } from "./notch-mail-browser.ts";
+import { notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
 import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchScriptDeps, notchTurnNote, wireOwnerWord } from "./notch-asks.ts";
+import { notchAskDeps, notchMailModelReady, notchScriptDeps, notchTurnNote, wireOwnerWord } from "./notch-asks.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -4692,6 +4692,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           llm: () => agentService.getLLMManager(),
           transport: () => notchTurnStore,
         }),
+        // Mail (pass 7): Jarvis looks at the mailbox by itself, on a clock,
+        // through a connection when one reads mail and in its own browser tab
+        // when not, and prepares a reply where a person is waiting. A test
+        // brain may shorten the rule's four hours, so that a build can be tried
+        // without waiting for them.
+        mail: notchMailLayerDeps({
+          db: getDb(),
+          manager: sidecarManager,
+          llm: () => agentService.getLLMManager(),
+          google: () => googleAuth,
+          modelReady: () => notchMailModelReady(agentService.getLLMManager()),
+          waitMinutes: notchDemoState === 'open' ? Number(process.env.JARVIS_NOTCH_MAIL_WAIT_MINUTES) : undefined,
+        }),
         openDashboard: (sidecarId) => {
           const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
           for (const id of targets) {
@@ -5684,7 +5697,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           say: (text) => { notchReal?.talk?.pretend(text); },
         }) : null,
         // The mail study (the plan's Track B), through Jarvis's own browser.
-        study: notchStudyDeps({ manager: sidecarManager, llm: () => agentService.getLLMManager(), google: () => googleAuth }),
+        study: notchStudyDeps({
+          manager: sidecarManager,
+          llm: () => agentService.getLLMManager(),
+          google: () => googleAuth,
+          mail: () => { const layer = notchReal?.mail; return layer ? { look: (kind) => layer.look(kind), counts: () => layer.store.counts() } : null; },
+        }),
       }),
       ...createWorkflowRoutes({
         egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',

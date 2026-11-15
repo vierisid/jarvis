@@ -78,6 +78,11 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["browser_scroll"] = makeBrowserScrollHandler(cfg)
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
 		registry["browser_close"] = makeBrowserCloseHandler(cfg)
+		// The notch's own tab, beside the page above: three Google sites and
+		// nothing else, so that a check of the mail never takes the agent's
+		// page (browser_mail_tab.go).
+		registry["mail_tab_navigate"] = makeMailTabNavigateHandler(cfg)
+		registry["mail_tab_evaluate"] = makeMailTabEvaluateHandler(cfg)
 		// Read-only, and note what is missing: no `cfg`. Every handler above
 		// takes one because it may need to find and launch a browser;
 		// browser_element_point answers from a browser that is already running

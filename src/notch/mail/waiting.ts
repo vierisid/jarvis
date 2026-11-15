@@ -52,7 +52,7 @@ export function mailShared(person: MailPerson): boolean {
   return SHARED_LOCAL.test(person.address.split('@')[0] ?? '');
 }
 
-export function mailWaiting(thread: MailThread, owner: MailOwner, now: number): MailWaiting {
+export function mailWaiting(thread: MailThread, owner: MailOwner, now: number, wait = MAIL_WAIT_MIN_MS): MailWaiting {
   const last = thread.messages.at(-1);
   if (!last) return { waits: false, why: 'empty' };
   if (isOwner(last.from, owner)) return { waits: false, why: 'owner-last' };
@@ -74,7 +74,7 @@ export function mailWaiting(thread: MailThread, owner: MailOwner, now: number): 
   if (!ownerWrote && last.to.length + last.cc.length > MAIL_CROWD) return { waits: false, why: 'crowd' };
 
   const waited = now - last.at;
-  if (waited < MAIL_WAIT_MIN_MS) return { waits: false, why: 'too-new' };
+  if (waited < wait) return { waits: false, why: 'too-new' };
   if (waited > MAIL_WAIT_MAX_MS) return { waits: false, why: 'too-old' };
   return { waits: true, who: last.from, since: last.at, last };
 }
