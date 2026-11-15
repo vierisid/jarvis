@@ -101,6 +101,8 @@ export interface NotchRealDeps {
     modelReady: NotchAsksDeps['modelReady'];
     remember?: NotchAsksDeps['remember'];
     understand?: NotchAsksDeps['understand'];
+    /** "Where is…?" answered by pointing at it on the screen (pass 9). */
+    point?: NotchAsksDeps['point'];
     /** Puts an approval in plain words, from its tool and arguments alone. */
     describeApproval?: (request: ApprovalRequest) => Promise<string | null>;
     /** What on the screen an approval would land on, as that machine reads it now. Shown to the person only. */
@@ -246,6 +248,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       modelReady: deps.asks.modelReady,
       remember: deps.asks.remember,
       understand: deps.asks.understand,
+      point: deps.asks.point,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
       // The instruction is over: what it was still asking for is asked no more.

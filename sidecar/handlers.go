@@ -139,6 +139,9 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 			notch.usePanels(nil)
 		}
 		registry["notch.configure"] = makeNotchConfigureHandler(notch)
+		// "Where is...?": a ring round something on the screen (notch_looker.go).
+		registry["notch.point"] = makeNotchPointHandler(notchLooker)
+		registry["notch.window"] = makeNotchWindowHandler()
 	}
 
 	if caps[CapSubPebble] && subPebble != nil {
