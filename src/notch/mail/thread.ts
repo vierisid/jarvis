@@ -16,8 +16,10 @@ export interface MailMessage {
   cc: MailPerson[];
   /** When it was sent, in milliseconds. */
   at: number;
-  /** What it says, as plain text, without the history quoted under it. */
+  /** What it says, as plain text, without the history quoted under it. A link is its words and then its address, between < and >. */
   text: string;
+  /** The names of the files that came with it. Absent when there were none. */
+  files?: string[];
 }
 
 export interface MailThread {

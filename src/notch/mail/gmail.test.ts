@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { gmailOwnText, gmailPeople, gmailSearch, gmailSearchPlace, gmailThread, gmailThreads, type GmailListed, type GmailPage, type GmailRawThread, type GmailRow } from './gmail.ts';
+import type { MailThread } from './thread.ts';
+import { gmailOwnText, gmailPeople, gmailSearch, gmailSearchPlace, gmailThread, gmailThreads, type GmailListed, type GmailPage, type GmailRawThread, type GmailRow, GMAIL_LINK_MAX, gmailLinks } from './gmail.ts';
 import { mailPerson } from './thread.ts';
 
 const id = (n: number) => n.toString(16).padStart(16, '0');
@@ -105,7 +106,54 @@ describe('a message without its quoted history', () => {
   });
 });
 
+// Found by the owner's scoring, 15 November 2026: drafts asked for a calendar link that was in the mail, behind the word "here".
+describe('the links of a message', () => {
+  const mark = (url: string) => `\u27E6${url}\u27E7`;
+
+  test('a link behind words is its words and then where it goes', () => {
+    expect(gmailLinks(`You can book a time here ${mark('https://cal.example/leo/30min')} whenever suits.`)).toBe('You can book a time here <https://cal.example/leo/30min> whenever suits.');
+  });
+
+  test('words that already show the address are not followed by it again', () => {
+    expect(gmailLinks(`Book at https://cal.example/leo ${mark('https://cal.example/leo')}`)).toBe('Book at https://cal.example/leo');
+    expect(gmailLinks(`See cal.example/leo ${mark('https://www.cal.example/leo?utm=x')}`)).toBe('See cal.example/leo');
+    // Only the words of the link itself count: an address earlier in the line does not hide a later link.
+    expect(gmailLinks(`cal.example is down, use this one ${mark('https://cal.example/leo')}`)).toBe('cal.example is down, use this one <https://cal.example/leo>');
+  });
+
+  test("Google's stop in front of a link is taken off", () => {
+    expect(gmailLinks(`here ${mark('https://www.google.com/url?q=https%3A%2F%2Fcal.example%2Fleo&sa=D&ust=1')}`)).toBe('here <https://cal.example/leo>');
+    expect(gmailLinks(`here ${mark('https://www.google.com/url?sa=D')}`)).toBe('here');
+  });
+
+  test('a very long address is shown as its site and the start of its path', () => {
+    const long = `https://track.example/c/${'a'.repeat(400)}?token=${'b'.repeat(200)}`;
+    const shown = gmailLinks(`Read more ${mark(long)}`);
+    expect(shown).toBe(`Read more <https://track.example/c/${'a'.repeat(77)}...>`);
+    expect(shown.length).toBeLessThan(GMAIL_LINK_MAX);
+  });
+
+  test('what is not a web address is dropped, and text without marks is left alone', () => {
+    expect(gmailLinks(`x ${mark('https://')} y`)).toBe('x y');
+    expect(gmailLinks('Plain text with a < b and b > a.')).toBe('Plain text with a < b and b > a.');
+  });
+});
+
 describe('a thread from what the page answered', () => {
+  test('keeps the links and the names of the files that came with a message', () => {
+    const at = Date.UTC(2026, 10, 10, 15, 4);
+    const read = gmailThread({ id: '19a1b2c3d4e5f607', subject: 'Call', messages: [
+      { from: 'Leo Bianchi <leo@lumen.example>', to: 'Sam Rossi <sam@northwind.example>', cc: '', at, text: 'Pick a slot here \u27E6https://cal.example/leo\u27E7\nDeck attached.', files: ['Lumen deck.pdf', '  invite.ics ', 7, ''] },
+      { from: 'Sam Rossi <sam@northwind.example>', to: 'Leo Bianchi <leo@lumen.example>', cc: '', at: at + 60_000, text: 'Thanks.', files: [] },
+      { from: 'Leo Bianchi <leo@lumen.example>', to: 'Sam Rossi <sam@northwind.example>', cc: '', at: at + 120_000, text: 'Great.', files: 2 },
+    ] }) as MailThread;
+    expect(read.messages[0]!.text).toBe('Pick a slot here <https://cal.example/leo>\nDeck attached.');
+    expect(read.messages[0]!.files).toEqual(['Lumen deck.pdf', 'invite.ics']);
+    // No files is no line about files: a count from an older reading is not a list of names.
+    expect('files' in read.messages[1]!).toBe(false);
+    expect('files' in read.messages[2]!).toBe(false);
+  });
+
   const at = Date.UTC(2026, 10, 10, 15, 4);
   const raw = (extra: Partial<GmailRawThread> = {}): GmailRawThread => ({
     id: id(77), subject: 'Deck for Thursday?',
