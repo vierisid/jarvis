@@ -1,6 +1,6 @@
 // Threads in full (args.ids: thread ids from the list), each read from the page
 // Gmail makes for printing it. Answers one entry per id:
-// { id, subject, messages: [{ from, to, cc, at, text }] } or { id, failed }.
+// { id, subject, messages: [{ from, to, cc, at, text, files }] } or { id, failed }.
 const key = typeof GLOBALS !== 'undefined' && Array.isArray(GLOBALS) && typeof GLOBALS[9] === 'string' ? GLOBALS[9] : null;
 if (!key) throw new Error('no key for this mailbox in the page');
 const base = location.origin + location.pathname;
@@ -31,6 +31,21 @@ const textOf = (root) => {
     if (node.tagName === 'BLOCKQUOTE' || node.classList.contains('gmail_quote') || node.classList.contains('gmail_extra') || node.id === 'divRplyFwdMsg') {
       // A forwarded message is the point of the mail that carries it, so it stays.
       if (!/forwarded message|messaggio inoltrato/i.test(node.textContent.slice(0, 200))) { out += '\n'; return; }
+    }
+    if (node.tagName === 'A') {
+      // A link is its words and where it goes. The words alone ("book a time here") are not the link:
+      // the address is left beside them, between marks, and ../gmail.ts decides how it is shown.
+      const before = out.length;
+      for (const child of node.childNodes) walk(child);
+      if (out.length === before) {
+        // A picture that is a link says what it is in its alt.
+        const picture = node.querySelector('img[alt]');
+        const alt = picture ? (picture.getAttribute('alt') || '').replace(/\s+/g, ' ').trim() : '';
+        if (alt) out += alt;
+      }
+      const href = node.getAttribute('href') || '';
+      if (/^https?:\/\//i.test(href)) out += ` \u27E6${href.replace(/\s/g, '')}\u27E7`;
+      return;
     }
     const block = BLOCK.has(node.tagName);
     if (block && !out.endsWith('\n')) out += '\n';
@@ -83,7 +98,8 @@ const one = async (id) => {
       cc: line('cc'),
       at: when(cells[1] ? cells[1].textContent : ''),
       text: body ? textOf(body) : '',
-      files: cell ? cell.querySelectorAll('table.att').length : 0,
+      // The files that came with it, by name: each is listed under the message with its name in bold.
+      files: cell ? [...cell.querySelectorAll('table.att b')].map((name) => name.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 12) : [],
     };
   });
   return { id, subject: title ? title.textContent.trim() : '', messages };

@@ -44,7 +44,7 @@ export interface GmailRawThread {
   /** Why it could not be read, when it could not. */
   failed?: string;
   subject: string;
-  messages: { from: string; to: string; cc: string; at: number | null; text: string }[];
+  messages: { from: string; to: string; cc: string; at: number | null; text: string; files?: unknown }[];
 }
 
 const THREAD_ID = /^[0-9a-f]{16}$/;
@@ -149,6 +149,44 @@ export function gmailOwnText(text: string): string {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/** The longest address of a link that is shown whole. A longer one is shown as its site and the start of its path. */
+export const GMAIL_LINK_MAX = 200;
+const LINK = /[ \t]?\u27E6(https?:\/\/[^\s\u27E7]*)\u27E7/g;
+
+/**
+ * The links of a message, as the model reads them. The page leaves each
+ * link's address beside its words, between marks; here it becomes
+ * "book a time here <https://cal.example/leo>".
+ *
+ * Without this a link is only its words, and a reply asks for the very thing
+ * the message gave: seen in the study on 15 November 2026, where drafts asked
+ * for a calendar link that was in the mail, behind the word "here".
+ */
+export function gmailLinks(text: string): string {
+  return text.replace(LINK, (_whole, raw: string, at: number, all: string) => {
+    let url: URL;
+    try {
+      url = new URL(raw);
+      // Google's own stop in front of a link: the link is what it leads to.
+      if (url.hostname === 'www.google.com' && url.pathname === '/url') url = new URL(url.searchParams.get('q') ?? url.searchParams.get('url') ?? '');
+    } catch {
+      return '';
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+    // Words that already show where the link goes are the link: it is not said twice.
+    const word = (all.slice(Math.max(0, at - 400), at).split('\n').at(-1) ?? '').trim().split(/\s+/).at(-1) ?? '';
+    if (word.toLowerCase().includes(url.hostname.replace(/^www\./, '').toLowerCase())) return '';
+    const shown = url.href.length <= GMAIL_LINK_MAX ? url.href : `${url.origin}${url.pathname.slice(0, 80)}...`;
+    return ` <${shown}>`;
+  });
+}
+
+/** The names of the files that came with a message, as the page gave them, checked. */
+function gmailFiles(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((name) => (typeof name === 'string' && name.trim() ? [name.replace(/\s+/g, ' ').trim().slice(0, 120)] : [])).slice(0, 12);
+}
+
 /** A thread from what the page answered, or the reason it cannot be trusted. */
 export function gmailThread(raw: GmailRawThread, row?: Pick<GmailRow, 'draft' | 'subject'>): MailThread | { failed: string } {
   if (raw.failed) return { failed: raw.failed };
@@ -164,7 +202,8 @@ export function gmailThread(raw: GmailRawThread, row?: Pick<GmailRow, 'draft' | 
       to: gmailPeople(String(message.to ?? '')),
       cc: gmailPeople(String(message.cc ?? '')),
       at: message.at,
-      text: gmailOwnText(String(message.text ?? '')),
+      text: gmailOwnText(gmailLinks(String(message.text ?? ''))),
+      ...(gmailFiles(message.files).length ? { files: gmailFiles(message.files) } : {}),
     });
   }
   // Gmail prints them oldest first. If that is ever not so, order is not guessed at.
