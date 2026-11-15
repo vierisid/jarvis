@@ -823,7 +823,7 @@ func uiaElementGetPropertyBool(elem *ole.IDispatch, propertyId int) bool {
 		return false
 	}
 	if v.VT == ole.VT_BOOL {
-		return v.Val != 0
+		return oleBoolIsTrue(v.Val)
 	}
 	return false
 }
