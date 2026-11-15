@@ -11,11 +11,19 @@
  */
 import { NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH, notchDemoGate, notchDemoTokenMatches } from './demo-gate.ts';
 import { notchStudyOp, type NotchStudyDeps } from './mail/study-route.ts';
+import { NOTCH_DROP_MAX_BYTES, type NotchDropped } from './drop.ts';
 import { notchScriptOp } from './script.ts';
 import type { NotchScriptDeps } from './script.ts';
 
 /** Where the desktop app is told to point the notch's window. */
 export const NOTCH_PAGE_PATH = '/notch.html';
+
+/**
+ * Where the notch's page sends a file that was dropped on it
+ * (ui/src/notch/drop.ts). Like every route under /api it answers only a
+ * signed-in page of this brain, from this brain's own origin.
+ */
+export const NOTCH_DROP_PATH = '/api/notch/drop';
 
 /** What the demo endpoint needs. */
 export interface NotchRouteDeps {
@@ -37,6 +45,30 @@ export interface NotchRouteDeps {
   study?: NotchStudyDeps | null;
   /** How many notch pages are up and listening. */
   pages?: () => number;
+  /** A file was dropped on the notch (./drop.ts). */
+  drop?: ((dropped: NotchDropped) => { taken: boolean }) | null;
+}
+
+/** What a dropped file's request says about it: its name, its size as the page saw it, and how many came with it. */
+export async function readNotchDrop(req: Request): Promise<NotchDropped> {
+  let name = '';
+  try { name = decodeURIComponent(req.headers.get('x-notch-file') ?? ''); } catch { name = ''; }
+  const count = Number(req.headers.get('x-notch-count') ?? 1);
+  const said = Number(req.headers.get('x-notch-size') ?? NaN);
+  const length = Number(req.headers.get('content-length') ?? 0);
+  let bytes = new Uint8Array(0);
+  // A body larger than anything that could be read is not read at all.
+  if (!(length > NOTCH_DROP_MAX_BYTES + 4096)) {
+    try { bytes = new Uint8Array(await req.arrayBuffer()); } catch { bytes = new Uint8Array(0); }
+    if (bytes.length > NOTCH_DROP_MAX_BYTES) bytes = new Uint8Array(0);
+  }
+  return {
+    name,
+    mediaType: (req.headers.get('content-type') ?? '').slice(0, 120),
+    size: Number.isFinite(said) && said >= 0 ? said : bytes.length,
+    bytes,
+    count: Number.isInteger(count) && count > 0 ? Math.min(count, 999) : 1,
+  };
 }
 
 type NotchRoutes = Record<string, { POST: (req: Request) => Promise<Response> }>;
@@ -47,6 +79,13 @@ export function notchRoutes(enabled: boolean, deps: NotchRouteDeps = {}): NotchR
   // Off: no route. A request gets the ordinary 404.
   if (!enabled) return {};
   return {
+    [NOTCH_DROP_PATH]: {
+      POST: async (req) => {
+        const drop = deps.drop;
+        if (!drop) return notFound();
+        return Response.json(drop(await readNotchDrop(req)));
+      },
+    },
     [NOTCH_DEMO_PATH]: {
       POST: async (req) => {
         const gate = notchDemoGate();

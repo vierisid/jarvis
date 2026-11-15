@@ -41,6 +41,7 @@ export class NotchSurface {
   private readonly answerListeners = new Set<(answer: NotchAnswer, sidecarId: string) => void>();
   private readonly openListeners = new Set<(sidecarId: string) => void>();
   private readonly stopListeners = new Set<(sidecarId: string) => void>();
+  private readonly dragListeners = new Set<(state: 'over' | 'left' | 'lost', sidecarId: string) => void>();
   private readonly helloListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
 
@@ -139,6 +140,12 @@ export class NotchSurface {
     return () => { this.stopListeners.delete(listener); };
   }
 
+  /** A file is over the notch, was taken away again, or was dropped and lost on the way. */
+  onDrag(listener: (state: 'over' | 'left' | 'lost', sidecarId: string) => void): () => void {
+    this.dragListeners.add(listener);
+    return () => { this.dragListeners.delete(listener); };
+  }
+
   private fromPage(sidecarId: string, raw: unknown): void {
     const message = parseNotchFromPage(raw);
     if (!message) {
@@ -170,6 +177,10 @@ export class NotchSurface {
     }
     if (message.type === 'stop') {
       for (const listener of this.stopListeners) listener(sidecarId);
+      return;
+    }
+    if (message.type === 'drag') {
+      for (const listener of this.dragListeners) listener(message.state, sidecarId);
       return;
     }
     const line = this.line;
