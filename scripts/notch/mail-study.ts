@@ -5,8 +5,9 @@
  *
  *   bun scripts/notch/mail-study.ts go [#place]        open Gmail in Jarvis's own browser
  *   bun scripts/notch/mail-study.ts shape <name> [json] run src/notch/mail/page/shape-<name>.js and print what it found
- *   bun scripts/notch/mail-study.ts export [--days 30] [--resume]
+ *   bun scripts/notch/mail-study.ts export [--days 30] [--resume | --refresh]
  *                                                      read the month's threads from Gmail into the study folder
+ *                                                      (--refresh: the same threads again, as the month stood when listed)
  *   bun scripts/notch/mail-study.ts calendar           read the calendar into the study folder: through the brain's Google
  *                                                      connection when there is one, else in the same signed-in browser
  *   bun scripts/notch/mail-study.ts replay [--want 45] [--most 160] [--tier medium]
@@ -30,7 +31,7 @@ import { browserDriveSearch, type DriveFile } from '../../src/notch/mail/drive.t
 import { gmailSearch, gmailThreads, type GmailRow } from '../../src/notch/mail/gmail.ts';
 import type { MailCalendarEvent, MailThought } from '../../src/notch/mail/proposer.ts';
 import { studyMoments, studyReplay, studyResult, type StudyMark, type StudyProposal, type StudyTried } from '../../src/notch/mail/study.ts';
-import { mailFirstName, type MailThread } from '../../src/notch/mail/thread.ts';
+import { mailFirstName, threadAsOf, type MailThread } from '../../src/notch/mail/thread.ts';
 import { mailMachine } from '../../src/notch/mail/waiting.ts';
 import { firstWay } from '../../src/notch/ways.ts';
 
@@ -282,7 +283,11 @@ async function main(argv: string[]): Promise<number> {
   }
   if (verb === 'export') {
     const days = Number(flag(rest, 'days') ?? 30);
-    const resume = rest.includes('--resume');
+    // `--refresh` reads the same threads again (the reader learned something, like keeping links) and keeps
+    // the month as it was listed: a message that came after the list was made is left out, so that the
+    // moments of the study, and the marks given to them, still stand for the same thing.
+    const refresh = rest.includes('--refresh');
+    const resume = rest.includes('--resume') || refresh;
     await brain.go('#inbox');
     const signed = await brain.run<{ host: string; main: boolean }>('shape-signin');
     if (signed.host !== 'mail' || !signed.main) {
@@ -320,16 +325,29 @@ async function main(argv: string[]): Promise<number> {
     const worth = (row: GmailRow) => row.people.length === 0 || row.people.some((who) => mine.has(who.address) || !mailMachine(who));
     const wanted = rows.filter(worth);
     const have = new Map((resume ? read<MailThread[]>(files.threads, []) : []).map((thread) => [thread.id, thread]));
-    const todo = wanted.filter((row) => !have.has(row.id));
+    // Read again one by one over the old: a thread that cannot be read this time keeps what was read before.
+    const again = new Set(refresh ? read<string[]>('refreshed.json', []) : []);
+    // `--moments` with --refresh: only the threads the study puts to the proposer, which is what a
+    // change to the reader has to reach first. The rest can be read again later, or never.
+    const only = refresh && rest.includes('--moments')
+      ? new Set(studyMoments([...have.values()], mine, listed.listedAt).moments.map((moment) => moment.thread))
+      : null;
+    const todo = wanted.filter((row) => (refresh ? !again.has(row.id) && (!only || only.has(row.id)) : !have.has(row.id)));
     console.log(`${rows.length} threads in ${days} days; ${rows.length - wanted.length} are machines only and are not read; ${have.size} already read; ${todo.length} to read.`);
     let unsaved = 0;
     const { failed } = await gmailThreads(brain, todo, {
       each: (done, of) => process.stdout.write(`\rReading threads: ${done} of ${of}   `),
       got: (read) => {
-        for (const thread of read) have.set(thread.id, thread);
+        for (const thread of read) {
+          const then = refresh ? threadAsOf(thread, listed!.listedAt) : thread;
+          // Nothing of it from before the list was made: it is not one of the month's threads as they were.
+          if (then.messages.length === 0) continue;
+          have.set(thread.id, refresh ? { ...then, ...(have.get(thread.id)?.draft ? { draft: true } : {}) } : then);
+          again.add(thread.id);
+        }
         unsaved += read.length;
         // Kept as it goes: a reading that is stopped has lost a minute, not the month.
-        if (unsaved >= 120) { write(files.threads, [...have.values()]); unsaved = 0; }
+        if (unsaved >= 120) { write(files.threads, [...have.values()]); if (refresh) write('refreshed.json', [...again]); unsaved = 0; }
       },
     });
     process.stdout.write('\n');
@@ -342,6 +360,7 @@ async function main(argv: string[]): Promise<number> {
     const full = [...names.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
     const name = full ? mailFirstName({ name: full, address }) : address.split('@')[0]!;
     write(files.threads, threads);
+    if (refresh) write('refreshed.json', [...again]);
     write(files.owner, { name, addresses: [...mine], readAt: listed.listedAt });
     const all = threads.flatMap((thread) => thread.messages);
     const span = all.length ? Math.round((Math.max(...all.map((message) => message.at)) - Math.min(...all.map((message) => message.at))) / 86_400_000) : 0;

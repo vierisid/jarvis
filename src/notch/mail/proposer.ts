@@ -99,6 +99,7 @@ function shown(message: MailMessage, owner: MailOwner, ownerName: string, zone?:
     `To: ${message.to.map(person).join(', ') || '(nobody named)'}`,
     ...(message.cc.length ? [`Cc: ${message.cc.map(person).join(', ')}`] : []),
     `Sent: ${when(message.at, zone)}`,
+    ...(message.files?.length ? [`Attached: ${message.files.join(', ')}`] : []),
     '',
     cut(message.text.trim(), MAIL_MESSAGE_CHARS),
   ].join('\n');
@@ -131,6 +132,8 @@ First decide whether that last message needs a reply from ${name}.
 If it needs a reply, write the reply ${name} would send.
 - Write as ${name}: match the samples of their writing in length, greeting, sign-off and manner. Most real replies are a few lines.
 - Write in the language of the last message.
+- Read every message whole before you write: a link stands after its words, between < and >, and the files that came with a message are named on its "Attached" line. What a message already gave (a link to book a time, a calendar invitation, a document, a file) is there to be used. Never ask for it again, and never name it as missing.
+- When they sent a link to book a time with them, do not propose times and do not ask for a link: say that ${name} will pick a time there.
 - Say only what ${name} can say from what is in the thread and in their calendar. Never make up a fact, a price, a date, a decision, a promise or an attachment. When the reply would need something you do not have, write the reply without it and name what is missing in "missing".
 - Propose or accept a time only when the calendar shows ${name} is free then. If you do, copy the words that name the time, exactly as you wrote them in the reply, into "time".
 - When what is missing is a file or a document that ${name} would have (a deck, a contract, a sheet, a recording), put two to five words it would be found by, as they would stand in its name, in "look_for". Leave it empty for anything else.
