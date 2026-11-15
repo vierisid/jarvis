@@ -697,7 +697,23 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		if !notchOn {
 			notchWhere.Forget()
 			notchAround.Forget()
+			notchLooker.Forget()
 			return
+		}
+		// Looking at a thing on the screen (notch_looker.go): what a line held
+		// goes out on this connection. The words and the picture travel beside
+		// the event, not in its payload.
+		notchLookStart.Do(func() { notchLookHands = platformNotchLookHands(notchLooker) })
+		if notchLookHands != nil {
+			notchLooker.Use(notchLookHands, notchLookAway, func(payload map[string]any, body []byte) {
+				evt := SidecarEvent{Type: "sidecar_event", EventType: notchLookEvent, Timestamp: time.Now().UnixMilli(), Priority: "high", Payload: payload}
+				if body != nil {
+					evt.Binary = BinaryDataInline{Type: "inline", MimeType: "application/x-notch-look"}
+				}
+				if err := sendFn(ctx, evt, body); err != nil {
+					log.Printf("[notch] look: %v did not reach the brain: %v", payload["phase"], err)
+				}
+			})
 		}
 		// Whether the person is on a call, and whether this machine has a
 		// connection (notch_around.go): told on the same terms.
@@ -731,6 +747,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		c.whereDecide.Store(nil)
 		notchWhere.Forget()
 		notchAround.Forget()
+		notchLooker.Forget()
 	}()
 
 	// What the notch's page says to the brain goes out on this connection, as

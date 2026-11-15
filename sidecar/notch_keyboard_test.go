@@ -69,6 +69,107 @@ func TestNotchKeyboardKeepsOnlyEscAndOnlyWhenWanted(t *testing.T) {
 // When the watch stops in the middle of talking, the page must not be left
 // thinking the keys are still held. It ends as a slip, not as a sentence:
 // what was being said is thrown away.
+// fakeKeysLook is a look that says what it was told and takes Esc when a line
+// is being drawn.
+type fakeKeysLook struct {
+	armed   []bool
+	drawing bool
+	escHeld bool
+}
+
+func (l *fakeKeysLook) Keys(armed bool) { l.armed = append(l.armed, armed) }
+func (l *fakeKeysLook) Esc() bool {
+	if l.drawing {
+		l.drawing, l.escHeld = false, true
+		return true
+	}
+	return l.escHeld
+}
+func (l *fakeKeysLook) EscUp() bool { held := l.escHeld; l.escHeld = false; return held }
+
+// The pointer is the look's from the moment the pair is down, before the hold
+// has become talking, and no longer once another key makes it a shortcut.
+func TestNotchKeyboardTellsTheLookWhenThePairAloneIsDown(t *testing.T) {
+	var h notchHeard
+	look := &fakeKeysLook{}
+	kb := newNotchKeyboard(notchTestPairs, h.say, h.mask)
+	kb.look = look
+	kb.key(notchKeyModifiers, notchModCtrl)
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
+	if got := look.armed; !reflect.DeepEqual(got, []bool{false, true}) {
+		t.Fatalf("armed: %v", got)
+	}
+	// Ctrl + Win + D is Windows' own: the pointer is the app's again.
+	kb.key(notchKeyOther, notchModCtrl|notchModMeta)
+	if got := look.armed[len(look.armed)-1]; got {
+		t.Fatal("still armed after another key")
+	}
+	// And stays so until the keys have come up and gone down again.
+	kb.key(notchKeyModifiers, notchModCtrl)
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
+	if got := look.armed[len(look.armed)-1]; got {
+		t.Fatal("armed again within the same press")
+	}
+	kb.key(notchKeyModifiers, 0)
+	kb.key(notchKeyModifiers, notchModMeta)
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
+	if got := look.armed[len(look.armed)-1]; !got {
+		t.Fatal("a fresh press of the pair did not arm the look")
+	}
+	// Ctrl + Win + Shift is not the pair.
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta|notchModShift)
+	if got := look.armed[len(look.armed)-1]; got {
+		t.Fatal("armed with a third modifier down")
+	}
+	kb.reset()
+	if got := look.armed[len(look.armed)-1]; got {
+		t.Fatal("armed after the keyboard was forgotten")
+	}
+}
+
+// Esc half way through a circle: the line is thrown away, the key reaches no
+// app (down, repeating or coming up), and what was being said is not an
+// instruction.
+func TestNotchKeyboardEscWhileALineIsDrawnIsTheLooksAndEndsTheTalkingAsASlip(t *testing.T) {
+	var h notchHeard
+	look := &fakeKeysLook{}
+	kb := newNotchKeyboard(notchTestPairs, h.say, h.mask)
+	kb.look = look
+	kb.key(notchKeyModifiers, notchModCtrl)
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if said, _ := h.got(); len(said) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	look.drawing = true
+	if !kb.key(notchKeyEscDown, notchModCtrl|notchModMeta) {
+		t.Fatal("Esc reached the app while a line was being drawn")
+	}
+	if !kb.key(notchKeyEscDown, notchModCtrl|notchModMeta) {
+		t.Fatal("Esc repeating reached the app")
+	}
+	if !kb.key(notchKeyEscUp, notchModCtrl|notchModMeta) {
+		t.Fatal("Esc coming up reached the app")
+	}
+	said, _ := h.got()
+	if !reflect.DeepEqual(said, []notchKeyAction{notchKeyTalkStart, notchKeyTalkCancel}) {
+		t.Fatalf("said %v", said)
+	}
+	// Letting go of the keys afterwards says nothing more.
+	kb.key(notchKeyModifiers, 0)
+	if said, _ := h.got(); len(said) != 2 {
+		t.Fatalf("said %v", said)
+	}
+	// With no line drawn, Esc with the pair held is not the look's: it is left to the keys, as before.
+	kb.key(notchKeyModifiers, notchModCtrl|notchModMeta)
+	if kb.key(notchKeyEscDown, notchModCtrl|notchModMeta) {
+		t.Fatal("Esc was kept with nothing drawn")
+	}
+}
+
 func TestNotchKeyboardResetEndsTalking(t *testing.T) {
 	var h notchHeard
 	kb := newNotchKeyboard(notchTestPairs, h.say, h.mask)
