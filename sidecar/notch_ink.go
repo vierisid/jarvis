@@ -22,9 +22,12 @@ import (
 // The marker's colour (the notch's citron) and how strong it is at its middle.
 const (
 	notchInkR, notchInkG, notchInkB = 0xD6, 0xFF, 0x5C
-	notchInkStrength                = 0.46
+	// Strong enough to be seen on a white window, where citron is pale, and
+	// weak enough that the words under it can still be read. (At 0.46 a line
+	// on white was hard to find.)
+	notchInkStrength = 0.62
 	// Half the marker's width, at a display scale of 100%.
-	notchInkRadius = 5.0
+	notchInkRadius = 6.0
 )
 
 // notchInk is a sheet as large as the part of the screen it covers.
