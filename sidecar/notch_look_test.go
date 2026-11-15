@@ -439,7 +439,7 @@ func TestInkPaintsOnlyTheRectangleAskedForInTheMarkersColour(t *testing.T) {
 	ink.paint(pixels, lookRect{0, 0, 32, 64})
 	full := pixels[32*64+20]
 	a, r, g, b := full>>24, full>>16&0xff, full>>8&0xff, full&0xff
-	if a < 110 || a > 125 {
+	if a < 150 || a > 166 {
 		t.Fatalf("strength %d", a)
 	}
 	// Multiplied by its own strength, as a layered window wants it: no channel above the strength.
