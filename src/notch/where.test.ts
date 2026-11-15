@@ -291,3 +291,43 @@ describe('in a browser, the site says where you are', () => {
     expect(h.blocks().find((b) => b.kind === 'buttons')).toMatchObject({ buttons: [{ id: 'sleep' }, { id: 'never', label: 'Watch Google Chrome again' }] });
   });
 });
+
+// Mail speaks up where mail is (pass 7): the brain has to hear when a site comes to the front, and when it leaves.
+describe('hearing which site is in front', () => {
+  const told = (asleep = false) => {
+    const heard: string[] = [];
+    let whereEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} };
+    const surface = new NotchSurface(port, () => {});
+    const inbox = new NotchInbox(surface, { log: () => {} });
+    attachNotchWhere(surface, inbox, { onEvent(listener) { whereEvent = listener; }, dispatchRPC: async () => ({}) },
+      { asleep: () => asleep, sleep: () => {}, arrived: (site) => { heard.push(site); }, log: () => {} });
+    const chrome = (site: string, look = '') => whereEvent('pc', { event_type: NOTCH_WHERE_EVENT, payload: { app: 'chrome', name: 'Google Chrome', title: 'x', site, look, still: true, never: [] } });
+    const notepad = () => whereEvent('pc', { event_type: NOTCH_WHERE_EVENT, payload: { app: 'notepad', name: 'Notepad', title: 'x', look: '', still: true, never: [] } });
+    return { heard, chrome, notepad };
+  };
+
+  test('told once when a site comes to the front, not while the person stays, and told when they leave it', () => {
+    const { heard, chrome, notepad } = told();
+    chrome('mail.google.com');
+    chrome('mail.google.com');
+    chrome('github.com');
+    notepad();
+    notepad();
+    chrome('mail.google.com');
+    expect(heard).toEqual(['mail.google.com', 'github.com', '', 'mail.google.com']);
+  });
+
+  test('while the desktop app looks away the site is not known: that is a leaving, and nothing is named', () => {
+    const { heard, chrome } = told();
+    chrome('mail.google.com');
+    chrome('bank.example', 'bank');
+    expect(heard).toEqual(['mail.google.com', '']);
+  });
+
+  test('nothing is told while asleep', () => {
+    const { heard, chrome } = told(true);
+    chrome('mail.google.com');
+    expect(heard).toEqual([]);
+  });
+});

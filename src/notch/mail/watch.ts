@@ -156,6 +156,11 @@ export class MailWatch {
     return this.last;
   }
 
+  /** Whether a look is under way now. A long one (the month) is not waited for by anything the owner is waiting on. */
+  busy(): boolean {
+    return this.looking !== null;
+  }
+
   /** What the owner is called, as their own mail signs them. Empty until a mail of theirs has been read. */
   name(): string {
     return this.ownerName;

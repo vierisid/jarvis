@@ -54,9 +54,10 @@ export interface NotchWhereDeps {
   /** Whether watching is switched on at all (the product's awareness setting). Taken as on when not given. */
   watching?(): boolean;
   /**
-   * The person has come to a site in their browser ("mail.google.com"): told
-   * once when it becomes the site in front, not while they stay. Never told
-   * while the desktop app looks away, since the site is not known then.
+   * The site in front has changed: the person has come to a site in their
+   * browser ("mail.google.com"), or left one ("" when what is in front is no
+   * site, or the desktop app looks away and the site is not known). Told once
+   * per change, not while they stay.
    */
   arrived?(site: string): void;
   log?: (line: string) => void;
@@ -218,7 +219,7 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     seen.set(sidecarId, { ...rest, icon: iconKey ? icons.get(iconKey) ?? null : null });
     front = sidecarId;
     refresh();
-    if (told.site && told.site !== siteBefore && !deps.asleep()) {
+    if (told.site !== siteBefore && !deps.asleep()) {
       try { deps.arrived?.(told.site); } catch (error) { log(`[notch] hearing of a site failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
     if (told.look !== before) {

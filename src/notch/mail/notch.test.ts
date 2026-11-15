@@ -36,6 +36,8 @@ function harness(rows: MailProposalRow[], options: {
   stillWaitsFrom?: (boolean | null)[];
   noMailbox?: boolean;
   look?: MailLook | null;
+  /** A look (the month, say) is under way. */
+  reading?: boolean;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -92,6 +94,7 @@ function harness(rows: MailProposalRow[], options: {
       stillWaits: async () => (options.stillWaitsFrom ? options.stillWaitsFrom[0]! : options.stillWaits === undefined ? true : options.stillWaits),
       look: async () => { looks++; return options.look ?? { through: 'browser', listed: 1, read: 0, asked: 0, prepared: 0, overtaken: 0 }; },
       lastLook: () => null,
+      busy: () => options.reading === true,
     },
     mailbox: () => (options.noMailbox ? null : mailbox),
     now: () => AT + 10_000 + now,
@@ -364,6 +367,18 @@ describe('coming to Gmail', () => {
     await h.answer('done');
     await h.arrive();
     expect(h.line()).toBeNull();
+  });
+
+  // The first look goes through a month. Coming to Gmail in the middle of it must not wait for its end.
+  test('while the mailbox is still being read it does not wait for that, and says nothing it does not know', async () => {
+    const empty = harness([], { reading: true });
+    await empty.arrive();
+    expect(empty.looks()).toBe(0);
+    expect(empty.line()).toBeNull();
+    const some = harness([row()], { reading: true });
+    await some.arrive();
+    expect(some.looks()).toBe(0);
+    expect(some.said()).toBe('You have not replied to Leo. I drafted a reply.');
   });
 
   test('when the mail cannot be seen, that is what it says', async () => {
