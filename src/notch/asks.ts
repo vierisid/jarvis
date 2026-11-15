@@ -27,6 +27,7 @@ import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
+import { whereQuestion, type NotchPointed } from './point.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
 export const NOTCH_HEARD_MS = 900;
@@ -112,6 +113,13 @@ export interface NotchAsksDeps {
   remember?: (what: string, sentence: string, askId: string, confirm?: (fact: string) => Promise<boolean>) => Promise<NotchRemembered>;
   /** One sentence saying what the instruction was taken to mean. Null when it cannot be said. */
   understand?: (text: string) => Promise<string | null>;
+  /**
+   * "Where is…?" (./point.ts): finds it in what the window in front says
+   * about itself, and points at it on the screen. Null when the words are not
+   * such a question, or the window has no answer: then they run as any other
+   * instruction.
+   */
+  point?: (question: string) => Promise<NotchPointed | null>;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
@@ -187,6 +195,8 @@ interface Live {
   cut?: boolean;
   /** What goes with the words: what was circled on the screen, a file that was dropped. */
   files?: NotchAskFile[];
+  /** The person asked for it to stop. What has no turn to cancel yet ends by this. */
+  stopAsked?: boolean;
   approvals: Set<string>;
   waiters: Set<() => void>;
 }
@@ -473,32 +483,73 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     ask.turn = ref;
     ask.activity = null;
     byTurn.set(ref.turnId, ask);
-    try {
-      await turns.submit({ ...ref, text: ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
-      // Kept with the turn now: not held here as well.
-      ask.files = undefined;
-    } catch (error) {
-      const busy = (error as { status?: unknown } | null)?.status === 409;
-      const note = error instanceof NotchFilesNotKept
-        ? error.why
-        : busy
-          ? 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.'
-          : 'It could not be started.';
-      log(`[notch] an instruction could not be started: ${error instanceof Error ? error.message : String(error)}`);
-      byTurn.delete(ref.turnId);
-      ask.note = note;
-      ledger.finish(ask.id, 'failed', { note });
-      ask.phase = 'failed';
+    /** Starts the turn. From here on the store says how it goes. */
+    const start = async (): Promise<void> => {
+      try {
+        await turns.submit({ ...ref, text: ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
+        // Kept with the turn now: not held here as well.
+        ask.files = undefined;
+      } catch (error) {
+        const busy = (error as { status?: unknown } | null)?.status === 409;
+        const note = error instanceof NotchFilesNotKept
+          ? error.why
+          : busy
+            ? 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.'
+            : 'It could not be started.';
+        log(`[notch] an instruction could not be started: ${error instanceof Error ? error.message : String(error)}`);
+        byTurn.delete(ref.turnId);
+        ask.note = note;
+        ledger.finish(ask.id, 'failed', { note });
+        ask.phase = 'failed';
+        return;
+      }
+      const understand = deps.understand;
+      if (understand) {
+        // Beside the turn, never in its way: the turn does not wait for it.
+        void understand(ask.heard).then(
+          (understood) => { if (understood) ledger.understood(ask.id, understood); },
+          () => {},
+        );
+      }
+    };
+    // "Where is…?" is answered by pointing, from what the window in front says
+    // about itself. Only when that has no answer does the question become a
+    // turn like any other. A question that carries what was circled is about
+    // that, not about where something is. The window is read beside the line
+    // that says so, not in its way: it can be stopped like anything running.
+    const point = deps.point;
+    if (point && !ask.files?.length && whereQuestion(ask.heard)) {
+      ask.activity = 'Looking for it in the window.';
+      void (async () => {
+        let pointed: NotchPointed | null = null;
+        try { pointed = await point(ask.heard); } catch (error) {
+          log(`[notch] a "where is" could not be answered by pointing: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (ask.phase !== 'running') return;
+        if (ask.stopAsked) {
+          byTurn.delete(ref.turnId);
+          ledger.finish(ask.id, 'stopped');
+          ask.phase = 'stopped';
+        } else if (pointed?.ok) {
+          byTurn.delete(ref.turnId);
+          ledger.did(ask.id, 'Pointed at it on the screen.');
+          ask.answer = pointed.said;
+          ledger.finish(ask.id, 'done', { answer: ask.answer });
+          ask.phase = 'done';
+        } else if (pointed) {
+          byTurn.delete(ref.turnId);
+          ask.note = pointed.why;
+          ledger.finish(ask.id, 'failed', { note: ask.note });
+          ask.phase = 'failed';
+        } else {
+          ask.activity = null;
+          await start();
+        }
+        bump(ask);
+      })();
       return;
     }
-    const understand = deps.understand;
-    if (understand) {
-      // Beside the turn, never in its way: the turn does not wait for it.
-      void understand(ask.heard).then(
-        (understood) => { if (understood) ledger.understood(ask.id, understood); },
-        () => {},
-      );
-    }
+    await start();
   }
 
   function onTurnEvent(event: BriefChatEvent): void {
@@ -679,6 +730,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           while (ask.phase === 'running') {
             const what = await Promise.race([stop, changed(ask)]);
             if (what === 'stop') {
+              ask.stopAsked = true;
               if (ask.turn) {
                 try { deps.turns()?.cancel(ask.turn); } catch (error) {
                   log(`[notch] a turn could not be stopped: ${error instanceof Error ? error.message : String(error)}`);

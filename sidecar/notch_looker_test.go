@@ -63,6 +63,9 @@ func (h *fakeHands) InkTag(text string, bounds lookRect) {
 	h.note("ink tag %s", text)
 }
 func (h *fakeHands) InkEnd(stay time.Duration) { h.note("ink end %v", stay) }
+func (h *fakeHands) Ring(r lookRect, label string, stay time.Duration) {
+	h.note("ring %d,%d %dx%d %q %v", r.X, r.Y, r.W, r.H, label, stay)
+}
 func (h *fakeHands) ThingAt(at lookPoint, light bool) (lookThing, bool) {
 	h.note("thing at %d,%d light=%v", at.X, at.Y, light)
 	return h.at, h.at.Kind != ""
@@ -379,4 +382,59 @@ func TestLookForgottenItTakesNothingAndTellsNothing(t *testing.T) {
 		}
 	}
 	_ = hands
+}
+
+func TestPointDrawsARingRoundWhatTheBrainFound(t *testing.T) {
+	look, hands, _, _ := lookWorld(t, "")
+	handler := makeNotchPointHandler(look)
+	result, err := handler(map[string]any{"x": 1880.0, "y": 4.0, "w": 32.0, "h": 24.0, "label": "  Close\n ", "ms": 4000.0})
+	if err != nil || result.Result.(map[string]any)["pointed"] != true {
+		t.Fatalf("%v %v", result, err)
+	}
+	if !hands.has(`ring 1880,4 32x24 "Close" 4s`) {
+		t.Fatalf("%v", hands.log())
+	}
+	// On a display to the left of the first, places are below zero.
+	if _, err := handler(map[string]any{"x": -1500.0, "y": 300.0, "w": 80.0, "h": 20.0}); err != nil {
+		t.Fatal(err)
+	}
+	if !hands.has(`ring -1500,300 80x20 "" 5s`) {
+		t.Fatalf("%v", hands.log())
+	}
+	// How long it stays is kept within reason.
+	handler(map[string]any{"x": 1.0, "y": 1.0, "w": 5.0, "h": 5.0, "ms": 9e9})
+	handler(map[string]any{"x": 1.0, "y": 1.0, "w": 5.0, "h": 5.0, "ms": 1.0})
+	if !hands.has(`ring 1,1 5x5 "" 15s`) || !hands.has(`ring 1,1 5x5 "" 500ms`) {
+		t.Fatalf("%v", hands.log())
+	}
+}
+
+func TestPointRefusesWhatIsNotARectangleAndWhenThereIsNothingToDrawWith(t *testing.T) {
+	look, hands, _, _ := lookWorld(t, "")
+	handler := makeNotchPointHandler(look)
+	for _, bad := range []map[string]any{
+		{},
+		{"x": 1.0, "y": 1.0, "w": 0.0, "h": 5.0},
+		{"x": "1", "y": 1.0, "w": 5.0, "h": 5.0},
+		{"x": 1.0, "y": 1.0, "w": 5.0},
+		{"x": 1e9, "y": 1.0, "w": 5.0, "h": 5.0},
+	} {
+		if _, err := handler(bad); err == nil {
+			t.Fatalf("%v was pointed at", bad)
+		}
+	}
+	// While the person is drawing a line, the screen is theirs.
+	look.Keys(true)
+	look.Down(10, 10)
+	if _, err := handler(map[string]any{"x": 1.0, "y": 1.0, "w": 5.0, "h": 5.0}); err == nil {
+		t.Fatal("a ring was drawn over a line being drawn")
+	}
+	look.Up(10, 10)
+	look.Forget()
+	if _, err := handler(map[string]any{"x": 1.0, "y": 1.0, "w": 5.0, "h": 5.0}); err == nil {
+		t.Fatal("a ring was drawn with nothing to draw with")
+	}
+	if hands.has("ring") {
+		t.Fatalf("%v", hands.log())
+	}
 }

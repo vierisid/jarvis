@@ -29,6 +29,7 @@ import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { BriefAttachmentProvider } from '../brief/attachments.ts';
 import { NotchFilesNotKept, type NotchTurnDoor } from '../notch/asks.ts';
 import { NOTCH_LOOK_FILE, NOTCH_LOOK_PICTURE, lookDescribeMessages, type NotchLookPort } from '../notch/look.ts';
+import { createNotchPoint } from '../notch/point.ts';
 import type { NotchRealDeps } from '../notch/real.ts';
 import { NOTCH_TOLD_SOURCE, createNotchRemember } from '../notch/remember.ts';
 import type { NotchScriptDeps } from '../notch/script.ts';
@@ -305,10 +306,38 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
     },
   });
 
+  /** The computer the person is at: the one the desktop tools would go to. Null when none can be asked. */
+  const machine = (): { manager: NonNullable<ReturnType<typeof getSidecarManager>>; id: string } | null => {
+    const manager = getSidecarManager();
+    if (!manager) return null;
+    let target: string | null = null;
+    try { target = resolveToolTarget(undefined, 'desktop', 'notch', { quiet: true }); } catch { target = null; }
+    if (!target) return null;
+    return { manager, id: findSidecar(target, manager.listSidecars())?.id ?? target };
+  };
+
   return {
     db: options.db,
     turns,
     modelReady: () => notchModelReady(options.llm()),
+    // "Where is…?" (pass 9): the window the person is in is read on their
+    // machine, a model picks the element that answers, and that machine draws
+    // a ring round it. Nothing is read with watching switched off.
+    point: createNotchPoint({
+      async read() {
+        const at = machine();
+        if (!at || !isScreenCaptureEnabled()) return null;
+        // An older desktop app does not know it and refuses: then the question runs as any other.
+        return at.manager.dispatchRPC(at.id, 'notch.window', {}, { initial: 8000, max: 8000 });
+      },
+      choose: (messages) => small('notch_point', messages, 30),
+      async ring(rect, label, ms) {
+        const at = machine();
+        if (!at) return false;
+        await at.manager.dispatchRPC(at.id, 'notch.point', { ...rect, label, ms }, { initial: 3000, max: 3000 });
+        return true;
+      },
+    }),
     talkPort: options.sidecars,
     // Look at this (pass 9): one sentence about the one thing that was circled.
     look: {

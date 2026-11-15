@@ -966,3 +966,79 @@ describe('an instruction that carries files', () => {
     expect(row(h)).toMatchObject({ state: 'failed', note: 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.' });
   });
 });
+
+// Pass 9: "Where is…?" is answered by pointing at it on the screen.
+describe('a question about where something is', () => {
+  test('is answered by pointing, in one line, and no turn is started', async () => {
+    const asked: string[] = [];
+    const h = harness({ deps: { point: async (question) => { asked.push(question); return { ok: true, said: 'Close, the button, top right of the window. I am pointing at it.' }; } } });
+    await h.type('Where do I close this window?');
+    expect(asked).toEqual(['Where do I close this window?']);
+    expect(h.door.texts()).toEqual([]);
+    expect(h.said()).toBe('Close, the button, top right of the window. I am pointing at it.');
+    expect(row(h)).toMatchObject({ state: 'done', answer: 'Close, the button, top right of the window. I am pointing at it.', did: ['Pointed at it on the screen.'] });
+  });
+
+  test('while the window is read the line says so', async () => {
+    let tell: (pointed: { ok: true; said: string } | null) => void = () => {};
+    const h = harness({ deps: { point: () => new Promise((resolve) => { tell = resolve; }) } });
+    await h.type('Where is the export button?');
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    expect(h.said()).toBe('Looking for it in the window.');
+    tell({ ok: true, said: 'Export, the button, at the bottom of the window. I am pointing at it.' });
+    await settle();
+    expect(h.said()).toBe('Export, the button, at the bottom of the window. I am pointing at it.');
+  });
+
+  test('when the window has no answer it runs as any other instruction', async () => {
+    const h = harness({ deps: { point: async () => null } });
+    await h.type('Where is the invoice from Acme?');
+    expect(h.door.texts()).toEqual(['Where is the invoice from Acme?']);
+    expect(h.said()).toBe('On it: Where is the invoice from Acme?');
+    const turn = h.door.running();
+    h.door.say(turn, 'In your Downloads folder.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('In your Downloads folder.');
+  });
+
+  test('a pointer that fails is not the end of the question either', async () => {
+    const h = harness({ deps: { point: async () => { throw new Error('the machine went away'); } } });
+    await h.type('Where do I close this window?');
+    expect(h.door.texts()).toEqual(['Where do I close this window?']);
+  });
+
+  test('where Jarvis looks away, that is what is said, and nothing is asked', async () => {
+    const h = harness({ deps: { point: async () => ({ ok: false, why: 'Your bank. I look away in here, so I cannot point in it.' }) } });
+    await h.type('Where do I close this window?');
+    expect(h.door.texts()).toEqual([]);
+    expect(h.said()).toContain('Your bank. I look away in here, so I cannot point in it.');
+    expect(row(h)).toMatchObject({ state: 'failed' });
+  });
+
+  test('words that are not such a question never reach the pointer, and neither does a question about what was circled', async () => {
+    const asked: string[] = [];
+    const h = harness({ deps: { point: async (question) => { asked.push(question); return null; } } });
+    await h.type('send Leo the numbers');
+    h.door.end(h.door.running());
+    await settle();
+    if (h.line()) await h.answer('done');
+    h.asks.typed('Where is this from?', [{ kind: 'document', name: 'circled-on-screen.txt', mediaType: 'text/plain', bytes: new Uint8Array([1]) }]);
+    await settle();
+    expect(asked).toEqual([]);
+    expect(h.door.texts()).toEqual(['send Leo the numbers', 'Where is this from?']);
+  });
+
+  test('stopped while the window is read: nothing is pointed at afterwards and no turn starts', async () => {
+    let tell: (pointed: { ok: true; said: string } | null) => void = () => {};
+    const h = harness({ deps: { point: () => new Promise((resolve) => { tell = resolve; }) } });
+    await h.type('Where is the export button?');
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'stop' });
+    await settle();
+    tell(null);
+    await settle();
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'stopped' });
+  });
+});
