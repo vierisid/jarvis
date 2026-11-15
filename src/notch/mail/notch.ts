@@ -59,7 +59,7 @@ export const MAIL_TONES: Record<string, string> = { yours: '', shorter: 'shorter
 
 export interface NotchMailDeps {
   store: MailStore;
-  watch: Pick<MailWatch, 'hold' | 'release' | 'redraft' | 'stillWaits' | 'look' | 'lastLook'>;
+  watch: Pick<MailWatch, 'hold' | 'release' | 'redraft' | 'stillWaits' | 'look' | 'lastLook' | 'busy'>;
   /** The mailbox to write through, or null when no desktop app with the notch's tab is there. */
   mailbox(): Mailbox | null;
   now?: () => number;
@@ -298,10 +298,12 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   }
 
   async function arrived(): Promise<void> {
-    // What is known is brought up to date first, unless it was just now.
+    // What is known is brought up to date first, unless it was just now. A look that is under way is
+    // not waited for: the first one goes through a month, and what it has prepared so far is there.
     const last = watch.lastLook();
     let look: MailLook | null = last && now() - last.at < MAIL_LOOK_FRESH_MS ? last.look : null;
-    if (!look) look = await watch.look('recent').catch(() => null);
+    const reading = watch.busy();
+    if (!look && !reading) look = await watch.look('recent').catch(() => null);
     sync();
     if (store.ready().length > 0) {
       // A reply the owner has not seen takes the notch, if the notch is free. Something that is up
@@ -311,6 +313,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       inbox.add(item(true));
       return;
     }
+    // Still being read, and nothing found yet: not known, so nothing is said.
+    if (!look && reading) return;
     if (now() - saidNothingAt < MAIL_NOTHING_AGAIN_MS) return;
     // Said only when it is true: the mailbox was looked at, and nobody is waiting. When it could not be
     // looked at, that is what is said.
