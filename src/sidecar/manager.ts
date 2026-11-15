@@ -109,6 +109,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'notch.where',
   // Whether the person is on a call, and whether that machine is online (src/notch/around.ts).
   'notch.around',
+  // What the person circled or clicked on their screen with the talk keys held (src/notch/look.ts).
+  'notch.look',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */
