@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { NOTCH_DEMO_ENV, NOTCH_DEMO_HEADER, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH, initNotchDemoGate, notchDemoGate, notchGatedPath } from './demo-gate.ts';
-import { NOTCH_PAGE_PATH, notchRoutes } from './routes.ts';
+import { NOTCH_DROP_PATH, NOTCH_PAGE_PATH, notchRoutes } from './routes.ts';
 import type { NotchScriptDeps } from './script.ts';
 import type { ScriptedTurn } from '../llm/scripted.ts';
 
@@ -60,7 +60,7 @@ describe('the notch routes', () => {
 
   test('the page is a built file at the root, not a route', () => {
     expect(NOTCH_PAGE_PATH).toBe('/notch.html');
-    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH]);
+    expect(Object.keys(notchRoutes(true))).toEqual([NOTCH_DROP_PATH, NOTCH_DEMO_PATH, NOTCH_FIXTURE_PATH, NOTCH_SCRIPT_PATH, NOTCH_STUDY_PATH]);
   });
 });
 
@@ -69,9 +69,14 @@ describe('the notch routes', () => {
 // who holds the right secret: that happened to the mail study, 14 November.
 describe('every route behind the gate', () => {
   test('is let past the server\'s own sign-in while the gate is open, and only then', () => {
-    const paths = Object.keys(notchRoutes(true));
+    // The route a dropped file arrives on is not one of them: it is part of
+    // the product, and answers a signed-in page like every other /api path.
+    const paths = Object.keys(notchRoutes(true)).filter((path) => path !== NOTCH_DROP_PATH);
+    expect(paths.length).toBe(4);
     initNotchDemoGate({ hosted: false, notch: true }, { [NOTCH_DEMO_ENV]: SECRET });
     expect(paths.filter((path) => !notchGatedPath(path))).toEqual([]);
+    // The secret of the development routes never lets a file in.
+    expect(notchGatedPath(NOTCH_DROP_PATH)).toBe(false);
     expect(notchGatedPath('/api/notch/anything-else')).toBe(false);
     expect(notchGatedPath('/api/vault/entities')).toBe(false);
     initNotchDemoGate({ hosted: false, notch: true }, {});

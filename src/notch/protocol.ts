@@ -302,7 +302,14 @@ export type NotchFromPage =
   /** A click on the resting notch, or yes with nothing on it. */
   | { type: 'open' }
   /** Esc twice: stop everything that is running, and start nothing until told. */
-  | { type: 'stop' };
+  | { type: 'stop' }
+  /**
+   * A file is being dragged over the notch (`over`), was taken away again
+   * (`left`), or was dropped and could not be handed to the brain (`lost`).
+   * A file that was dropped and handed over arrives by itself, not as a
+   * message: it is too large for one.
+   */
+  | { type: 'drag'; state: 'over' | 'left' | 'lost' };
 
 const ANSWER_ACTS: ReadonlySet<string> = new Set<NotchAnswerAct>([
   'yes', 'no', 'fold', 'pick', 'button', 'go', 'word', 'ask', 'stop', 'undo', 'done',
@@ -314,13 +321,14 @@ const short = (value: unknown, max: number): string | undefined =>
 /**
  * Reads one message from the page. The page is the brain's own, but what
  * arrives has crossed two processes as text, so nothing about it is assumed:
- * anything that is not exactly one of its four messages is null.
+ * anything that is not exactly one of its messages is null.
  */
 export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
   if (m.type === 'open') return { type: 'open' };
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'drag') return m.state === 'over' || m.state === 'left' || m.state === 'lost' ? { type: 'drag', state: m.state } : null;
   if (m.type === 'hello') {
     return typeof m.v === 'number' && Number.isInteger(m.v) && m.v > 0 ? { type: 'hello', v: m.v } : null;
   }
