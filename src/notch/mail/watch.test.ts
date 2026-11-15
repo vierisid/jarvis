@@ -37,7 +37,7 @@ function world(threads: MailThread[], options: { answer?: (text: string) => stri
     list: async (days, pages) => { asked.lists.push(pages ? -pages : days); return [...box.values()].map((item) => listed(item, options.rows?.(item))); },
     read: async (rows) => { asked.reads.push(rows.map((row) => row.id)); return rows.flatMap((row) => { const item = box.get(row.id); return item ? [item] : []; }); },
   };
-  const reply = (fields: Record<string, unknown> = {}) => JSON.stringify({ needs_reply: true, why: 'Asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: 'Thursday at 10:00', look_for: '', ...fields });
+  const reply = (fields: Record<string, unknown> = {}) => JSON.stringify({ needs_reply: true, why: 'Asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: 'Thursday at 10:00', look_for: '', about: 'Leo asks if Thursday at 10 works.', ...fields });
   const watch = new MailWatch({
     reader: async () => (options.signedOut ? null : { reader, through: 'browser' }),
     store,
@@ -229,6 +229,42 @@ describe('a look at the mailbox', () => {
   });
 });
 
+describe('what a thread is, for the owner', () => {
+  test('is kept with the reply when the model gave it', async () => {
+    const { watch, store, reply } = world([thread(T1, [message(leo, 24)])], { answer: () => reply({ about: 'Leo wants to know if Thursday at 10 works.' }) });
+    await watch.look('sweep');
+    expect(store.ready()[0]!.about).toBe('Leo wants to know if Thursday at 10 works.');
+  });
+
+  // Replies prepared before replies carried one: the owner's test brain had some.
+  test('a reply without it is given one by a later look, asked for once, and what it cost is added', async () => {
+    let about = '';
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: () => (asked.thinks.length > 1 ? JSON.stringify({ about }) : reply({ about: '' })) });
+    await watch.look('sweep');
+    // The model that drafted gave none, and so did the small question after it.
+    expect(store.ready()[0]!.about).toBe('');
+    expect(asked.thinks.length).toBe(2);
+    about = 'Leo wants to know if Thursday at 10 works.';
+    // Asked once since the brain started: not again every minute.
+    await watch.look('glance');
+    expect(asked.thinks.length).toBe(2);
+    // A brain that starts again asks again, and this time is told.
+    const again = new MailWatch({
+      reader: async () => ({ through: 'browser', reader: { owner: async () => me.address, list: async () => [], read: async () => [thread(T1, [message(leo, 24)])] } }),
+      store,
+      think: async (messages) => { asked.thinks.push(messages[0]!.content); return { content: JSON.stringify({ about }), model: 'm', input: 300, output: 20, cached: 0 }; },
+      now: () => NOW,
+      log: () => {},
+    });
+    const before = store.ready()[0]!;
+    await again.look('glance');
+    expect(store.ready()[0]).toMatchObject({ about, tokensIn: before.tokensIn + 300, tokensOut: before.tokensOut + 20, draft: before.draft });
+    // The small question, not the drafting one.
+    expect(asked.thinks.at(-1)).toContain('in one plain sentence of at most twenty words');
+    expect(asked.thinks.at(-1)).not.toContain('needs_reply');
+  });
+});
+
 describe('the owner\'s voice', () => {
   test('a full look reads their own latest mail first, so that the first reply is already in their voice and by their name', async () => {
     const mineOnly = thread(T2, [message(me, 30, 'Ciao Leo,\nva benissimo, a giovedì.\nSam')]);
@@ -343,6 +379,32 @@ describe('a reply written again in another manner', () => {
 });
 
 describe('is a reply still an answer to the last word', () => {
+  // Three questions to the mailbox, each waiting its turn behind a look, made a draft slow to open.
+  test('is one question to the mailbox: whose mailbox it is was learned by the look', async () => {
+    let owners = 0;
+    let reads = 0;
+    const store = new MailStore(new Database(':memory:'));
+    const item = thread(T1, [message(leo, 24)]);
+    const watch = new MailWatch({
+      reader: async () => ({ through: 'browser', reader: {
+        owner: async () => { owners++; return me.address; },
+        list: async () => [listed(item)],
+        read: async (rows) => { reads++; return rows.map(() => item); },
+      } }),
+      store,
+      think: async () => ({ content: JSON.stringify({ needs_reply: true, why: '', reply: 'Yes.', missing: '', time: '', look_for: '', about: 'Leo asks about Thursday.' }), model: 'm', input: 1, output: 1, cached: 0 }),
+      now: () => NOW,
+      log: () => {},
+    });
+    await watch.look('sweep');
+    const [row] = store.ready();
+    const ownersBefore = owners;
+    const readsBefore = reads;
+    expect(await watch.stillWaits(row!.id, 0)).toBe(true);
+    expect(owners).toBe(ownersBefore);
+    expect(reads).toBe(readsBefore + 1);
+  });
+
   test('yes while the thread stands as it did, no once it has moved on, and nothing is concluded without the mailbox', async () => {
     const { watch, store, box } = world([thread(T1, [message(leo, 24)])]);
     await watch.look('sweep');

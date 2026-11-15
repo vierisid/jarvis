@@ -658,8 +658,14 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     sends it. Nothing more is asked (44). Esc while the fuse burns takes the
     yes back and nothing else: the draft is removed from Gmail and the reply
     waits again. A fuse nobody saw burn out sends nothing. Esc before that
-    is a no: the reply is turned down and does not come back (21). Left
-    alone, it folds and waits.
+    is a no on a reply that was offered: on its line, and on the draft that
+    line led to, the reply is turned down and does not come back (21). A
+    draft the owner opened themselves, from the list or from Home's row, is
+    closed by Esc and kept, and the key says so: the sheet's `no` word is
+    "back" or "close" there. Found on the owner's first evening with it (15
+    November 2026): ten replies were turned down in eleven minutes by the key
+    that everywhere else means back. Under every draft is the link "Not
+    needed", which is the no in words. Left alone, a line folds and waits.
 62. **Sent means it is the last word in its thread.** Gmail saying "Message
     sent" is not taken for it: the thread is read again, and the reply is
     called sent when the owner's mail, sent since the yes, is its last
@@ -668,12 +674,22 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     else takes the notch between the draft and the fuse, what was put in
     Gmail is taken out again.
 63. **One reply per thread, asked again before it is shown.** A newer
-    message in a thread overtakes the reply to the older one. Before a line
-    comes up the mailbox is asked whether the reply is still an answer to the
-    last word, unless a look saw so in the last ninety seconds; before it is
-    written into the thread it is always asked. Once the owner answers by
-    hand, begins a draft, or the other side writes again, the reply leaves
-    by itself, within a minute.
+    message in a thread overtakes the reply to the older one. Before a reply
+    speaks up by itself the mailbox is asked whether it is still an answer to
+    the last word, unless a look saw so in the last ninety seconds: nothing
+    is said and then taken back. A reply the owner asks for (a row of the
+    list, Home's row, the line they tapped the notch for) comes up at once
+    and the mailbox is asked behind it. If it then says the thread moved on,
+    the draft is taken away with the reason: "The thread has moved on since.
+    This reply is no longer needed." Not known is not no. The question is one
+    reading of the thread: whose mailbox it is was learned by the look.
+    Measured on the owner's brain on 15 November 2026: one reading takes
+    about 0.6 s, but it used to be three questions asked before the draft was
+    shown, each waiting its turn behind a look through the month (59), and a
+    draft took many seconds to open. Before a reply is written into the
+    thread the mailbox is always asked. Once the owner answers by hand,
+    begins a draft, or the other side writes again, the reply leaves by
+    itself, within a minute.
 64. **Mail is one thing on the notch, and it never stands in front of the
     text field.** Whatever is in the count comes before Home when the resting
     notch is tapped (26), and mail that nobody has answered is there every
@@ -699,12 +715,26 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     known, so nothing is said. From pass 8 a reply to a mail that has just
     come also speaks from anywhere (69).
 
+What a draft says besides the reply. Above the paper, one sentence that
+says what the thread is ("James wants your time zone so he can send the
+invite"): `about`, at most 160 characters, asked for in the same model call
+as the draft. The list shows it in place of the subject. A reply prepared
+before replies carried one gets it from a small call of its own
+(`mailAboutMessages`), at most eight a look and asked once per start of the
+brain. Under the paper, what Jarvis did not know, with the word "tell me":
+the owner types it (up to 200 characters) and the reply is written again
+with it. What they told is shown ("You told me: ... change") and kept with
+that reply. It is not remembered for the next one.
+
 What reaches the model, and how: the thread as text, inside the marks for
 outside content (`wrapUntrusted`); links as their words and their address;
-the names of attached files; the calendar; and a few of the owner's own
-mails for their voice. The tone the owner picks on the notch is one of four
-fixed manners. What the model answers is a draft and nothing else: not who it
-goes to, not whether it is sent.
+the names of attached files; the calendar; the owner's time zone; and a few
+of the owner's own mails for their voice. What the owner told for a reply
+reaches it as theirs, outside those marks. The tone the owner picks on the
+notch is one of four fixed manners. What the model answers is a draft, what
+it did not know, and the sentence about the thread, and nothing else: not
+who it goes to, not whether it is sent. A sentence that carries the marks of
+outside content is not shown.
 
 To try a build without waiting four hours for a test mail: start the brain
 with `JARVIS_NOTCH_MAIL_WAIT_MINUTES=2` (honoured only on a development brain,
@@ -715,12 +745,18 @@ layer has done so far).
 
 What is not done, or not proven:
 
-- **Writing and sending through the tab has not been run on a real mailbox.**
-  The steps were proven by hand with the study's scripts on 14 November (a
-  mail sent, a reply written as a draft and thrown away); `page/reply.js` is
-  those steps put together with stricter checks, and has only been run by
-  tests against a stand-in page. A step that does not find what it expects
-  refuses and says so; it does not guess.
+- **Writing and sending through the tab has been run on one mailbox.** On
+  15 November 2026, with the owner's yes, on a thread with themselves: a
+  draft written, saved and thrown away; then one reply sent, the thread one
+  message longer, one recipient, no draft left. The same evening the owner
+  sent one reply to another person from the notch. That is one account and
+  one build of Gmail. A step that does not find what it expects refuses and
+  says so; it does not guess.
+- **The sentence about the thread is the model's.** It is asked to name
+  nothing that is not in the thread, and it is shown as written. How often it
+  is wrong has not been counted.
+- **A draft that is taken away because the thread moved on** has been run
+  by tests only, not seen on the owner's mailbox.
 - **A reply with people in copy** uses Gmail's "Reply all" and then requires
   the frame to name exactly the expected people. How Gmail shows several
   people in that frame has not been seen. If it shows them in a way the

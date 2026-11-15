@@ -470,7 +470,7 @@ export function createNotchSurface(
         body: 'sheet', say: l.say, sheet: blocksOf(l.blocks), stag: true, ...common,
         // A sheet that asks for a decision says what each key means: the pair is yes, Esc is no.
         ...(l.stay ? { pairYes: true } : {}),
-        hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
+        hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: l.no ?? 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
       }, instant);
       return;
     }

@@ -21,12 +21,14 @@ const AT = Date.UTC(2026, 10, 14, 9, 0);
 
 const row = (extra: Partial<MailProposalRow> = {}): MailProposalRow => ({
   id: mailProposalId(T1, AT), thread: T1, messageAt: AT, state: 'ready', who: leo, subject: 'Deck for Thursday?', to: [leo], cc: [anna],
-  draft: 'Hi Leo,\nThursday at 10:00 works for me.\nSam', time: 'Thursday at 10:00', missing: 'The deck itself.', lookFor: '', found: null, tone: '', told: '',
+  draft: 'Hi Leo,\nThursday at 10:00 works for me.\nSam', time: 'Thursday at 10:00', missing: 'The deck itself.', lookFor: '', found: null, tone: '', told: '', about: '',
   model: 'm', tokensIn: 1200, tokensOut: 80, createdAt: AT + 1, updatedAt: AT + 1, sentAt: null, ...extra,
 });
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); };
 const text = (parts: NotchPart[] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : 'word' in part ? `[${part.word.value}]` : '')).join('');
+/** The quiet lines of a sheet, as text: everything but the paper and the links. */
+const notes = (blocks: NotchBlock[]): string[] => blocks.flatMap((block) => (block.kind === 'note' ? [text(block.say)] : []));
 
 function harness(rows: MailProposalRow[], options: {
   steps?: Partial<Record<'write' | 'send' | 'discard', MailStep>>;
@@ -34,6 +36,8 @@ function harness(rows: MailProposalRow[], options: {
   stillWaits?: boolean | null;
   /** Read at each asking: so that a test can change the answer while a line is up. */
   stillWaitsFrom?: (boolean | null)[];
+  /** The mailbox takes its time: the answer comes when this does. */
+  stillWaitsWhen?: Promise<boolean | null>;
   noMailbox?: boolean;
   look?: MailLook | null;
   /** A look (the month, say) is under way. */
@@ -82,6 +86,9 @@ function harness(rows: MailProposalRow[], options: {
   const redrafts: [string, { tone?: string; told?: string }][] = [];
   const held: string[] = [];
   let looks = 0;
+  const asks = { still: 0 };
+  const stillWaits = async (): Promise<boolean | null> =>
+    options.stillWaitsWhen ? options.stillWaitsWhen : options.stillWaitsFrom ? options.stillWaitsFrom[0]! : options.stillWaits === undefined ? true : options.stillWaits;
   const mail = attachNotchMail(inbox, {
     store,
     watch: {
@@ -97,7 +104,7 @@ function harness(rows: MailProposalRow[], options: {
         store.put(next);
         return next;
       },
-      stillWaits: async () => (options.stillWaitsFrom ? options.stillWaitsFrom[0]! : options.stillWaits === undefined ? true : options.stillWaits),
+      stillWaits: async () => { asks.still++; return stillWaits(); },
       look: async () => { looks++; return options.look ?? { through: 'browser', listed: 1, read: 0, asked: 0, prepared: 0, overtaken: 0 }; },
       lastLook: () => null,
       busy: () => options.reading === true,
@@ -110,7 +117,7 @@ function harness(rows: MailProposalRow[], options: {
   });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    mail, store, inbox, did, plans, redrafts, held, line, surface,
+    mail, store, inbox, did, plans, redrafts, held, line, surface, asks,
     looks: () => looks,
     said: (): string => text(line()?.say),
     count: (): number => surface.current().count,
@@ -136,11 +143,13 @@ describe('the draft as it is shown', () => {
     expect(text(paper.to)).toBe('To Leo Bianchi  ·  Copy to Anna Conti  ·  Re: Deck for Thursday?');
     expect(paper.lines.map(text)).toEqual(['Hi Leo,', '[Thursday at 10:00] works for me.', 'Sam']);
     expect(paper.lines[1]![1]).toEqual({ word: { name: 'when', value: 'Thursday at 10:00', options: ['Thursday at 10:00'], label: 'Time', read: 'dayTime' } });
-    expect(blocks.slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual([
+    expect(notes(blocks)).toEqual([
       'I did not know: The deck itself. [tell me]',
       'Found in your Drive: Lumen deck v3',
       'Not sent yet. Tone [yours]',
     ]);
+    // Under it all, the one way to turn the reply down for good.
+    expect(blocks.at(-1)).toEqual({ kind: 'buttons', buttons: [{ id: 'not-needed', label: 'Not needed', quiet: true }] });
     // The word beside what was not known takes a sentence, not a word.
     const missing = blocks[1] as { say: NotchPart[] };
     expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: [], label: 'Tell Jarvis', free: true, long: true } });
@@ -148,13 +157,25 @@ describe('the draft as it is shown', () => {
 
   test('what the owner told is shown, with the one word to change it, and nothing missing has no word to tell', () => {
     const told = mailDraftBlocks(row({ told: 'Central European Time', missing: 'Whether Thursday still suits Leo.' }));
-    expect(told.slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual([
+    expect(notes(told)).toEqual([
       'I did not know: Whether Thursday still suits Leo.',
       'You told me: Central European Time [change]',
       'Not sent yet. Tone [yours]',
     ]);
     const none = mailDraftBlocks(row({ missing: '' }));
     expect(none.map((block) => JSON.stringify(block)).join('')).not.toContain('"told"');
+  });
+
+  // The owner, 15 November 2026: "I've got no context on what the thread was about ... a very small summary".
+  test('what the thread is comes first, above the reply, in one line', () => {
+    const blocks = mailDraftBlocks(row({ about: 'Leo wants the deck before Thursday\'s call with Northwind.', missing: '' }));
+    expect(blocks[0]).toEqual({ kind: 'note', say: ['Leo wants the deck before Thursday\'s call with Northwind.'] });
+    expect(blocks[1]!.kind).toBe('paper');
+    expect(notes(blocks)).toEqual(['Leo wants the deck before Thursday\'s call with Northwind.', 'Not sent yet. Tone [yours]']);
+    // One line it stays, whatever the model wrote.
+    expect(text((mailDraftBlocks(row({ about: 'x'.repeat(400) }))[0] as { say: NotchPart[] }).say).length).toBeLessThanOrEqual(180);
+    // None made: the paper is first, as before.
+    expect(mailDraftBlocks(row())[0]!.kind).toBe('paper');
   });
 
   test('the empty lines of a reply are the gaps between its paragraphs, not paragraphs of their own', () => {
@@ -165,7 +186,7 @@ describe('the draft as it is shown', () => {
   test('a reply with no time has no lit word, and one with nothing missing says nothing of it', () => {
     const blocks = mailDraftBlocks(row({ time: null, missing: '' }));
     expect((blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Thursday at 10:00 works for me.', 'Sam']);
-    expect(blocks.length).toBe(2);
+    expect(notes(blocks)).toEqual(['Not sent yet. Tone [yours]']);
   });
 });
 
@@ -242,9 +263,22 @@ describe('a prepared reply on the notch', () => {
     const onDraft = harness([row()]);
     await onDraft.arrive();
     await onDraft.answer('yes');
+    // No other word for the key: on this draft it is the no it says it is.
+    expect((onDraft.line() as { no?: string }).no).toBeUndefined();
     await onDraft.answer('no');
     expect(onDraft.store.proposal(row().id)!.state).toBe('declined');
     expect(onDraft.did).toEqual([]);
+  });
+
+  test('"Not needed" under the draft is a no in words: the reply does not come back', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('button', { button: 'not-needed' });
+    expect(h.store.proposal(row().id)!.state).toBe('declined');
+    expect(h.count()).toBe(0);
+    expect(h.did).toEqual([]);
+    expect(h.mail.homeRow()).toBeNull();
   });
 
   test('left alone it folds and waits in Home: not now is not no, and it does not stand in the way', async () => {
@@ -263,7 +297,7 @@ describe('a prepared reply on the notch', () => {
     await h.answer('word', { word: 'tone', value: 'shorter' });
     expect(h.redrafts).toEqual([[row().id, { tone: 'shorter' }]]);
     expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Thursday 10 works. Sam']);
-    expect(text((h.blocks().at(-1) as { say: NotchPart[] }).say)).toBe('Not sent yet. Tone [shorter]');
+    expect(notes(h.blocks()).at(-1)).toBe('Not sent yet. Tone [shorter]');
     await h.answer('yes');
     expect(h.plans[0]!.text).toBe('Thursday 10 works. Sam');
   });
@@ -273,11 +307,11 @@ describe('a prepared reply on the notch', () => {
     const h = harness([row()]);
     await h.arrive();
     await h.answer('yes');
-    expect(text((h.blocks()[1] as { say: NotchPart[] }).say)).toBe('I did not know: The deck itself. [tell me]');
+    expect(notes(h.blocks())[0]).toBe('I did not know: The deck itself. [tell me]');
     await h.answer('word', { word: 'told', value: 'The deck goes out on Friday' });
     expect(h.redrafts).toEqual([[row().id, { told: 'The deck goes out on Friday' }]]);
     expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'The deck goes out on Friday.', 'Sam']);
-    expect(h.blocks().slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual(['You told me: The deck goes out on Friday [change]', 'Not sent yet. Tone [yours]']);
+    expect(notes(h.blocks())).toEqual(['You told me: The deck goes out on Friday [change]', 'Not sent yet. Tone [yours]']);
     // And that is what is sent.
     await h.answer('yes');
     expect(h.plans[0]!.text).toBe('Hi Leo,\nThe deck goes out on Friday.\nSam');
@@ -291,7 +325,7 @@ describe('a prepared reply on the notch', () => {
     for (const value of ['tell me', 'change', '', '   ']) await h.answer('word', { word: 'told', value });
     expect(h.redrafts).toEqual([]);
     await h.answer('word', { word: 'told', value: 'cannot be written' });
-    expect(text((h.blocks().at(-1) as { say: NotchPart[] }).say)).toBe('I could not write it again. This is the reply as it was. Tone [yours]');
+    expect(notes(h.blocks()).at(-1)).toBe('I could not write it again. This is the reply as it was. Tone [yours]');
     expect(h.store.proposal(row().id)!.told).toBe('');
   });
 
@@ -300,7 +334,7 @@ describe('a prepared reply on the notch', () => {
     await h.arrive();
     await h.answer('yes');
     await h.answer('word', { word: 'tone', value: 'more formal' });
-    expect(text((h.blocks().at(-1) as { say: NotchPart[] }).say)).toBe('I could not write it again. This is the reply as it was. Tone [yours]');
+    expect(notes(h.blocks()).at(-1)).toBe('I could not write it again. This is the reply as it was. Tone [yours]');
     // A word that is not one of the tones is not acted on.
     await h.answer('word', { word: 'tone', value: 'like a pirate' });
     expect(h.redrafts.length).toBe(1);
@@ -551,13 +585,84 @@ describe('several replies waiting', () => {
     await h.answer('done');
     expect(h.said()).toBe('1 reply waits');
     expect(h.blocks().map((block) => (block as { id?: string }).id)).toEqual([T1]);
-    // Esc on its draft is a no to that reply, and to that one only.
+    // Esc on a draft opened from the list closes the draft. The reply is kept, and the list is back.
+    // Found on the owner's first evening with it (15 November 2026): ten replies were turned down in
+    // eleven minutes, by the key that everywhere else means "back".
     await h.answer('go', { row: T1 });
+    expect(h.said()).toBe('Reply to Leo');
+    // The key says what it does here: it is not the "no" of a reply that was offered.
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'send', stay: true, no: 'back' });
     await h.answer('no');
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+    expect(h.said()).toBe('1 reply waits');
+    // Turning it down is said in words, on the draft, and is a no to that reply only.
+    await h.answer('go', { row: T1 });
+    await h.answer('button', { button: 'not-needed' });
     expect(h.store.proposal(row().id)!.state).toBe('declined');
     expect(h.store.proposal(older.id)!.state).toBe('sent');
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(0);
+  });
+
+  test('a row says what its thread is when that is known, and its subject when it is not', async () => {
+    const h = harness([row({ about: 'Leo wants the deck before Thursday\'s call.' }), older]);
+    await h.open();
+    await h.answer('yes');
+    // The row begins with the name, so the sentence does not say it twice.
+    expect(h.blocks()).toEqual([
+      { kind: 'row', id: T1, lead: 'Leo', say: ['wants the deck before Thursday\'s call.'], go: true },
+      { kind: 'row', id: T2, lead: 'Anna', say: ['Invoice 114'], go: true },
+    ]);
+    // A sentence that begins with somebody else is left whole.
+    const other = harness([row({ about: 'The Lumen team asks for the deck.' }), older]);
+    await other.open();
+    await other.answer('yes');
+    expect(text((other.blocks()[0] as { say: NotchPart[] }).say)).toBe('The Lumen team asks for the deck.');
+  });
+
+  // The owner, 15 November 2026: "when I click it for Jarvis to show me the draft, it takes so long".
+  // Measured on their brain: the mailbox was asked three things first, each behind a look through the month.
+  test('a draft the owner asks for is up at once: the mailbox is asked behind it, not before it', async () => {
+    let tell: (still: boolean | null) => void = () => {};
+    const h = harness([row(), older], { stillWaitsWhen: new Promise((resolve) => { tell = resolve; }) });
+    await h.open();
+    await h.answer('yes');
+    await h.answer('go', { row: T2 });
+    // The mailbox has said nothing yet, and the draft is there.
+    expect(h.asks.still).toBe(1);
+    expect(h.said()).toBe('Reply to Anna');
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'send' });
+    // It answers: the thread still waits. Nothing changes on the notch.
+    tell(true);
+    await settle();
+    expect(h.said()).toBe('Reply to Anna');
+    expect(h.store.proposal(older.id)!.state).toBe('ready');
+  });
+
+  test('when the mailbox then says the thread moved on, the draft is taken away with the reason, and the list is back', async () => {
+    let tell: (still: boolean | null) => void = () => {};
+    const h = harness([row(), older], { stillWaitsWhen: new Promise((resolve) => { tell = resolve; }) });
+    await h.open();
+    await h.answer('yes');
+    await h.answer('go', { row: T2 });
+    expect(h.said()).toBe('Reply to Anna');
+    tell(false);
+    await settle();
+    expect(h.said()).toBe('The thread has moved on since. This reply is no longer needed.');
+    expect(h.store.proposal(older.id)!.state).toBe('answered');
+    expect(h.did).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('1 reply waits');
+    expect(h.blocks().map((block) => (block as { id?: string }).id)).toEqual([T1]);
+  });
+
+  test('a mailbox that cannot say is not a reason to take a draft away', async () => {
+    const h = harness([row(), older], { stillWaits: null });
+    await h.open();
+    await h.answer('yes');
+    await h.answer('go', { row: T2 });
+    expect(h.said()).toBe('Reply to Anna');
+    expect(h.store.proposal(older.id)!.state).toBe('ready');
   });
 
   test('Esc on the line about them all, or on the list, turns nobody\'s reply down, and they wait in Home', async () => {
@@ -584,10 +689,12 @@ describe('several replies waiting', () => {
     one.inbox.present('home', (stage) => one.mail.open(stage));
     await settle();
     expect(one.said()).toBe('Reply to Leo');
-    expect(one.line()).toMatchObject({ kind: 'sheet', yes: 'send' });
-    // Opened from Home, it has been seen: it is not also in the count.
+    expect(one.line()).toMatchObject({ kind: 'sheet', yes: 'send', no: 'close' });
+    // Opened from Home, it has been seen: it is not also in the count. Esc closes it, and it is kept.
     await one.answer('no');
     expect(one.count()).toBe(0);
+    expect(one.store.proposal(row().id)!.state).toBe('ready');
+    expect(one.line()).toBeNull();
     const two = harness([row(), older]);
     two.inbox.present('home', (stage) => two.mail.open(stage));
     await settle();
@@ -644,11 +751,24 @@ describe('keeping the notch in line with the replies that wait', () => {
     expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Sorry for the wait.', 'Sam']);
   });
 
-  test('a reply that is no longer an answer to the last word is not shown when its turn comes', async () => {
+  test('a reply that is no longer an answer to the last word does not speak up by itself', async () => {
+    // Nobody is waiting on the notch: the mailbox is asked first, and nothing is said and then taken back.
+    const h = harness([row()], { stillWaits: false });
+    await h.arrive();
+    expect(h.asks.still).toBe(1);
+    expect(h.line()).toBeNull();
+    expect(h.did).toEqual([]);
+  });
+
+  test('when the owner came for it, it is not left on the notch either: they are told the thread moved on', async () => {
     const h = harness([row()], { stillWaits: false });
     await h.open();
-    expect(h.line()?.kind).not.toBe('offer');
+    expect(h.said()).toBe('The thread has moved on since. This reply is no longer needed.');
+    expect(h.store.proposal(row().id)!.state).toBe('answered');
     expect(h.did).toEqual([]);
+    await h.answer('done');
+    expect(h.count()).toBe(0);
+    expect(h.mail.homeRow()).toBeNull();
   });
 
   test('after the last reply was sent from the notch, a new one is counted again', async () => {

@@ -120,6 +120,11 @@ export interface NotchSheetLine extends NotchLineBase {
    * else does not close it. Only yes and Esc answer it.
    */
   stay?: boolean;
+  /**
+   * What Esc does on a sheet that stays, in a word, when it is not a no to
+   * what the sheet asks: "back", "close". The answer it sends is the same.
+   */
+  no?: string;
 }
 
 /** A text field in place of the sentence, with a panel under it. */

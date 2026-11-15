@@ -10,7 +10,7 @@ const T = Date.UTC(2026, 10, 14, 9, 0);
 const row = (extra: Partial<MailProposalRow> = {}): MailProposalRow => ({
   id: mailProposalId('19a1b2c3d4e5f607', T), thread: '19a1b2c3d4e5f607', messageAt: T, state: 'ready', who: leo, subject: 'Deck for Thursday?',
   to: [leo], cc: [anna], draft: 'Hi Leo,\nThursday at 10:00 works.\nSam', time: 'Thursday at 10:00', missing: '', lookFor: 'Lumen deck',
-  found: [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }], tone: '', told: '', model: 'm',
+  found: [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }], tone: '', told: '', about: '', model: 'm',
   tokensIn: 1200, tokensOut: 80, createdAt: T + 1, updatedAt: T + 1, sentAt: null, ...extra,
 });
 
@@ -81,9 +81,9 @@ describe('a prepared reply', () => {
       tokens_out INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER)`);
     db.run(`INSERT INTO notch_mail_proposals (id, thread_id, message_at, state, created_at, updated_at) VALUES ('old:1', 'old', 1, 'ready', 1, 1)`);
     const store = new MailStore(db);
-    expect(store.proposal('old:1')).toMatchObject({ told: '', state: 'ready' });
-    store.put(row({ told: 'Tuesday at 15:00 works' }));
-    expect(store.proposal(row().id)!.told).toBe('Tuesday at 15:00 works');
+    expect(store.proposal('old:1')).toMatchObject({ told: '', about: '', state: 'ready' });
+    store.put(row({ told: 'Tuesday at 15:00 works', about: 'Leo wants a time for the call.' }));
+    expect(store.proposal(row().id)).toMatchObject({ told: 'Tuesday at 15:00 works', about: 'Leo wants a time for the call.' });
     // Opened again: the column is not added twice.
     expect(new MailStore(db).proposal(row().id)!.told).toBe('Tuesday at 15:00 works');
   });

@@ -27,7 +27,7 @@
  * mailbox is behind `MailReader`, and the notch hears `changed`.
  */
 import type { MailCalendarEvent, MailProposal, MailThink } from './proposer.ts';
-import { mailTold, mailVoiceSamples, proposeMail } from './proposer.ts';
+import { mailAboutMessages, mailTold, mailVoiceSamples, parseMailAbout, proposeMail } from './proposer.ts';
 import { mailProposalId, type MailProposalRow, type MailStore } from './store.ts';
 import { isOwner, mailFirstName, type MailOwner, type MailPerson, type MailThread } from './thread.ts';
 import { MAIL_WAIT_MIN_MS, mailMachine, mailReplyTo, mailWaiting } from './waiting.ts';
@@ -92,6 +92,8 @@ const MAIL_VOICE_POOL = 300;
 /** How far back, and how many, of the owner's own threads a full look reads for their voice. */
 const MAIL_VOICE_DAYS = 14;
 const MAIL_VOICE_READ = 24;
+/** How many replies without a sentence about their thread get one in a look. */
+const MAIL_ABOUT_PER_LOOK = 8;
 /** How long a reply seen to wait is taken to wait still, before a line about it is shown. */
 export const MAIL_CHECKED_FRESH_MS = 90_000;
 const MAIL_READ_BATCH = 6;
@@ -147,6 +149,10 @@ export class MailWatch {
   private readonly held = new Set<string>();
   /** Whether the owner's own latest mail has been read for their voice since the brain started. */
   private voiceRead = false;
+  /** Whose mailbox it is, once the mailbox has said so: it does not change, and is not asked for again. */
+  private ownerAddress = '';
+  /** Replies for which a sentence about their thread was asked for since the brain started. */
+  private readonly aboutTried = new Set<string>();
   /** When each reply that waits was last seen, in the mailbox, to still be an answer to the last word. */
   private readonly checked = new Map<string, number>();
 
@@ -197,7 +203,8 @@ export class MailWatch {
     const { reader } = way;
     const { store } = this.deps;
     const wait = this.deps.waitMs ?? MAIL_WAIT_MIN_MS;
-    const owner: MailOwner = new Set([(await reader.owner()).toLowerCase()]);
+    this.ownerAddress = (await reader.owner()).toLowerCase();
+    const owner: MailOwner = new Set([this.ownerAddress]);
     // The first look, and every full one, begins with the owner's own latest mail: a reply is written in
     // their voice, and by their name. The first look is a short one, so that a reply is ready within a
     // minute of the brain starting: it must not be the one reply written without their voice.
@@ -297,7 +304,34 @@ export class MailWatch {
       }
     }
     if (look.overtaken) this.deps.changed?.();
+    await this.fillAbout(reader, owner).catch(() => {});
     return look;
+  }
+
+  /**
+   * Replies that were prepared before replies carried a sentence about their
+   * thread get one: a few each look, so that the owner knows what they are
+   * answering. A reply whose thread cannot be read now keeps none, and is
+   * shown without it.
+   */
+  private async fillAbout(reader: MailReader, owner: MailOwner): Promise<void> {
+    const without = this.deps.store.ready().filter((row) => !row.about && !this.held.has(row.id) && !this.aboutTried.has(row.id)).slice(0, MAIL_ABOUT_PER_LOOK);
+    if (without.length === 0 || this.deps.paused?.()) return;
+    const threads = await reader.read(without.map((row) => ({ id: row.thread, people: [], count: 0, draft: false, subject: row.subject })));
+    let filled = 0;
+    for (const row of without) {
+      // Asked once since the brain started, whatever comes of it: a model that gives none is not asked every minute.
+      this.aboutTried.add(row.id);
+      const thread = threads.find((entry) => entry.id === row.thread);
+      if (!thread) continue;
+      const thought = await this.deps.think(mailAboutMessages({ thread, owner, ownerName: this.ownerName || [...owner][0]!.split('@')[0]!, zone: this.deps.zone }), { maxTokens: 120 }).catch(() => null);
+      const about = thought ? parseMailAbout(thought.content) : '';
+      const now = this.deps.store.proposal(row.id);
+      if (!now || now.state !== 'ready') continue;
+      this.deps.store.put({ ...now, about, tokensIn: now.tokensIn + (thought ? thought.input + thought.cached : 0), tokensOut: now.tokensOut + (thought?.output ?? 0) });
+      if (about) filled++;
+    }
+    if (filled) this.deps.changed?.();
   }
 
   /** Keeps a thread the owner wrote in, for their voice, and learns what they are called. */
@@ -353,6 +387,7 @@ export class MailWatch {
       found: null,
       tone: '',
       told: '',
+      about: proposal?.about ?? '',
       model: cost.model,
       tokensIn: cost.input + cost.cached,
       tokensOut: cost.output,
@@ -404,7 +439,7 @@ export class MailWatch {
       tokensIn: row.tokensIn + spent.input + spent.cached,
       tokensOut: row.tokensOut + spent.output,
       updatedAt: at,
-      ...(made?.proposal?.needsReply ? { draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone, told } : {}),
+      ...(made?.proposal?.needsReply ? { draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone, told, about: made.proposal.about || row.about } : {}),
     };
     this.deps.store.put(next);
     return made?.proposal?.needsReply ? next : null;
@@ -424,7 +459,9 @@ export class MailWatch {
     const way = await this.deps.reader().catch(() => null);
     if (!way) return null;
     try {
-      const owner: MailOwner = new Set([(await way.reader.owner()).toLowerCase()]);
+      // Whose mailbox it is was learned by the first look: one question to the mailbox, not two.
+      if (!this.ownerAddress) this.ownerAddress = (await way.reader.owner()).toLowerCase();
+      const owner: MailOwner = new Set([this.ownerAddress]);
       const [thread] = await way.reader.read([{ id: row.thread, people: [], count: 0, draft: false, subject: row.subject }]);
       if (!thread) return null;
       const last = thread.messages.at(-1);
