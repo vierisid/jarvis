@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,10 @@ func (h *fakeHands) Screen(at lookPoint) (lookRect, float64) {
 func (h *fakeHands) Own(at lookPoint) bool { return h.own }
 func (h *fakeHands) Front(at lookPoint) (string, string) {
 	return "excel", "Payouts  -  Excel"
+}
+func (h *fakeHands) WindowRect(at lookPoint) lookRect { return lookRect{0, 0, 1800, 1000} }
+func (h *fakeHands) Around(at lookPoint) []string {
+	return []string{"Acme", "Payouts by customer", "", "Payouts by customer", "Payouts  -  Excel", "Sheet1"}
 }
 func (h *fakeHands) Snapshot(screen lookRect) lookSnapshot {
 	h.note("snapshot")
@@ -119,14 +124,20 @@ func lookWorld(t *testing.T, away string) (*NotchLook, *fakeHands, func(phase st
 	return look, hands, wait, sent
 }
 
-func lookWords(t *testing.T, body []byte) (notchLookTold, []byte) {
+// What travelled beside a look: the words, the picture of what was circled,
+// and the picture of the window round it.
+func lookWords(t *testing.T, body []byte) (notchLookTold, []byte, []byte) {
 	t.Helper()
 	n := int(binary.BigEndian.Uint32(body))
 	var told notchLookTold
 	if err := json.Unmarshal(body[4:4+n], &told); err != nil {
 		t.Fatal(err)
 	}
-	return told, body[4+n:]
+	rest := body[4+n:]
+	if told.PictureBytes > len(rest) {
+		t.Fatalf("the words say the picture is %d bytes and %d follow", told.PictureBytes, len(rest))
+	}
+	return told, rest[:told.PictureBytes], rest[told.PictureBytes:]
 }
 
 func TestLookALineRoundThreeRowsIsToldWithWhatItHeldAndAPicture(t *testing.T) {
@@ -154,12 +165,21 @@ func TestLookALineRoundThreeRowsIsToldWithWhatItHeldAndAPicture(t *testing.T) {
 	if taken.payload["look_id"] != begun.payload["look_id"] || taken.payload["how"] != "loop" || taken.payload["things"] != 3 {
 		t.Fatalf("%v", taken.payload)
 	}
-	told, picture := lookWords(t, taken.body)
+	told, picture, window := lookWords(t, taken.body)
 	if told.App != "excel" || len(told.Things) != 3 || told.Things[1].Name != "Lumen" || told.Things[2].Parts[1] != "430.50" {
 		t.Fatalf("%+v", told)
 	}
 	if len(picture) < 8 || string(picture[1:4]) != "PNG" {
 		t.Fatal("no picture came with it")
+	}
+	// What the rows stand in, the nearest first: each once, without the first
+	// row's own name and without the window's title, which is told by itself.
+	if !reflect.DeepEqual(told.Around, []string{"Payouts by customer", "Sheet1"}) {
+		t.Fatalf("around: %q", told.Around)
+	}
+	// And the whole window round them, as a second picture.
+	if len(window) < 8 || string(window[1:4]) != "PNG" {
+		t.Fatal("no picture of the window came with it")
 	}
 	// Where the picture is: round the rows that were found, not only round the line.
 	part := taken.payload["picture"].(map[string]any)
@@ -190,7 +210,7 @@ func TestLookAClickIsTheOneThingUnderThePointer(t *testing.T) {
 	if taken.payload["how"] != "click" || taken.payload["things"] != 1 {
 		t.Fatalf("%v", taken.payload)
 	}
-	told, _ := lookWords(t, taken.body)
+	told, _, _ := lookWords(t, taken.body)
 	if told.Things[0].Name != "Close" || told.Things[0].Kind != "button" {
 		t.Fatalf("%+v", told)
 	}

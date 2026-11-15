@@ -95,10 +95,6 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
       'goals/rhythm.ts',
-      // The notch's look: what the desktop app read where the owner pointed,
-      // each text cut where it is parsed, framed into the prompt that asks
-      // for one sentence about it.
-      'notch/look.ts',
       // The notch's mail proposer: a thread, a calendar and the owner's own
       // mails, each cut to its own limit before it is framed into the prompt.
       'notch/mail/proposer.ts',

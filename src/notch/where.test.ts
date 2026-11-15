@@ -164,6 +164,30 @@ describe('the resting notch shows where you are, and whether it is looking', () 
     expect(h.last('where')?.app).toBeNull();
     expect(h.where.mayKeep('pc', 'notepad')).toBe(true);
   });
+
+  // What a question that does not say what it is about is about (pass 9).
+  test('says which app is in front, and the site, only while it is watching it', () => {
+    const h = harness();
+    expect(h.where.front()).toBeNull();
+    h.tell(notepad, true);
+    expect(h.where.front()).toEqual({ name: 'Notepad', site: '' });
+    h.tell({ ...notepad, app: 'chrome', name: 'Google Chrome', title: 'Telemetry - Grafana', site: 'grafana.example' });
+    // The site, never the window's title.
+    expect(h.where.front()).toEqual({ name: 'Google Chrome', site: 'grafana.example' });
+    // Looking away, asleep, or with watching off, it says nothing of where the person is.
+    h.tell({ ...notepad, app: 'chrome', name: 'Google Chrome', look: 'bank' });
+    expect(h.where.front()).toBeNull();
+    h.tell(notepad);
+    h.sleep(true);
+    expect(h.where.front()).toBeNull();
+    h.sleep(false);
+    h.setWatching(false);
+    expect(h.where.front()).toBeNull();
+    h.setWatching(true);
+    expect(h.where.front()).toEqual({ name: 'Notepad', site: '' });
+    h.gone();
+    expect(h.where.front()).toBeNull();
+  });
 });
 
 describe('"What I see", in plain words', () => {

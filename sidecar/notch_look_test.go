@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"image"
 	"image/png"
 	"math"
 	"reflect"
@@ -332,9 +333,11 @@ func TestLookTagNamesOneThingAndCountsSeveral(t *testing.T) {
 	}
 }
 
-func TestLookBodyCarriesTheWordsBesideThePicture(t *testing.T) {
+func TestLookBodyCarriesTheWordsBesideThePictures(t *testing.T) {
 	picture := []byte{0x89, 'P', 'N', 'G', 1, 2, 3}
-	body, err := notchLookBody(notchLookTold{App: "excel", Title: "Payouts", Things: []lookThing{{Kind: "row", Name: "Acme", Parts: []string{"Acme", "120"}, Rect: lookRect{1, 2, 3, 4}}}}, picture)
+	window := []byte{0x89, 'P', 'N', 'G', 9, 9}
+	body, err := notchLookBody(notchLookTold{App: "excel", Title: "Payouts", Around: []string{"Payouts by customer"},
+		Things: []lookThing{{Kind: "row", Name: "Acme", Parts: []string{"Acme", "120"}, Rect: lookRect{1, 2, 3, 4}}}}, picture, window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +346,7 @@ func TestLookBodyCarriesTheWordsBesideThePicture(t *testing.T) {
 	if err := json.Unmarshal(body[4:4+n], &told); err != nil {
 		t.Fatal(err)
 	}
-	if told["app"] != "excel" || told["title"] != "Payouts" {
+	if told["app"] != "excel" || told["title"] != "Payouts" || told["around"].([]any)[0] != "Payouts by customer" {
 		t.Fatalf("%v", told)
 	}
 	thing := told["things"].([]any)[0].(map[string]any)
@@ -351,13 +354,51 @@ func TestLookBodyCarriesTheWordsBesideThePicture(t *testing.T) {
 	if _, has := thing["rect"]; has || thing["kind"] != "row" || thing["name"] != "Acme" {
 		t.Fatalf("%v", thing)
 	}
-	if !reflect.DeepEqual(body[4+n:], picture) {
-		t.Fatal("the picture did not follow the words")
+	// The words say where the first picture ends, and the second follows it.
+	if told["picture_bytes"] != float64(len(picture)) {
+		t.Fatalf("picture_bytes: %v", told["picture_bytes"])
 	}
-	// Nothing read is still a list, not null.
-	empty, _ := notchLookBody(notchLookTold{}, nil)
-	if got := string(empty[4:]); got != `{"things":[]}` {
+	if !reflect.DeepEqual(body[4+n:4+n+len(picture)], picture) || !reflect.DeepEqual(body[4+n+len(picture):], window) {
+		t.Fatal("the pictures did not follow the words in their order")
+	}
+	// Nothing read is still a list, not null, and no picture is none.
+	empty, _ := notchLookBody(notchLookTold{}, nil, nil)
+	if got := string(empty[4:]); got != `{"things":[],"picture_bytes":0}` {
 		t.Fatalf("%s", got)
+	}
+}
+
+func TestLookAroundNamesAreKeptOnceEachWithoutTheThingAndTheTitle(t *testing.T) {
+	got := lookAroundNames([]string{"1,284", "Installs", "", "Installs", " Telemetry  overview ", "Telemetry - Grafana", strings.Repeat("x", 200), "a", "b", "c"}, "1,284", "Telemetry - Grafana")
+	want := []string{"Installs", "Telemetry overview", strings.Repeat("x", 79) + "…", "a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%q", got)
+	}
+	if lookAroundNames(nil, "", "") != nil {
+		t.Fatal("no names gave names")
+	}
+}
+
+func TestLookWindowPictureOnlyWhenItSaysMoreThanTheCloseOne(t *testing.T) {
+	close := lookRect{400, 400, 300, 240}
+	if !lookWindowWorthIt(lookRect{0, 0, 1800, 1000}, close) {
+		t.Fatal("a window far larger than the close picture was left out")
+	}
+	if lookWindowWorthIt(lookRect{380, 380, 340, 280}, close) {
+		t.Fatal("a window hardly larger than the close picture was added")
+	}
+	if lookWindowWorthIt(lookRect{}, close) {
+		t.Fatal("no window was a window")
+	}
+	if !lookWindowWorthIt(lookRect{0, 0, 800, 600}, lookRect{}) {
+		t.Fatal("with no close picture the window is all there is")
+	}
+	// The window is cut to the display it is shown on.
+	if got := lookWithin(lookRect{-200, -8, 2200, 1100}, lookRect{0, 0, 1920, 1080}); got != (lookRect{0, 0, 1920, 1080}) {
+		t.Fatalf("%+v", got)
+	}
+	if !lookWithin(lookRect{3000, 0, 100, 100}, lookRect{0, 0, 1920, 1080}).empty() {
+		t.Fatal("a window on another display was kept")
 	}
 }
 
@@ -552,5 +593,46 @@ func TestRingPathGoesRoundTheThingALittleOutsideIt(t *testing.T) {
 	small := lookRingPath(lookRect{10, 10, 2, 2}, 4, 30)
 	if sb := lookBounds(small); sb.W != 10 || sb.H != 10 || len(small) < 8 {
 		t.Fatalf("%+v, %d points", sb, len(small))
+	}
+}
+
+func TestLookShotMakesALargePartSmaller(t *testing.T) {
+	const w, h = 400, 200
+	shot := &lookShot{pixels: make([]byte, w*h*4), w: w, h: h, x: 100, y: 50}
+	// Left half red, right half blue, as Windows keeps them: blue, green, red.
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := (y*w + x) * 4
+			if x < w/2 {
+				shot.pixels[i+2] = 255
+			} else {
+				shot.pixels[i] = 255
+			}
+		}
+	}
+	decode := func(data []byte) image.Image {
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img
+	}
+	small := decode(shot.CutSmall(lookRect{100, 50, 400, 200}, 100))
+	if b := small.Bounds(); b.Dx() != 100 || b.Dy() != 50 {
+		t.Fatalf("%v", b)
+	}
+	if r, _, bl, _ := small.At(10, 10).RGBA(); r>>8 != 255 || bl>>8 != 0 {
+		t.Fatal("the left is not red")
+	}
+	if r, _, bl, _ := small.At(90, 40).RGBA(); r>>8 != 0 || bl>>8 != 255 {
+		t.Fatal("the right is not blue")
+	}
+	// Small enough already: as it is.
+	if b := decode(shot.CutSmall(lookRect{100, 50, 80, 40}, 100)).Bounds(); b.Dx() != 80 || b.Dy() != 40 {
+		t.Fatalf("%v", b)
+	}
+	// A longest side that does not divide evenly is never made larger than asked.
+	if b := decode(shot.CutSmall(lookRect{100, 50, 399, 200}, 150)).Bounds(); b.Dx() > 150 || b.Dy() > 150 {
+		t.Fatalf("%v", b)
 	}
 }
