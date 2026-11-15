@@ -147,6 +147,40 @@ describe('on a call', () => {
     expect(h.said()).toBe('mail?');
   });
 
+  test('what the person is in the middle of on the notch is not taken from them: the call is said when the notch is free', async () => {
+    const h = harness();
+    h.inbox.add(h.item('question'));
+    await settle();
+    expect(h.said()).toBe('question?');
+    await h.tell({ call: true });
+    await h.pass(NOTCH_CALL_AFTER_MS);
+    expect(h.around.onCall()).toBe(true);
+    // Their line is still theirs.
+    expect(h.said()).toBe('question?');
+    await h.answer('yes');
+    await h.pass(5000);
+    expect(h.said()).toBe('On a call. I hold everything until you are done.');
+    await h.answer('done');
+    h.inbox.add(h.item('mail'));
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('a call that came and went while they were busy on the notch held nothing, and ends without a word', async () => {
+    const h = harness();
+    h.inbox.add(h.item('question'));
+    await settle();
+    await h.tell({ call: true });
+    await h.pass(NOTCH_CALL_AFTER_MS);
+    await h.tell({ call: false });
+    await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    expect(h.around.onCall()).toBe(false);
+    expect(h.said()).toBe('question?');
+    await h.answer('yes');
+    await h.pass(10_000);
+    expect(h.line()).toBeNull();
+  });
+
   // A program that died with the microphone says it has it still. Nothing is held for good on its word.
   test('no call lasts three hours: after that it is taken to be over', async () => {
     const h = harness();

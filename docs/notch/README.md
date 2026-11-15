@@ -825,10 +825,13 @@ What is not done, or not proven, in pass 8:
 
 - **The two facts from the desktop app have not been read on a real
   machine**: that a calling program has the microphone, and that the machine
-  is online. The reading of the record is tested against made-up records; the
-  record itself is Windows' own and its shape is taken from how it is known
-  to be written. On a Mac neither is read yet: nothing is held for a call and
-  nothing is said about the connection there.
+  is online. The reading of the record is tested against made-up records. Its
+  shape was checked on the owner's machine on 15 November 2026, by counts
+  alone: programs not from the Store are listed by path with `#` for the
+  backslash, and each entry has a start and a stop as 64-bit numbers. That a
+  call is then seen as one has not been tried. On a Mac neither fact is read
+  yet: nothing is held for a call and nothing is said about the connection
+  there.
 - **One path per event is not enforced across the product.** With a Google
   connection the older observers still raise their own events for the same
   mail and calendar. The notch's own lines are one each.
