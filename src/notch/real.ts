@@ -30,6 +30,7 @@ import type { NotchPauseDeps } from './pause.ts';
 import { attachNotchPromises } from './promises.ts';
 import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
+import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import { attachNotchSuggestions } from './suggestions.ts';
@@ -105,6 +106,12 @@ export interface NotchRealDeps {
    * front, and whether watching is switched on at all.
    */
   where?: { port: NotchWherePort; watching?: () => boolean };
+  /**
+   * Mail (pass 7): Jarvis looks at the mailbox by itself, prepares a reply
+   * where a person is waiting, and puts it on the notch. Everything it needs
+   * of the product: the database, the notch's own browser tab, the model.
+   */
+  mail?: Omit<NotchMailLayerDeps, 'paused' | 'log' | 'noClock'> & { noClock?: boolean };
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -122,6 +129,8 @@ export interface NotchReal {
   asks: NotchAsks | null;
   /** Where the person is and whether Jarvis is looking, when a desktop app tells it. */
   where: NotchWhere | null;
+  /** The mail layer, when the brain was given what it needs. */
+  mail: NotchMailLayer | null;
   talk: NotchTalk | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
@@ -131,9 +140,12 @@ export interface NotchReal {
 
 export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): NotchReal {
   const log = deps.log ?? ((line: string) => console.log(line));
+  // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
+  let mail: NotchMailLayer | null = null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
+    sentMail: (since: number) => mail?.sentSince(since) ?? [],
   };
   // Made after the inbox, which opens it: yes at rest with nothing waiting.
   let asks: NotchAsks | null = null;
@@ -162,6 +174,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       asleep: () => (deps.emergency ? deps.emergency.getState() !== 'normal' : false),
       sleep: () => deps.emergency?.pause(),
       watching: deps.where.watching,
+      // Coming to Gmail is where a prepared reply speaks up (pass 7).
+      arrived: (site) => mail?.arrived(site),
       log,
     })
     : null;
@@ -207,6 +221,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   questions?.sync();
   const questionTimer = questions ? setInterval(() => questions.sync(), NOTCH_QUESTION_LOOK_MS) : null;
   questionTimer?.unref?.();
+  if (deps.mail) {
+    const emergency = deps.emergency;
+    mail = attachMailLayer(inbox, { ...deps.mail, paused: emergency ? () => emergency.getState() !== 'normal' : undefined, log });
+  }
   const news = attachNotchNews(inbox, { openFailures: deps.openFailures, log });
   news.sync();
   const failureTimer = setInterval(() => news.sync(), NOTCH_FAILURE_LOOK_MS);
@@ -247,7 +265,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, mail,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -256,6 +274,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       stopPromises(); stopPause();
       asks?.stop();
       where?.stop();
+      mail?.stop();
     },
   };
 }

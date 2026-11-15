@@ -585,6 +585,145 @@ What "never watch" does not do: it stops Jarvis watching by itself. If the
 person asks Jarvis to read that app, it reads it: saying it is the approval
 (44).
 
+## Mail: Jarvis goes first
+
+From pass 7 the notch says "You have not replied to Marco. I drafted a
+reply." about the person's real mail. The parts are in `src/notch/mail/`:
+`watch.ts` looks at the mailbox on a clock and decides, `waiting.ts` is the
+rule for "a person is waiting", `proposer.ts` is the one model call,
+`store.ts` is what is remembered, `mailbox.ts` reads and writes through the
+browser, `notch.ts` is the line, and `attach.ts` puts them together.
+
+54. **Jarvis looks at the mail by itself.** Decided by the owner on 15
+    November 2026: it has to know that it needs to check mail periodically,
+    through a connection when one exists and in the browser when not. So
+    nothing waits for the person to open Gmail. A glance at the top of the
+    list every minute, the last two days every five, the whole month when
+    the brain starts and every six hours (`MAIL_GLANCE_MS`, `MAIL_RECENT_MS`,
+    `MAIL_SWEEP_MS`). One look at a time; none while everything is stopped,
+    and none while no real model is set up, since nothing could be prepared.
+    The way is chosen each time with `firstWay`: a connection first, the
+    browser tab second. No way is not an empty mailbox: a look that finds no
+    way changes nothing and says so once in the log.
+55. **A look reads little.** The list first. A thread is read only when the
+    list shows it changed since it was last read (how many messages, who is
+    shown last, a draft) and the one shown last is a person who is not the
+    owner (`mailCandidate`, which leaves out only what the rule would leave
+    out). On a real month that was 601 threads of 3,689. A reply that waits
+    is checked the same way: its thread is read when the list shows it
+    changed, and a full look checks every one. A message that is too new is
+    remembered with the moment it will have waited long enough.
+56. **A message is put to the model once.** One row per message a person
+    waited on (`notch_mail_proposals`), whatever came of it: a reply is
+    ready, the model said none is needed, or it gave nothing usable. What
+    it cost is on the row, every redraft counted, and Today shows it for
+    what was sent. There is no cap (the owner's decision G).
+57. **The notch has a tab of its own.** The browser has one page that the
+    agent drives. A look at the mail every minute in that page would pull it
+    out from under whatever the agent was doing. So the desktop app keeps a
+    second tab (`sidecar/browser_mail_tab.go`, calls `mail_tab_navigate` and
+    `mail_tab_evaluate`, feature `browser_mail_tab`). It is taken to Gmail,
+    Google Calendar and Google Drive and nowhere else; an address anywhere
+    else is refused before the browser hears of it. A script runs in it only
+    while it is on one of those three, and never on Google's sign-in page:
+    there the answer is "signed out", and nothing is typed. Nothing is
+    enabled on it, because the client wakes whoever waits for a browser event
+    by the event's name alone and an event from this tab would be taken for
+    one from the agent's page. An answer names the site, never the address.
+58. **It never opens a window nobody asked for.** When no browser is running
+    the tab's browser is started hidden. A browser started that way is not
+    the one the person was promised: the first call for the agent's page
+    that says nothing about visibility gets a visible browser, as it always
+    did, and the hidden one gives way (`keepRunningBrowser`). The browser is
+    started with background timers left alone, because the tab is never in
+    front and its scripts wait on timers that Chrome would slow to one a
+    minute.
+59. **One thing has the tab at a time.** A look, a reading of the calendar, a
+    search of Drive and a reply being sent all use the same tab
+    (`MailTabTurn`). A reply holds it from its first step to its last, so
+    that no look navigates away from a draft that is written and not yet
+    sent, and what the person is waiting on goes before what Jarvis does by
+    itself.
+60. **Who a reply goes to is not a model's to decide, and is checked on the
+    page.** `mailReplyTo` decides it from the message that is answered: the
+    one who wrote, and in copy everyone else it went to, without the owner.
+    Before the reply is written and again before Send is pressed, the page
+    script (`page/reply.js`) reads who Gmail's own reply frame goes to and
+    refuses unless it is exactly those people. It also refuses unless the
+    thread on screen is the one meant and the text in the reply is the text
+    that was shown.
+61. **Two yeses and a fuse, and saying yes is the approval.** Yes on the line
+    shows the draft, on paper, with who it goes to. Yes on the draft puts it
+    in the thread as a draft in Gmail, burns a fuse of five seconds, and
+    sends it. Nothing more is asked (44). Esc while the fuse burns takes the
+    yes back and nothing else: the draft is removed from Gmail and the reply
+    waits again. A fuse nobody saw burn out sends nothing. Esc before that
+    is a no: the reply is turned down and does not come back (21). Left
+    alone, it folds and waits.
+62. **Sent means it is the last word in its thread.** Gmail saying "Message
+    sent" is not taken for it: the thread is read again, and the reply is
+    called sent when the owner's mail, sent since the yes, is its last
+    message. If it cannot be sent the line says so and says where the draft
+    is. A reply is never left half written: when a step fails, or something
+    else takes the notch between the draft and the fuse, what was put in
+    Gmail is taken out again.
+63. **One item per thread, asked again before it is shown.** A newer
+    message in a thread overtakes the reply to the older one. Before a line
+    comes up the mailbox is asked whether the reply is still an answer to the
+    last word, unless a look saw so in the last ninety seconds; before it is
+    written into the thread it is always asked. Once the owner answers by
+    hand, begins a draft, or the other side writes again, the reply leaves
+    the count by itself, within a minute.
+64. **It speaks up in one place for now: when the person comes to Gmail.**
+    The desktop app says which site is in front (pass 6). Coming to
+    `mail.google.com`, the newest reply that has not spoken yet takes the
+    notch if the notch is free. Each speaks once. Everywhere else a reply
+    joins the count. With nothing waiting it says "Nobody in your mail is
+    waiting for a reply", once in thirty minutes and only when a look
+    reached the mailbox; when none did, it says that it cannot see the mail.
+    While the desktop app looks away the site is not known, so nothing is
+    said. Speaking up from anywhere is pass 8.
+
+What reaches the model, and how: the thread as text, inside the marks for
+outside content (`wrapUntrusted`); links as their words and their address;
+the names of attached files; the calendar; and a few of the owner's own
+mails for their voice. The tone the owner picks on the notch is one of four
+fixed manners. What the model answers is a draft and nothing else: not who it
+goes to, not whether it is sent.
+
+To try a build without waiting four hours for a test mail: start the brain
+with `JARVIS_NOTCH_MAIL_WAIT_MINUTES=2` (honoured only on a development brain,
+where the demo gate is open). To check a build from the command line, numbers
+only: `bun scripts/notch/mail-study.ts tab` (is the tab there and signed in)
+and `bun scripts/notch/mail-study.ts watch sweep` (one look, and what the mail
+layer has done so far).
+
+What is not done, or not proven:
+
+- **Writing and sending through the tab has not been run on a real mailbox.**
+  The steps were proven by hand with the study's scripts on 14 November (a
+  mail sent, a reply written as a draft and thrown away); `page/reply.js` is
+  those steps put together with stricter checks, and has only been run by
+  tests against a stand-in page. A step that does not find what it expects
+  refuses and says so; it does not guess.
+- **A reply with people in copy** uses Gmail's "Reply all" and then requires
+  the frame to name exactly the expected people. How Gmail shows several
+  people in that frame has not been seen. If it shows them in a way the
+  script does not read, such a reply is refused, not sent wrongly.
+- **No connection reads mail yet.** The order is in place (`firstWay`), and
+  the first place is empty: the Google connection reads unread messages one
+  by one for the email observer, not threads. A thread reader over it would
+  slot in as `connection` in `attach.ts`.
+- **The desktop app's side is tested against a stand-in browser** (the pipe
+  conversation, the three sites, the hidden-to-visible rule), not against
+  Chromium.
+- The time in a draft is a word the person can type over; it offers no other
+  free times from the calendar.
+- What a reply does with a file found in Drive is not decided: the sheet
+  names what was found.
+- Gmail's pages are read by their build as it was in November 2026. A change
+  there makes a step refuse; the `shape-` scripts print the build again.
+
 ## The keys
 
 | What | Keys | How it is told |

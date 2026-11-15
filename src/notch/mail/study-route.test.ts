@@ -183,3 +183,52 @@ describe('what the study may ask', () => {
     expect((await notchStudyOp(null, fake().deps)).status).toBe(400);
   });
 });
+
+describe('checking a build of pass 7 through the study', () => {
+  const tabbed = () => {
+    const went: string[] = [];
+    const ran: string[] = [];
+    const base = fake();
+    const tab: MailBrowser = { navigate: async (url) => { went.push(url); }, evaluate: async (expression) => { ran.push(expression); return expression.includes('.slice(') ? '' : '0'; } };
+    return { deps: { ...base.deps, tab: () => tab } as NotchStudyDeps, went, ran, page: base.went };
+  };
+
+  test('`tab: true` uses the notch\'s own tab, which goes to Gmail, Google Calendar and Google Drive and nowhere else', async () => {
+    const { deps, went, page } = tabbed();
+    for (const url of ['https://mail.google.com/mail/u/0/', 'https://calendar.google.com/calendar/u/0/r/week', 'https://drive.google.com/drive/search?q=deck']) {
+      expect((await notchStudyOp({ op: 'navigate', url, tab: true }, deps)).status).toBe(200);
+    }
+    for (const url of ['https://accounts.google.com/', 'https://docs.google.com/', 'http://mail.google.com/', 'https://mail.google.com.evil.example/', 'https://x@mail.google.com/', 'https://mail.google.com:8443/']) {
+      expect((await notchStudyOp({ op: 'navigate', url, tab: true }, deps)).status).toBe(400);
+    }
+    expect(went.length).toBe(3);
+    // The page the agent drives was not touched.
+    expect(page).toEqual([]);
+    // Without the word, the page is still only taken to Gmail.
+    expect((await notchStudyOp({ op: 'navigate', url: 'https://calendar.google.com/' }, deps)).status).toBe(400);
+  });
+
+  test('says so when no desktop app has the tab', async () => {
+    const answer = await notchStudyOp({ op: 'navigate', url: 'https://mail.google.com/', tab: true }, fake().deps);
+    expect(answer.status).toBe(409);
+    expect(answer.body.error).toContain('own tab');
+  });
+
+  test('`watch` asks the mail layer for one look and answers with numbers', async () => {
+    const asked: string[] = [];
+    const deps: NotchStudyDeps = {
+      ...fake().deps,
+      mail: () => ({
+        look: async (kind) => { asked.push(kind); return { through: 'browser', listed: 50, read: 3, asked: 2, prepared: 1, overtaken: 0 }; },
+        counts: () => ({ ready: 1, silent: 1, threads: 3 }),
+      }),
+    };
+    expect((await notchStudyOp({ op: 'watch', kind: 'glance' }, deps)).body).toEqual({
+      look: { through: 'browser', listed: 50, read: 3, asked: 2, prepared: 1, overtaken: 0 }, counts: { ready: 1, silent: 1, threads: 3 },
+    });
+    // With no kind, or one it does not know, nothing is looked at: only what has been done so far is said.
+    expect((await notchStudyOp({ op: 'watch', kind: 'everything' }, deps)).body).toEqual({ look: null, counts: { ready: 1, silent: 1, threads: 3 } });
+    expect(asked).toEqual(['glance']);
+    expect((await notchStudyOp({ op: 'watch', kind: 'glance' }, fake().deps)).status).toBe(409);
+  });
+});

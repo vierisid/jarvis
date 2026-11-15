@@ -15,6 +15,9 @@
  *   bun scripts/notch/mail-study.ts look               for each draft that named a file it did not have, look for it in the
  *                                                      owner's Drive, in the same signed-in browser, and keep what was found
  *   bun scripts/notch/mail-study.ts sheet [--port 3144] serve the scoring sheet on this computer only
+ *   bun scripts/notch/mail-study.ts tab                (pass 7) is the notch's own tab there and signed in to Gmail
+ *   bun scripts/notch/mail-study.ts watch [glance|recent|sweep]
+ *                                                      (pass 7) one look by the mail layer now, and what it has done: numbers only
  *   bun scripts/notch/mail-study.ts score              what the marks add up to
  *
  * What this prints is shapes and counts. Mail itself is written to the study
@@ -31,6 +34,7 @@ import { browserDriveSearch, type DriveFile } from '../../src/notch/mail/drive.t
 import { gmailSearch, gmailThreads, type GmailRow } from '../../src/notch/mail/gmail.ts';
 import type { MailCalendarEvent, MailThought } from '../../src/notch/mail/proposer.ts';
 import { studyMoments, studyReplay, studyResult, type StudyMark, type StudyProposal, type StudyTried } from '../../src/notch/mail/study.ts';
+import type { GooglePage } from '../../src/notch/mail/page.ts';
 import { mailFirstName, threadAsOf, type MailThread } from '../../src/notch/mail/thread.ts';
 import { mailMachine } from '../../src/notch/mail/waiting.ts';
 import { firstWay } from '../../src/notch/ways.ts';
@@ -97,6 +101,11 @@ export class StudyBrain {
 
   go(place = '', options: { headless?: boolean } = {}): Promise<unknown> {
     return this.ask({ op: 'navigate', url: GMAIL + place, ...options });
+  }
+
+  /** This brain's browser as the readers of the calendar and of Drive use it: moved from site to site by a page script. */
+  page(): GooglePage {
+    return { run: (name, args) => this.run(name, args) };
   }
 
   /** Runs a page script and gives back what it answered, parsed. */
@@ -180,6 +189,20 @@ async function main(argv: string[]): Promise<number> {
   if (verb === 'shape' && rest[0]) {
     const answer = await brain.run(`shape-${rest[0]}`, rest[1] ? JSON.parse(rest[1]) : undefined);
     console.log(JSON.stringify(answer, null, 2));
+    return 0;
+  }
+  if (verb === 'watch') {
+    // Pass 7, on a brain that runs it: one look by the mail layer now (glance, recent or sweep), or with
+    // no kind only what it has done so far. Numbers, and the way the mail was reached. No mail.
+    const answer = await brain.ask({ op: 'watch', ...(rest[0] ? { kind: rest[0] } : {}) });
+    console.log(JSON.stringify(answer, null, 2));
+    return 0;
+  }
+  if (verb === 'tab') {
+    // Pass 7: is the notch's own tab there, and signed in? It is taken to Gmail and asked where it is.
+    await brain.ask({ op: 'navigate', url: `${GMAIL}#inbox`, tab: true });
+    const { answer } = await brain.ask({ op: 'run', name: 'shape-signin', tab: true });
+    console.log(String(answer));
     return 0;
   }
   if (verb === 'selfcheck') {
@@ -384,7 +407,7 @@ async function main(argv: string[]): Promise<number> {
       } },
       { name: 'browser', get: async () => {
         try {
-          read = await browserCalendar(brain, from, to, { each: (weeks) => process.stdout.write(`\rReading the calendar in the browser: week ${weeks}   `) });
+          read = await browserCalendar(brain.page(), from, to, { each: (weeks) => process.stdout.write(`\rReading the calendar in the browser: week ${weeks}   `) });
         } finally {
           process.stdout.write('\n');
           // The browser is left where the study found it: on the mail.
@@ -419,7 +442,7 @@ async function main(argv: string[]): Promise<number> {
     try {
       for (const proposal of todo) {
         const reached = await firstWay<DriveFile[]>([
-          { name: 'browser', get: () => browserDriveSearch(brain, proposal.lookFor!, { most: 4 }) },
+          { name: 'browser', get: () => browserDriveSearch(brain.page(), proposal.lookFor!, { most: 4 }) },
         ]);
         proposal.found = { through: reached.through, files: reached.value ?? [] };
         if (!reached.value) unreached++; else if (reached.value.length) found++; else nothing++;
@@ -478,7 +501,7 @@ async function main(argv: string[]): Promise<number> {
     console.log(`${tokens.input} tokens read and ${tokens.output} written in all, on ${[...new Set(tried.map((entry) => entry.cost.model))].join(', ')}.`);
     return 0;
   }
-  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | export | calendar | replay | look | sheet | score');
+  console.error('Usage: mail-study.ts go [#place] [--headless|--visible] | shape <name> [json] | export | calendar | replay | look | sheet | score | tab | watch [kind]');
   return 2;
 }
 

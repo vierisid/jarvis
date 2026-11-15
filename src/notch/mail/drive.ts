@@ -8,7 +8,7 @@
  *
  * This finds and names. It opens no file, shares none and attaches none.
  */
-import type { GmailPage } from './gmail.ts';
+import { goToSite, type GooglePage } from './page.ts';
 
 export interface DriveFile {
   /** Drive's id of the file. */
@@ -48,18 +48,18 @@ function driveFile(raw: unknown): DriveFile | null {
  * Google, or the words are no search: that way is not there. A throw is a
  * Drive that is there and could not be read.
  */
-export async function browserDriveSearch(page: GmailPage, words: string, options: {
+export async function browserDriveSearch(page: GooglePage, words: string, options: {
   most?: number;
   sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<DriveFile[] | null> {
   const query = driveQuery(words);
   if (!query) return null;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  await page.run('site', { site: 'drive', path: driveSearchPath(query) });
+  const there = await goToSite(page, 'drive', driveSearchPath(query));
   let state = 'not-up';
   for (let attempt = 0; attempt < DRIVE_TRIES; attempt++) {
-    // The page is on its way: an answer given while the address changes is thrown away by the desktop app.
-    await sleep(attempt === 0 ? 1200 : 1500);
+    // A page that is still on its way: an answer given while the address changes is thrown away by the desktop app.
+    if (!there || attempt > 0) await sleep(attempt === 0 ? 1200 : 1500);
     const answer = await page.run<{ state?: unknown; files?: unknown }>('drive-search', { query, most: options.most ?? 8 }).catch(() => null);
     state = typeof answer?.state === 'string' ? answer.state : 'no-answer';
     if (state === 'signed-out') return null;

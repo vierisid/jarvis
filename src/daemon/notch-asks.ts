@@ -221,6 +221,15 @@ export function notchModelReady(llm: LLMManager): boolean {
   return !(scriptedModelBound(llm) && scriptedTurns().length === 0);
 }
 
+/**
+ * Whether the mail layer may ask the model: a real one is set up. The stand-in
+ * model answers from a script written for the instructions a person types; a
+ * look at the mail must never use up its lines.
+ */
+export function notchMailModelReady(llm: LLMManager): boolean {
+  return Object.keys(llm.getTierMap()).length > 0 && !scriptedModelBound(llm);
+}
+
 export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDeps['asks']> {
   let door: { transport: BriefChatTransport; door: NotchTurnDoor } | null = null;
   const turns = (): NotchTurnDoor | null => {

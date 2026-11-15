@@ -1,0 +1,272 @@
+import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import type { MailThought } from './proposer.ts';
+import { MailStore, mailProposalId } from './store.ts';
+import { mailPerson, type MailMessage, type MailPerson, type MailThread } from './thread.ts';
+import { MailWatch, mailCandidate, mailSignature, type MailListed, type MailReader } from './watch.ts';
+
+const HOUR = 60 * 60 * 1000;
+const NOW = Date.UTC(2026, 10, 14, 9, 0);
+const me = mailPerson('Sam Rossi', 'sam@northwind.example');
+const owner = new Set([me.address]);
+const leo = mailPerson('Leo Bianchi', 'leo@lumen.example');
+const anna = mailPerson('Anna Conti', 'anna@lumen.example');
+const robot = mailPerson('Lumen', 'no-reply@lumen.example');
+
+const message = (from: MailPerson, hoursAgo: number, text = 'Does Thursday at 10 work?', extra: Partial<MailMessage> = {}): MailMessage =>
+  ({ from, to: [from === me ? leo : me], cc: [], at: NOW - hoursAgo * HOUR, text, ...extra });
+const thread = (id: string, messages: MailMessage[]): MailThread => ({ id, subject: `Subject of ${id}`, messages });
+const listed = (item: MailThread, extra: Partial<MailListed> = {}): MailListed => ({
+  id: item.id, subject: item.subject, count: item.messages.length, draft: false,
+  people: [...new Map(item.messages.map((entry) => [entry.from.address, entry.from])).values()].sort((a, b) =>
+    item.messages.findLastIndex((entry) => entry.from.address === a.address) - item.messages.findLastIndex((entry) => entry.from.address === b.address)),
+  ...extra,
+});
+
+const T1 = '19a1b2c3d4e5f601';
+const T2 = '19a1b2c3d4e5f602';
+
+/** A mailbox, a model and a store, with what each was asked. */
+function world(threads: MailThread[], options: { answer?: (text: string) => string | Error; rows?: (item: MailThread) => Partial<MailListed>; signedOut?: boolean; calendar?: boolean } = {}) {
+  const box = new Map(threads.map((item) => [item.id, item]));
+  const store = new MailStore(new Database(':memory:'));
+  const asked = { lists: [] as number[], reads: [] as string[][], thinks: [] as string[], calendar: 0, files: [] as string[], changed: 0 };
+  let now = NOW;
+  const reader: MailReader = {
+    owner: async () => me.address,
+    list: async (days, pages) => { asked.lists.push(pages ? -pages : days); return [...box.values()].map((item) => listed(item, options.rows?.(item))); },
+    read: async (rows) => { asked.reads.push(rows.map((row) => row.id)); return rows.flatMap((row) => { const item = box.get(row.id); return item ? [item] : []; }); },
+  };
+  const reply = (fields: Record<string, unknown> = {}) => JSON.stringify({ needs_reply: true, why: 'Asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: 'Thursday at 10:00', look_for: '', ...fields });
+  const watch = new MailWatch({
+    reader: async () => (options.signedOut ? null : { reader, through: 'browser' }),
+    store,
+    think: async (messages): Promise<MailThought> => {
+      const text = messages[1]!.content;
+      asked.thinks.push(text);
+      const answer = options.answer?.(text) ?? reply();
+      if (answer instanceof Error) throw answer;
+      return { content: answer, model: 'test-model', input: 1000, output: 50, cached: 200 };
+    },
+    calendar: options.calendar === false ? undefined : async () => { asked.calendar++; return [{ summary: 'Board call', start: '2026-11-19T10:00:00Z', end: '2026-11-19T11:00:00Z' }]; },
+    files: async (words) => { asked.files.push(words); return [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }]; },
+    changed: () => { asked.changed++; },
+    now: () => now,
+    zone: 'UTC',
+    log: () => {},
+  });
+  return { watch, store, asked, box, reply, later: (ms: number) => { now += ms; } };
+}
+
+describe('what the list alone can rule out', () => {
+  test('a thread is read when the one shown last is a person who is not the owner', () => {
+    const item = thread(T1, [message(me, 48), message(leo, 24)]);
+    expect(mailCandidate(listed(item), owner)).toBe(true);
+    expect(mailCandidate(listed(thread(T1, [message(leo, 48), message(me, 24)])), owner)).toBe(false);
+    expect(mailCandidate(listed(thread(T1, [message(robot, 24)])), owner)).toBe(false);
+    expect(mailCandidate(listed(item, { draft: true }), owner)).toBe(false);
+    // Filed away by Gmail: a person only when the owner has been writing with them.
+    expect(mailCandidate(listed(thread(T1, [message(leo, 24)]), { filed: 'forums' }), owner)).toBe(false);
+    expect(mailCandidate(listed(item, { filed: 'forums' }), owner)).toBe(true);
+    expect(mailCandidate(listed(thread(T1, [message(leo, 24)]), { filed: 'updates' }), owner)).toBe(true);
+  });
+
+  test('the signature changes when a message is added, when another person writes last, and when a draft appears', () => {
+    const item = listed(thread(T1, [message(me, 48), message(leo, 24)]));
+    expect(mailSignature(item)).toBe('2|leo@lumen.example|');
+    expect(mailSignature({ ...item, count: 3 })).not.toBe(mailSignature(item));
+    expect(mailSignature({ ...item, draft: true })).not.toBe(mailSignature(item));
+    expect(mailSignature({ ...item, people: [leo, me] })).not.toBe(mailSignature(item));
+  });
+});
+
+describe('a look at the mailbox', () => {
+  test('prepares a reply for a thread where a person is waiting, once', async () => {
+    const { watch, store, asked } = world([thread(T1, [message(me, 48, 'Here is the deck.'), message(leo, 24)])]);
+    const look = await watch.look('sweep');
+    expect(look).toEqual({ through: 'browser', listed: 1, read: 1, asked: 1, prepared: 1, overtaken: 0 });
+    expect(asked.lists).toEqual([30]);
+    const [row] = store.ready();
+    expect(row).toMatchObject({
+      id: mailProposalId(T1, NOW - 24 * HOUR), thread: T1, state: 'ready', who: leo, to: [leo], cc: [],
+      draft: 'Hi Leo,\nThursday at 10:00 works.\nSam', time: 'Thursday at 10:00', model: 'test-model', tokensIn: 1200, tokensOut: 50,
+    });
+    expect(asked.changed).toBe(1);
+    // The owner's own name, as their mail signs them, and their calendar reach the model.
+    expect(asked.thinks[0]).toContain('(this is Sam)');
+    expect(asked.thinks[0]).toContain('Board call');
+    expect(watch.name()).toBe('Sam');
+
+    // The next looks find the list unchanged: nothing is read, and the model is not asked again.
+    expect(await watch.look('recent')).toMatchObject({ read: 0, asked: 0, prepared: 0, overtaken: 0 });
+    expect(await watch.look('glance')).toMatchObject({ read: 0, asked: 0, prepared: 0, overtaken: 0 });
+    // A glance is the top of the list of the last two days.
+    expect(asked.lists).toEqual([30, 2, -1]);
+    expect(asked.thinks.length).toBe(1);
+    // A full look takes nothing on trust: the reply that waits is checked against its thread.
+    expect(await watch.look('sweep')).toMatchObject({ read: 1, asked: 0, overtaken: 0 });
+  });
+
+  test('reads only what may matter: not the owner\'s last word, not a machine', async () => {
+    const { watch, asked, store } = world([
+      thread(T1, [message(leo, 48), message(me, 24)]),
+      thread(T2, [message(robot, 24)]),
+    ]);
+    expect(await watch.look('sweep')).toMatchObject({ listed: 2, read: 0, asked: 0 });
+    expect(asked.reads).toEqual([]);
+    expect(store.ready()).toEqual([]);
+  });
+
+  test('a message the model says needs no reply is not asked about again, and is not on the notch', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24, 'Thanks, all good!')])], { answer: () => reply({ needs_reply: false, reply: '' }) });
+    await watch.look('sweep');
+    expect(store.ready()).toEqual([]);
+    expect(store.proposal(mailProposalId(T1, NOW - 24 * HOUR))!.state).toBe('silent');
+    expect(asked.changed).toBe(0);
+    await watch.look('recent');
+    expect(asked.thinks.length).toBe(1);
+  });
+
+  test('a message that is too new is looked at again when it has waited long enough', async () => {
+    const { watch, store, asked, later } = world([thread(T1, [message(leo, 1)])]);
+    expect(await watch.look('sweep')).toMatchObject({ read: 1, asked: 0 });
+    expect(store.seen(T1)!.dueAt).toBe(NOW + 3 * HOUR);
+    later(2 * HOUR);
+    expect(await watch.look('recent')).toMatchObject({ read: 0, asked: 0 });
+    later(HOUR + 1);
+    expect(await watch.look('recent')).toMatchObject({ read: 1, asked: 1, prepared: 1 });
+    expect(asked.thinks.length).toBe(1);
+    expect(store.seen(T1)!.dueAt).toBeNull();
+  });
+
+  test('a reply leaves when the owner answers by hand', async () => {
+    const { watch, store, box, asked } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    box.set(T1, thread(T1, [message(leo, 24), message(me, 0.1, 'Yes, see you then.')]));
+    // The owner's answer puts the thread at the top of the list with a new last word: a glance is enough.
+    expect(await watch.look('glance')).toMatchObject({ overtaken: 1, read: 1 });
+    expect(store.ready()).toEqual([]);
+    expect(store.proposal(mailProposalId(T1, NOW - 24 * HOUR))!.state).toBe('answered');
+    expect(asked.changed).toBe(2);
+  });
+
+  test('a reply leaves when the owner begins a draft of their own, without the thread being read', async () => {
+    const drafted = new Set<string>();
+    const { watch, store, asked } = world([thread(T1, [message(leo, 24)])], { rows: (item) => ({ draft: drafted.has(item.id) }) });
+    await watch.look('sweep');
+    drafted.add(T1);
+    const reads = asked.reads.length;
+    expect(await watch.look('recent')).toMatchObject({ overtaken: 1, read: 0 });
+    expect(asked.reads.length).toBe(reads);
+    expect(store.ready()).toEqual([]);
+  });
+
+  test('when the other side writes again, the old reply is overtaken and a new one prepared for the new message', async () => {
+    const { watch, store, box } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    box.set(T1, thread(T1, [message(leo, 24), message(leo, 5, 'Any news?')]));
+    expect(await watch.look('recent')).toMatchObject({ overtaken: 1, asked: 1, prepared: 1 });
+    expect(store.ready().map((row) => row.id)).toEqual([mailProposalId(T1, NOW - 5 * HOUR)]);
+  });
+
+  test('a reply the notch is acting on is left alone by a look', async () => {
+    const { watch, store, box } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    const [row] = store.ready();
+    watch.hold(row!.id);
+    // The notch has just sent it: the mailbox shows the owner's reply.
+    box.set(T1, thread(T1, [message(leo, 24), message(me, 0, 'Hi Leo,\nThursday at 10:00 works.\nSam')]));
+    expect(await watch.look('recent')).toMatchObject({ read: 0, overtaken: 0 });
+    expect(store.proposal(row!.id)!.state).toBe('ready');
+    watch.release(row!.id);
+    expect(await watch.look('recent')).toMatchObject({ overtaken: 1 });
+  });
+
+  test('a file the reply would need is looked for before anyone is told it is missing', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24, 'Can you send the deck?')])], { answer: () => reply({ missing: 'The deck.', look_for: 'Lumen deck', time: '' }) });
+    await watch.look('sweep');
+    expect(asked.files).toEqual(['Lumen deck']);
+    expect(store.ready()[0]).toMatchObject({ lookFor: 'Lumen deck', found: [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }] });
+  });
+
+  // No way to the mailbox is not an empty mailbox: nothing is concluded, nothing is forgotten.
+  test('with no way to the mailbox it says so and changes nothing', async () => {
+    const { watch, store, asked } = world([thread(T1, [message(leo, 24)])], { signedOut: true });
+    expect(await watch.look('sweep')).toEqual({ through: null, listed: 0, read: 0, asked: 0, prepared: 0, overtaken: 0 });
+    expect(asked.lists).toEqual([]);
+    expect(store.ready()).toEqual([]);
+  });
+
+  test('a model that cannot be reached leaves the thread to be asked about by the next look', async () => {
+    let down = true;
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: () => (down ? new Error('no model') : reply()) });
+    expect(await watch.look('sweep')).toMatchObject({ asked: 1, prepared: 0 });
+    expect(store.proposal(mailProposalId(T1, NOW - 24 * HOUR))).toBeNull();
+    down = false;
+    expect(await watch.look('recent')).toMatchObject({ asked: 1, prepared: 1 });
+    expect(asked.thinks.length).toBe(2);
+  });
+
+  test('an answer of the model that cannot be used is kept as failed and not asked for again', async () => {
+    const { watch, store, asked } = world([thread(T1, [message(leo, 24)])], { answer: () => 'I think you should reply.' });
+    await watch.look('sweep');
+    expect(store.proposal(mailProposalId(T1, NOW - 24 * HOUR))!.state).toBe('failed');
+    await watch.look('recent');
+    expect(asked.thinks.length).toBe(1);
+  });
+
+  test('one look at a time: a second call is the same look', async () => {
+    const { watch, asked } = world([thread(T1, [message(leo, 24)])]);
+    const [a, b] = await Promise.all([watch.look('sweep'), watch.look('recent')]);
+    expect(a).toBe(b);
+    expect(asked.lists).toEqual([30]);
+  });
+
+  test('nothing is looked at while everything is stopped', async () => {
+    const box = world([thread(T1, [message(leo, 24)])]);
+    const paused = new MailWatch({ reader: async () => { throw new Error('asked'); }, store: box.store, think: async () => { throw new Error('asked'); }, paused: () => true, log: () => {} });
+    expect(await paused.look('sweep')).toMatchObject({ through: null, read: 0 });
+  });
+});
+
+describe('a reply written again in another manner', () => {
+  test('is drafted again for the thread as it stands, and what it cost is added', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: (text) => (text.includes('asked for this reply to be written shorter') ? reply({ reply: 'Thursday 10 works. Sam', time: '' }) : reply()) });
+    await watch.look('sweep');
+    const [row] = store.ready();
+    const next = await watch.redraft(row!.id, 'shorter');
+    expect(next).toMatchObject({ draft: 'Thursday 10 works. Sam', time: null, tone: 'shorter', tokensIn: 2400, tokensOut: 100, state: 'ready' });
+    expect(store.proposal(row!.id)!.draft).toBe('Thursday 10 works. Sam');
+    expect(asked.thinks.length).toBe(2);
+  });
+
+  test('is not drafted when the thread has moved on, and the reply that was there stays', async () => {
+    const { watch, store, box } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    const [row] = store.ready();
+    box.set(T1, thread(T1, [message(leo, 24), message(anna, 1, 'I can take this one.')]));
+    expect(await watch.redraft(row!.id, 'shorter')).toBeNull();
+    expect(store.proposal(row!.id)!.draft).toBe(row!.draft);
+  });
+});
+
+describe('is a reply still an answer to the last word', () => {
+  test('yes while the thread stands as it did, no once it has moved on, and nothing is concluded without the mailbox', async () => {
+    const { watch, store, box } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    const [row] = store.ready();
+    expect(await watch.stillWaits(row!.id)).toBe(true);
+    box.set(T1, thread(T1, [message(leo, 24), message(me, 0.1, 'Done.')]));
+    // Seen to wait a moment ago by the look: the mailbox is not asked again so soon.
+    expect(await watch.stillWaits(row!.id)).toBe(true);
+    expect(await watch.stillWaits(row!.id, 0)).toBe(false);
+    expect(store.proposal(row!.id)!.state).toBe('answered');
+    // Gone from the mailbox's reach: not known, so not changed.
+    const other = world([thread(T2, [message(leo, 24)])]);
+    await other.watch.look('sweep');
+    const [waiting] = other.store.ready();
+    other.box.delete(T2);
+    expect(await other.watch.stillWaits(waiting!.id, 0)).toBeNull();
+    expect(other.store.proposal(waiting!.id)!.state).toBe('ready');
+  });
+});

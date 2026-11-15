@@ -74,14 +74,27 @@ function rowOf(raw: unknown): GmailRow | null {
  * page that is short of a full one, empty, or the same as the one before
  * (Gmail shows the last page again when asked for one past it).
  */
-export async function gmailSearch(page: GmailPage, query: string, options: { pages?: number; each?: (page: number, rows: number) => void } = {}): Promise<GmailRow[]> {
+export async function gmailSearch(page: GmailPage, query: string, options: {
+  pages?: number;
+  each?: (page: number, rows: number) => void;
+  /**
+   * Wraps the showing and the reading of one page of the list, which belong
+   * together: a browser that others use too must not be taken elsewhere
+   * between the two.
+   */
+  step?: <T>(work: () => Promise<T>) => Promise<T>;
+} = {}): Promise<GmailRow[]> {
   const found = new Map<string, GmailRow>();
+  const step = options.step ?? (<T>(work: () => Promise<T>) => work());
   let full = 0;
   let before = '';
   for (let at = 1; at <= (options.pages ?? 60); at++) {
     const place = gmailSearchPlace(query, at);
-    await page.run('go', { place });
-    const listed = await page.run<GmailListed>('list', { place, not: before });
+    const not = before;
+    const listed = await step(async () => {
+      await page.run('go', { place });
+      return page.run<GmailListed>('list', { place, not });
+    });
     if (!listed.there) {
       // The first page not showing is a failure. A later one is the end of the list.
       if (at === 1) throw new Error('Gmail did not show the list for that search');
