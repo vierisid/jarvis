@@ -19,6 +19,8 @@ export interface MailCalendarEvent {
   end: string;
   /** A whole-day event: from the start of its first day to the end of its last. */
   allDay?: boolean;
+  /** Other people are in it: a meeting or a call, not a note of the owner's own. Absent when that is not known. */
+  withOthers?: boolean;
 }
 
 export interface MailProposalInput {

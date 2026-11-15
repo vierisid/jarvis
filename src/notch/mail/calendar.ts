@@ -42,7 +42,7 @@ export interface CalendarRead {
   declined: number;
 }
 
-interface WeekEvent extends MailCalendarEvent { id: string; allDay: boolean }
+interface WeekEvent extends MailCalendarEvent { id: string; allDay: boolean; withOthers: boolean }
 
 /** One event as the page answered it, checked. Null when it is not one. */
 export function calendarEvent(raw: unknown): WeekEvent | null {
@@ -59,6 +59,7 @@ export function calendarEvent(raw: unknown): WeekEvent | null {
     start: new Date(start).toISOString(),
     end: new Date(end).toISOString(),
     allDay: event.allDay === true,
+    withOthers: event.withOthers === true,
   };
 }
 
@@ -119,6 +120,6 @@ export async function browserCalendar(page: GooglePage, from: number, to: number
   const events = [...found.values()]
     .filter((event) => Date.parse(event.end) > from && Date.parse(event.start) < to)
     .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
-    .map((event) => ({ summary: event.summary, start: event.start, end: event.end, ...(event.allDay ? { allDay: true } : {}) }));
+    .map((event) => ({ summary: event.summary, start: event.start, end: event.end, ...(event.allDay ? { allDay: true } : {}), ...(event.withOthers ? { withOthers: true } : {}) }));
   return { events, weeks, unread, declined };
 }

@@ -68,6 +68,8 @@ export interface NotchMailLayer {
   sentSince(since: number): { at: number; text: string; small: string }[];
   /** One look now, of a kind. */
   look(kind: MailLookKind): ReturnType<MailWatch['look']>;
+  /** The owner's calendar between two moments, by whichever way reaches it, or null. */
+  calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>;
   stop(): void;
 }
 
@@ -96,6 +98,11 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
   let mail: NotchMail | null = null;
   /** Whether Gmail is the site in front: there a reply speaks up as soon as it is prepared, not only on arrival. */
   let inGmail = false;
+  /**
+   * Whether the first look through the month is over. What it finds is mail that had been lying there, and
+   * speaks only in Gmail. A reply prepared after it is to a mail that has just come, and speaks from anywhere.
+   */
+  let sweptOnce = false;
   const speak = (): void => { void mail?.arrived().catch((error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`)); };
   const watch = new MailWatch({
     store,
@@ -110,7 +117,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     },
     calendar,
     files: async (words) => { const tab = page(); return tab ? turn.take(() => browserDriveSearch(tab, words, { most: 4 })) : null; },
-    changed: () => { mail?.sync(); if (inGmail) speak(); },
+    changed: () => { mail?.sync(); if (inGmail) speak(); else if (sweptOnce) mail?.speak(); },
     paused: deps.paused,
     modelReady: deps.modelReady,
     now,
@@ -118,13 +125,14 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     waitMs: deps.waitMs,
     log,
   });
-  mail = attachNotchMail(inbox, { store, watch, mailbox, now, log });
+  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, now, log });
 
   const timers: ReturnType<typeof setInterval>[] = [];
   let first: ReturnType<typeof setTimeout> | null = null;
   const said = { through: undefined as string | null | undefined };
   const look = async (kind: MailLookKind) => {
     const result = await watch.look(kind);
+    if (kind === 'sweep' && result.through) sweptOnce = true;
     // Said when it changes, not every minute: which way the mail is reached, or that there is none.
     if (result.through !== said.through && !deps.paused?.() && deps.modelReady?.() !== false) {
       said.through = result.through;
@@ -158,6 +166,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
       small: tokens(row),
     })),
     look,
+    calendar,
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },
   };
 }

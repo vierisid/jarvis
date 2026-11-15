@@ -696,8 +696,18 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	whereDecide := func(notchOn bool) {
 		if !notchOn {
 			notchWhere.Forget()
+			notchAround.Forget()
 			return
 		}
+		// Whether the person is on a call, and whether this machine has a
+		// connection (notch_around.go): told on the same terms.
+		notchAroundStart.Do(func() { platformNotchAroundStart(notchAround) })
+		notchAround.Use(func(payload map[string]any) {
+			evt := SidecarEvent{Type: "sidecar_event", EventType: notchAroundEvent, Timestamp: time.Now().UnixMilli(), Priority: "high", Payload: payload}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[notch] what is going on around the person did not reach the brain: %v", err)
+			}
+		})
 		notchWhereStart.Do(func() { platformNotchWhereStart(notchWhere) })
 		notchWhere.Use(func(payload map[string]any, icon []byte) {
 			evt := SidecarEvent{
@@ -720,6 +730,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	defer func() {
 		c.whereDecide.Store(nil)
 		notchWhere.Forget()
+		notchAround.Forget()
 	}()
 
 	// What the notch's page says to the brain goes out on this connection, as

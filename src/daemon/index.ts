@@ -4643,6 +4643,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           modelReady: () => notchMailModelReady(agentService.getLLMManager()),
           waitMinutes: notchDemoState === 'open' ? Number(process.env.JARVIS_NOTCH_MAIL_WAIT_MINUTES) : undefined,
         }),
+        // From anywhere, and the shape of the day (pass 8): the speaking rule
+        // and the quiet hours, the calendar as a source, things held during a
+        // call, the lines of the day, and a lost connection. The desktop app
+        // says when a call is on and whether its machine is online.
+        day: { db: getDb(), around: sidecarManager },
         openDashboard: (sidecarId) => {
           const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
           for (const id of targets) {
@@ -6417,7 +6422,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // What is typed into the notch, and its recordings, are for the notch
     // alone (src/notch/surface.ts, src/notch/talk.ts): an instruction is not
     // an observation to pass round the dashboards.
-    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where'];
+    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where', 'notch.around'];
 
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double

@@ -24,6 +24,7 @@ import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/cont
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
+import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 
@@ -106,6 +107,8 @@ export interface NotchAsksDeps {
    * text field.
    */
   mail?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
+  /** The person's quiet hours (quiet.ts): Home's line about them and its button, and what a change there does. */
+  quiet?: NotchQuietHome;
   heardMs?: number;
   log?: (line: string) => void;
 }
@@ -784,11 +787,15 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           ...(mailRow ? [mailRow] : []),
           ...(deps.see ? [deps.see.row()] : []),
           ...today,
-          { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }] },
+          ...(deps.quiet ? [deps.quiet.note()] : []),
+          { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }, ...(deps.quiet ? [deps.quiet.button()] : [])] },
         ],
       });
-      const answer = await stage.answer(id, ['ask', 'no', 'button', 'go']);
+      const answer = await stage.answer(id, ['ask', 'no', 'button', 'go', 'word']);
       if (answer.act === 'no') return;
+      // The quiet hours, changed where they are shown: Home is drawn again with what they are now.
+      if (answer.act === 'word') { deps.quiet?.word(answer.word ?? '', answer.value ?? ''); continue; }
+      if (answer.act === 'button' && deps.quiet?.press(answer.button ?? '')) continue;
       if (answer.act === 'go' && answer.row === 'last' && recent) {
         const again = stage.id();
         stage.put({ id: again, kind: 'sheet', say: [recent.source === 'spoken' ? 'You said' : 'You typed'], blocks: ledgerDetail(recent), stay: true });

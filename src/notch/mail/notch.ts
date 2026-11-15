@@ -16,6 +16,12 @@
  * When the owner comes to it and several are unseen, it is one line and a
  * list behind it, and each row opens its reply.
  *
+ * Where it speaks up (pass 8): a reply to a mail that has just come speaks
+ * from anywhere, with its source in front ("In Gmail: you have not replied
+ * to Marco") unless Gmail is what the owner is looking at. The replies the
+ * first look found for mail that had been lying there speak only in Gmail:
+ * twenty old mails are not twenty interruptions.
+ *
  * What the owner can do with a reply, and what each thing does:
  *
  *   yes on the line     shows the draft, on paper, with who it goes to
@@ -62,6 +68,8 @@ export interface NotchMailDeps {
   watch: Pick<MailWatch, 'hold' | 'release' | 'redraft' | 'stillWaits' | 'look' | 'lastLook' | 'busy'>;
   /** The mailbox to write through, or null when no desktop app with the notch's tab is there. */
   mailbox(): Mailbox | null;
+  /** Whether Gmail is the site in front. When it is not, a line that speaks up names its source. Taken as yes when not given. */
+  inGmail?(): boolean;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -71,6 +79,12 @@ export interface NotchMail {
   sync(): void;
   /** The owner has come to Gmail: the newest reply they have not seen speaks up, or it is said that nothing waits. */
   arrived(): Promise<void>;
+  /** A reply to a mail that has just come is ready: it speaks up wherever the owner is, when the notch lets it. */
+  speak(): void;
+  /** How many replies prepared since a moment the owner has not seen. */
+  newSince(at: number): number;
+  /** Another line has told the owner of the replies that wait (the morning line, "while you were away"): they do not each speak up after it. */
+  told(): void;
   /** Home's row about the replies that wait, or null when none does. */
   homeRow(): NotchBlock | null;
   /** What that row opens: the reply when one waits, the list when several do. Comes back when it is closed. */
@@ -132,7 +146,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     if (!row || row.state !== 'ready') return 'settled';
     const who = mailFirstName(row.who);
     if (options.line) {
-      const first = await stage.offer(['You have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' });
+      const first = await stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' });
       if (first.act === 'fold') return 'waits';
       if (first.act === 'no') return decline(id);
     }
@@ -225,6 +239,13 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     }
   }
 
+  /**
+   * How a line about mail begins. Always with its source: in Gmail the place itself says it, anywhere
+   * else the line does ("In Gmail: you ..."). `after` is the word that follows the source, `alone` the
+   * word the line begins with when no source is named.
+   */
+  const source = (after: string, alone: string): NotchPart[] => (deps.inGmail?.() === false ? [em('In Gmail:'), after ? ` ${after}` : ' '] : alone ? [alone] : []);
+
   /** Is this reply still an answer to the last word? Asked of the mailbox unless a look saw so a moment ago. Not known is not no. */
   const stillTrue = async (row: MailProposalRow): Promise<boolean> =>
     store.proposal(row.id)?.state === 'ready' && (await watch.stillWaits(row.id)) !== false;
@@ -267,7 +288,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       return left();
     }
     for (const row of fresh) seen.add(row.id);
-    const many = await stage.offer([em(`${fresh.length} people`), ' are waiting for a reply. I drafted them.'], 'show', { src: 'mail' });
+    const many = await stage.offer([...source('', ''), em(`${fresh.length} people`), ' are waiting for a reply. I drafted them.'], 'show', { src: 'mail' });
     // Esc here is not a no to anyone's reply: each is turned down on its own draft.
     if (many.act === 'yes') await list(stage);
     return left();
@@ -297,6 +318,15 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     if (!waiting && present) { present = false; inbox.remove(NOTCH_MAIL_ITEM); }
   }
 
+  function speak(): void {
+    sync();
+    // A reply the owner has not seen takes the notch when the notch lets it. Something that is up
+    // already is not spoken over, and nobody's one say is used up for it.
+    if (unseen().length === 0 || inbox.showing() !== null) return;
+    present = true;
+    inbox.add(item(true));
+  }
+
   async function arrived(): Promise<void> {
     // What is known is brought up to date first, unless it was just now. A look that is under way is
     // not waited for: the first one goes through a month, and what it has prepared so far is there.
@@ -304,15 +334,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     let look: MailLook | null = last && now() - last.at < MAIL_LOOK_FRESH_MS ? last.look : null;
     const reading = watch.busy();
     if (!look && !reading) look = await watch.look('recent').catch(() => null);
+    if (store.ready().length > 0) { speak(); return; }
     sync();
-    if (store.ready().length > 0) {
-      // A reply the owner has not seen takes the notch, if the notch is free. Something that is up
-      // already is not spoken over, and nobody's one say is used up for it.
-      if (unseen().length === 0 || inbox.showing() !== null) return;
-      present = true;
-      inbox.add(item(true));
-      return;
-    }
     // Still being read, and nothing found yet: not known, so nothing is said.
     if (!look && reading) return;
     if (now() - saidNothingAt < MAIL_NOTHING_AGAIN_MS) return;
@@ -347,6 +370,11 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     sync();
   }
 
+  function told(): void {
+    for (const row of unseen()) seen.add(row.id);
+    sync();
+  }
+
   sync();
-  return { sync, arrived, homeRow, open };
+  return { sync, arrived, speak, newSince: (at) => unseen().filter((row) => row.createdAt >= at).length, told, homeRow, open };
 }

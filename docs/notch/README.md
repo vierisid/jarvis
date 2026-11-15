@@ -686,18 +686,18 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     is kept, it is not said again, and Esc on the line about several, or on
     the list, turns nobody's reply down: each is turned down on its own
     draft. What has been seen is remembered until the brain restarts.
-65. **It speaks up in one place for now: when the person comes to Gmail.**
-    The desktop app says which site is in front (pass 6). Coming to
-    `mail.google.com`, the newest reply the owner has not seen takes the
-    notch if the notch is free, as the one line "You have not replied to
-    Marco. I drafted a reply." Everywhere else a new reply joins the count,
-    and tapping the notch shows it: one line when one is unseen, "3 people
-    are waiting for a reply. I drafted them." and a list when several are.
-    With nothing waiting it says "Nobody in your mail is waiting for a
-    reply", once in thirty minutes and only when a look reached the mailbox;
-    when none did, it says that it cannot see the mail. While the desktop app
-    looks away the site is not known, so nothing is said. Speaking up from
-    anywhere is pass 8.
+65. **Coming to Gmail, a reply speaks up.** The desktop app says which site
+    is in front (pass 6). Coming to `mail.google.com`, the newest reply the
+    owner has not seen takes the notch when the notch lets it (66), as the one
+    line "You have not replied to Marco. I drafted a reply." A reply prepared
+    while Gmail is in front speaks the same way. Tapping the notch shows what
+    is unseen: one line when one is, "3 people are waiting for a reply. I
+    drafted them." and a list when several are. With nothing waiting it says
+    "Nobody in your mail is waiting for a reply", once in thirty minutes and
+    only when a look reached the mailbox; when none did, it says that it
+    cannot see the mail. While the desktop app looks away the site is not
+    known, so nothing is said. From pass 8 a reply to a mail that has just
+    come also speaks from anywhere (69).
 
 What reaches the model, and how: the thread as text, inside the marks for
 outside content (`wrapUntrusted`); links as their words and their address;
@@ -738,6 +738,108 @@ What is not done, or not proven:
   names what was found.
 - Gmail's pages are read by their build as it was in November 2026. A change
   there makes a step refuse; the `shape-` scripts print the build again.
+
+## From anywhere, and the shape of the day
+
+Pass 8 is one rule and the things that follow from it. The rule is the
+owner's, from the plan: only a person waiting or a running clock speaks up,
+only after four seconds of still hands, always with its source. Everything
+else joins the count.
+
+66. **A line nobody asked for comes up in a still moment.** The desktop app
+    says when the person's hands have been off the keyboard and the mouse for
+    four seconds (pass 6). The inbox asks before it lets anything speak by
+    itself (`maySpeak`): their hands are still, they are not away, and it is
+    not their quiet hours. What may not speak joins the count and has its say
+    at the next still moment (`calmed`). Two things do not wait: what the
+    person asked for themselves, and what has a window already running (a
+    promise about to be kept). Tapping the notch is never held back: the
+    person can always open it and find what waits.
+67. **Whether the person is there is known from their hands alone**
+    (`presence.ts`). Still for twenty minutes is away; hands on again is
+    back; the first time in a day, which begins at five in the morning, is
+    the morning. Nothing is read from the screen for it and a locked screen
+    is not known. Someone who reads for twenty minutes without touching
+    anything is "away" and then "back": that errs towards telling them what
+    changed. Nothing is said to an empty chair.
+68. **Quiet hours: inside them nothing arrives.** 22:00 to 07:00 unless the
+    person changes them, and whenever they say "Quiet for an hour". Both are
+    in Home, under the text field: the two times are words that can be
+    changed, and the button is beside "What you asked". Kept in
+    `notch_settings`. What arrives joins the count and can be found there.
+    A promise about to be kept is still shown: stopping it is theirs to do.
+69. **Always with its source.** A reply to a mail that has just come speaks
+    from anywhere as "In Gmail: you have not replied to Marco. I drafted a
+    reply.", with the mail icon; in Gmail the place itself says it. The
+    replies the first look found for mail that had been lying there speak
+    only in Gmail: twenty old mails are not twenty interruptions.
+70. **A meeting is said ten minutes before** (`soon.ts`): "Board call in 10
+    min.", with the calendar icon. Only events other people are in: the
+    owner's own notes in their calendar are theirs to remember, and whole
+    days are not clocks. Read through a connection when there is one and in
+    the signed-in browser when not, every five minutes, for today and
+    tomorrow. It waits for a still moment like everything else, and says how
+    long is left then; two minutes before the start it does not wait any
+    more. A meeting moved or cancelled in the meantime is not announced at
+    its old hour. The prototype's line went on "Notes are ready": nothing
+    prepares notes yet, so nothing is said about notes. A title is text from
+    the calendar: it is shown to the person and no model reads it.
+71. **On a call, everything is held** (`around.ts`). The desktop app says
+    when a program people make calls with has the microphone
+    (`sidecar/notch_around.go`). It reads that from the record Windows keeps
+    for the person's own privacy settings: nothing is listened to and nothing
+    is recorded to know it, and which program it is is not said. A minute of
+    it is a call (a sentence dictated is not); with a meeting in the calendar
+    for that moment it is a call at once. The notch says "On a call. I hold
+    everything until you are done." once, takes nothing to the person while
+    it lasts (`inbox.hold`), and shows a bump beside itself for each thing
+    that arrives. Fifteen seconds after the microphone is given back the call
+    is over, and what was held is offered: "Call ended. I held 2 things."
+    Dictation tools, noise filters and assistants that listen for their name
+    are not calling programs and hold nothing back. A record that never
+    closed (a program died with the microphone) is not believed past six
+    hours, and no call is held past three. When the desktop app goes away
+    nothing is held on its last word.
+72. **The lines of the day are counted when they are said** (`day.ts`).
+    The morning line, the first time the person is there: "Morning. 2 things
+    done overnight. 3 need you.", where done is actions carried out, promises
+    kept and replies sent since they left, and "need you" is what is in the
+    count plus every reply that is drafted. Yes shows what waits. The evening
+    line, from six in the evening if they are there: "Today: 5 things done. 2
+    still wait." Each is said once a day, remembered across a restart.
+73. **Back after being away, one line says what changed.** Who wrote and is
+    waiting, and what moved in the calendar: "While you were away: 3 people
+    wrote and are waiting for a reply, and Board call moved to 16:00." The
+    calendar is read afresh and compared with what it held when they left.
+    One new mail is its own line and gets no summary; nothing new is nothing
+    to say. Replies a line has told of do not each speak up after it: they
+    wait in Home.
+74. **A lost connection is said, once.** The desktop app says what the
+    system itself knows about its connection; nothing is sent anywhere to
+    find out. Gone for eight seconds: "No connection. I carry on when it is
+    back." When it returns: "Back online.", and what could not be read is
+    read. A blink is not said, and a return is not announced when its going
+    could not be.
+
+What is not done, or not proven, in pass 8:
+
+- **The two facts from the desktop app have not been read on a real
+  machine**: that a calling program has the microphone, and that the machine
+  is online. The reading of the record is tested against made-up records; the
+  record itself is Windows' own and its shape is taken from how it is known
+  to be written. On a Mac neither is read yet: nothing is held for a call and
+  nothing is said about the connection there.
+- **One path per event is not enforced across the product.** With a Google
+  connection the older observers still raise their own events for the same
+  mail and calendar. The notch's own lines are one each.
+- **The evening line counts; it does not offer to move what slipped.** The
+  prototype's "1 thing slipped today. Move it to tomorrow?" needs a way to
+  change when a promise is due, which the product does not have.
+- **The lines of the day and the quiet hours have their defaults** (a day
+  begins at 05:00, the evening line from 18:00, away after twenty minutes, a
+  meeting ten minutes before). Only the quiet hours can be changed, in Home.
+- Which events are meetings is read from how Google Calendar words an
+  invitation ("Accepted", "Needs RSVP"), in English.
 
 ## The keys
 
