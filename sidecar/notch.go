@@ -160,6 +160,8 @@ func (n *NotchService) watchKeys() {
 		notchTalk.key(action)
 		n.runInPage(notchKeyScript(action))
 	}, nil)
+	// While the talk pair is down the pointer is the look's (notch_looker.go).
+	kb.look = notchLooker
 	if err := kb.watch(); err != nil {
 		log.Printf("[notch] keys: not watching: %v", err)
 		return
