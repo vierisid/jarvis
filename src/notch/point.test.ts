@@ -266,6 +266,8 @@ describe('something that takes several clicks to get to', () => {
       'read', 'choose 2', `wait 420,850 28x28 "1. Click Add Source" ${NOTCH_POINT_WAIT_MS}`,
       `sleep ${NOTCH_POINT_SETTLE_MS}`,
       'read', 'choose 2', `wait 430,600 220x26 "2. Click Audio Input Capture" ${NOTCH_POINT_WAIT_MS}`,
+      // Done with: the pointer goes home at once.
+      'clear',
     ]);
     // The line on the notch for each step. The first says where, so the eye finds the pointer.
     expect(said).toEqual(['Step 1: click Add Source, bottom left of the window.', 'Last step: click Audio Input Capture.']);

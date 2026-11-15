@@ -372,6 +372,7 @@ export function createNotchPoint(deps: NotchPointDeps): (question: string, durin
       if (got === 'stopped' || signal?.aborted) { await clear(); return { ok: 'stopped' }; }
       if (!got) {
         if (n === 1) return null;
+        await clear();
         return { ok: true, said: 'I could not point at the next step.' };
       }
       if (!got.clicked) {
@@ -380,7 +381,8 @@ export function createNotchPoint(deps: NotchPointDeps): (question: string, durin
         return { ok: true, said: `I stopped showing the way: nothing was clicked for ${Math.round(NOTCH_POINT_WAIT_MS / 1000)} seconds.` };
       }
       steps.push({ name: go.name, type: go.type, clicked: got.inside ? 'it' : 'elsewhere' });
-      if (got.inside && last) return { ok: true, said: 'That was the last step.' };
+      // The pointer does not stand about on a thing that is done with: it goes home now.
+      if (got.inside && last) { await clear(); return { ok: true, said: 'That was the last step.' }; }
       if (!got.inside && ++misses >= NOTCH_POINT_MISSES) {
         await clear();
         return { ok: true, said: 'I stopped showing the way. Ask me again when you want it.' };
