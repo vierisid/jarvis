@@ -56,6 +56,8 @@ export class NotchPresence {
   private isStill: boolean | null = null;
   private stillSince: number | null = null;
   private away = false;
+  /** Whether their hands have been on since the brain started. Until then nothing is known of when they were last there. */
+  private everThere = false;
   private timer: unknown = null;
   private readonly now: () => number;
   private readonly clock: NonNullable<NotchPresenceDeps['clock']>;
@@ -93,7 +95,9 @@ export class NotchPresence {
       return;
     }
     const since = this.stillSince;
-    const first = this.isStill === null;
+    // The first time their hands are on since the brain started: it may have started while they were out.
+    const first = !this.everThere;
+    this.everThere = true;
     const wasAway = this.away;
     this.isStill = false;
     this.stillSince = null;
