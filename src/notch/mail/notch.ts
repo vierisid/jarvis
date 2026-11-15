@@ -70,6 +70,11 @@ export interface NotchMailDeps {
   mailbox(): Mailbox | null;
   /** Whether Gmail is the site in front. When it is not, a line that speaks up names its source. Taken as yes when not given. */
   inGmail?(): boolean;
+  /**
+   * Whether the whole month has been gone through since the brain started. Until it has, "nobody is
+   * waiting" is not known and is not said. Taken as yes when not given.
+   */
+  monthRead?(): boolean;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -77,8 +82,12 @@ export interface NotchMailDeps {
 export interface NotchMail {
   /** Brings the inbox in line with the replies that wait. */
   sync(): void;
-  /** The owner has come to Gmail: the newest reply they have not seen speaks up, or it is said that nothing waits. */
-  arrived(): Promise<void>;
+  /**
+   * The owner has come to Gmail: the newest reply they have not seen speaks up, or it is said that
+   * nothing waits. While the mailbox is still being read and nothing is ready, that is what is said,
+   * and the answer is `reading`: whoever asked comes again when the reading is over.
+   */
+  arrived(): Promise<'spoke' | 'said' | 'reading' | 'nothing'>;
   /** A reply to a mail that has just come is ready: it speaks up wherever the owner is, when the notch lets it. */
   speak(): void;
   /** How many replies prepared since a moment the owner has not seen. */
@@ -127,6 +136,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   /** Whether mail is in the inbox now. */
   let present = false;
   let saidNothingAt = -Infinity;
+  /** "I am reading your mail" was said: once since the brain started is enough. */
+  let saidReading = false;
   /** Replies the owner has seen once, as a line or as a row of the list they opened: these wait in Home, not in the count. */
   const seen = new Set<string>();
   const unseen = (): MailProposalRow[] => store.ready().filter((row) => !seen.has(row.id));
@@ -327,24 +338,32 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     inbox.add(item(true));
   }
 
-  async function arrived(): Promise<void> {
+  async function arrived(): Promise<'spoke' | 'said' | 'reading' | 'nothing'> {
     // What is known is brought up to date first, unless it was just now. A look that is under way is
     // not waited for: the first one goes through a month, and what it has prepared so far is there.
     const last = watch.lastLook();
     let look: MailLook | null = last && now() - last.at < MAIL_LOOK_FRESH_MS ? last.look : null;
     const reading = watch.busy();
     if (!look && !reading) look = await watch.look('recent').catch(() => null);
-    if (store.ready().length > 0) { speak(); return; }
+    if (store.ready().length > 0) { speak(); return 'spoke'; }
     sync();
-    // Still being read, and nothing found yet: not known, so nothing is said.
-    if (!look && reading) return;
-    if (now() - saidNothingAt < MAIL_NOTHING_AGAIN_MS) return;
+    // The mailbox could not be reached at all: that is what is said, whatever else is not known.
+    const unreachable = !!look && !look.through && !reading;
+    // Still being read, or the month not yet gone through, and nothing found so far: who is waiting is
+    // not known. That is said, once, so that the owner is not left looking at a notch that says nothing,
+    // and "nobody is waiting" is kept for when it is true.
+    if (!unreachable && (reading || deps.monthRead?.() === false)) {
+      if (!saidReading) saidReading = inbox.present('mail-reading', (stage) => stage.say(['I am reading your mail. One moment.'], 2600, { mood: 'read', src: 'mail' }));
+      return 'reading';
+    }
+    if (now() - saidNothingAt < MAIL_NOTHING_AGAIN_MS) return 'nothing';
     // Said only when it is true: the mailbox was looked at, and nobody is waiting. When it could not be
     // looked at, that is what is said.
     const words: NotchPart[] = look?.through
       ? ['Nobody in your mail is waiting for a reply.']
       : ['I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.'];
     if (inbox.present('mail-nothing', (stage) => stage.say(words, 3600, { src: 'mail' }))) saidNothingAt = now();
+    return 'said';
   }
 
   function homeRow(): NotchBlock | null {

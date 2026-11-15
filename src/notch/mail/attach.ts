@@ -9,8 +9,11 @@
  *
  * The clock: a glance at the top of the list every minute (a new mail, or the
  * owner's own answer, is there), the last two days every five, and the whole
- * month when the brain starts and every six hours after. One look at a time,
- * and none while everything is stopped.
+ * month every six hours. When the brain starts, the last two days come first,
+ * so that a reply is ready within a minute, and the month right after. A look
+ * through the month that was cut short (the browser was closed under it) is
+ * taken again at the next minute, until one has gone through. One look at a
+ * time, and none while everything is stopped.
  */
 import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from '../inbox.ts';
@@ -68,6 +71,8 @@ export interface NotchMailLayer {
   sentSince(since: number): { at: number; text: string; small: string }[];
   /** One look now, of a kind. */
   look(kind: MailLookKind): ReturnType<MailWatch['look']>;
+  /** Whether the month still has to be gone through. */
+  monthDue(): boolean;
   /** The owner's calendar between two moments, by whichever way reaches it, or null. */
   calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>;
   stop(): void;
@@ -103,7 +108,14 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
    * speaks only in Gmail. A reply prepared after it is to a mail that has just come, and speaks from anywhere.
    */
   let sweptOnce = false;
-  const speak = (): void => { void mail?.arrived().catch((error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`)); };
+  /** Whether the owner, in Gmail, was told to wait for a look that was under way: they are owed its result. */
+  let owed = false;
+  const speak = (): void => {
+    void mail?.arrived().then(
+      (came) => { owed = came === 'reading'; },
+      (error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  };
   const watch = new MailWatch({
     store,
     think: deps.think,
@@ -125,14 +137,18 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     waitMs: deps.waitMs,
     log,
   });
-  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, now, log });
+  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, monthRead: () => sweptOnce, now, log });
 
   const timers: ReturnType<typeof setInterval>[] = [];
   let first: ReturnType<typeof setTimeout> | null = null;
   const said = { through: undefined as string | null | undefined };
+  /** Whether the month still has to be gone through: at the start, every six hours, and for as long as a look through it was cut short. */
+  let monthDue = true;
   const look = async (kind: MailLookKind) => {
     const result = await watch.look(kind);
-    if (kind === 'sweep' && result.through) sweptOnce = true;
+    if (kind === 'sweep' && result.through && !result.failed) { sweptOnce = true; monthDue = false; }
+    // The owner came to Gmail while this look was under way and was told to wait: now they are told.
+    if (owed && inGmail) speak();
     // Said when it changes, not every minute: which way the mail is reached, or that there is none.
     if (result.through !== said.through && !deps.paused?.() && deps.modelReady?.() !== false) {
       said.through = result.through;
@@ -142,14 +158,16 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     return result;
   };
   if (!deps.noClock) {
-    first = setTimeout(() => { void look('sweep'); }, MAIL_FIRST_LOOK_MS);
+    // The last two days first: a reply to what came lately is ready within a minute. Then the month.
+    first = setTimeout(() => { void look('recent').then(() => look('sweep')); }, MAIL_FIRST_LOOK_MS);
     first.unref?.();
     let ticks = 0;
     const every = setInterval(() => {
       ticks++;
-      const sweep = ticks % Math.round(MAIL_SWEEP_MS / MAIL_GLANCE_MS) === 0;
+      if (ticks % Math.round(MAIL_SWEEP_MS / MAIL_GLANCE_MS) === 0) monthDue = true;
       const recent = ticks % Math.round(MAIL_RECENT_MS / MAIL_GLANCE_MS) === 0;
-      void look(sweep ? 'sweep' : recent ? 'recent' : 'glance');
+      // A look that is under way is the one that is waited for: asking again while the month is read changes nothing.
+      void look(monthDue && !watch.busy() ? 'sweep' : recent ? 'recent' : 'glance');
     }, MAIL_GLANCE_MS);
     every.unref?.();
     timers.push(every);
@@ -159,13 +177,14 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     store,
     watch,
     mail,
-    arrived: (site) => { inGmail = site === GMAIL; if (inGmail) speak(); },
+    arrived: (site) => { inGmail = site === GMAIL; if (inGmail) speak(); else owed = false; },
     sentSince: (since) => store.sentSince(since).map((row) => ({
       at: row.sentAt ?? row.updatedAt,
       text: `Replied to ${mailFirstName(row.who)}: ${row.subject}`,
       small: tokens(row),
     })),
     look,
+    monthDue: () => monthDue,
     calendar,
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },
   };
