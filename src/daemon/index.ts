@@ -5609,6 +5609,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Absent unless the notch switch is on.
       ...notchRoutes(notchEnabled(), {
         demo: notchDemo, fixtures: notchReal?.fixtures ?? null, pages: () => notchSurface?.listening() ?? 0,
+        // A file dropped on the notch's page arrives here, from the page itself.
+        drop: (dropped) => notchReal?.drop?.take(dropped) ?? { taken: false },
         script: notchReal?.asks && notchReal.talk ? notchScriptDeps({
           llm: () => agentService.getLLMManager(),
           type: (text) => { notchReal?.asks?.typed(text); },

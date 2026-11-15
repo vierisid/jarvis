@@ -32,6 +32,7 @@ import { attachNotchPromises } from './promises.ts';
 import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
+import { attachNotchDrop, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
 import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
@@ -169,6 +170,8 @@ export interface NotchReal {
   talk: NotchTalk | null;
   /** Looking at a thing on the screen, when a desktop app can. */
   look: NotchLook | null;
+  /** A file dropped on the notch, when the brain takes instructions. */
+  drop: NotchDrop | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
   /** Stops looking. */
@@ -240,6 +243,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     : null;
   let talk: NotchTalk | null = null;
   let lookAt: NotchLook | null = null;
+  let drop: NotchDrop | null = null;
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -277,6 +281,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       });
     }
     talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, look: lookAt ?? undefined, log });
+    // A file dropped on the notch (pass 9) is asked about at once, as an instruction that carries it.
+    const owner = asks;
+    drop = attachNotchDrop(surface, inbox, {
+      ask: (text, files) => { owner.typed(text, files); },
+      tell: (parts, mood) => { owner.tell(parts, mood); },
+      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+      log,
+    });
   }
   const promises = deps.promises;
   const stopPromises = promises ? attachNotchPromises(inbox, { executor: promises.executor }) : () => {};
@@ -392,7 +404,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, mail, quiet, presence, around, soon,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -401,6 +413,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       stopPromises(); stopPause();
       asks?.stop();
       lookAt?.stop();
+      drop?.stop();
       where?.stop();
       mail?.stop();
       presence?.stop();
