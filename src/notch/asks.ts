@@ -27,7 +27,7 @@ import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
-import { whereQuestion, type NotchPointed } from './point.ts';
+import { whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
 export const NOTCH_HEARD_MS = 900;
@@ -119,7 +119,7 @@ export interface NotchAsksDeps {
    * such a question, or the window has no answer: then they run as any other
    * instruction.
    */
-  point?: (question: string) => Promise<NotchPointed | null>;
+  point?: (question: string, during?: NotchPointDuring) => Promise<NotchPointed | null>;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
@@ -197,6 +197,15 @@ interface Live {
   files?: NotchAskFile[];
   /** The person asked for it to stop. What has no turn to cancel yet ends by this. */
   stopAsked?: boolean;
+  /**
+   * The way to something is being shown on the screen, one click at a time
+   * (./point.ts). Calling this takes it off the screen. Unlike a turn, a walk
+   * waits on the person, so it does not stand in the way of what they ask
+   * next: a new question ends it.
+   */
+  walk?: () => void;
+  /** It ended because something else took its place: nothing is said about it. */
+  silent?: boolean;
   approvals: Set<string>;
   waiters: Set<() => void>;
 }
@@ -394,6 +403,28 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
   }
 
+  /**
+   * A walk that is waiting for the person's click is over the moment they ask
+   * for something else: it is taken off the screen and nothing is said about
+   * it. Their new question is not told "I am still on the last thing".
+   */
+  function endWalks(): void {
+    for (const ask of [...live.values()]) {
+      if (ask.phase !== 'running' || !ask.walk) continue;
+      const stop = ask.walk;
+      ask.walk = undefined;
+      ask.silent = true;
+      ask.phase = 'stopped';
+      ledger.finish(ask.id, 'stopped');
+      stop();
+      inbox.remove(itemId(ask.id));
+      forget(ask);
+      const waiters = [...ask.waiters];
+      ask.waiters.clear();
+      for (const wake of waiters) wake();
+    }
+  }
+
   function door(): NotchTurnDoor | null {
     const turns = deps.turns();
     if (turns && !unlisten) unlisten = turns.onEvent(onTurnEvent);
@@ -520,19 +551,30 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     const point = deps.point;
     if (point && !ask.files?.length && whereQuestion(ask.heard)) {
       ask.activity = 'Looking for it in the window.';
+      const stop = new AbortController();
+      ask.walk = () => stop.abort();
       void (async () => {
         let pointed: NotchPointed | null = null;
-        try { pointed = await point(ask.heard); } catch (error) {
+        try {
+          pointed = await point(ask.heard, {
+            signal: stop.signal,
+            // One step of the way is being shown: the line says which, for as long as its click is waited for.
+            step: (said) => { if (ask.phase === 'running') { ask.activity = said; bump(ask); } },
+          });
+        } catch (error) {
           log(`[notch] a "where is" could not be answered by pointing: ${error instanceof Error ? error.message : String(error)}`);
         }
+        ask.walk = undefined;
         if (ask.phase !== 'running') return;
-        if (ask.stopAsked) {
+        if (ask.stopAsked || pointed?.ok === 'stopped') {
+          // Taken off the screen by something that was not Esc (a line was drawn round something): nothing is said.
+          if (!ask.stopAsked) ask.silent = true;
           byTurn.delete(ref.turnId);
           ledger.finish(ask.id, 'stopped');
           ask.phase = 'stopped';
-        } else if (pointed?.ok) {
+        } else if (pointed?.ok === true) {
           byTurn.delete(ref.turnId);
-          ledger.did(ask.id, 'Pointed at it on the screen.');
+          ledger.did(ask.id, 'Showed it on the screen.');
           ask.answer = pointed.said;
           ledger.finish(ask.id, 'done', { answer: ask.answer });
           ask.phase = 'done';
@@ -731,6 +773,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             const what = await Promise.race([stop, changed(ask)]);
             if (what === 'stop') {
               ask.stopAsked = true;
+              ask.walk?.();
               if (ask.turn) {
                 try { deps.turns()?.cancel(ask.turn); } catch (error) {
                   log(`[notch] a turn could not be stopped: ${error instanceof Error ? error.message : String(error)}`);
@@ -787,7 +830,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         case 'failed': case 'stopped': {
           // A memory the person said no to: nothing was done, nothing is said.
-          if (ask.note === NOT_SAVED) { forget(ask); return 'settled'; }
+          if (ask.note === NOT_SAVED || ask.silent) { forget(ask); return 'settled'; }
           if (ask.phase === 'stopped') await stage.say(['Stopped. What was already done stays done.'], 2600, { mood: 'careful' });
           else await stage.say([ask.note ?? 'That did not work.'], 5200, { mood: 'sorry', mark: 'fail' });
           if (stage.surface.listening() === 0) return 'waits';
@@ -903,6 +946,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   }
 
   function typed(text: string, files?: NotchAskFile[]): string {
+    endWalks();
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
     ledger.open(id, 'typed', text);
@@ -949,6 +993,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         deps.attention?.();
         return refused;
       }
+      endWalks();
       const running = [...live.values()].find((other) => other.phase === 'running');
       if (running) {
         const refused = crypto.randomUUID();

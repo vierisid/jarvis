@@ -955,7 +955,8 @@ machine, is listed under the invariants.
     (`circled-on-screen.txt`) and the picture (`circled-on-screen.png`) as
     the turn's attachments, which is where the model reads a file as outside
     content. Esc while a line is drawn throws the line away, reaches no app,
-    and ends the talking as a slip (`notchKeyboard.key`).
+    and ends the talking as a slip (`notchKeyboard.key`). The look waits for
+    the words of its hold for as long as they are being made: see 92.
 84. **A look by itself says what the thing means, not what it is.** Decided
     by the owner on 15 November 2026, after he circled the number of installs
     on a dashboard and was told that he was circling it: the worth of a look
@@ -977,8 +978,10 @@ machine, is listed under the invariants.
     the named things in the window as a numbered list, and takes back a
     number. "How do I start recording?" with OBS in front is a question about
     the button that starts recording: the owner asked it on 15 November 2026
-    and was told it depends what is meant. The ring is drawn round that element's own
-    rectangle (`notch.point`): never round a place the model wrote. The
+    and was told it depends what is meant. Jarvis's own pointer goes to that
+    element's own rectangle and a ring is drawn round it (`notch.point`, see
+    94): never to a place the model wrote. What is not on the screen yet is
+    walked to one click at a time (95). The
     window read is the one in front unless that is the notch itself (it has
     the keyboard while something is typed), then the first one behind it that
     is somebody else's. When the window says nothing useful, or the model
@@ -1001,9 +1004,9 @@ machine, is listed under the invariants.
     16 MB. An Office file is a zip of XML: the few parts that hold the words
     are unpacked with a limit on what any part may unpack to, and read with
     patterns, never with a parser that follows what the XML declares. Words
-    are cut at 120,000 characters, and the question says so. A file that is
-    asked about is asked about at once, as an instruction that carries it.
-    Anything else gets its own sentence and what would work instead
+    are cut at 120,000 characters, and the question says so. A file that
+    can be read waits for its question (93), which is then an instruction
+    that carries it. Anything else gets its own sentence and what would work instead
     ("Call with Anna.m4a is a sound file. I cannot listen to files yet."). A
     file too large is not sent at all: the brain is told its name, kind and
     size. A file's name is shown and given to the model; it is never logged.
@@ -1025,6 +1028,77 @@ machine, is listed under the invariants.
     the window a file is let go on the one in front. When the notch finds
     itself in front without the page having asked, the keyboard goes back to
     the last window that was somebody else's (`notchWindow.watch`).
+
+91. **A yes or no from Windows is sixteen bits.** UI Automation hands a
+    property over in a VARIANT, whose yes or no is 16 bits of a field 64
+    bits wide. The other 48 are not promised to be zero, and what answers
+    from another program leaves anything in them. Read whole, a "no" with
+    stray bits above it came out as "yes": so the bare desktop, and ordinary
+    windows, were taken for a password being typed, and the eyes turned
+    away (the owner's machine, 15 November 2026: five times in four minutes,
+    some for less than a second). Every yes or no is read through
+    `oleBoolIsTrue`, which looks at the 16 bits. When a password field is
+    believed to have the keyboard, the log says how it was known and what
+    kind of control said so, as a number: never its name or what is in it.
+92. **A look waits for the words of its hold, however long they take.** What
+    was circled is read after the button comes up, and that takes from a
+    moment to a few seconds. The words are made after the keys come up, and
+    that takes a second or two. So the look can be told in between: the keys
+    are up, no recording is open, the words are not in. A recording that has
+    ended and is being made into words still counts as open (`NotchTalk.open`),
+    and the look waits for what it says. The owner circled a figure and
+    asked about it with the keys held on 15 November 2026, three times; each
+    time the look answered by itself and his question ran without it. A look
+    that is read only after its words went on without it (it took more than
+    8 seconds) says nothing by itself. The desktop app's log says how long
+    each look took to read and to be told.
+93. **A dropped file waits for its question.** The notch opens its mouth
+    while a file is over it and swallows it when it is let go: the
+    prototype's animation (`mouth` open, over, gulp). Then it says what it
+    got and asks what is wanted from it: the file's card, three things to
+    pick by what kind of file it is (the prototype's, less what the product
+    cannot do), and a field that has the keyboard. What is typed there is
+    the question. So is what is said with the talk keys held while the file
+    waits: the words take the file (`NotchDrop.claim`, asked by `talk.ts`
+    once words are in). Enter on an empty field asks the first of the three.
+    Esc lets the file go. A second file dropped while the first waits joins
+    it, up to three and up to what one turn may carry, and then "what
+    changed" is the first thing offered. A file nobody asks about is let go
+    after five minutes. Nothing is asked of a model until the person says
+    what they want. The owner, 16 November 2026: "it should either give me
+    the opportunity to ask a specific question about it, or give me a few
+    options".
+94. **Jarvis's pointer is its own, and it never clicks.** To show where a
+    thing is, a pointer leaves the notch, flies to the thing along the
+    prototype's curve, and lands on it; then the ring is drawn round the
+    thing, a piece at a time, and a few words are put beside it. The pointer
+    is the prototype's citron arrow, drawn by the desktop app into a small
+    window of its own that takes no click and never has the keyboard
+    (`newNotchHand`, the ink thread in `notch_look_windows.go`). It is not
+    the system's pointer, which stays in the person's hand and is never
+    moved. When the ring's time is up the pointer flies home and is gone.
+95. **The way to something is shown one click at a time, and the person
+    does every click.** When what is asked for is behind a menu, a tab or a
+    settings window, the pointer goes to the first thing to click and waits
+    there (`NotchLook.PointWait`). The click is seen, never kept: the mouse
+    hook is in for the length of the wait and passes everything on. A click
+    Jarvis itself sends is not a click a person made, and is not counted;
+    neither is a click on the notch. After the click the ring goes at once,
+    the window is read again together with what the click opened (a menu or
+    a dropped-down list is a window of its own with no title bar, and is
+    read first: `notchPopupElements`), the model is told what was clicked and
+    chooses the next thing, and the pointer flies on from where it stands.
+    The notch's line says the step. It ends when the last step is clicked,
+    when the model says the person is there, on Esc, on a new question
+    (which is not told "I am still on the last thing"), when a line is drawn
+    round something, after 60 seconds with no click, after three clicks
+    somewhere else, and after eight steps. Nothing in it knows one program
+    from another: it works wherever a program describes its own controls.
+    The choice of the next click is asked of the middle model tier, not the
+    smallest, because it rests on knowing the program as much as on reading
+    the screen. The owner, 16 November 2026: "the little cursor that goes to
+    the right button, waits until I click it, and then shows me the next
+    step again with the cursor".
 
 A correction to pass 6, found in the first test of pass 9: "a password
 field has the keyboard" was asked only when the window in front or the
@@ -1060,14 +1134,40 @@ What is not done, or not proven, in pass 9:
   a cell is known from documentation, not from looking. Chrome is the known
   weak spot: it describes a page to other programs only once it believes one
   is listening.
-- **Whether Windows hands a dragged file to the notch's window** has not been
-  tried. The notch at rest is 88 by 30 pixels; it grows once a file is over
-  it.
+- **The page hears of a dragged file only once it is over the notch
+  itself**, because the rest of its window lets everything through. So the
+  mouth opens when the file arrives there, not when the drag begins, as it
+  did in the prototype.
 - **A spreadsheet's dates come as the numbers the file keeps them as**, and
   its formulas as their last results. A Word file's tables come as lines.
   Pictures inside Office files are not read.
-- **A dropped file is summarised and nothing else.** The prototype's "ask by
-  typing, by voice, or pick a suggestion" for a file that waits is not built.
+- **What ran on a real machine in the second test, 15 November 2026, late:**
+  five looks, three of them with a question spoken in the same hold. The
+  log shows each of those looks told in the second its recording ended,
+  which is the gap 92 closes. 91 to 95 were built after that test and have
+  not run on a real machine.
+- **91 was found by reading, not by catching it.** The desktop app logged
+  "password" as the reason five times while no password was typed, and the
+  wide read is the one fault found that makes a "no" into a "yes". It was
+  not seen happening. If the eyes turn away again in an ordinary window,
+  the log now names the kind of control that was believed.
+- **The pointer has never been seen on a real display.** Its picture and its
+  path are tested as numbers and were looked at as a rendered image; how the
+  flight looks at 60 frames a second over real windows is not known. Nor is
+  whether the ring and the words sit well on a menu.
+- **How well the model chooses the next click is not known**, and neither is
+  how long it takes between a click and the pointer moving on. Both depend
+  on the model the owner has set up.
+- **A step that is not a click cannot be shown:** a key to press, a thing to
+  drag, words to type. The model can only point at something to click. A
+  step done with the keyboard is not seen, so the walk waits its 60 seconds.
+- **A program that draws its own controls and describes none of them**
+  (a game, a canvas) cannot be walked: the question runs as an ordinary
+  instruction, and the answer is words.
+- **Reading what a click opened is untried.** A menu is taken to be a window
+  of the same program with no title bar. A program that opens its menus
+  from another process would have them missed.
+- **A dropped file's suggestions are fixed sentences in English.**
 - **The line stays inside the display it was begun on.** A circle drawn
   across two displays is cut at the edge of the first.
 - **A PDF that is only scanned pages has no text to read** and is refused as
@@ -1274,8 +1374,8 @@ What is not done, or not proven, in pass 9:
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
-| brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away |
-| brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s) | `{pointed: true}`. Draws a ring round the rectangle. Refused while the person is drawing a line |
+| brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away What the program has open on top of it (a menu, a dropped-down list) comes first in `elements`, counted in `popups`. |
+| brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through seven functions on `window`:
