@@ -132,6 +132,11 @@ describe('the draft as it is shown', () => {
     ]);
   });
 
+  test('the empty lines of a reply are the gaps between its paragraphs, not paragraphs of their own', () => {
+    const blocks = mailDraftBlocks(row({ draft: 'Hi Leo,\n\nThursday at 10:00 works for me.\n  \nSam', missing: '' }));
+    expect((blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', '[Thursday at 10:00] works for me.', 'Sam']);
+  });
+
   test('a reply with no time has no lit word, and one with nothing missing says nothing of it', () => {
     const blocks = mailDraftBlocks(row({ time: null, missing: '' }));
     expect((blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Thursday at 10:00 works for me.', 'Sam']);
@@ -185,8 +190,10 @@ describe('a prepared reply on the notch', () => {
     expect(h.did).toEqual(['write', 'discard']);
     expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
     await h.answer('done');
+    // It waits again: kept, and one step away in Home. It has been seen, so it is not in the count.
     expect(h.store.proposal(row().id)!.state).toBe('ready');
-    expect(h.count()).toBe(1);
+    expect(h.count()).toBe(0);
+    expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('Reply to Leo is drafted');
   });
 
   test('a fuse nobody saw burn out sends nothing and leaves no draft', async () => {
@@ -215,12 +222,13 @@ describe('a prepared reply on the notch', () => {
     expect(onDraft.did).toEqual([]);
   });
 
-  test('left alone it folds and waits: not now is not no', async () => {
+  test('left alone it folds and waits in Home: not now is not no, and it does not stand in the way', async () => {
     const h = harness([row()]);
     await h.arrive();
     await h.answer('fold');
     expect(h.store.proposal(row().id)!.state).toBe('ready');
-    expect(h.count()).toBe(1);
+    expect(h.count()).toBe(0);
+    expect(h.mail.homeRow()).toMatchObject({ kind: 'row', id: 'mail', lead: 'Mail', go: true });
   });
 
   test('a new tone is a new letter: it is written again, and that is what is sent', async () => {
@@ -327,7 +335,8 @@ describe('coming to Gmail', () => {
   test('each reply speaks up by itself once, the newest first, and one that is on the notch is left as it is', async () => {
     const older = row({ id: mailProposalId(T2, AT - 1000), thread: T2, messageAt: AT - 1000, who: anna });
     const h = harness([row(), older]);
-    expect(h.count()).toBe(2);
+    // Mail is one thing in the count, however many replies wait in it.
+    expect(h.count()).toBe(1);
     await h.arrive();
     expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
     const shown = h.line()!.id;
@@ -336,10 +345,15 @@ describe('coming to Gmail', () => {
     await h.answer('fold');
     await h.arrive();
     expect(h.said()).toBe('You have not replied to Anna. I drafted a reply.');
+    // It is on the notch, and nothing else waits behind it.
+    expect(h.count()).toBe(0);
     await h.answer('fold');
+    expect(h.count()).toBe(0);
     await h.arrive();
     expect(h.line()).toBeNull();
-    expect(h.count()).toBe(2);
+    // Both seen: neither is in the count, and both are kept.
+    expect(h.store.ready().length).toBe(2);
+    expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('2 replies drafted, waiting for your word');
   });
 
   test('with nobody waiting it says so, truthfully, and not again each time', async () => {
@@ -359,8 +373,105 @@ describe('coming to Gmail', () => {
   });
 });
 
+describe('several replies waiting', () => {
+  const older = row({ id: mailProposalId(T2, AT - 1000), thread: T2, messageAt: AT - 1000, who: anna, subject: 'Invoice 114', cc: [], to: [anna], draft: 'Hi Anna,\nPaid today.\nSam', time: null, missing: '' });
+
+  // A month of unanswered mail must never stand between the owner and the rest of the notch.
+  test('are one line when the owner comes to the notch, and a list of who and what behind it', async () => {
+    const h = harness([row(), older]);
+    await h.open();
+    expect(h.said()).toBe('2 people are waiting for a reply. I drafted them.');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'show', src: 'mail' });
+    await h.answer('yes');
+    expect(h.said()).toBe('2 replies wait');
+    expect(h.blocks()).toEqual([
+      { kind: 'row', id: T1, lead: 'Leo', say: ['Deck for Thursday?'], go: true },
+      { kind: 'row', id: T2, lead: 'Anna', say: ['Invoice 114'], go: true },
+    ]);
+  });
+
+  test('a row opens its reply at the draft, and the list comes back with what is left', async () => {
+    const h = harness([row(), older]);
+    await h.open();
+    await h.answer('yes');
+    await h.answer('go', { row: T2 });
+    expect(h.said()).toBe('Reply to Anna');
+    expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Anna,', 'Paid today.', 'Sam']);
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.plans).toEqual([{ thread: T2, to: ['anna@lumen.example'], cc: [], text: 'Hi Anna,\nPaid today.\nSam' }]);
+    expect(h.said()).toBe('Sent to Anna.');
+    await h.answer('done');
+    expect(h.said()).toBe('1 reply waits');
+    expect(h.blocks().map((block) => (block as { id?: string }).id)).toEqual([T1]);
+    // Esc on its draft is a no to that reply, and to that one only.
+    await h.answer('go', { row: T1 });
+    await h.answer('no');
+    expect(h.store.proposal(row().id)!.state).toBe('declined');
+    expect(h.store.proposal(older.id)!.state).toBe('sent');
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+  });
+
+  test('Esc on the line about them all, or on the list, turns nobody\'s reply down, and they wait in Home', async () => {
+    const h = harness([row(), older]);
+    await h.open();
+    await h.answer('no');
+    expect(h.store.ready().length).toBe(2);
+    // Seen: out of the count, so that the next tap on the resting notch is the text field.
+    expect(h.count()).toBe(0);
+    expect(h.line()).toBeNull();
+    // From Home's row: the list. Esc on it closes it.
+    h.inbox.present('home', (stage) => h.mail.open(stage));
+    await settle();
+    expect(h.said()).toBe('2 replies wait');
+    await h.answer('no');
+    expect(h.store.ready().length).toBe(2);
+    expect(h.line()).toBeNull();
+  });
+
+  test('Home has one row for them, and it opens the reply when one waits and the list when several do', async () => {
+    const none = harness([]);
+    expect(none.mail.homeRow()).toBeNull();
+    const one = harness([row()]);
+    one.inbox.present('home', (stage) => one.mail.open(stage));
+    await settle();
+    expect(one.said()).toBe('Reply to Leo');
+    expect(one.line()).toMatchObject({ kind: 'sheet', yes: 'send' });
+    // Opened from Home, it has been seen: it is not also in the count.
+    await one.answer('no');
+    expect(one.count()).toBe(0);
+    const two = harness([row(), older]);
+    two.inbox.present('home', (stage) => two.mail.open(stage));
+    await settle();
+    expect(two.said()).toBe('2 replies wait');
+  });
+
+  test('a reply prepared after the others were seen is the only one in the count, and the only one its line is about', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('fold');
+    expect(h.count()).toBe(0);
+    h.store.put(older);
+    h.mail.sync();
+    await settle();
+    expect(h.count()).toBe(1);
+    await h.open();
+    expect(h.said()).toBe('You have not replied to Anna. I drafted a reply.');
+    await h.answer('fold');
+    expect(h.count()).toBe(0);
+    expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('2 replies drafted, waiting for your word');
+  });
+
+  test('with one reply waiting the owner gets the line about it, not a list of one', async () => {
+    const h = harness([row()]);
+    await h.open();
+    expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
+  });
+});
+
 describe('keeping the notch in line with the replies that wait', () => {
-  test('a reply whose thread moved on leaves the count without a word, and a new one joins it', async () => {
+  test('mail leaves the count without a word when the last reply is answered elsewhere, and is back when one waits again', async () => {
     const h = harness([row()]);
     expect(h.count()).toBe(1);
     h.store.move(row().id, 'ready', 'answered', AT + 5);
@@ -374,7 +485,7 @@ describe('keeping the notch in line with the replies that wait', () => {
     expect(h.line()).toBeNull();
   });
 
-  test('a newer message in the same thread takes the place of the old reply: one item per thread', async () => {
+  test('a newer message in the same thread takes the place of the old reply: one reply per thread', async () => {
     const h = harness([row()]);
     h.store.move(row().id, 'ready', 'answered', AT + 5);
     h.store.put(row({ id: mailProposalId(T1, AT + 3_600_000), messageAt: AT + 3_600_000, draft: 'Hi Leo,\nSorry for the wait.\nSam', time: null }));
@@ -389,7 +500,21 @@ describe('keeping the notch in line with the replies that wait', () => {
   test('a reply that is no longer an answer to the last word is not shown when its turn comes', async () => {
     const h = harness([row()], { stillWaits: false });
     await h.open();
-    expect(h.line()).toBeNull();
+    expect(h.line()?.kind).not.toBe('offer');
+    expect(h.did).toEqual([]);
+  });
+
+  test('after the last reply was sent from the notch, a new one is counted again', async () => {
+    const h = harness([row()]);
+    await h.open();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('done');
+    await h.answer('done');
     expect(h.count()).toBe(0);
+    h.store.put(row({ id: mailProposalId(T2, AT), thread: T2 }));
+    h.mail.sync();
+    await settle();
+    expect(h.count()).toBe(1);
   });
 });

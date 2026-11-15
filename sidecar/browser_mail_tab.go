@@ -174,6 +174,16 @@ func (c *cdpClient) mailTabHost(session string) (string, error) {
 // for the page to be there, and says which site it landed on. Landing on the
 // sign-in page is an answer, not an error: the caller is told "sign-in".
 func (c *cdpClient) mailTabNavigate(session, target string) (string, error) {
+	// The page that is there now is marked, so that the page that comes can be
+	// told from it: both say "complete", and the old one goes on answering for
+	// a moment after the browser has been told to leave it. A move inside the
+	// same document (only the part after # differs) brings no new page, so
+	// nothing is marked for it.
+	current, _ := c.mailTabText(session, "location.href", 5*time.Second)
+	newPage := !sameDocument(current, target)
+	if newPage {
+		_, _ = c.mailTabText(session, "window.__jarvisLeaving = true, ''", 5*time.Second)
+	}
 	raw, err := c.sendOn(session, "Page.navigate", map[string]any{"url": target})
 	if err != nil {
 		return "", fmt.Errorf("mail tab: navigate failed: %w", err)
@@ -185,11 +195,10 @@ func (c *cdpClient) mailTabNavigate(session, target string) (string, error) {
 	if nav.ErrorText != "" {
 		return "", fmt.Errorf("mail tab: navigate failed: %s", truncateMarked(nav.ErrorText, 200))
 	}
-	// The load is asked for, not listened for. The page that was there before
-	// answers "complete" too, so the first thing waited for is the new one.
+	// The load is asked for, not listened for.
 	stop := time.Now().Add(mailTabLoadBudget)
 	for {
-		state, err := c.mailTabText(session, "location.href === 'about:blank' ? '' : document.readyState", 5*time.Second)
+		state, err := c.mailTabText(session, "(window.__jarvisLeaving || location.href === 'about:blank') ? '' : document.readyState", 5*time.Second)
 		if err == nil && state == "complete" {
 			break
 		}
@@ -205,6 +214,18 @@ func (c *cdpClient) mailTabNavigate(session, target string) (string, error) {
 		return "", fmt.Errorf("mail tab: the page did not say where it is: %w", err)
 	}
 	return mailTabSite(host), nil
+}
+
+// sameDocument says whether going from one address to the other stays in the
+// same document: everything but the part after # is the same.
+func sameDocument(from, to string) bool {
+	cut := func(address string) string {
+		if at := strings.Index(address, "#"); at >= 0 {
+			return address[:at]
+		}
+		return address
+	}
+	return from != "" && cut(from) == cut(to)
 }
 
 // mailTabEvaluate runs a script in the tab, only while the tab is on one of its

@@ -55,6 +55,8 @@ export interface MailReader {
   list(days: number, pages?: number): Promise<MailListed[]>;
   /** Threads in full. One that could not be read is left out. */
   read(rows: MailListed[]): Promise<MailThread[]>;
+  /** The threads the owner last wrote in, the newest first: read for their voice. */
+  sent?(days: number): Promise<MailListed[]>;
 }
 
 export interface MailWatchDeps {
@@ -87,6 +89,9 @@ export const MAIL_RECENT_DAYS = 2;
 const MAIL_CALENDAR_AHEAD_MS = 10 * 24 * 60 * 60 * 1000;
 /** The owner's own threads kept in mind for their voice. */
 const MAIL_VOICE_POOL = 300;
+/** How far back, and how many, of the owner's own threads a full look reads for their voice. */
+const MAIL_VOICE_DAYS = 14;
+const MAIL_VOICE_READ = 24;
 /** How long a reply seen to wait is taken to wait still, before a line about it is shown. */
 export const MAIL_CHECKED_FRESH_MS = 90_000;
 const MAIL_READ_BATCH = 6;
@@ -184,6 +189,16 @@ export class MailWatch {
     const { store } = this.deps;
     const wait = this.deps.waitMs ?? MAIL_WAIT_MIN_MS;
     const owner: MailOwner = new Set([(await reader.owner()).toLowerCase()]);
+    // A full look begins with the owner's own latest mail: a reply is written in their voice, and by their name.
+    if (kind === 'sweep' && reader.sent) {
+      try {
+        const own = (await reader.sent(MAIL_VOICE_DAYS)).slice(0, MAIL_VOICE_READ);
+        for (let at = 0; at < own.length; at += MAIL_READ_BATCH) this.learnVoice(await reader.read(own.slice(at, at + MAIL_READ_BATCH)), owner);
+      } catch (error) {
+        // Without it replies are plainer, not wrong: the look goes on.
+        this.log(`[notch] the owner's own mail could not be read for their voice: ${error instanceof Error ? error.message.slice(0, 120) : 'no answer'}`);
+      }
+    }
     const rows = kind === 'glance' ? await reader.list(MAIL_RECENT_DAYS, 1) : await reader.list(kind === 'sweep' ? MAIL_SWEEP_DAYS : MAIL_RECENT_DAYS);
     look.listed = rows.length;
     const now = this.now();

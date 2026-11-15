@@ -196,6 +196,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       openDashboard: deps.openDashboard,
       today: () => notchTodayBlocks(notchToday(todayDeps)),
       see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
+      // Replies that are prepared wait in Home, one row for all of them (pass 7).
+      mail: deps.mail ? { row: () => mail?.mail.homeRow() ?? null, open: async (stage) => { await mail?.mail.open(stage); } } : undefined,
       log,
     });
     talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, log });

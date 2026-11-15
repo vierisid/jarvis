@@ -98,6 +98,12 @@ describe('one reply through the tab', () => {
     expect(shut.names()).not.toContain('reply');
   });
 
+  test('a step during which the page went away is a step that did not happen, with a reason and no address in it', async () => {
+    const { page } = tab({ up: true, reply: () => { throw new Error('Execution context was destroyed at https://mail.google.com/mail/u/0/#inbox/abc'); } });
+    const step = await browserMailbox(page, new MailTabTurn()).reply(plan, (reply) => reply.write());
+    expect(step).toEqual({ ok: false, why: 'Execution context was destroyed at (an address)' });
+  });
+
   // Nothing may navigate the tab away between the draft being written and it being sent or thrown away.
   test('a reply has the tab to itself from its first step to its last', async () => {
     const { page, names } = tab({ up: true });

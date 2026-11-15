@@ -87,6 +87,8 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
     },
     // A look reads a few threads at a time and goes on to the next: one that Gmail did not give is read by the next look.
     read: async (rows) => (await gmailThreads(readingPage, rows, { batch: 6, pauses: [] })).threads,
+    // The owner's own latest mail, for their voice.
+    sent: async (days) => (await gmailSearch(page, `in:sent newer_than:${Math.max(1, Math.floor(days))}d`, { pages: 1, step: reading })).map((row) => listed(row)),
   };
 
   return {
@@ -101,16 +103,25 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
     },
     reply: (plan, work) => turn.take(async () => {
       const told = { do: '', thread: plan.thread, to: plan.to, cc: plan.cc, text: plan.text };
+      // A step that throws (the page went away, the desktop app did not answer) is a step that did not
+      // happen, with its reason: whoever asked decides what that means, and is never left without an answer.
+      const step = async (work: () => Promise<MailStep>): Promise<MailStep> => {
+        try {
+          return await work();
+        } catch (error) {
+          return { ok: false, why: (error instanceof Error ? error.message : String(error)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '(an address)').slice(0, 200) };
+        }
+      };
       const session: MailReplySession = {
-        async write() {
+        write: () => step(async () => {
           // Gmail opens a thread from its own address only when it is loaded afresh: the number makes the address new.
           await page.go('mail', `/mail/u/0/?zx=${now().toString(36)}#all/${plan.thread}`);
           const open = await page.run<{ open?: boolean }>('thread-open', { id: plan.thread });
           if (!open?.open) return { ok: false, why: 'the thread did not open' };
           return stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'write' }));
-        },
-        send: async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'send' })),
-        discard: async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'discard' })),
+        }),
+        send: () => step(async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'send' }))),
+        discard: () => step(async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'discard' }))),
         async sent(since) {
           try {
             const owner = (await page.run<{ address: string }>('owner')).address;
