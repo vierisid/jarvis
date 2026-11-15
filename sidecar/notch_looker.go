@@ -142,9 +142,14 @@ var (
 )
 
 // notchLookAway says why this program does not look at a window, or "" when
-// it does: an app on the person's list, a bank, or any window at all while a
-// password is being typed (notch_where.go).
+// it does: watching is switched off or Jarvis is asleep (observers_pause.go:
+// the person's "stop looking" covers every way of looking, this one too), an
+// app on the person's list, a bank, or any window at all while a password is
+// being typed (notch_where.go).
 func notchLookAway(app, title string) string {
+	if screenObserversPaused.Load() {
+		return "off"
+	}
 	if look := notchWhere.Look(); look != notchLooking {
 		return string(look)
 	}

@@ -438,3 +438,18 @@ func TestPointRefusesWhatIsNotARectangleAndWhenThereIsNothingToDrawWith(t *testi
 		t.Fatalf("%v", hands.log())
 	}
 }
+
+// The person's "stop looking" covers every way Jarvis looks: with watching
+// switched off, or Jarvis asleep, a circle reads nothing.
+func TestLookAwayWhileWatchingIsSwitchedOff(t *testing.T) {
+	was := screenObserversPaused.Load()
+	defer screenObserversPaused.Store(was)
+	screenObserversPaused.Store(false)
+	if got := notchLookAway("notepad", "notes.txt - Notepad"); got != "" {
+		t.Fatalf("looking away from a plain window: %q", got)
+	}
+	screenObserversPaused.Store(true)
+	if got := notchLookAway("notepad", "notes.txt - Notepad"); got != "off" {
+		t.Fatalf("with watching off: %q", got)
+	}
+}
