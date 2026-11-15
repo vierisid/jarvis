@@ -1,0 +1,130 @@
+/**
+ * The owner's mailbox through the notch's own tab: read, and written to.
+ *
+ * Reading is what ./watch.ts asks for (the list, and threads in full).
+ * Writing is one reply in one thread: put in as a draft, then sent, or thrown
+ * away. Both go through the same tab (./tab.ts), and each piece of work takes
+ * the tab's turn, so that nothing navigates away under anything else.
+ *
+ * A reply holds the turn from its first step to its last: the draft is
+ * written, the owner's window to take it back burns down, and it is sent or
+ * discarded, all in the thread that was opened for it.
+ */
+import { gmailSearch, gmailThreads, type GmailRow } from './gmail.ts';
+import type { GooglePage } from './page.ts';
+import { MailSignedOut, type MailTabTurn } from './tab.ts';
+import type { MailThread } from './thread.ts';
+import type { MailListed, MailReader } from './watch.ts';
+
+/** How many pages of the list a look may go through: a month of a busy mailbox, and room. */
+export const MAILBOX_PAGES_MONTH = 150;
+export const MAILBOX_PAGES_RECENT = 8;
+
+export interface MailReplyPlan {
+  /** The thread the reply is written in. */
+  thread: string;
+  /** Who it goes to, and who is in copy: addresses. Decided by ./waiting.ts, checked on the page before every step. */
+  to: string[];
+  cc: string[];
+  text: string;
+}
+
+export type MailStep = { ok: true } | { ok: false; why: string };
+
+/** One reply, with the tab to itself. */
+export interface MailReplySession {
+  /** Opens the thread and writes the reply into it. Gmail keeps it as a draft. Nothing is sent. */
+  write(): Promise<MailStep>;
+  /** Presses Send, once. */
+  send(): Promise<MailStep>;
+  /** Throws the reply away: nothing is left in Drafts. */
+  discard(): Promise<MailStep>;
+  /** After a send: does the mailbox show a mail of the owner's, sent since then, as the last word in the thread? Null when that could not be read. */
+  sent(since: number): Promise<boolean | null>;
+}
+
+export interface Mailbox {
+  /** The mailbox for reading, or null when the browser is not signed in to Google. */
+  reader(): Promise<MailReader | null>;
+  /** Runs one reply from its first step to its last, with the tab to itself. */
+  reply<T>(plan: MailReplyPlan, work: (session: MailReplySession) => Promise<T>): Promise<T>;
+}
+
+interface StepAnswer { ok?: unknown; why?: unknown }
+const stepOf = (answer: StepAnswer | null): MailStep =>
+  (answer?.ok === true ? { ok: true } : { ok: false, why: typeof answer?.why === 'string' ? answer.why.slice(0, 200) : 'the page did not answer' });
+
+export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, options: { now?: () => number } = {}): Mailbox {
+  const now = options.now ?? Date.now;
+
+  /** Gmail up in the tab: the tab may have been left on the calendar, on Drive, or on nothing. */
+  const gmailUp = async (): Promise<void> => {
+    const where = await page.run<{ up?: boolean }>('where').catch((error: unknown) => {
+      if (error instanceof MailSignedOut) throw error;
+      return null;
+    });
+    if (where?.up) return;
+    await page.go('mail', '/mail/u/0/#inbox');
+  };
+  /** A piece of reading: the tab's turn, and Gmail up in it. */
+  const reading = <T>(work: () => Promise<T>): Promise<T> => turn.take(async () => { await gmailUp(); return work(); });
+  const readingPage = { run: <T>(name: string, args?: unknown) => reading(() => page.run<T>(name, args)) };
+  const listed = (row: GmailRow, filed?: MailThread['filed']): MailListed => ({ ...row, ...(filed ? { filed } : {}) });
+
+  const reader: MailReader = {
+    owner: async () => (await reading(() => page.run<{ address: string }>('owner'))).address,
+    async list(days, top) {
+      const window = `newer_than:${Math.max(1, Math.floor(days))}d`;
+      const pages = top ?? (days > 7 ? MAILBOX_PAGES_MONTH : MAILBOX_PAGES_RECENT);
+      // Everything but advertising, social notices and mailing lists. A search that names chats shows no mail at all.
+      const rows = await gmailSearch(page, `${window} -category:promotions -category:social -category:forums`, { pages, step: reading });
+      // The top of the list is where a mail that just came is: the rest is for the fuller looks.
+      if (top) return rows.map((row) => listed(row));
+      // A mailing list is a person only when the owner has been writing in the thread.
+      const forums = await gmailSearch(page, `${window} category:forums from:me`, { pages: 3, step: reading }).catch(() => [] as GmailRow[]);
+      const have = new Set(rows.map((row) => row.id));
+      return [...rows.map((row) => listed(row)), ...forums.filter((row) => !have.has(row.id)).map((row) => listed(row, 'forums'))];
+    },
+    // A look reads a few threads at a time and goes on to the next: one that Gmail did not give is read by the next look.
+    read: async (rows) => (await gmailThreads(readingPage, rows, { batch: 6, pauses: [] })).threads,
+  };
+
+  return {
+    async reader() {
+      try {
+        await reading(async () => {});
+        return reader;
+      } catch (error) {
+        if (error instanceof MailSignedOut) return null;
+        throw error;
+      }
+    },
+    reply: (plan, work) => turn.take(async () => {
+      const told = { do: '', thread: plan.thread, to: plan.to, cc: plan.cc, text: plan.text };
+      const session: MailReplySession = {
+        async write() {
+          // Gmail opens a thread from its own address only when it is loaded afresh: the number makes the address new.
+          await page.go('mail', `/mail/u/0/?zx=${now().toString(36)}#all/${plan.thread}`);
+          const open = await page.run<{ open?: boolean }>('thread-open', { id: plan.thread });
+          if (!open?.open) return { ok: false, why: 'the thread did not open' };
+          return stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'write' }));
+        },
+        send: async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'send' })),
+        discard: async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'discard' })),
+        async sent(since) {
+          try {
+            const owner = (await page.run<{ address: string }>('owner')).address;
+            const { threads } = await gmailThreads(page, [{ id: plan.thread, draft: false, subject: '' }], { batch: 1, pauses: [] });
+            const last = threads[0]?.messages.at(-1);
+            if (!last) return null;
+            // Gmail prints when a mail was sent to the minute: one sent at 9:05:40 reads as 9:05.
+            return last.from.address === owner.toLowerCase() && last.at >= since - 120_000;
+          } catch {
+            return null;
+          }
+        },
+      };
+      return work(session);
+    }, { first: true }),
+  };
+}

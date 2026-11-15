@@ -12,7 +12,7 @@
  * What is read is what the owner sees there: the events of every calendar
  * they have switched on, without the ones they declined.
  */
-import type { GmailPage } from './gmail.ts';
+import { goToSite, type GooglePage } from './page.ts';
 import type { MailCalendarEvent } from './proposer.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -69,7 +69,7 @@ interface WeekAnswer { state?: unknown; days?: unknown; zoneAgrees?: unknown; ev
  * is not signed in to Google: that way is not there, and the caller says so
  * or tries another. A throw is a calendar that is there and could not be read.
  */
-export async function browserCalendar(page: GmailPage, from: number, to: number, options: {
+export async function browserCalendar(page: GooglePage, from: number, to: number, options: {
   each?: (weeks: number) => void;
   sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<CalendarRead | null> {
@@ -85,12 +85,12 @@ export async function browserCalendar(page: GmailPage, from: number, to: number,
 
   while (wanted <= final) {
     if (weeks >= CALENDAR_WEEKS_MAX) throw new Error(`more than ${CALENDAR_WEEKS_MAX} weeks of calendar were asked for`);
-    await page.run('site', { site: 'calendar', path: calendarWeekPath(wanted) });
+    const there = await goToSite(page, 'calendar', calendarWeekPath(wanted));
     let week: WeekAnswer | null = null;
     let state = 'not-up';
     for (let attempt = 0; attempt < CALENDAR_TRIES && !week; attempt++) {
-      // The page is on its way: an answer given while the address changes is thrown away by the desktop app.
-      await sleep(attempt === 0 ? 1200 : 1500);
+      // A page that is still on its way: an answer given while the address changes is thrown away by the desktop app.
+      if (!there || attempt > 0) await sleep(attempt === 0 ? 1200 : 1500);
       const answer = await page.run<WeekAnswer>('cal-week', { day: wanted }).catch(() => null);
       state = typeof answer?.state === 'string' ? answer.state : 'no-answer';
       if (state === 'signed-out') return null;

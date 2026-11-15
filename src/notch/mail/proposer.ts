@@ -33,6 +33,11 @@ export interface MailProposalInput {
   now: number;
   /** Their time zone, for the dates the model reads. */
   zone?: string;
+  /**
+   * Another manner than the owner's own, when they asked for one on the
+   * notch: "shorter", "warmer", "more formal". A few plain words.
+   */
+  manner?: string;
 }
 
 export interface MailProposal {
@@ -148,8 +153,11 @@ export function mailProposalMessages(input: MailProposalInput): { role: 'system'
   const { thread, owner, ownerName, zone } = input;
   const samples = input.samples.map((sample) => cut(sample.trim(), MAIL_SAMPLE_CHARS)).filter(Boolean).slice(0, 3);
   const days = (input.calendar ?? []).slice(0, 60).map((event) => mailCalendarLine(event, zone));
+  // The owner's own word for how it should read, and nothing but words: it stands outside the mail's marks.
+  const manner = (input.manner ?? '').replace(/[^\p{L} -]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
   const user = [
     `It is ${when(input.now, zone)}.`,
+    ...(manner ? [`${ownerName} asked for this reply to be written ${manner}. Keep what it says; change how it says it.`] : []),
     wrapUntrusted(mailThreadText(thread, owner, ownerName, zone), 'a mail thread'),
     input.calendar
       ? wrapUntrusted(days.length ? days.join('\n') : 'Nothing is in the calendar for these days.', `${ownerName}'s calendar for the coming days`)

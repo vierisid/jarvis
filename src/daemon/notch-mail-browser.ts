@@ -9,7 +9,10 @@ import { listUpcomingEvents } from '../integrations/google-api.ts';
 import type { GoogleAuth } from '../integrations/google-auth.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import type { Database } from 'bun:sqlite';
 import type { MailBrowser } from '../notch/mail/browser.ts';
+import { mailTabBrowser } from '../notch/mail/tab.ts';
+import type { NotchRealDeps } from '../notch/real.ts';
 import type { NotchStudyDeps } from '../notch/mail/study-route.ts';
 import { servesCapability } from '../sidecar/capability-predicate.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
@@ -33,15 +36,72 @@ export function notchMailBrowser(manager: Pick<SidecarManager, 'listSidecars' | 
   };
 }
 
+/** A script in the notch's tab may read a batch of threads: the desktop app gives it ninety seconds. */
+const MAIL_TAB_TIMEOUT = { initial: 100_000, max: 120_000 };
+/** The feature a desktop app names when it has the notch's own tab (sidecar/browser_mail_tab.go). */
+export const MAIL_TAB_FEATURE = 'browser_mail_tab';
+
+/**
+ * The notch's own tab in the first connected desktop app that has one, or
+ * null. It is beside the page the agent drives, so a look at the mail never
+ * takes that page.
+ */
+export function notchMailTab(manager: Pick<SidecarManager, 'listSidecars' | 'dispatchRPC'>): MailBrowser | null {
+  const machine = manager.listSidecars().find((sidecar) => servesCapability(sidecar, 'browser') && sidecar.features?.includes(MAIL_TAB_FEATURE));
+  if (!machine) return null;
+  return mailTabBrowser((method, params) => manager.dispatchRPC(machine.id, method, params, MAIL_TAB_TIMEOUT));
+}
+
+/** What the notch's mail layer (pass 7) needs of a running brain. */
+export function notchMailLayerDeps(options: {
+  db: Database;
+  manager: Pick<SidecarManager, 'listSidecars' | 'dispatchRPC'>;
+  llm: () => LLMManager;
+  google: () => GoogleAuth | null;
+  modelReady: () => boolean;
+  /** A shorter wait than the rule's four hours, in minutes: for trying a build. */
+  waitMinutes?: number;
+}): NonNullable<NotchRealDeps['mail']> {
+  const wait = options.waitMinutes;
+  return {
+    db: options.db,
+    tab: () => notchMailTab(options.manager),
+    // Jarvis by itself, reading mail other people wrote: not the person's own words.
+    think: (messages, { maxTokens }) => runWithOrigin('background', async () => {
+      const answer = await options.llm().chatTier('medium', 'notch_mail', messages, { max_tokens: maxTokens, temperature: 0 });
+      return {
+        content: answer.content,
+        model: answer.model,
+        input: answer.usage.input_tokens,
+        output: answer.usage.output_tokens,
+        cached: answer.usage.cache_read_input_tokens ?? 0,
+      };
+    }),
+    connectedCalendar: async (from, to) => {
+      const google = options.google();
+      if (!google?.isAuthenticated()) return null;
+      const events = await listUpcomingEvents(await google.getAccessToken(), 'primary', new Date(from).toISOString(), new Date(to).toISOString(), 250);
+      return events.map((event) => ({ summary: event.summary, start: event.start, end: event.end }));
+    },
+    modelReady: options.modelReady,
+    zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    ...(wait && Number.isFinite(wait) && wait >= 1 && wait <= 240 ? { waitMs: Math.floor(wait) * 60_000 } : {}),
+  };
+}
+
 /** What the mail study's dev route needs of a running brain. */
 export function notchStudyDeps(options: {
   manager: Pick<SidecarManager, 'listSidecars' | 'dispatchRPC'>;
   llm: () => LLMManager;
   /** The brain's Google connection as it is now: it can come and go while the brain runs. */
   google: () => GoogleAuth | null;
+  /** The mail layer of this brain, once the notch is attached. */
+  mail?: NotchStudyDeps['mail'];
 }): NotchStudyDeps {
   return {
     browser: () => notchMailBrowser(options.manager),
+    tab: () => notchMailTab(options.manager),
+    mail: options.mail,
     // Run by the person at their desk: not held behind background work.
     think: (messages, { tier, maxTokens }) => runWithOrigin('user', async () => {
       const answer = await options.llm().chatTier(tier, 'notch_mail_study', messages, { max_tokens: maxTokens, temperature: 0 });

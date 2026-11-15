@@ -1530,7 +1530,7 @@ const featureBrowserElemGen = "browser_elem_gen"
 // from a dev build because it must never self-update; a protocol feature is a
 // fact about the code that is running, and withholding it would make the brain
 // refuse a reviewed click on exactly the build a developer is testing.
-var protocolFeatures = []string{featureBrowserElemGen, featureBrowserActionOutcomes}
+var protocolFeatures = []string{featureBrowserElemGen, featureBrowserActionOutcomes, featureBrowserMailTab}
 
 // registrationFeatures is the register `features` list: the updater's, then the
 // protocol's.

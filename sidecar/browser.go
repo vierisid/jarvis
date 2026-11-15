@@ -255,6 +255,10 @@ var activeCDP struct {
 	mu      sync.Mutex
 	client  *cdpClient
 	healthy bool
+	// The browser the notch started hidden for its own tab, when the running
+	// one is that (browser_mail_tab.go). Nobody asked to see it, and nobody
+	// asked for it to be hidden either: see getCDP.
+	startedForMailTab *cdpClient
 }
 
 // existingCDP returns the live browser connection, or nil when there is none.
@@ -295,10 +299,19 @@ func getCDP(cfg *SidecarConfig, headless, explicit bool) (*cdpClient, error) {
 	defer activeCDP.mu.Unlock()
 
 	if c := activeCDP.client; c != nil && !c.closed.Load() {
-		if explicit && c.headless != headless {
+		// A browser the notch started hidden for its own tab is not one the
+		// caller chose. A call for the agent's page that says nothing about
+		// visibility gets what it always got, a visible browser: the hidden one
+		// gives way, and the notch opens its tab again in the new one.
+		if !keepRunningBrowser(c.headless, c == activeCDP.startedForMailTab, headless, explicit) {
 			activeCDP.client = nil
+			activeCDP.startedForMailTab = nil
 			c.shutdown()
 		} else {
+			// Asked for by name, in the mode it is in: it is the caller's now.
+			if explicit {
+				activeCDP.startedForMailTab = nil
+			}
 			return c, nil
 		}
 	}
@@ -309,6 +322,17 @@ func getCDP(cfg *SidecarConfig, headless, explicit bool) (*cdpClient, error) {
 	}
 	activeCDP.client = client
 	return client, nil
+}
+
+// keepRunningBrowser decides whether a call for the agent's page uses the
+// browser that is running or has it started again. `runningHeadless` is how the
+// running one is shown, `startedForMailTab` whether the notch started it hidden
+// for its own tab; `headless` and `explicit` are what the call asked for.
+func keepRunningBrowser(runningHeadless, startedForMailTab, headless, explicit bool) bool {
+	if explicit {
+		return runningHeadless == headless
+	}
+	return !startedForMailTab
 }
 
 // browserProfileName derives a per-browser user-data dir name from the
@@ -334,6 +358,12 @@ func chromiumLaunchArgs(profileDir string, headless bool) []string {
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-features=Translate",
+		// A tab that is not in front has its timers slowed, to once a minute
+		// after five minutes. The notch reads mail in a tab of its own that is
+		// never in front (browser_mail_tab.go), and its scripts wait on timers.
+		"--disable-background-timer-throttling",
+		"--disable-renderer-backgrounding",
+		"--disable-backgrounding-occluded-windows",
 	}
 	if headless {
 		args = append(args, "--headless=new", "--hide-scrollbars")
