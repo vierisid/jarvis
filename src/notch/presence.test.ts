@@ -108,6 +108,15 @@ describe('whether the person is there', () => {
     expect(told).toEqual(['morning 0', 'calm', 'left 0', 'back 61']);
   });
 
+  // The brain is often started before the person sits down: the first word it hears is "still".
+  test('a brain that started while they were out says the morning when they first sit down, however soon', () => {
+    const { presence, told, pass } = harness();
+    presence.hands(true);
+    pass(10 * MIN);
+    presence.hands(false);
+    expect(told).toEqual(['calm', 'morning 10']);
+  });
+
   test('the morning is remembered across a restart of the brain, and comes again the next day after a night away', () => {
     const settings = new NotchSettings(new Database(':memory:'));
     const first = harness(NINE, settings);
