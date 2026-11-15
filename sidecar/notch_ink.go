@@ -242,3 +242,158 @@ func (s *lookShot) CutSmall(part lookRect, most int) []byte {
 	}
 	return out.Bytes()
 }
+
+// ---------------------------------------------------------------------------
+// The hand: Jarvis's own pointer
+// ---------------------------------------------------------------------------
+//
+// When Jarvis shows where something is, it does not only light the thing up.
+// Its own pointer leaves the notch, travels to the thing and lands on it, and
+// then the ring is drawn. The pointer is the prototype's: the notch's citron
+// arrow with a dark edge, the same shape, a little larger than the system's.
+// The owner asked for it on 16 November 2026: "it should be a cursor that
+// comes out of the notch and points at there, and then it creates the
+// highlight."
+
+const (
+	// The arrow's box, at a display scale of 100%. The prototype's is 20, in a
+	// small window; on a whole display that is too easy to lose.
+	notchHandBoxPx = 28.0
+	// The edge round it, in the units of the shape's own 24 by 24 box.
+	notchHandEdge = 1.3
+	// The shadow under it: how far down, how wide, how dark.
+	notchHandShadowDown = 2.0
+	notchHandShadowWide = 3.5
+	notchHandShadowDark = 0.30
+	// Its edge and its fill: the notch's black and its citron.
+	notchHandEdgeR, notchHandEdgeG, notchHandEdgeB = 0x13, 0x16, 0x1A
+)
+
+// The arrow, in a 24 by 24 box: the path of the prototype's pointer
+// ("M4 2.5 11.2 21l2.5-7.3 7.3-2.5z"). The first point is its tip.
+var notchHandShape = [4][2]float64{{4, 2.5}, {11.2, 21}, {13.7, 13.7}, {21, 11.2}}
+
+// notchHand is the pointer's picture, as a layered window shows it, with
+// where its tip is in that picture.
+type notchHand struct {
+	pixels     []uint32
+	w, h       int
+	tipX, tipY float64
+}
+
+// handDistance is how far a point of the shape's box is from the arrow's
+// outline, and whether it is inside the arrow.
+func handDistance(px, py float64) (distance float64, inside bool) {
+	distance = math.Inf(1)
+	n := len(notchHandShape)
+	for i := 0; i < n; i++ {
+		a, b := notchHandShape[i], notchHandShape[(i+1)%n]
+		dx, dy := b[0]-a[0], b[1]-a[1]
+		t := 0.0
+		if l2 := dx*dx + dy*dy; l2 > 0 {
+			t = math.Max(0, math.Min(1, ((px-a[0])*dx+(py-a[1])*dy)/l2))
+		}
+		ex, ey := px-(a[0]+t*dx), py-(a[1]+t*dy)
+		distance = math.Min(distance, math.Sqrt(ex*ex+ey*ey))
+		// A ray to the right crosses this side: counted for "inside".
+		if (a[1] > py) != (b[1] > py) && px < a[0]+(py-a[1])/(b[1]-a[1])*dx {
+			inside = !inside
+		}
+	}
+	return distance, inside
+}
+
+// newNotchHand draws the pointer for a display of that scale.
+func newNotchHand(scale float64) *notchHand {
+	if scale <= 0 {
+		scale = 1
+	}
+	unit := notchHandBoxPx * scale / 24
+	pad := math.Ceil((notchHandShadowWide + notchHandShadowDown) * scale)
+	side := int(math.Ceil(notchHandBoxPx*scale + 2*pad))
+	hand := &notchHand{pixels: make([]uint32, side*side), w: side, h: side, tipX: pad + notchHandShape[0][0]*unit, tipY: pad + notchHandShape[0][1]*unit}
+	const sub = 4
+	half := notchHandEdge / 2
+	for y := 0; y < side; y++ {
+		for x := 0; x < side; x++ {
+			var a, r, g, b float64
+			for sy := 0; sy < sub; sy++ {
+				for sx := 0; sx < sub; sx++ {
+					// This sample, in the shape's own box.
+					ux := (float64(x) + (float64(sx)+0.5)/sub - pad) / unit
+					uy := (float64(y) + (float64(sy)+0.5)/sub - pad) / unit
+					d, in := handDistance(ux, uy)
+					switch {
+					case d <= half:
+						a, r, g, b = a+1, r+notchHandEdgeR, g+notchHandEdgeG, b+notchHandEdgeB
+					case in:
+						a, r, g, b = a+1, r+notchInkR, g+notchInkG, b+notchInkB
+					default:
+						// Outside the arrow: its shadow, a little below it.
+						sd, sin := handDistance(ux, uy-notchHandShadowDown*scale/unit)
+						out := 0.0
+						if !sin && sd > half {
+							out = (sd - half) * unit / (notchHandShadowWide * scale)
+						}
+						if out < 1 {
+							a += notchHandShadowDark * (1 - out) * (1 - out)
+						}
+					}
+				}
+			}
+			n := float64(sub * sub)
+			a, r, g, b = a/n, r/n, g/n, b/n
+			if a <= 0 {
+				continue
+			}
+			// Colour already multiplied by its strength, as a layered window wants it.
+			hand.pixels[y*side+x] = uint32(a*255+0.5)<<24 | uint32(r+0.5)<<16 | uint32(g+0.5)<<8 | uint32(b+0.5)
+		}
+	}
+	return hand
+}
+
+// frame draws the pointer into dst (as large as the pointer's own picture) at
+// a part of its size and of its strength: it grows and comes into sight as it
+// leaves the notch. It grows from its tip, so the tip stays on its path.
+func (h *notchHand) frame(dst []uint32, size, strength float64) {
+	if len(dst) < h.w*h.h {
+		return
+	}
+	if size >= 0.999 && strength >= 0.999 {
+		copy(dst, h.pixels)
+		return
+	}
+	size = math.Max(size, 0.05)
+	strength = math.Max(0, math.Min(1, strength))
+	at := func(x, y int) (a, r, g, b float64) {
+		if x < 0 || y < 0 || x >= h.w || y >= h.h {
+			return 0, 0, 0, 0
+		}
+		p := h.pixels[y*h.w+x]
+		return float64(p >> 24), float64(p >> 16 & 0xFF), float64(p >> 8 & 0xFF), float64(p & 0xFF)
+	}
+	for y := 0; y < h.h; y++ {
+		for x := 0; x < h.w; x++ {
+			// Where this pixel comes from in the full-size picture.
+			sx := h.tipX + (float64(x)+0.5-h.tipX)/size - 0.5
+			sy := h.tipY + (float64(y)+0.5-h.tipY)/size - 0.5
+			x0, y0 := int(math.Floor(sx)), int(math.Floor(sy))
+			fx, fy := sx-float64(x0), sy-float64(y0)
+			var a, r, g, b float64
+			for _, c := range [4]struct {
+				x, y int
+				w    float64
+			}{{x0, y0, (1 - fx) * (1 - fy)}, {x0 + 1, y0, fx * (1 - fy)}, {x0, y0 + 1, (1 - fx) * fy}, {x0 + 1, y0 + 1, fx * fy}} {
+				ca, cr, cg, cb := at(c.x, c.y)
+				a, r, g, b = a+ca*c.w, r+cr*c.w, g+cg*c.w, b+cb*c.w
+			}
+			a, r, g, b = a*strength, r*strength, g*strength, b*strength
+			if a < 0.5 {
+				dst[y*h.w+x] = 0
+				continue
+			}
+			dst[y*h.w+x] = uint32(a+0.5)<<24 | uint32(r+0.5)<<16 | uint32(g+0.5)<<8 | uint32(b+0.5)
+		}
+	}
+}

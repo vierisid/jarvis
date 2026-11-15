@@ -3,7 +3,7 @@ import type { NotchAskFile } from './asks.ts';
 import { NOTCH_DROP_MAX_BYTES, attachNotchDrop, dropName, dropQuestion, dropVerdict } from './drop.ts';
 import type { NotchDropped } from './drop.ts';
 import { NotchInbox } from './inbox.ts';
-import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
+import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import { NOTCH_DROP_PATH, notchRoutes, readNotchDrop } from './routes.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
@@ -98,58 +98,48 @@ function harness(options: { paused?: () => boolean; busy?: boolean } = {}) {
   const drop = attachNotchDrop(surface, inbox, {
     ask: (words, files) => { asked.push({ text: words, files }); },
     tell: (parts) => { told.push(text(parts)); },
-    paused: options.paused, overMs: 5000, log: (line) => logs.push(line),
+    paused: options.paused, holdMs: 80, log: (line) => logs.push(line),
   });
   if (options.busy) inbox.present('something', (stage) => stage.say(['Busy with something.'], 60_000));
   const line = (): NotchLine | null => surface.current().line;
   const file = (name: string, mediaType: string, size: number, extra: Partial<NotchDropped> = {}): NotchDropped =>
     ({ name, mediaType, size, bytes: new Uint8Array(size), count: 1, ...extra });
+  const blocks = (): NotchBlock[] => { const now = line(); return now && 'blocks' in now ? now.blocks ?? [] : []; };
+  const answer = async (act: string, more: Record<string, unknown> = {}): Promise<void> => {
+    fromPage({ type: 'answer', id: line()!.id, act, ...more });
+    await settle();
+  };
   return {
-    drop, asked, told, logs, line, fromPage, file,
+    drop, asked, told, logs, line, fromPage, file, inbox, answer,
     said: (): string => text(line()?.say),
-    async advance(ms: number): Promise<void> {
-      now += ms;
-      for (const timer of [...timers].filter((entry) => entry.at <= now)) {
-        const at = timers.indexOf(timer);
-        if (at >= 0) { timers.splice(at, 1); timer.fn(); }
-      }
+    /** What the mouth was told to do, in order. */
+    mouth: (): string[] => pushed.flatMap((message) => (message.type === 'act' && message.mouth ? [message.mouth] : [])),
+    /** "Got it" has had its moment: the page says so, and the question about the file comes up. */
+    async got(): Promise<void> {
       await settle();
+      if (line()?.kind === 'say') await answer('done');
     },
+    cards: (): string[] => blocks().flatMap((block) => (block.kind === 'file' ? [`${block.icon} | ${block.name} | ${block.meta}`] : [])),
+    buttons: (): string[] => blocks().flatMap((block) => (block.kind === 'buttons' ? block.buttons.map((button) => `${button.key ?? '-'} ${button.label}`) : [])),
   };
 }
 
 describe('a file held over the notch', () => {
-  test('the notch says where to let go, and stops saying it when the file is taken away', async () => {
+  // The owner, 16 November 2026: "the animation of the notch when I drop a file into it is not the same
+  // as the one we built." The one we built is the mouth: it opens for a file, and swallows it.
+  test('the notch opens its mouth, and shuts it when the file is taken away', async () => {
     const h = harness();
     h.fromPage({ type: 'drag', state: 'over' });
     await settle();
-    expect(h.said()).toBe('Let go of it here. I will read it.');
-    // Said once for one drag, however often the page says "over".
-    h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
-    expect(h.said()).toBe('Let go of it here. I will read it.');
+    expect(h.mouth()).toEqual(['open', 'over']);
+    // No line is put up for it: the mouth says it.
+    expect(h.line()).toBeNull();
     h.fromPage({ type: 'drag', state: 'left' });
     await settle();
-    expect(h.line()).toBeNull();
-    // And again for the next one.
-    h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
-    expect(h.said()).toBe('Let go of it here. I will read it.');
-  });
-
-  test('held there and never let go: the line does not stay for ever', async () => {
-    const h = harness();
-    h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
-    // The page shows a line for its time and then says it is done.
-    expect(h.line()).toMatchObject({ kind: 'say', ms: 5000 });
-    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'done' });
-    await settle();
-    expect(h.line()).toBeNull();
-    // Still held there, or brought back: it is said again.
-    h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
-    expect(h.said()).toBe('Let go of it here. I will read it.');
+    expect(h.mouth()).toEqual(['open', 'over', 'shut']);
+    // Taken away twice is shut once.
+    h.fromPage({ type: 'drag', state: 'left' });
+    expect(h.mouth().length).toBe(3);
   });
 
   test('what is on the notch is not taken down for a file that may never be dropped', async () => {
@@ -158,19 +148,23 @@ describe('a file held over the notch', () => {
     h.fromPage({ type: 'drag', state: 'over' });
     await settle();
     expect(h.said()).toBe('Busy with something.');
-    // The file can still be let go on the notch as it is.
-    expect(h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000))).toEqual({ taken: true });
-    expect(h.asked.length).toBe(1);
+    expect(h.mouth()).toEqual(['open', 'over']);
   });
 
-  test('a file that was let go and did not arrive is said to be lost', async () => {
+  test('a file that was let go and did not arrive is said to be lost, and the mouth shuts', async () => {
     const h = harness();
     h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
     h.fromPage({ type: 'drag', state: 'lost' });
     await settle();
     expect(h.told).toEqual(['I could not take that file. Try dropping it again.']);
-    expect(h.said()).not.toBe('Let go of it here. I will read it.');
+    expect(h.mouth()).toEqual(['open', 'over', 'shut']);
+  });
+
+  test('with everything stopped the mouth stays shut', async () => {
+    const h = harness({ paused: () => true });
+    h.fromPage({ type: 'drag', state: 'over' });
+    await settle();
+    expect(h.mouth()).toEqual([]);
   });
 
   test('a message about dragging that is not one of the three is not understood', async () => {
@@ -179,56 +173,184 @@ describe('a file held over the notch', () => {
     h.fromPage({ type: 'drag' });
     await settle();
     expect(h.line()).toBeNull();
+    expect(h.mouth()).toEqual([]);
   });
 });
 
 describe('a file dropped on the notch', () => {
-  // The owner's test for pass 9: "Drop a PDF: a sheet with a summary."
-  test('a PDF is asked about at once, as an instruction that carries it', async () => {
+  // The owner, 16 November 2026: "right now it just gives me a summary, but it should either give me the
+  // opportunity to ask a specific question about it, or give me a few options."
+  test('it is swallowed, said, and then asked about: its card, three things to pick, and a field', async () => {
     const h = harness();
     h.fromPage({ type: 'drag', state: 'over' });
-    await settle();
     expect(h.drop.take(h.file('C:\\Users\\sam\\Deck.pdf', 'application/pdf', 300_000))).toEqual({ taken: true });
     await settle();
-    expect(h.asked.map((ask) => ask.text)).toEqual(['Summarise the file I dropped, Deck.pdf: what it is, and the points that matter, in a few short lines.']);
-    expect(h.asked[0]!.files.map((file) => [file.kind, file.name, file.mediaType, file.bytes.length])).toEqual([['document', 'Deck.pdf', 'application/pdf', 300_000]]);
-    // "Let go of it here" has left.
-    expect(h.said()).not.toBe('Let go of it here. I will read it.');
+    expect(h.mouth()).toEqual(['open', 'over', 'gulp']);
+    expect(h.said()).toBe('Got Deck.pdf.');
+    expect(h.line()).toMatchObject({ kind: 'say', mood: 'happy' });
+    // Nothing is asked of a model yet: it waits to be told what is wanted.
+    expect(h.asked).toEqual([]);
+    expect(h.drop.holding()).toBe(true);
+    await h.got();
+    expect(h.line()).toMatchObject({ kind: 'ask', yes: 'ask', focus: true, placeholder: 'Ask about it, or hold the keys and say it' });
+    expect(h.cards()).toEqual(['doc | Deck.pdf | PDF · 293 KB']);
+    expect(h.buttons()).toEqual(['- Summarise it', '- Find the numbers', '- What is missing']);
     // The name of the file is the person's: sizes and kinds only in the log.
     expect(h.logs.join('\n')).not.toContain('Deck');
     expect(h.logs.join('\n')).toContain('300000 bytes');
   });
 
-  test('a file it cannot read is not asked about: the notch says what it is and what would work', () => {
+  test('one of the three is picked: that is asked, and it carries the file', async () => {
     const h = harness();
-    expect(h.drop.take(h.file('Call with Anna.m4a', 'audio/mp4', 40_000))).toEqual({ taken: false });
-    expect(h.asked).toEqual([]);
-    expect(h.told).toEqual(['Call with Anna.m4a is a sound file. I cannot listen to files yet.']);
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await h.got();
+    await h.answer('button', { button: 'ask1' });
+    expect(h.asked.map((ask) => ask.text)).toEqual(['List the numbers that matter in the file I dropped, Deck.pdf, each with what it measures, in a few short lines.']);
+    expect(h.asked[0]!.files.map((file) => [file.kind, file.name, file.mediaType, file.bytes.length])).toEqual([['document', 'Deck.pdf', 'application/pdf', 300_000]]);
+    // Asked once: nothing is held any more, and the question about it is off the notch.
+    expect(h.drop.holding()).toBe(false);
+    expect(h.inbox.count()).toBe(0);
+    expect(h.line()).toBeNull();
   });
 
-  test('a web page is asked about as its words, under its own name', () => {
+  // "Sometimes I might want something specific, like I drop a deck and I ask what has changed since the last deck."
+  test('his own question, typed: asked in his words, with the file', async () => {
+    const h = harness();
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await h.got();
+    await h.answer('ask', { text: '  what does slide four ask the reader to do?  ' });
+    expect(h.asked.map((ask) => [ask.text, ask.files.map((file) => file.name)])).toEqual([['what does slide four ask the reader to do?', ['Deck.pdf']]]);
+  });
+
+  test('Enter on an empty field asks the first of the three', async () => {
+    const h = harness();
+    h.drop.take(h.file('shot.png', 'image/png', 40_000));
+    await h.got();
+    expect(h.cards()).toEqual(['image | shot.png | Picture · 39 KB']);
+    expect(h.buttons()).toEqual(['- Describe it', '- Read the text in it', '- What stands out']);
+    await h.answer('ask', { text: '' });
+    expect(h.asked.map((ask) => ask.text)).toEqual(['Tell me what the picture I dropped, shot.png, shows, in a few short lines.']);
+  });
+
+  test('his own question, said with the keys held while the file waits: the words take the file', async () => {
+    const h = harness();
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await h.got();
+    // What talking does once words are in (talk.ts): it asks for what is held.
+    const files = h.drop.claim();
+    await settle();
+    expect(files.map((file) => file.name)).toEqual(['Deck.pdf']);
+    expect(h.drop.holding()).toBe(false);
+    // The question about the file is gone from the notch and from the count: it was answered by voice.
+    expect(h.line()).toBeNull();
+    expect(h.inbox.count()).toBe(0);
+    expect(h.asked).toEqual([]);
+    // Nothing is handed over twice.
+    expect(h.drop.claim()).toEqual([]);
+  });
+
+  test('Esc lets the file go: nothing is asked, and it is not kept', async () => {
+    const h = harness();
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await h.got();
+    await h.answer('no');
+    expect(h.asked).toEqual([]);
+    expect(h.drop.holding()).toBe(false);
+    expect(h.drop.claim()).toEqual([]);
+  });
+
+  test('a file nobody asks about is let go after a while', async () => {
+    const h = harness();
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await h.got();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await settle();
+    expect(h.drop.holding()).toBe(false);
+    expect(h.line()).toBeNull();
+    expect(h.logs.join('\n')).toContain('1 dropped file(s) were let go');
+    expect(h.logs.join('\n')).not.toContain('Deck');
+  });
+
+  test('a second file dropped while the first waits joins it: "what changed" can be asked of the two', async () => {
+    const h = harness();
+    h.drop.take(h.file('Deck October.pdf', 'application/pdf', 200_000));
+    await h.got();
+    h.drop.take(h.file('Deck November.pdf', 'application/pdf', 300_000));
+    await settle();
+    expect(h.said()).toBe('Got Deck November.pdf too.');
+    await h.got();
+    expect(h.cards()).toEqual(['doc | Deck October.pdf | PDF · 195 KB', 'doc | Deck November.pdf | PDF · 293 KB']);
+    expect(h.buttons()).toEqual(['- What changed', '- Compare them', '- Summarise them']);
+    expect(h.line()).toMatchObject({ placeholder: 'Ask about them, or hold the keys and say it' });
+    await h.answer('button', { button: 'ask0' });
+    expect(h.asked[0]!.text).toBe('I dropped these files, in this order: Deck October.pdf, Deck November.pdf. Tell me what changed from the first to the last, in a few short lines.');
+    expect(h.asked[0]!.files.map((file) => file.name)).toEqual(['Deck October.pdf', 'Deck November.pdf']);
+  });
+
+  test('no more than three are held, and no more than a turn can carry', async () => {
+    const h = harness();
+    for (const name of ['a.txt', 'b.txt', 'c.txt']) expect(h.drop.take(h.file(name, 'text/plain', 10))).toEqual({ taken: true });
+    expect(h.drop.take(h.file('d.txt', 'text/plain', 10))).toEqual({ taken: false });
+    expect(h.told).toEqual(['I am holding 3 files already. Ask about those first.']);
+    const big = harness();
+    big.drop.take(big.file('one.png', 'image/png', 4 * MB));
+    big.drop.take(big.file('two.png', 'image/png', 3 * MB));
+    expect(big.drop.take(big.file('three.png', 'image/png', 2 * MB))).toEqual({ taken: false });
+    expect(big.told).toEqual(['three.png is too large to read together with what I am holding. Ask about that first.']);
+    expect(big.drop.claim().length).toBe(2);
+  });
+
+  test('a file it cannot read is not held: the notch says what it is and what would work, and the mouth shuts', () => {
+    const h = harness();
+    h.fromPage({ type: 'drag', state: 'over' });
+    expect(h.drop.take(h.file('Call with Anna.m4a', 'audio/mp4', 40_000))).toEqual({ taken: false });
+    expect(h.drop.holding()).toBe(false);
+    expect(h.told).toEqual(['Call with Anna.m4a is a sound file. I cannot listen to files yet.']);
+    expect(h.mouth()).toEqual(['open', 'over', 'shut']);
+  });
+
+  test('a web page is held as its words, under its own name', async () => {
     const h = harness();
     const page = new TextEncoder().encode('<html><head><script>steal()</script></head><body><h1>Receipt 114</h1><p>Paid in <b>full</b>.</p></body></html>');
     expect(h.drop.take({ name: 'receipt.html', mediaType: 'text/html', size: page.length, bytes: page, count: 1 })).toEqual({ taken: true });
+    await h.got();
+    await h.answer('button', { button: 'ask0' });
     expect(h.asked[0]!.text).toBe('Summarise the file I dropped, receipt.html: what it is, and the points that matter, in a few short lines.');
     const [file] = h.asked[0]!.files;
     expect([file!.kind, file!.name, file!.mediaType]).toEqual(['document', 'receipt.html', 'text/plain']);
     expect(new TextDecoder().decode(file!.bytes)).toBe('Receipt 114\nPaid in full.');
   });
 
-  test('a long one is cut, and the question says so', () => {
+  test('a spreadsheet and a code file are offered what fits them', async () => {
+    const sheet = harness();
+    sheet.drop.take(sheet.file('payouts.csv', 'text/csv', 2000));
+    await sheet.got();
+    expect(sheet.cards()).toEqual(['sheet | payouts.csv | Spreadsheet · 2 KB']);
+    expect(sheet.buttons()).toEqual(['- Totals', '- What stands out', '- Summarise it']);
+    const code = harness();
+    const source = new TextEncoder().encode('export const one = 1;\n');
+    code.drop.take({ name: 'one.ts', mediaType: '', size: source.length, bytes: source, count: 1 });
+    await code.got();
+    expect(code.cards()).toEqual(['doc | one.ts | Code · 1 KB']);
+    expect(code.buttons()).toEqual(['- Explain it', '- Find problems', '- Summarise it']);
+  });
+
+  test('a long one is cut: its card says so, and so does what is asked', async () => {
     const h = harness();
     const long = new TextEncoder().encode('word '.repeat(60_000));
     expect(h.drop.take({ name: 'log.yaml', mediaType: '', size: long.length, bytes: long, count: 1 })).toEqual({ taken: true });
+    await h.got();
+    expect(h.cards()[0]).toContain('first part only');
+    await h.answer('button', { button: 'ask0' });
     expect(h.asked[0]!.text).toContain('only its first part could be read');
     expect(h.asked[0]!.files[0]!.bytes.length).toBeLessThan(121_000);
   });
 
-  test('a file that is not what its name says, or is locked, is said to be unreadable and nothing is asked', () => {
+  test('a file that is not what its name says, or is locked, is said to be unreadable and nothing is held', () => {
     const h = harness();
     const junk = new TextEncoder().encode('this is not a zip, whatever the end of its name says about it');
     expect(h.drop.take({ name: 'Payouts.xlsx', mediaType: '', size: junk.length, bytes: junk, count: 1 })).toEqual({ taken: false });
-    expect(h.asked).toEqual([]);
+    expect(h.drop.holding()).toBe(false);
     expect(h.told).toEqual(['I could not read Payouts.xlsx. It may be damaged, protected with a password, or hold no words.']);
   });
 
@@ -241,22 +363,25 @@ describe('a file dropped on the notch', () => {
   test('a file that arrived in part is not read', () => {
     const h = harness();
     expect(h.drop.take({ name: 'Deck.pdf', mediaType: 'application/pdf', size: 300_000, bytes: new Uint8Array(1000), count: 1 })).toEqual({ taken: false });
-    expect(h.asked).toEqual([]);
+    expect(h.drop.holding()).toBe(false);
     expect(h.told).toEqual(['Only part of Deck.pdf arrived, so I did not read it. Try dropping it again.']);
-  });
-
-  test('several at once: the first is taken, and that is said', () => {
-    const h = harness();
-    expect(h.drop.take(h.file('a.txt', 'text/plain', 10, { count: 3 }))).toEqual({ taken: true });
-    expect(h.told).toEqual(['One file at a time. I took the first: a.txt.']);
-    expect(h.asked.length).toBe(1);
   });
 
   test('with everything stopped nothing is read', () => {
     const h = harness({ paused: () => true });
     expect(h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000))).toEqual({ taken: false });
-    expect(h.asked).toEqual([]);
+    expect(h.drop.holding()).toBe(false);
     expect(h.told).toEqual(['Everything is stopped. Wake me first.']);
+  });
+
+  test('dropped while something else is on the notch: it takes the notch, because a file was handed over', async () => {
+    const h = harness({ busy: true });
+    await settle();
+    expect(h.said()).toBe('Busy with something.');
+    h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+    await settle();
+    // What was there was not an item with a turn of its own, so the file's question waits for the notch to be free.
+    expect(h.drop.holding()).toBe(true);
   });
 });
 

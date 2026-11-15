@@ -24,6 +24,7 @@
  * Neither the audio nor the words are in an event's payload: payloads are not
  * private (see the skip list where sidecar events are broadcast).
  */
+import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchAskFile, NotchAsks } from './asks.ts';
 
@@ -108,6 +109,12 @@ export interface NotchTalkDeps {
    * the words carry it.
    */
   look?: NotchTalkLook;
+  /**
+   * The files that were dropped on the notch and wait for their question
+   * (./drop.ts), handed over: what is said while they wait is about them.
+   * Asked only once words are in. After it nothing waits.
+   */
+  held?: () => NotchAskFile[];
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -129,7 +136,12 @@ export interface NotchTalkLook {
 export const NOTCH_TALK_LOOK_BEFORE_MS = 1500;
 
 export interface NotchTalk {
-  /** Whether a recording is open on that desktop app: its talk keys are held. */
+  /**
+   * Whether that desktop app's talk keys are held, or were let go a moment
+   * ago and what was said is still being made into words. Until the words
+   * are in, nobody knows whether anything was said: a look made in the same
+   * hold must wait for them, and not answer by itself in between.
+   */
   open(sidecarId: string): boolean;
   /**
    * For the hand test and the end-to-end run: goes through everything after
@@ -173,6 +185,15 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   /** When each recording was opened, by its key, for as long as it matters: until its words are in. */
   const since = new Map<string, number>();
   const limits = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * The recordings that have ended and are being made into words, with the
+   * desktop app each came from. The owner circled a figure and asked about it
+   * with the keys still held (15 November 2026): what was circled reached
+   * here while the words were with the speech-to-text service, no recording
+   * was open any more, and the look answered by itself. The question that was
+   * spoken then ran without it.
+   */
+  const making = new Map<string, string>();
   /** Whether something was looked at during the hold that made this recording. */
   const looked = (sidecarId: string, talkKey: string): boolean =>
     !!deps.look && deps.look.during(sidecarId, (since.get(talkKey) ?? now()) - NOTCH_TALK_LOOK_BEFORE_MS);
@@ -193,11 +214,15 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   const heard = async (sidecarId: string, talkKey: string, said: string, cut: boolean): Promise<void> => {
     const withLook = looked(sidecarId, talkKey);
     since.delete(talkKey);
-    let files: NotchAskFile[] | null = null;
+    let seen: NotchAskFile[] = [];
     if (withLook) {
-      try { files = await deps.look!.files(sidecarId); } catch { files = null; }
+      try { seen = (await deps.look!.files(sidecarId)) ?? []; } catch { seen = []; }
     }
-    deps.asks.words(talkKey, said, { ...(cut ? { cut: true } : {}), ...(files?.length ? { files } : {}) });
+    let dropped: NotchAskFile[] = [];
+    try { dropped = deps.held?.() ?? []; } catch { dropped = []; }
+    // The files that were handed over first: they were given on purpose. Then as much of the look as a turn may carry.
+    const files = [...dropped, ...seen].slice(0, ATTACHMENT_LIMITS.perTurn);
+    deps.asks.words(talkKey, said, { ...(cut ? { cut: true } : {}), ...(files.length ? { files } : {}) });
   };
   const closed = (sidecarId: string): void => {
     const limit = limits.get(sidecarId);
@@ -226,6 +251,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     const provider = deps.stt();
     if (!provider) { nothing(sidecarId, talkKey, 'no_stt'); return; }
     let timer: ReturnType<typeof setTimeout> | undefined;
+    making.set(talkKey, sidecarId);
     try {
       const words = await Promise.race([
         provider.transcribe(pcmToWav(pcm, sampleRate)),
@@ -241,6 +267,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
       nothing(sidecarId, talkKey, 'failed');
     } finally {
       if (timer) clearTimeout(timer);
+      making.delete(talkKey);
     }
   }
 
@@ -313,7 +340,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
 
   let pretended = 0;
   return {
-    open: (sidecarId) => open.has(sidecarId),
+    open: (sidecarId) => open.has(sidecarId) || [...making.values()].includes(sidecarId),
     pretend(words) {
       const talkKey = `pretend:${Date.now().toString(36)}-${++pretended}`;
       deps.asks.listen(talkKey);

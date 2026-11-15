@@ -456,6 +456,42 @@ describe('a look and what is said with the keys held', () => {
     expect(await never.look.files('pc')).toBeNull();
   });
 
+  test('a look that is read only after its words went on without it does not answer by itself', async () => {
+    const h = harness();
+    h.begun('L7');
+    // The words are in, and wait for the look for as long as they may.
+    expect(await h.look.files('pc')).toBeNull();
+    expect(h.logs.join('\n')).toContain('the words that came with it go on without it');
+    // Now it is read. Its question has been asked: "what does this tell me?" is not asked on top of it.
+    h.taken([{ kind: 'text', name: '1,284' }], {}, 'L7');
+    await h.wait(60);
+    expect(h.asked).toEqual([]);
+    expect(h.line()).toBeNull();
+    // The next look is its own.
+    h.begun('L8');
+    h.taken(threeRows, {}, 'L8');
+    await h.wait(40);
+    expect(h.said()).toBe('3 rows. They add up to 1,291.00.');
+  });
+
+  // The whole of it, as it went wrong on the owner's machine: the keys came up, the words were being made,
+  // and what was circled was told in between.
+  test('told while the words of the same hold are being made: it waits, and goes with them', async () => {
+    let making = true;
+    const h = harness({ talking: () => making });
+    h.begun();
+    h.taken([{ kind: 'text', name: '1,284' }], {}, 'L1', PNG, WINDOW, ['Installs']);
+    await h.wait(60);
+    // Three times the grace a look with nothing open is given: it has not answered by itself.
+    expect(h.asked).toEqual([]);
+    expect(h.line()).toBeNull();
+    const files = await h.look.files('pc');
+    making = false;
+    expect(files!.map((file) => file.name)).toEqual([NOTCH_LOOK_FILE, NOTCH_LOOK_PICTURE, NOTCH_LOOK_WINDOW]);
+    await h.wait(60);
+    expect(h.asked).toEqual([]);
+  });
+
   test('a look that was refused has nothing to go with the words', async () => {
     const h = harness({ talking: () => true });
     h.begun();

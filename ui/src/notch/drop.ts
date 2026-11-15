@@ -5,10 +5,11 @@
  * of it. It does three things:
  *
  *   - It says to the brain that a file is over the notch, and when it has
- *     gone again, so that the notch can say where to let go.
+ *     gone again, so that the notch can open its mouth for it.
  *   - It sends a file that is let go to the brain, as the body of one
- *     request. The bytes never pass through the desktop app: its messages
- *     are for a few words, not for a file.
+ *     request (the first three, when several are dropped together). The
+ *     bytes never pass through the desktop app: its messages are for a few
+ *     words, not for a file.
  *   - It never lets a drop do what a browser does with one by itself, which
  *     is to leave this page and show the file instead. That holds for
  *     anything dragged here, a file or not.
@@ -21,6 +22,8 @@ import type { NotchFromPage } from '../../../src/notch/protocol.ts';
 /** Where a dropped file goes, and the most that is sent (src/notch/drop.ts). */
 export const NOTCH_DROP_PATH = '/api/notch/drop';
 export const NOTCH_DROP_MAX_BYTES = 16 * 1024 * 1024;
+/** The most files taken from one drop (src/notch/drop.ts). */
+export const NOTCH_DROP_MOST = 3;
 
 export interface NotchDropPort {
   send(message: NotchFromPage): void;
@@ -89,14 +92,17 @@ export function watchNotchDrops(target: Pick<Document, 'addEventListener' | 'rem
     const drag = event as DragEvent;
     drag.preventDefault();
     const files = [...(drag.dataTransfer?.files ?? [])];
-    const [first] = files;
     depth = 0;
-    if (!first) { leave(); return; }
+    if (files.length === 0) { leave(); return; }
     over = false;
-    port.upload(first, files.length).then(
-      (arrived) => { if (!arrived) port.send({ type: 'drag', state: 'lost' }); },
-      () => { port.send({ type: 'drag', state: 'lost' }); },
-    );
+    // One after another, in the order they were dropped: the brain holds them in that order.
+    void (async () => {
+      for (const file of files.slice(0, NOTCH_DROP_MOST)) {
+        let arrived = false;
+        try { arrived = await port.upload(file, files.length); } catch { arrived = false; }
+        if (!arrived) { port.send({ type: 'drag', state: 'lost' }); return; }
+      }
+    })();
   };
   target.addEventListener('dragenter', onEnter);
   target.addEventListener('dragover', onOver);

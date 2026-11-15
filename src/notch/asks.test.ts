@@ -976,7 +976,7 @@ describe('a question about where something is', () => {
     expect(asked).toEqual(['Where do I close this window?']);
     expect(h.door.texts()).toEqual([]);
     expect(h.said()).toBe('Close, the button, top right of the window. I am pointing at it.');
-    expect(row(h)).toMatchObject({ state: 'done', answer: 'Close, the button, top right of the window. I am pointing at it.', did: ['Pointed at it on the screen.'] });
+    expect(row(h)).toMatchObject({ state: 'done', answer: 'Close, the button, top right of the window. I am pointing at it.', did: ['Showed it on the screen.'] });
   });
 
   test('while the window is read the line says so', async () => {
@@ -1027,6 +1027,79 @@ describe('a question about where something is', () => {
     await settle();
     expect(asked).toEqual([]);
     expect(h.door.texts()).toEqual(['send Leo the numbers', 'Where is this from?']);
+  });
+
+  // The owner, 16 November 2026: the pointer "waits until I click it, and then shows me the next step again".
+  test('a walk of several clicks: the line says the step that is being shown, and the last line says it is over', async () => {
+    let during: { step?: (said: string) => void; signal?: AbortSignal } = {};
+    let tell: (pointed: { ok: true; said: string }) => void = () => {};
+    const h = harness({ deps: { point: (_question, how) => { during = how ?? {}; return new Promise((resolve) => { tell = resolve; }); } } });
+    await h.type('How do I add an audio input capture?');
+    expect(h.said()).toBe('Looking for it in the window.');
+    during.step?.('Step 1: click Add Source, bottom left of the window.');
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    expect(h.said()).toBe('Step 1: click Add Source, bottom left of the window.');
+    during.step?.('Last step: click Audio Input Capture.');
+    await settle();
+    expect(h.said()).toBe('Last step: click Audio Input Capture.');
+    tell({ ok: true, said: 'That was the last step.' });
+    await settle();
+    expect(h.said()).toBe('That was the last step.');
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'done', answer: 'That was the last step.' });
+  });
+
+  test('Esc while a step waits for its click: the walk is told to stop, and it says it stopped', async () => {
+    let signal: AbortSignal | undefined;
+    const h = harness({ deps: { point: (_question, how) => new Promise((resolve) => {
+      signal = how?.signal;
+      signal?.addEventListener('abort', () => resolve({ ok: 'stopped' }));
+    }) } });
+    await h.type('How do I add an audio input capture?');
+    expect(signal?.aborted).toBe(false);
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'stop' });
+    await settle();
+    expect(signal?.aborted).toBe(true);
+    expect(row(h)).toMatchObject({ state: 'stopped' });
+    expect(h.said()).toBe('Stopped. What was already done stays done.');
+    expect(h.door.texts()).toEqual([]);
+  });
+
+  test('a walk that something else took off the screen says nothing more', async () => {
+    const h = harness({ deps: { point: async () => ({ ok: 'stopped' }) } });
+    await h.type('How do I add an audio input capture?');
+    await settle();
+    expect(row(h)).toMatchObject({ state: 'stopped' });
+    expect(h.line()).toBeNull();
+    expect(h.door.texts()).toEqual([]);
+  });
+
+  test('a new question while a step waits for its click ends the walk: it is not told "I am still on the last thing"', async () => {
+    let signal: AbortSignal | undefined;
+    let walks = 0;
+    const h = harness({ deps: { point: (question, how) => {
+      if (!question.startsWith('How do I add')) return Promise.resolve(null);
+      walks++;
+      signal = how?.signal;
+      return new Promise(() => {});
+    } } });
+    await h.type('How do I add an audio input capture?');
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    h.asks.typed('send Leo the numbers');
+    await settle();
+    // The pointer was taken off the screen, and the new instruction runs.
+    expect(signal?.aborted).toBe(true);
+    expect(walks).toBe(1);
+    expect(h.door.texts()).toEqual(['send Leo the numbers']);
+    expect(h.said()).toBe('On it: send Leo the numbers');
+    // Spoken, the same: the keys are not refused.
+    const again = harness({ deps: { point: (_question, how) => { signal = how?.signal; return new Promise(() => {}); } } });
+    await again.type('How do I add an audio input capture?');
+    again.asks.listen('talk-1');
+    await settle();
+    expect(signal?.aborted).toBe(true);
+    expect(again.said()).not.toContain('I am still on the last thing');
   });
 
   test('stopped while the window is read: nothing is pointed at afterwards and no turn starts', async () => {

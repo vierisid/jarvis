@@ -31,6 +31,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -746,4 +747,108 @@ func lookRingPath(r lookRect, margin, radius float64) []lookPoint {
 		path = path[:n-1]
 	}
 	return path
+}
+
+// ---------------------------------------------------------------------------
+// The way of the hand
+// ---------------------------------------------------------------------------
+
+// How the hand moves. The times are the prototype's, stretched for a real
+// display: there the hand crossed a window, here it may cross a screen.
+const (
+	// The shortest and the longest a flight takes; in between, by its length.
+	notchHandFlightMin = 440 * time.Millisecond
+	notchHandFlightMax = 820 * time.Millisecond
+	// How long it takes to grow to its size and come into sight as it leaves the notch.
+	notchHandGrow = 300 * time.Millisecond
+	// How small it is inside the notch.
+	notchHandSmall = 0.35
+	// How long the ring takes to be drawn once the hand has landed.
+	notchHandRing = 280 * time.Millisecond
+	// How long the hand waits on a thing that was clicked for the next thing
+	// to go to, before it goes home. Finding the next thing means reading the
+	// window again and asking a model.
+	notchHandLinger = 8 * time.Second
+	// How long the way home takes.
+	notchHandHome = 380 * time.Millisecond
+)
+
+// lookEase is the curve CSS calls cubic-bezier(x1, y1, x2, y2), at t.
+func lookEase(x1, y1, x2, y2, t float64) float64 {
+	if t <= 0 {
+		return 0
+	}
+	if t >= 1 {
+		return 1
+	}
+	curve := func(p1, p2, s float64) float64 {
+		u := 1 - s
+		return 3*u*u*s*p1 + 3*u*s*s*p2 + s*s*s
+	}
+	lo, hi := 0.0, 1.0
+	for i := 0; i < 40; i++ {
+		if mid := (lo + hi) / 2; curve(x1, x2, mid) < t {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return curve(y1, y2, (lo+hi)/2)
+}
+
+// lookHandFlight is how long the hand takes from a to b.
+func lookHandFlight(a, b lookPoint) time.Duration {
+	far := math.Hypot(float64(b.X-a.X), float64(b.Y-a.Y))
+	took := notchHandFlightMin + time.Duration(far/4)*time.Millisecond
+	if took > notchHandFlightMax {
+		took = notchHandFlightMax
+	}
+	return took
+}
+
+// lookHandAt is where the hand's tip is a part t of the way from a to b. It
+// goes across quickly and settles, and goes down slowly and then quickly, as
+// the prototype's does: so its way is a curve, not a ruled line.
+func lookHandAt(a, b lookPoint, t float64) (x, y float64) {
+	across := lookEase(0.2, 0.7, 0.2, 1, t)
+	down := lookEase(0.5, 0, 0.25, 1, t)
+	return float64(a.X) + float64(b.X-a.X)*across, float64(a.Y) + float64(b.Y-a.Y)*down
+}
+
+// lookHandRest is where the hand's tip rests on a thing: inside it, a little
+// right of and below its middle, so that the arrow does not lie over the
+// thing's own words more than it must.
+func lookHandRest(r lookRect, scale float64) lookPoint {
+	return lookPoint{
+		r.X + r.W/2 + int(math.Min(float64(r.W)/4, 16*scale)),
+		r.Y + r.H/2 + int(math.Min(float64(r.H)/4, 6*scale)),
+	}
+}
+
+// lookPathPieces cuts a closed line into pieces of about step pixels, so that
+// it can be drawn a part at a time at an even speed. The first point is
+// repeated at the end: the line is closed.
+func lookPathPieces(path []lookPoint, step float64) []lookPoint {
+	if len(path) < 2 || step <= 0 {
+		return path
+	}
+	var out []lookPoint
+	for i := range path {
+		a, b := path[i], path[(i+1)%len(path)]
+		far := math.Hypot(float64(b.X-a.X), float64(b.Y-a.Y))
+		n := int(math.Ceil(far / step))
+		if n < 1 {
+			n = 1
+		}
+		for k := 0; k < n; k++ {
+			t := float64(k) / float64(n)
+			out = append(out, lookPoint{a.X + int(math.Round(float64(b.X-a.X)*t)), a.Y + int(math.Round(float64(b.Y-a.Y)*t))})
+		}
+	}
+	return append(out, path[0])
+}
+
+// lookGrown is the same rectangle with a margin round it.
+func lookGrown(r lookRect, by int) lookRect {
+	return lookRect{r.X - by, r.Y - by, r.W + 2*by, r.H + 2*by}
 }

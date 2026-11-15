@@ -61,9 +61,17 @@ type lookHands interface {
 	InkTag(text string, bounds lookRect)
 	// InkEnd takes the ink away after it has stayed this long.
 	InkEnd(stay time.Duration)
-	// Ring draws a ring round a rectangle of the screen, with a few words
-	// beside it, and takes both away after they have stayed this long.
-	Ring(r lookRect, label string, stay time.Duration)
+	// Point sends Jarvis's own pointer to a rectangle of the screen: from
+	// the notch, or from where it is when it is already out. When it has
+	// landed a ring is drawn round the rectangle, with a few words beside it.
+	// Ring and words stay for that long; then the pointer goes home.
+	Point(r lookRect, label string, stay time.Duration)
+	// PointHit: the thing pointed at was clicked. Its ring and words go at
+	// once. The pointer waits where it is for the next thing a while, and
+	// goes home when none comes.
+	PointHit()
+	// PointEnd takes ring and words away and sends the pointer home now.
+	PointEnd()
 	// The window a place is in: its rectangle in screen pixels (empty when
 	// it cannot be told), and the names of what stands round that place, from
 	// the nearest outwards (the panel, the list, the page).
@@ -109,6 +117,8 @@ type NotchLook struct {
 	last lookPoint
 	// An Esc that dropped a line is still down: its coming up is ours too.
 	escHeld bool
+	// Something was pointed at and the person's click is waited for.
+	waiting *lookWait
 
 	// Something changed in the line being drawn: the tag is due a reading.
 	changed chan struct{}
@@ -134,9 +144,29 @@ type lookLine struct {
 	snapshot lookSnapshot
 }
 
+// lookClick is what came of waiting for a click on a thing that was pointed
+// at: whether a button of the pointer came up at all, whether that was on
+// the thing, and otherwise why the wait ended ("time", "replaced", "gone").
+type lookClick struct {
+	Clicked bool
+	Inside  bool
+	Why     string
+}
+
+// lookWait is one wait for such a click.
+type lookWait struct {
+	rect lookRect
+	done chan lookClick
+}
+
+// A click this close to the thing counts as on it: its ring is drawn that far out.
+const notchPointSlack = 8
+
 type lookTaken struct {
 	line   *lookLine
 	points []lookPoint
+	// When the button came up.
+	at time.Time
 }
 
 // How long a finished line waits for what its press was finding out.
@@ -193,6 +223,10 @@ func (l *NotchLook) Forget() {
 	l.mu.Lock()
 	hands := l.hands
 	l.pen.Reset()
+	l.endWait("gone")
+	if hands != nil {
+		hands.PointEnd()
+	}
 	l.hands, l.send, l.away = nil, nil, nil
 	if l.line != nil {
 		l.line.gone = true
@@ -210,11 +244,12 @@ func (l *NotchLook) Forget() {
 }
 
 // Wants reports whether the pointer is to be watched now: the talk pair is
-// down, or the button that began a line has not come up yet.
+// down, the button that began a line has not come up yet, or something was
+// pointed at and the person's click on it is waited for.
 func (l *NotchLook) Wants() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.hands != nil && (l.pen.Armed() || l.pen.Busy())
+	return l.hands != nil && (l.pen.Armed() || l.pen.Busy() || l.waiting != nil)
 }
 
 // Keys is the keyboard saying whether the talk pair, and nothing else, is
@@ -283,6 +318,8 @@ func (l *NotchLook) Down(x, y int) bool {
 		l.mu.Unlock()
 		return v.Swallow
 	}
+	// A line is begun: whatever was being pointed at is over.
+	l.endWait("replaced")
 	line := &lookLine{id: newNotchLookID(), ready: make(chan struct{})}
 	l.line = line
 	l.last = at
@@ -349,7 +386,7 @@ func (l *NotchLook) Up(x, y int) bool {
 	hands, from := l.hands, l.last
 	var job *lookTaken
 	if v.Taken != nil && l.line != nil {
-		job = &lookTaken{line: l.line, points: v.Taken}
+		job = &lookTaken{line: l.line, points: v.Taken, at: time.Now()}
 	}
 	l.mu.Unlock()
 	if hands != nil && v.Swallow {
@@ -485,7 +522,9 @@ func (l *NotchLook) tell(job lookTaken) {
 		send(notchLookPayload("taken", line.id, how, line.refused, 0, bounds, lookRect{}), nil)
 		return
 	}
+	reading := time.Now()
 	things := lookHolds(hands, job.points, false)
+	readMs := time.Since(reading).Milliseconds()
 	ink(lookTag(things), notchLookInkStay)
 	// What was circled is where the things are, when any were found: a sloppy
 	// circle round the left end of three rows is a picture of the three rows.
@@ -521,8 +560,15 @@ func (l *NotchLook) tell(job lookTaken) {
 		log.Printf("[notch] look: what was read could not be packed: %v", err)
 		return
 	}
-	// Counts and sizes, never what was read.
-	log.Printf("[notch] look: %s, %d thing(s), %d name(s) round them, picture %d bytes, window %d bytes", how, len(things), len(around), len(picture), len(window))
+	// Counts, sizes and how long it took, never what was read. The times are
+	// there because a look is joined to what is said in the same hold: one
+	// that is told long after the button came up keeps the answer waiting.
+	sinceUp := int64(0)
+	if !job.at.IsZero() {
+		sinceUp = time.Since(job.at).Milliseconds()
+	}
+	log.Printf("[notch] look: %s, %d thing(s), %d name(s) round them, picture %d bytes, window %d bytes; the things were read in %d ms, and it is told %d ms after the button came up",
+		how, len(things), len(around), len(picture), len(window), readMs, sinceUp)
 	send(notchLookPayload("taken", line.id, how, "", len(things), bounds, part), body)
 }
 
@@ -573,8 +619,18 @@ func parseNotchPoint(params map[string]any) (lookRect, string, time.Duration, er
 	return r, label, stay, nil
 }
 
-// Point draws a ring round a rectangle of the screen. An error when there is
-// nothing to draw with here, or a line is being drawn by the person.
+// endWait ends the wait for a click, if there is one, and says why. Called
+// with the lock held.
+func (l *NotchLook) endWait(why string) {
+	if w := l.waiting; w != nil {
+		l.waiting = nil
+		w.done <- lookClick{Why: why}
+	}
+}
+
+// Point sends the pointer to a rectangle of the screen and rings it. An error
+// when there is nothing to draw with here, or a line is being drawn by the
+// person.
 func (l *NotchLook) Point(r lookRect, label string, stay time.Duration) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -584,19 +640,123 @@ func (l *NotchLook) Point(r lookRect, label string, stay time.Duration) error {
 	if l.pen.Busy() {
 		return fmt.Errorf("the person is drawing a line")
 	}
+	l.endWait("replaced")
 	// A line that was finished is no longer the one on the screen: the ring takes its place.
 	l.line = nil
-	l.hands.Ring(r, label, stay)
+	l.hands.Point(r, label, stay)
 	return nil
 }
 
-// makeNotchPointHandler serves notch.point: the brain asks for a ring round
-// something it found in a window's own description of itself.
+// PointWait points at a rectangle and waits for the person to click: there,
+// or anywhere else. It comes back when a button of the pointer has come up,
+// when the wait is over, or when something else took the pointing's place.
+// The click itself is never kept from the app: it is only seen.
+func (l *NotchLook) PointWait(r lookRect, label string, wait time.Duration) (lookClick, error) {
+	l.mu.Lock()
+	hands := l.hands
+	if hands == nil {
+		l.mu.Unlock()
+		return lookClick{}, fmt.Errorf("pointing is not available on this computer")
+	}
+	if l.pen.Busy() {
+		l.mu.Unlock()
+		return lookClick{}, fmt.Errorf("the person is drawing a line")
+	}
+	l.endWait("replaced")
+	l.line = nil
+	w := &lookWait{rect: r, done: make(chan lookClick, 1)}
+	l.waiting = w
+	// Ring and words stay for the whole wait: what ends the wait takes them down.
+	hands.Point(r, label, wait+time.Second)
+	l.mu.Unlock()
+	hands.Watch()
+	select {
+	case got := <-w.done:
+		return got, nil
+	case <-time.After(wait):
+	}
+	l.mu.Lock()
+	if l.waiting == w {
+		l.waiting = nil
+		hands.PointEnd()
+	}
+	l.mu.Unlock()
+	hands.Watch()
+	// The click may have come in the same moment.
+	select {
+	case got := <-w.done:
+		return got, nil
+	default:
+		return lookClick{Why: "time"}, nil
+	}
+}
+
+// PointClear takes away whatever is being pointed at and sends the pointer
+// home. A wait for a click ends with "replaced".
+func (l *NotchLook) PointClear() {
+	l.mu.Lock()
+	hands := l.hands
+	l.endWait("replaced")
+	if hands != nil {
+		hands.PointEnd()
+	}
+	l.mu.Unlock()
+	if hands != nil {
+		hands.Watch()
+	}
+}
+
+// Clicked is a button of the pointer coming up that the look did not keep
+// for itself. When a click is waited for, this is it.
+func (l *NotchLook) Clicked(x, y int) {
+	l.mu.Lock()
+	w, hands := l.waiting, l.hands
+	if w == nil || hands == nil {
+		l.mu.Unlock()
+		return
+	}
+	// A click on the notch itself (to stop, to read what it says) is not a step.
+	if hands.Own(lookPoint{x, y}) {
+		l.mu.Unlock()
+		return
+	}
+	l.waiting = nil
+	// The ring goes at once: it is not left lying over the menu or the window the click opened.
+	hands.PointHit()
+	l.mu.Unlock()
+	w.done <- lookClick{Clicked: true, Inside: lookGrown(w.rect, notchPointSlack).holds(x, y), Why: "click"}
+	hands.Watch()
+}
+
+// How long a click on a thing that was pointed at is waited for, at the most.
+const notchPointMaxWait = 90 * time.Second
+
+// makeNotchPointHandler serves notch.point: the brain asks for the pointer to
+// go to something it found in a window's own description of itself.
+//
+//	{x, y, w, h, label, ms}            go there and ring it for ms
+//	{x, y, w, h, label, wait_ms}       the same, and answer only when the
+//	                                   person has clicked, or wait_ms is over
+//	{clear: true}                      take it away
 func makeNotchPointHandler(l *NotchLook) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
+		if clear, _ := params["clear"].(bool); clear {
+			l.PointClear()
+			return &RPCResult{Result: map[string]any{"cleared": true}}, nil
+		}
 		r, label, stay, err := parseNotchPoint(params)
 		if err != nil {
 			return nil, err
+		}
+		if ms, ok := params["wait_ms"].(float64); ok && !math.IsNaN(ms) && ms > 0 {
+			wait := min(time.Duration(ms)*time.Millisecond, notchPointMaxWait)
+			got, err := l.PointWait(r, label, wait)
+			if err != nil {
+				return nil, fmt.Errorf("notch.point: %w", err)
+			}
+			// Whether, never where: the place of a click is the person's own.
+			log.Printf("[notch] point: waited for a click: %s (clicked %v, on the thing %v)", got.Why, got.Clicked, got.Inside)
+			return &RPCResult{Result: map[string]any{"pointed": true, "clicked": got.Clicked, "inside": got.Inside, "why": got.Why}}, nil
 		}
 		if err := l.Point(r, label, stay); err != nil {
 			return nil, fmt.Errorf("notch.point: %w", err)
