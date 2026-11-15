@@ -27,7 +27,9 @@
  *   yes on the line     shows the draft, on paper, with who it goes to
  *   a lit word          the tone: the reply is written again in that manner.
  *                       The time, when the reply names one: the owner's own
- *                       time takes its place in the text
+ *                       time takes its place in the text.
+ *                       "tell me", beside what Jarvis did not know: the owner
+ *                       types it, and the reply is written again with it
  *   yes on the draft    the reply is put into the thread as a draft in Gmail,
  *                       a fuse burns, and it is sent. Saying yes is the
  *                       approval: nothing more is asked
@@ -59,6 +61,11 @@ export const MAIL_FUSE_MS = 5000;
 export const MAIL_NOTHING_AGAIN_MS = 30 * 60 * 1000;
 /** A look this recent is taken as the state of the mailbox when the owner comes to Gmail. */
 export const MAIL_LOOK_FRESH_MS = 10 * 60 * 1000;
+
+/** The word on the draft that takes what the owner tells Jarvis, and what it says before and after they have. */
+export const MAIL_TOLD_WORD = 'told';
+export const MAIL_TELL = 'tell me';
+export const MAIL_TELL_AGAIN = 'change';
 
 /** The manners a reply can be written again in. The first is the owner's own. */
 export const MAIL_TONES: Record<string, string> = { yours: '', shorter: 'shorter', warmer: 'more warmly', 'more formal': 'more formally' };
@@ -123,7 +130,11 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   to.push(`  ·  Re: ${short(row.subject, 80)}`);
   const tone = Object.keys(MAIL_TONES).find((name) => MAIL_TONES[name] === row.tone) ?? 'yours';
   const blocks: NotchBlock[] = [{ kind: 'paper', to, lines }];
-  if (row.missing) blocks.push({ kind: 'note', say: ['I did not know: ', short(row.missing, 200)] });
+  // What it did not know is not the end of it: the owner can say it, in their own words, and the reply is
+  // written again with it. One word on the sheet takes that: beside what is missing, or beside what was told.
+  const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [], label: 'Tell Jarvis', free: true, long: true } });
+  if (row.missing) blocks.push({ kind: 'note', say: ['I did not know: ', short(row.missing, 200), ...(row.told ? [] : [' ', tell(MAIL_TELL)])] });
+  if (row.told) blocks.push({ kind: 'note', say: ['You told me: ', em(short(row.told, 200)), ' ', tell(MAIL_TELL_AGAIN)] });
   if (row.found?.length) blocks.push({ kind: 'note', say: ['Found in your Drive: ', em(row.found.map((file) => short(file.name, 60)).join(', '))] });
   blocks.push({ kind: 'note', say: [note ?? 'Not sent yet.', ' Tone ', { word: { name: 'tone', value: tone, options: Object.keys(MAIL_TONES), label: 'Tone' } }] });
   return blocks;
@@ -179,7 +190,15 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       if (answer.word === 'tone' && value in MAIL_TONES && MAIL_TONES[value] !== row.tone) {
         // A new tone is a new letter: it is written again, and the paper says so while it is.
         stage.surface.update(sheet, { blocks: mailDraftBlocks({ ...row, tone: MAIL_TONES[value]! }, 'Writing it again…') });
-        const again = await watch.redraft(id, MAIL_TONES[value]!);
+        const again = await watch.redraft(id, { tone: MAIL_TONES[value]! });
+        if (stage.ended()) return 'waits';
+        if (again) row = again;
+        stage.surface.update(sheet, { blocks: mailDraftBlocks(row, again ? undefined : 'I could not write it again. This is the reply as it was.') });
+      }
+      if (answer.word === MAIL_TOLD_WORD && value && value !== MAIL_TELL && value !== MAIL_TELL_AGAIN && value !== row.told) {
+        // The owner said what was not known: it is written again with that, and the paper says so while it is.
+        stage.surface.update(sheet, { blocks: mailDraftBlocks({ ...row, told: value }, 'Writing it again…') });
+        const again = await watch.redraft(id, { told: value });
         if (stage.ended()) return 'waits';
         if (again) row = again;
         stage.surface.update(sheet, { blocks: mailDraftBlocks(row, again ? undefined : 'I could not write it again. This is the reply as it was.') });

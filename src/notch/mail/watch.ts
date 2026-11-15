@@ -27,7 +27,7 @@
  * mailbox is behind `MailReader`, and the notch hears `changed`.
  */
 import type { MailCalendarEvent, MailProposal, MailThink } from './proposer.ts';
-import { mailVoiceSamples, proposeMail } from './proposer.ts';
+import { mailTold, mailVoiceSamples, proposeMail } from './proposer.ts';
 import { mailProposalId, type MailProposalRow, type MailStore } from './store.ts';
 import { isOwner, mailFirstName, type MailOwner, type MailPerson, type MailThread } from './thread.ts';
 import { MAIL_WAIT_MIN_MS, mailMachine, mailReplyTo, mailWaiting } from './waiting.ts';
@@ -352,6 +352,7 @@ export class MailWatch {
       lookFor: proposal?.lookFor ?? '',
       found: null,
       tone: '',
+      told: '',
       model: cost.model,
       tokensIn: cost.input + cost.cached,
       tokensOut: cost.output,
@@ -368,11 +369,13 @@ export class MailWatch {
   }
 
   /**
-   * The reply for a message written again in another manner ("shorter",
-   * "more formal"), for the thread as it stands. Null when the thread has
-   * moved on or the model gave nothing: the reply that was there stays.
+   * The reply for a message written again, for the thread as it stands: in
+   * another manner ("shorter", "more formal"), or with what the owner told
+   * Jarvis after it said what it did not know. What is not changed stays as
+   * it was asked before. Null when the thread has moved on or the model gave
+   * nothing: the reply that was there stays.
    */
-  async redraft(id: string, tone: string): Promise<MailProposalRow | null> {
+  async redraft(id: string, change: { tone?: string; told?: string }): Promise<MailProposalRow | null> {
     const row = this.deps.store.proposal(id);
     const way = row?.state === 'ready' ? await this.deps.reader() : null;
     if (!row || !way) return null;
@@ -381,6 +384,8 @@ export class MailWatch {
     const last = thread?.messages.at(-1);
     if (!thread || !last || last.at !== row.messageAt || isOwner(last.from, owner)) return null;
     const at = this.now();
+    const tone = change.tone ?? row.tone;
+    const told = mailTold(change.told ?? row.told);
     const calendar = (await this.deps.calendar?.(at, at + MAIL_CALENDAR_AHEAD_MS).catch(() => null)) ?? null;
     const made = await proposeMail({
       thread,
@@ -391,6 +396,7 @@ export class MailWatch {
       now: at,
       zone: this.deps.zone,
       manner: tone,
+      ...(told ? { told } : {}),
     }, this.deps.think).catch(() => null);
     const spent = made?.cost ?? { model: row.model, input: 0, output: 0, cached: 0 };
     const next: MailProposalRow = {
@@ -398,7 +404,7 @@ export class MailWatch {
       tokensIn: row.tokensIn + spent.input + spent.cached,
       tokensOut: row.tokensOut + spent.output,
       updatedAt: at,
-      ...(made?.proposal?.needsReply ? { draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone } : {}),
+      ...(made?.proposal?.needsReply ? { draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone, told } : {}),
     };
     this.deps.store.put(next);
     return made?.proposal?.needsReply ? next : null;

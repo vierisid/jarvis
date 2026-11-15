@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mailPerson, type MailMessage, type MailThread } from './thread.ts';
 import {
-  MAIL_MESSAGE_CHARS, MAIL_REPLY_MAX, MAIL_THREAD_CHARS, mailCalendarLine, mailProposalMessages, mailThreadText, mailVoiceSamples, parseMailProposal, proposeMail,
+  MAIL_MESSAGE_CHARS, MAIL_REPLY_MAX, MAIL_THREAD_CHARS, mailCalendarLine, mailProposalMessages, mailTold, mailZoneText, mailThreadText, mailVoiceSamples, parseMailProposal, proposeMail,
   type MailProposalInput,
 } from './proposer.ts';
 
@@ -22,7 +22,7 @@ describe('what the model is given', () => {
   test('the thread, marked as outside content, with who is the owner and when each was sent', () => {
     const [system, user] = mailProposalMessages(input());
     expect(system!.content).toContain('You prepare email replies for Sam.');
-    expect(user!.content).toContain('It is Sat, 14 Nov 2026, 09:00.');
+    expect(user!.content).toContain("It is Sat, 14 Nov 2026, 09:00, in Sam's time zone: Coordinated Universal Time, UTC+0.");
     expect(user!.content).toContain('From: Sam Rossi <sam@northwind.example> (this is Sam)');
     expect(user!.content).toContain('From: Leo Bianchi <leo@lumen.example>\nTo: Sam Rossi <sam@northwind.example>\nSent: Fri, 13 Nov 2026, 09:00');
     // The mail sits between the marks, never before them.
@@ -42,6 +42,26 @@ describe('what the model is given', () => {
     expect(system!.content).toContain('When they sent a link to book a time with them, do not propose times and do not ask for a link');
     // A message with no files has no line about files.
     expect(mailProposalMessages(input())[1]!.content).not.toContain('Attached:');
+  });
+
+  // Found on the owner's first real use, 15 November 2026: a draft said "I did not know: Vieri's time zone".
+  test('the owner\'s time zone is given as a person says it, with the rule never to call it missing', () => {
+    expect(mailZoneText(NOW, 'Europe/Rome')).toBe('Central European Standard Time, UTC+1');
+    expect(mailZoneText(Date.UTC(2026, 6, 1), 'Europe/Rome')).toBe('Central European Summer Time, UTC+2');
+    expect(mailZoneText(NOW, 'America/New_York')).toBe('Eastern Standard Time, UTC-5');
+    expect(mailZoneText(NOW, 'Not/AZone')).toBe('');
+    const [system, user] = mailProposalMessages(input({ zone: 'Europe/Rome' }));
+    expect(user!.content).toContain("It is Sat, 14 Nov 2026, 10:00, in Sam's time zone: Central European Standard Time, UTC+1.");
+    expect(system!.content).toContain("You know Sam's time zone: it is given with the date. When they are asked for it, say it. Never name it as missing.");
+  });
+
+  test('what the owner told is one line of plain text, theirs, and stands before the mail', () => {
+    expect(mailTold('  Tuesday\n at 15:00\tworks \u0007 ')).toBe('Tuesday at 15:00 works');
+    expect(mailTold('x'.repeat(500)).length).toBe(200);
+    const user = mailProposalMessages(input({ told: 'Tuesday at 15:00 works' }))[1]!.content;
+    expect(user).toContain('Sam told you, for this reply: "Tuesday at 15:00 works". This is true and it is theirs to say: use it in the reply, and do not name as missing what it answers.');
+    expect(user.indexOf('told you, for this reply')).toBeLessThan(user.indexOf('<<<UNTRUSTED_CONTENT'));
+    expect(mailProposalMessages(input())[1]!.content).not.toContain('told you, for this reply');
   });
 
   // A mail that gives orders is still a mail: it never reaches the instructions.
