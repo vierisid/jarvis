@@ -62,7 +62,7 @@ export interface NotchMailLayer {
   store: MailStore;
   watch: MailWatch;
   mail: NotchMail;
-  /** The person has come to a site in their browser. */
+  /** The site in front has changed: the one the person has come to, or "" when they have left for no site. */
   arrived(site: string): void;
   /** What was sent today, for the list of what was done. */
   sentSince(since: number): { at: number; text: string; small: string }[];
@@ -94,6 +94,9 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
   };
 
   let mail: NotchMail | null = null;
+  /** Whether Gmail is the site in front: there a reply speaks up as soon as it is prepared, not only on arrival. */
+  let inGmail = false;
+  const speak = (): void => { void mail?.arrived().catch((error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`)); };
   const watch = new MailWatch({
     store,
     think: deps.think,
@@ -107,7 +110,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     },
     calendar,
     files: async (words) => { const tab = page(); return tab ? turn.take(() => browserDriveSearch(tab, words, { most: 4 })) : null; },
-    changed: () => mail?.sync(),
+    changed: () => { mail?.sync(); if (inGmail) speak(); },
     paused: deps.paused,
     modelReady: deps.modelReady,
     now,
@@ -148,7 +151,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     store,
     watch,
     mail,
-    arrived: (site) => { if (site === GMAIL) void mail!.arrived().catch((error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`)); },
+    arrived: (site) => { inGmail = site === GMAIL; if (inGmail) speak(); },
     sentSince: (since) => store.sentSince(since).map((row) => ({
       at: row.sentAt ?? row.updatedAt,
       text: `Replied to ${mailFirstName(row.who)}: ${row.subject}`,
