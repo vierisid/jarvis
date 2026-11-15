@@ -28,6 +28,8 @@ export const NOTCH_CALL_AFTER_MS = 60 * 1000;
 export const NOTCH_CALL_ENDS_AFTER_MS = 15 * 1000;
 /** No call lasts this long: what says so is a record that was never closed. */
 export const NOTCH_CALL_MOST_MS = 3 * 60 * 60 * 1000;
+/** How often "on a call" is tried again while the notch is taken by something the person is doing. */
+export const NOTCH_CALL_SAY_AGAIN_MS = 5 * 1000;
 /** How long the connection has to be gone before it is said: a blink is not said. */
 export const NOTCH_OFFLINE_AFTER_MS = 8 * 1000;
 
@@ -77,6 +79,9 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
   let longest: unknown = null;
   let parked = -1;
   let parking: unknown = null;
+  /** Whether the inbox is held for the call: it is from the moment the call was said. */
+  let holding = false;
+  let saying: unknown = null;
 
   const held = (): number => Math.max(0, inbox.count() - waitedBefore);
   const park = (): void => {
@@ -92,11 +97,19 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     callSince = now();
     waitedBefore = inbox.count();
     log('[notch] on a call: everything is held');
-    // Said once, if the notch is free to say it. Then nothing more comes until the call is over.
-    const hold = (): void => { if (inCall) { inbox.hold(HOLD); parked = -1; park(); } };
-    if (deps.asleep?.() || !inbox.present('call', async (stage) => {
-      try { await stage.say(['On a call. I hold everything until you are done.'], 3000, { mood: 'focus' }); } finally { hold(); }
-    })) hold();
+    // Said once, when the notch is free to say it. Then nothing more comes until the call is over.
+    // Something the person is in the middle of on the notch is not taken from them for it: it waits.
+    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD); parked = -1; park(); } };
+    const say = (): void => {
+      saying = null;
+      if (!inCall || holding) return;
+      if (deps.asleep?.()) { hold(); return; }
+      const said = inbox.present('call', async (stage) => {
+        try { await stage.say(['On a call. I hold everything until you are done.'], 3000, { mood: 'focus' }); } finally { hold(); }
+      });
+      if (!said) saying = clock.setTimeout(say, NOTCH_CALL_SAY_AGAIN_MS);
+    };
+    say();
     longest = clock.setTimeout(() => { longest = null; log('[notch] a call of three hours is taken to be over'); end(); }, NOTCH_CALL_MOST_MS);
   }
 
@@ -105,6 +118,10 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     inCall = false;
     if (longest) { clock.clearTimeout(longest); longest = null; }
     if (parking) { clock.clearTimeout(parking); parking = null; }
+    if (saying) { clock.clearTimeout(saying); saying = null; }
+    // It was never said, so nothing was held: the call came and went while the person was busy on the notch.
+    if (!holding) { log('[notch] the call is over before it was said'); return; }
+    holding = false;
     const many = held();
     const minutes = Math.round((now() - callSince) / 60_000);
     log(`[notch] the call is over after ${minutes} min: ${many} held`);
@@ -196,8 +213,8 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     online: () => isOnline,
     stop: () => {
       stopped = true;
-      for (const timer of [starting, ending, longest, parking, goingOffline]) if (timer) clock.clearTimeout(timer);
-      if (inCall) { inCall = false; surface.act({ park: 0 }); inbox.release(HOLD); }
+      for (const timer of [starting, ending, longest, parking, saying, goingOffline]) if (timer) clock.clearTimeout(timer);
+      if (inCall) { inCall = false; surface.act({ park: 0 }); if (holding) inbox.release(HOLD); holding = false; }
     },
   };
 }
