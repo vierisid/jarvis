@@ -578,25 +578,85 @@ func lookTag(things []lookThing) string {
 // notchLookTold is everything about one look that is words: it travels beside
 // the picture, not in the event's payload, because a payload is not private.
 type notchLookTold struct {
-	App    string      `json:"app,omitempty"`
-	Title  string      `json:"title,omitempty"`
+	App   string `json:"app,omitempty"`
+	Title string `json:"title,omitempty"`
+	// What the things stand in, from the nearest outwards: the names of the
+	// panel, the list, the page round them. It is what tells a number on a
+	// dashboard from the same number anywhere else.
+	Around []string    `json:"around,omitempty"`
 	Things []lookThing `json:"things"`
+	// How many bytes of what follows the words are the picture of what was
+	// circled. What comes after those is a second picture: the whole window
+	// round it, made smaller.
+	PictureBytes int `json:"picture_bytes"`
 }
 
 // notchLookBody packs what was read and the picture into one piece: four
 // bytes saying how long the words are, the words as JSON, then the picture.
-func notchLookBody(told notchLookTold, picture []byte) ([]byte, error) {
+func notchLookBody(told notchLookTold, picture, window []byte) ([]byte, error) {
 	if told.Things == nil {
 		told.Things = []lookThing{}
 	}
+	told.PictureBytes = len(picture)
 	words, err := json.Marshal(told)
 	if err != nil {
 		return nil, err
 	}
-	body := make([]byte, 4, 4+len(words)+len(picture))
+	body := make([]byte, 4, 4+len(words)+len(picture)+len(window))
 	binary.BigEndian.PutUint32(body, uint32(len(words)))
 	body = append(body, words...)
-	return append(body, picture...), nil
+	body = append(body, picture...)
+	return append(body, window...), nil
+}
+
+// The most names of what the things stand in that are told, and the longest
+// side of the picture of the window round them.
+const (
+	notchLookMaxAround  = 5
+	notchLookWindowSide = 1400
+)
+
+// lookAroundNames keeps the names of what a thing stands in: cleaned, each
+// once, without the thing's own name and without the window's title (which is
+// told by itself), the nearest first.
+func lookAroundNames(names []string, own, title string) []string {
+	var out []string
+	seen := map[string]bool{lookClean(own): true, lookClean(title): true, "": true}
+	for _, name := range names {
+		name = lookClean(name)
+		if utf8.RuneCountInString(name) > 80 {
+			name = string([]rune(name)[:79]) + "…"
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+		if len(out) == notchLookMaxAround {
+			break
+		}
+	}
+	return out
+}
+
+// lookWindowWorthIt reports whether a picture of the whole window says more
+// than the picture of what was circled already does: it has to be a good deal
+// larger.
+func lookWindowWorthIt(window, picture lookRect) bool {
+	if window.empty() {
+		return false
+	}
+	return picture.empty() || window.W*window.H >= 2*picture.W*picture.H
+}
+
+// lookWithin is the part of a that lies inside b.
+func lookWithin(a, b lookRect) lookRect {
+	x0, y0 := max(a.X, b.X), max(a.Y, b.Y)
+	x1, y1 := min(a.X+a.W, b.X+b.W), min(a.Y+a.H, b.Y+b.H)
+	if x1 <= x0 || y1 <= y0 {
+		return lookRect{}
+	}
+	return lookRect{x0, y0, x1 - x0, y1 - y0}
 }
 
 // notchLookPayload is the part of the event that is not words: how the look

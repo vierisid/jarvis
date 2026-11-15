@@ -64,6 +64,11 @@ type lookHands interface {
 	// Ring draws a ring round a rectangle of the screen, with a few words
 	// beside it, and takes both away after they have stayed this long.
 	Ring(r lookRect, label string, stay time.Duration)
+	// The window a place is in: its rectangle in screen pixels (empty when
+	// it cannot be told), and the names of what stands round that place, from
+	// the nearest outwards (the panel, the list, the page).
+	WindowRect(at lookPoint) lookRect
+	Around(at lookPoint) []string
 	// What is at a place, and what a line holds. Both may take a while.
 	// light: only what the tag needs (what kind of thing, and the name of
 	// one), not what is written inside each.
@@ -75,6 +80,9 @@ type lookHands interface {
 type lookSnapshot interface {
 	// Cut gives a part of it as an image file (PNG), or nil.
 	Cut(part lookRect) []byte
+	// CutSmall is Cut, made smaller when its longest side would be more than
+	// most pixels.
+	CutSmall(part lookRect, most int) []byte
 }
 
 const (
@@ -487,7 +495,12 @@ func (l *NotchLook) tell(job lookTaken) {
 	}
 	middle := lookPoint{bounds.X + bounds.W/2, bounds.Y + bounds.H/2}
 	app, title := hands.Front(middle)
-	var picture []byte
+	own := ""
+	if len(things) > 0 {
+		own = things[0].Name
+	}
+	around := lookAroundNames(hands.Around(middle), own, title)
+	var picture, window []byte
 	part := lookRect{}
 	if line.snapshot != nil {
 		part = lookPictureRect(seen, line.screen)
@@ -495,16 +508,21 @@ func (l *NotchLook) tell(job lookTaken) {
 		if picture == nil {
 			part = lookRect{}
 		}
-		// The copy of the whole display is let go as soon as the picture is cut.
+		// And the whole window round it, smaller: what a thing means is told
+		// by what stands round it, and a close picture leaves that out.
+		if whole := lookWithin(hands.WindowRect(middle), line.screen); lookWindowWorthIt(whole, part) {
+			window = line.snapshot.CutSmall(whole, notchLookWindowSide)
+		}
+		// The copy of the whole display is let go as soon as the pictures are cut.
 		line.snapshot = nil
 	}
-	body, err := notchLookBody(notchLookTold{App: app, Title: lookClean(title), Things: things}, picture)
+	body, err := notchLookBody(notchLookTold{App: app, Title: lookClean(title), Around: around, Things: things}, picture, window)
 	if err != nil {
 		log.Printf("[notch] look: what was read could not be packed: %v", err)
 		return
 	}
 	// Counts and sizes, never what was read.
-	log.Printf("[notch] look: %s, %d thing(s), picture %d bytes", how, len(things), len(picture))
+	log.Printf("[notch] look: %s, %d thing(s), %d name(s) round them, picture %d bytes, window %d bytes", how, len(things), len(around), len(picture), len(window))
 	send(notchLookPayload("taken", line.id, how, "", len(things), bounds, part), body)
 }
 

@@ -186,6 +186,8 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	stoleFocus := false
+	// The last window in front that was somebody else's: where the keyboard goes back to.
+	var lastOther uintptr
 	first := true
 	var (
 		video      notchVideoWatch
@@ -284,9 +286,26 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 			}
 		}
 		fg, _, _ := procGetForegroundWindow.Call()
+		if fg != 0 && fg != w.hwnd && !ownWindow(fg) {
+			lastOther = fg
+		}
 		holds := fg == w.hwnd && !w.hasFocus.Load()
-		if holds && !stoleFocus {
-			log.Printf("[notch] WARNING: the notch has the keyboard without having asked for it")
+		if holds {
+			// Windows gave the notch the keyboard without the page asking: a
+			// file was let go on it, or a click landed in a way that made it
+			// the window in front. It goes back to the window the person was
+			// in, which is where they still are.
+			returned := false
+			if ok, _, _ := procIsWindow.Call(lastOther); lastOther != 0 && ok != 0 {
+				setWindowLong(w.hwnd, gwlExStyle, getWindowLong(w.hwnd, gwlExStyle)|wsExNoActivate)
+				procSetForegroundWindow.Call(lastOther)
+				after, _, _ := procGetForegroundWindow.Call()
+				returned = after == lastOther
+			}
+			if !stoleFocus || returned {
+				log.Printf("[notch] the notch had the keyboard without having asked for it; given back: %v", returned)
+			}
+			holds = !returned
 		}
 		stoleFocus = holds
 	}

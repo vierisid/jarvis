@@ -173,7 +173,7 @@ import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchMailModelReady, notchScriptDeps, notchTurnNote, wireOwnerWord } from "./notch-asks.ts";
+import { notchAskDeps, notchMailModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -4618,6 +4618,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // it lands on reads as a delete or a payment, so that has to be known
       // before the click (authority/owner-word.ts).
       wireOwnerWord();
+      // A question on the notch is told which app is in front (notchFrontNote).
+      setNotchFrontSource(() => notchReal?.where?.front() ?? null);
       // A capture that was on its way when the desktop app started looking
       // away is not kept (awareness/capture-guard.ts).
       setCaptureGuard((id, app) => notchReal?.where?.mayKeep(id, app) ?? true);

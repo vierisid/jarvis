@@ -26,6 +26,7 @@ package main
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -179,6 +180,8 @@ type NotchWhere struct {
 	icons map[string][]byte
 	// What was last said, so that nothing is said twice.
 	last string
+	// Why it was last not looking, for the log: a change is written down.
+	lastLook notchLook
 	// Saves the list in this machine's settings.
 	save func(list []string) error
 }
@@ -371,6 +374,21 @@ func (w *NotchWhere) tell() {
 		return
 	}
 	w.last = said
+	// Why, and never where: a notch that turns its eyes aside for no reason
+	// the person can see has to be explainable from the log afterwards.
+	if look != w.lastLook {
+		w.lastLook = look
+		switch {
+		case look == notchLooking:
+			log.Printf("[notch] where: looking again")
+		case look == notchLookBank && w.front.Site != "":
+			log.Printf("[notch] where: looking away (bank, by the site's address)")
+		case look == notchLookBank:
+			log.Printf("[notch] where: looking away (bank, by a word in the window's title)")
+		default:
+			log.Printf("[notch] where: looking away (%s)", look)
+		}
+	}
 	var icon []byte
 	// The picture goes once per connection, and never while looking away:
 	// then no app is shown at all.
