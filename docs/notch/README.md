@@ -880,6 +880,146 @@ What is not done, or not proven, in pass 8:
 - Which events are meetings is read from how Google Calendar words an
   invitation ("Accepted", "Needs RSVP"), in English.
 
+## Look at this, where is, and a dropped file
+
+Pass 9. Three ways of showing Jarvis something instead of describing it.
+Built for Windows; what is not, and what has not been seen on a real
+machine, is listed under the invariants.
+
+75. **While the talk pair is held, the pointer is Jarvis's.** A press with
+    the pair down, and its letting go, are kept from the app in front
+    (`sidecar/notch_looker.go`). A press that hardly moves is a click on the
+    one thing under it; a press and a line is a circle round what is meant.
+    Moving the pointer is never kept from anything, and a click a program
+    sent is never taken: only a person looks. The pointer is the look's from
+    the moment both keys are down, not from when the hold has become
+    talking, because a click is quicker than that. A press on one of Jarvis's
+    own windows is that window's.
+76. **The pointer is watched only then.** The mouse hook exists only while
+    the pair is down or a line is being drawn. At every other time nothing of
+    Jarvis stands between the mouse and the apps (`lookWindows.watchThread`).
+77. **The ink dims nothing and takes no click.** The line is drawn in a
+    window over the display it was begun on. Every pixel the marker has not
+    touched is clear, a click goes through it, and so does every question
+    about what is at a place. It is a marker: one strength where the line
+    crosses itself, nothing darker inside (`notch_ink.go`). This program
+    knows each display's own scale, so the pointer, the ink and the elements
+    are in the same real pixels at any scale and on any display.
+78. **A circle is drawn fast and not neatly.** A thing is inside a line when
+    the line's inside covers the middle of the thing: twelve pixels of the
+    line through its centre, across or down, or half of a thing smaller than
+    that (`lookCovers`). So a circle round the left end of three rows means
+    those rows, and the row above that its top edge runs through is not
+    meant. A line with no inside (a stroke under a word) means what it runs
+    over.
+79. **What is read is the app's own description of itself.** From the word
+    under a place the look climbs to the row it is in, when that row is about
+    as tall as the word; failing that to the nearest thing that is one by
+    itself (a button, a link, a field); failing that it keeps the word
+    (`lookSettle`). Things that stand side by side in one container are read
+    from the container, so a row between two places that were asked about is
+    not left out. The cells of a spreadsheet are gathered into rows when the
+    line took several of each row. What is typed into a password field is
+    never read.
+80. **Nothing is read where Jarvis looks away, and a quick click waits for
+    that to be known.** Whether the window is one Jarvis looks away from (a
+    password, a bank, an app on the list: 45 and 46) is decided on the machine
+    before anything is read or copied. Finding it out takes a few
+    milliseconds beside the watch on the pointer, and a click can be done
+    before it is known: so every line has its own state, and nothing is read
+    or told until its press has finished finding out (`lookLine.ready`). The
+    press is still kept from the app, and the notch says why it did not
+    look.
+81. **The picture is of the screen, not of the line.** A copy of the display
+    is taken at the press, before any ink is on it. When the line is finished
+    the picture is cut from it: what was circled, or the things that were
+    found there when they reach further, with room round them, at most 1,600
+    pixels a side. The copy is let go as soon as the picture is cut.
+82. **What was read never travels in a payload, and never reaches a log.**
+    The event `notch.look` says how the look was made, how many things it
+    holds and where. The words and the picture travel beside it (four bytes
+    of length, the words as JSON, the PNG). The event is not passed round the
+    dashboards. Both sides log counts and sizes only.
+83. **A look and what is said with the keys held are one gesture.** The
+    microphone is open while a line is drawn, because the same keys are
+    held. Nothing said: the look answers by itself, in one line, and the
+    listening line leaves without "I did not catch that". Something said: it
+    runs as an instruction that carries what was read
+    (`circled-on-screen.txt`) and the picture (`circled-on-screen.png`) as
+    the turn's attachments, which is where the model reads a file as outside
+    content. Esc while a line is drawn throws the line away, reaches no app,
+    and ends the talking as a slip (`notchKeyboard.key`).
+84. **Several things are counted and added up without a model.** "3 rows.
+    They add up to 1,291.00." is arithmetic (`lookSums`): a column is added
+    when every row has a number there, cents are added as cents, and a unit
+    is said only when every number has the same one. One thing is put to the
+    model for one sentence, inside the marks for outside content, with what
+    the thing itself says as the fallback. Where the app said nothing about
+    itself the picture is asked about.
+85. **"Where is…?" is answered from the element's own place.** A question
+    that begins like one (`whereQuestion`) reads the window the person is in
+    (`notch.window`), gives a model the named things in it as a numbered
+    list, and takes back a number. The ring is drawn round that element's own
+    rectangle (`notch.point`): never round a place the model wrote. The
+    window read is the one in front unless that is the notch itself (it has
+    the keyboard while something is typed), then the first one behind it that
+    is somebody else's. When the window says nothing useful, or the model
+    finds no answer, the question runs as any other instruction. The read
+    runs beside the working line, so it can be stopped.
+86. **A dropped file is the page's to take, and never the browser's.** The
+    page says to the brain that a file is over the notch, and sends a file
+    that is let go as the body of one request to `/api/notch/drop`, which
+    answers only a signed-in page of this brain (the secret of the
+    development routes never lets a file in). The page stops every drop,
+    of a file or of anything else, from doing what a browser does with one,
+    which is to leave the page and show what was dropped.
+87. **What cannot be read is refused in a sentence that says what it is.**
+    What can be read is what a chat attachment can be: text, Markdown, CSV,
+    JSON, a PDF with text in it (40 pages, 1 MB), a PNG or a JPEG (4 MB).
+    Such a file is asked about at once, as an instruction that carries it.
+    Anything else gets its own sentence and what would work instead
+    ("Payouts.xlsx is a spreadsheet. I cannot read those yet. Saved as CSV, I
+    can."). A file too large is not sent at all: the brain is told its name,
+    kind and size. A file's name is shown and given to the model; it is never
+    logged.
+88. **An instruction can carry files, and nothing is left half kept.** The
+    files of a notch turn are kept as its attachments by the notch's door
+    (`src/daemon/notch-asks.ts`). When the turn cannot start they are taken
+    back. When they cannot be kept, nothing is asked and the reason is what
+    the notch says. A Notch chat the owner had closed is opened again to hold
+    them.
+
+What is not done, or not proven, in pass 9:
+
+- **None of it has run on a real machine.** The pen, the geometry, the ink,
+  what is told and the keyboard's part are tested without a platform, and
+  the Windows code compiles and its tests pass on GitHub. The hook, the ink
+  window, the tag, the reading of real apps, the picture and the ring have
+  not been seen.
+- **The arrow keys are not built.** The plan has "hold the pair, move with
+  the arrows, Enter". With the pair held those are Windows' own shortcuts:
+  Ctrl + Win + Left and Right switch desktops, Ctrl + Win + Enter starts
+  Narrator. Taking them would break both. That is the owner's to decide.
+- **Nothing of pass 9 is built for the Mac.** There the look has no hands
+  (`notch_look_other.go`), so the pair only talks, and "where is" runs as an
+  ordinary instruction. The plan's rebuild of the Mac's element reading on
+  the native accessibility interface is not started.
+- **How well a real app can be named is not known.** The reading is general,
+  not written for Excel, Explorer or Chrome. What each of them calls a row or
+  a cell is known from documentation, not from looking. Chrome is the known
+  weak spot: it describes a page to other programs only once it believes one
+  is listening.
+- **Whether Windows hands a dragged file to the notch's window** has not been
+  tried. The notch at rest is 88 by 30 pixels; it grows once a file is over
+  it.
+- **A dropped file is summarised and nothing else.** The prototype's "ask by
+  typing, by voice, or pick a suggestion" for a file that waits is not built.
+- **The line stays inside the display it was begun on.** A circle drawn
+  across two displays is cut at the edge of the first.
+- **A PDF that is only scanned pages has no text to read** and is refused as
+  one: nothing is guessed from its pictures.
+- "Where is" is known by how a question begins, in English.
+
 ## The keys
 
 | What | Keys | How it is told |
@@ -887,6 +1027,7 @@ What is not done, or not proven, in pass 8:
 | Talk | hold Ctrl + Win (Mac: Ctrl + Option) | the pair down alone for 150 ms; ends when either comes up or any other key goes down |
 | Yes | tap Win + Alt (Mac: Option + Cmd) | the two down within 0.7 s of each other and up again within 1.5 s, with no other key |
 | Esc | Esc | only while the notch has something on it, and never with a modifier |
+| Look | hold the talk pair, then click or draw with the mouse | the pair down alone, from the first moment; the press and its letting go are kept from the app in front (75) |
 | Stop everything | Esc twice | the second within 0.4 s of one that was taken |
 
 - A pair is two different modifier keys. Left and right are the same key.
@@ -1078,6 +1219,9 @@ What is not done, or not proven, in pass 8:
 | desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
+| desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the picture beside it (four bytes of length, `{app, title, things: [{kind, name, value, parts}]}` as JSON, then a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
+| brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}`, places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away |
+| brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s) | `{pointed: true}`. Draws a ring round the rectangle. Refused while the person is drawing a line |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through seven functions on `window`:
@@ -1120,6 +1264,7 @@ time; a new `show` replaces it.
 | page | `answer {id, act, ...}` | What the person did with the line `id` |
 | page | `open` | A click on the resting notch, or yes with nothing on it |
 | page | `stop` | Esc twice: stop everything, and start nothing until told |
+| page | `drag {state}` | A file is over the notch (`over`), was taken away again (`left`), or was let go and did not reach the brain (`lost`). The file itself goes in one request to `/api/notch/drop`: its bytes as the body, `x-notch-file` (its name, percent-encoded), `x-notch-size` and `x-notch-count` as headers |
 
 A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 (yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`
