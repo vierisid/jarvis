@@ -35,8 +35,18 @@
  *                       approval: nothing more is asked
  *   Esc while it burns  takes the yes back, and nothing else: the draft is
  *                       removed from Gmail, and the reply goes back to waiting
- *   Esc before that     is a no: the reply is turned down and does not come back
+ *   Esc before that     on the line that offered the reply, and on its draft,
+ *                       is a no: the reply is turned down and does not come
+ *                       back. On a draft the owner opened from the list it
+ *                       closes the draft and goes back to the list: the list
+ *                       is a menu, and leaving a page of it throws nothing
+ *                       away. "Not needed", under every draft, turns one down
  *   left alone          it folds and goes back to the count. Not now is not no
+ *
+ * A draft the owner asked to see comes up at once. Whether it is still an
+ * answer to the last word in its thread is asked of the mailbox behind it, and
+ * if the thread has moved on the draft is taken away with a line that says so.
+ * Before anything is written into the thread it is asked again, and waited for.
  *
  * Before the line is shown, the mailbox is asked whether the reply is still
  * an answer to the last word in its thread. Before anything is written or
@@ -61,6 +71,9 @@ export const MAIL_FUSE_MS = 5000;
 export const MAIL_NOTHING_AGAIN_MS = 30 * 60 * 1000;
 /** A look this recent is taken as the state of the mailbox when the owner comes to Gmail. */
 export const MAIL_LOOK_FRESH_MS = 10 * 60 * 1000;
+
+/** The link under a draft that turns the reply down for good. */
+export const MAIL_NOT_NEEDED = 'not-needed';
 
 /** The word on the draft that takes what the owner tells Jarvis, and what it says before and after they have. */
 export const MAIL_TOLD_WORD = 'told';
@@ -129,7 +142,8 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   if (row.cc.length) to.push('  ·  Copy to ', em(names(row.cc)));
   to.push(`  ·  Re: ${short(row.subject, 80)}`);
   const tone = Object.keys(MAIL_TONES).find((name) => MAIL_TONES[name] === row.tone) ?? 'yours';
-  const blocks: NotchBlock[] = [{ kind: 'paper', to, lines }];
+  // What the thread is, before the reply to it: the owner knows what they are answering without opening the mail.
+  const blocks: NotchBlock[] = [...(row.about ? [{ kind: 'note' as const, say: [short(row.about, 180)] }] : []), { kind: 'paper', to, lines }];
   // What it did not know is not the end of it: the owner can say it, in their own words, and the reply is
   // written again with it. One word on the sheet takes that: beside what is missing, or beside what was told.
   const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [], label: 'Tell Jarvis', free: true, long: true } });
@@ -137,6 +151,8 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   if (row.told) blocks.push({ kind: 'note', say: ['You told me: ', em(short(row.told, 200)), ' ', tell(MAIL_TELL_AGAIN)] });
   if (row.found?.length) blocks.push({ kind: 'note', say: ['Found in your Drive: ', em(row.found.map((file) => short(file.name, 60)).join(', '))] });
   blocks.push({ kind: 'note', say: [note ?? 'Not sent yet.', ' Tone ', { word: { name: 'tone', value: tone, options: Object.keys(MAIL_TONES), label: 'Tone' } }] });
+  // Turning a reply down for good is said in words, on the draft: it is not what closing a draft means.
+  blocks.push({ kind: 'buttons', buttons: [{ id: MAIL_NOT_NEEDED, label: 'Not needed', quiet: true }] });
   return blocks;
 }
 
@@ -163,22 +179,46 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * once: the owner picked it from the list. Comes back `settled` when the
    * reply no longer waits, `waits` when it does.
    */
-  async function play(stage: NotchStage, id: string, options: { line: boolean }): Promise<NotchItemEnd> {
+  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean }): Promise<NotchItemEnd> {
     let row = store.proposal(id);
     if (!row || row.state !== 'ready') return 'settled';
     const who = mailFirstName(row.who);
+    // The owner asked to see it: it comes up now, and the mailbox is asked behind it whether the thread
+    // has moved on. Found on the owner's first evening with it (15 November 2026): asked first, and in
+    // three questions that each waited their turn behind a look through the month, a draft took
+    // seconds to open.
+    const GONE = Symbol('the thread moved on');
+    const gone: Promise<typeof GONE> | null = options.asked
+      ? new Promise((resolve) => { void watch.stillWaits(id).then((still) => { if (still === false) resolve(GONE); }, () => {}); })
+      : null;
+    const unlessGone = <T>(wait: Promise<T>): Promise<T | typeof GONE> => {
+      if (!gone) return wait;
+      // The wait that is left behind ends with the stage: that is not a failure of anything.
+      wait.catch(() => {});
+      return Promise.race([wait, gone]);
+    };
+    const movedOn = async (): Promise<NotchItemEnd> => {
+      store.move(id, 'ready', 'answered', now());
+      await stage.say(['The thread has moved on since. This reply is no longer needed.'], 3400, { src: 'mail' });
+      return 'settled';
+    };
     if (options.line) {
-      const first = await stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' });
+      const first = await unlessGone(stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' }));
+      if (first === GONE) return movedOn();
       if (first.act === 'fold') return 'waits';
       if (first.act === 'no') return decline(id);
     }
 
     // The draft, on paper. Only yes and Esc answer it: a click somewhere else is neither.
     const sheet = stage.id();
-    stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row), yes: 'send', stay: true, src: 'mail' });
+    stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row), yes: 'send', stay: true, ...(options.keep ? { no: options.keep } : {}), src: 'mail' });
     for (;;) {
-      const answer = await stage.answer(sheet, ['yes', 'no', 'word']);
-      if (answer.act === 'no') return decline(id);
+      const answer = await unlessGone(stage.answer(sheet, ['yes', 'no', 'word', 'button']));
+      if (answer === GONE) return movedOn();
+      if (answer.act === 'button') { if (answer.button === MAIL_NOT_NEEDED) return decline(id); continue; }
+      // Esc. On a draft the owner opened from the list or from Home it closes the draft, and the sheet
+      // says so beside the key: the reply is kept. On the draft of a reply that was offered, it is a no.
+      if (answer.act === 'no') return options.keep ? 'waits' : decline(id);
       if (answer.act === 'yes') break;
       const value = (answer.value ?? '').trim();
       if (answer.word === 'when' && row.time && value && value !== row.time && row.draft.includes(row.time)) {
@@ -282,7 +322,12 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
 
   /** The list of the replies that wait: who, and about what. A row opens its reply. */
   const listBlocks = (ready: MailProposalRow[]): NotchBlock[] =>
-    ready.map((row) => ({ kind: 'row', id: row.thread, lead: short(mailFirstName(row.who), 18), say: [short(row.subject, 70)], go: true }));
+    ready.map((row) => {
+      const who = mailFirstName(row.who);
+      // The row begins with who it is: a sentence that begins with them too goes on from there.
+      const about = row.about.startsWith(`${who} `) ? row.about.slice(who.length + 1) : row.about;
+      return { kind: 'row', id: row.thread, lead: short(who, 18), say: [short(about || row.subject, 110)], go: true };
+    });
 
   /** The list, until it is closed or nothing is left in it. Every reply in it has been seen from then on. */
   async function list(stage: NotchStage): Promise<void> {
@@ -293,8 +338,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       const answer = await stage.sheet([ready.length === 1 ? '1 reply waits' : `${ready.length} replies wait`], listBlocks(ready), { src: 'mail' });
       if (answer.act !== 'go' || !answer.row) return;
       const row = ready.find((entry) => entry.thread === answer.row);
-      if (!row || !(await stillTrue(row))) continue;
-      await play(stage, row.id, { line: false });
+      if (!row) continue;
+      await play(stage, row.id, { line: false, keep: 'back', asked: true });
     }
   }
 
@@ -308,13 +353,21 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     const left = (): NotchItemEnd => (unseen().length > 0 ? 'waits' : 'settled');
     const fresh = unseen();
     if (fresh.length === 0) return 'settled';
-    if (how.unasked || fresh.length === 1) {
+    if (how.unasked) {
+      // Speaking up by itself: nobody is waiting, so the mailbox is asked first. A line about a thread
+      // that was answered a minute ago is not said and then taken back.
       let row: MailProposalRow | undefined;
       for (const candidate of fresh) {
         seen.add(candidate.id);
         if (await stillTrue(candidate)) { row = candidate; break; }
       }
       if (row) await play(stage, row.id, { line: true });
+      return left();
+    }
+    const [only] = fresh;
+    if (fresh.length === 1 && only) {
+      seen.add(only.id);
+      await play(stage, only.id, { line: true, asked: true });
       return left();
     }
     for (const row of fresh) seen.add(row.id);
@@ -400,7 +453,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     const [only] = ready;
     if (ready.length === 1 && only) {
       seen.add(only.id);
-      if (await stillTrue(only)) await play(stage, only.id, { line: false });
+      // From Home's row: as from the list, closing the draft throws nothing away.
+      await play(stage, only.id, { line: false, keep: 'close', asked: true });
     } else {
       await list(stage);
     }

@@ -607,6 +607,17 @@ describe('a sheet that asks for a decision', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
   });
 
+  // A draft the owner opened to read: Esc closes it and throws nothing away, and the key says so.
+  test('says what Esc does when that is not a no, and sends the same answer', () => {
+    show({ ...ask(true), yes: 'send', no: 'back' } as NotchLine);
+    const hint = ($('.hint')?.textContent ?? '').replace(/\s+/g, ' ');
+    expect(hint).toContain('send');
+    expect(hint).toContain('back');
+    expect(hint).not.toMatch(/\bno\b/);
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
+  });
+
   test('an ordinary sheet still closes on a click away', () => {
     show(ask(false));
     surface.pointer(5, 600, true);
