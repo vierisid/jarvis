@@ -148,6 +148,9 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 			}
 		})
 		password := false
+		// How many more of the once-a-second looks ask again where the
+		// keyboard is.
+		askAgain := 0
 		look := time.NewTicker(time.Second)
 		defer look.Stop()
 		hands := time.NewTicker(500 * time.Millisecond)
@@ -174,10 +177,24 @@ func platformNotchWhereStart(w *NotchWhere) (stop func()) {
 					}
 				}
 				read(true)
+				// The keyboard can land in the new window after the event that
+				// says the window changed, and some programs (everything built
+				// on Chromium, until something has asked it) send no event for
+				// it at all. So it is asked again on the next two looks.
+				askAgain = 2
 			case <-look.C:
 				// A title changes without any of the events above: another tab,
 				// another page. Reading it is one call.
-				read(false)
+				//
+				// "A password field has the keyboard" is asked again for as long
+				// as it is believed: the field can lose the keyboard with no
+				// event reaching here, and then the notch went on looking away,
+				// in every window, until the person changed window again. Seen
+				// on the owner's machine on 15 November 2026.
+				read(password || askAgain > 0)
+				if askAgain > 0 {
+					askAgain--
+				}
 			case <-hands.C:
 				w.SetStill(notchIdleMs() >= notchStillMs)
 			}

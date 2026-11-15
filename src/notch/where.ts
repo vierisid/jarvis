@@ -102,6 +102,13 @@ export interface NotchWhere {
   mayKeep(sidecarId: string, app?: string | null): boolean;
   /** Whether the person's hands are still on the machine in front, as last told. */
   still(): boolean;
+  /**
+   * The app in front, and the site when it is a browser, while Jarvis is
+   * watching it: what a question that does not say what it is about is most
+   * likely about. Null while asleep, looking away, not watching, or when no
+   * app is known. The window's title is not part of it (48).
+   */
+  front(): { name: string; site: string } | null;
   stop(): void;
 }
 
@@ -353,6 +360,11 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
   return {
     face, refresh, row, see, mayKeep,
     still: () => here()?.still === true,
+    front() {
+      const now = here();
+      if (deps.asleep() || face() !== 'idle' || !now?.app || !now.name) return null;
+      return { name: now.name, site: now.site };
+    },
     stop() { stopped = true; },
   };
 }

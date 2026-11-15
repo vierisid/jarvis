@@ -213,6 +213,64 @@ func (w *lookWindows) Front(at lookPoint) (app, title string) {
 	return notchAppKey(processBaseName(win32GetWindowPid(hwnd))), win32WindowTitle(hwnd)
 }
 
+func (w *lookWindows) WindowRect(at lookPoint) lookRect {
+	hwnd := win32RootWindow(win32WindowFromPoint(at.X, at.Y))
+	if hwnd == 0 || ownWindow(hwnd) {
+		return lookRect{}
+	}
+	var rc w32Rect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); ok == 0 {
+		return lookRect{}
+	}
+	return lookRect{int(rc.Left), int(rc.Top), int(rc.Right - rc.Left), int(rc.Bottom - rc.Top)}
+}
+
+// Around reads the names of what stands round a place: from the element
+// there up through what holds it, as far as the window.
+func (w *lookWindows) Around(at lookPoint) []string {
+	result, err := comThread.call(func(state *uiaState) (any, error) {
+		walker, err := uiaRawViewWalker(state.automation)
+		if err != nil {
+			return nil, err
+		}
+		defer walker.Release()
+		elem, err := uiaElementFromPoint(state.automation, at.X, at.Y)
+		if err != nil || elem == nil {
+			return []string{}, nil
+		}
+		var names []string
+		cur := elem
+		for climb := 0; climb < 14 && cur != nil; climb++ {
+			role := controlTypeName(uiaElementGetPropertyInt(cur, UIA_ControlTypePropertyId))
+			// What is typed into a password field is never read; nor is its name needed.
+			if !uiaElementGetPropertyBool(cur, UIA_IsPasswordPropertyId) {
+				if name := uiaElementGetPropertyStr(cur, UIA_NamePropertyId); name != "" {
+					names = append(names, name)
+				}
+			}
+			parent, perr := uiaWalkerGetParent(walker, cur)
+			cur.Release()
+			cur = nil
+			if perr != nil || parent == nil || role == "Window" {
+				if parent != nil {
+					parent.Release()
+				}
+				break
+			}
+			cur = parent
+		}
+		if cur != nil {
+			cur.Release()
+		}
+		return names, nil
+	})
+	if err != nil {
+		return nil
+	}
+	names, _ := result.([]string)
+	return names
+}
+
 func (w *lookWindows) Snapshot(screen lookRect) lookSnapshot {
 	if screen.empty() {
 		return nil

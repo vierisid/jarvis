@@ -113,11 +113,10 @@ export interface NotchRealDeps {
     stt: NotchTalkDeps['stt'];
     /**
      * Look at this (pass 9): the desktop apps that say what was circled or
-     * clicked with the talk keys held, and the model's one sentence about one
-     * thing. A look with words is an instruction, so it needs the rest of
-     * asking.
+     * clicked with the talk keys held. A look is asked about as an
+     * instruction, so it needs the rest of asking.
      */
-    look?: { port: NotchLookPort; describe?: NotchLookDeps['describe'] };
+    look?: { port: NotchLookPort; modelReady?: NotchLookDeps['modelReady'] };
   };
   /**
    * Where the person is (pass 6): the desktop apps that say which app is in
@@ -275,7 +274,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         inbox,
         ask: (text, files) => { owner.typed(text, files); },
         talking: (sidecarId) => talk?.open(sidecarId) ?? false,
-        describe: deps.asks.look.describe,
+        modelReady: deps.asks.look.modelReady ?? deps.asks.modelReady,
         paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
         log,
       });

@@ -195,7 +195,12 @@ type lookShot struct {
 
 // Cut gives a part of the copy as a PNG. The part is in screen pixels; what
 // of it lies outside the copy is left out. Nil when nothing is left.
-func (s *lookShot) Cut(part lookRect) []byte {
+func (s *lookShot) Cut(part lookRect) []byte { return s.CutSmall(part, 0) }
+
+// CutSmall is Cut with the picture made smaller when its longest side would
+// be more than most pixels: every pixel of the result is the mean of a square
+// of the copy, so small writing blurs and does not break up. most 0: as it is.
+func (s *lookShot) CutSmall(part lookRect, most int) []byte {
 	if s == nil || len(s.pixels) < s.w*s.h*4 {
 		return nil
 	}
@@ -204,12 +209,30 @@ func (s *lookShot) Cut(part lookRect) []byte {
 	if x1 <= x0 || y1 <= y0 {
 		return nil
 	}
-	img := image.NewNRGBA(image.Rect(0, 0, x1-x0, y1-y0))
-	for y := y0; y < y1; y++ {
-		src := s.pixels[(y*s.w+x0)*4 : (y*s.w+x1)*4]
-		dst := img.Pix[(y-y0)*img.Stride:]
-		for i := 0; i+3 < len(src); i += 4 {
-			dst[i], dst[i+1], dst[i+2], dst[i+3] = src[i+2], src[i+1], src[i], 0xFF
+	by := 1
+	if most > 0 {
+		by = (max(x1-x0, y1-y0) + most - 1) / most
+	}
+	by = max(by, 1)
+	width, height := (x1-x0)/by, (y1-y0)/by
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		dst := img.Pix[y*img.Stride:]
+		for x := 0; x < width; x++ {
+			var b, g, r int
+			for dy := 0; dy < by; dy++ {
+				row := ((y0+y*by+dy)*s.w + x0 + x*by) * 4
+				for dx := 0; dx < by; dx++ {
+					b += int(s.pixels[row+dx*4])
+					g += int(s.pixels[row+dx*4+1])
+					r += int(s.pixels[row+dx*4+2])
+				}
+			}
+			n := by * by
+			dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = uint8(r/n), uint8(g/n), uint8(b/n), 0xFF
 		}
 	}
 	var out bytes.Buffer
