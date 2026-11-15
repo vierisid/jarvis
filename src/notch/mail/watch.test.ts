@@ -252,10 +252,56 @@ describe('the owner\'s voice', () => {
     expect(asked.thinks[0]).toContain('va benissimo, a giovedì.');
     expect(asked.thinks[0]).toContain('mails Sam wrote, for their voice');
     expect(voiced.name()).toBe('Sam');
-    // Only a full look does: the lighter ones do not go back for it.
+    // After that only a full look does: the lighter ones do not go back for it.
     await voiced.look('recent');
     expect(sentAsked).toEqual([14]);
+    await voiced.look('sweep');
+    expect(sentAsked).toEqual([14, 14]);
     expect(watch.name()).toBe('');
+  });
+
+  // The first look after the brain starts is a short one, so that a reply is ready within a minute.
+  test('the first look, whatever its kind, reads their own mail first: no reply is written without their voice', async () => {
+    const mineOnly = thread(T2, [message(me, 30, 'Ciao Leo,\nva benissimo, a giovedì.\nSam')]);
+    const box = new Map([[T1, thread(T1, [message(leo, 24)])]]);
+    const thinks: string[] = [];
+    const sentAsked: number[] = [];
+    const first = new MailWatch({
+      reader: async () => ({ through: 'browser', reader: {
+        owner: async () => me.address,
+        list: async () => [...box.values()].map((item) => listed(item)),
+        read: async (rows) => rows.flatMap((row) => (row.id === T2 ? [mineOnly] : box.get(row.id) ? [box.get(row.id)!] : [])),
+        sent: async (days) => { sentAsked.push(days); return [listed(mineOnly)]; },
+      } }),
+      store: new MailStore(new Database(':memory:')),
+      think: async (messages) => { thinks.push(messages[1]!.content); return { content: JSON.stringify({ needs_reply: false, why: '', reply: '' }), model: 'm', input: 1, output: 1, cached: 0 }; },
+      now: () => NOW,
+      log: () => {},
+    });
+    await first.look('recent');
+    expect(sentAsked).toEqual([14]);
+    expect(thinks[0]).toContain('va benissimo, a giovedì.');
+    await first.look('glance');
+    expect(sentAsked).toEqual([14]);
+  });
+
+  test('a look that was cut short says so, and what it had done stands', async () => {
+    let reads = 0;
+    const cut = new MailWatch({
+      reader: async () => ({ through: 'browser', reader: {
+        owner: async () => me.address,
+        list: async () => [listed(thread(T1, [message(leo, 24)]))],
+        read: async () => { reads++; throw new Error('the browser went away'); },
+      } }),
+      store: new MailStore(new Database(':memory:')),
+      think: async () => { throw new Error('not asked'); },
+      now: () => NOW,
+      log: () => {},
+    });
+    expect(await cut.look('sweep')).toMatchObject({ failed: true });
+    expect(reads).toBe(1);
+    // It is not taken for the state of the mailbox: nothing is remembered as the last look.
+    expect(cut.lastLook()).toBeNull();
   });
 });
 

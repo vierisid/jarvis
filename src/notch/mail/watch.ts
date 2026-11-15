@@ -107,6 +107,8 @@ export type MailLookKind = 'sweep' | 'recent' | 'glance';
 export interface MailLook {
   /** The way that was used, or null when there was none. */
   through: string | null;
+  /** The look was cut short: the browser went away under it, or the mailbox stopped answering. What it did up to then stands. */
+  failed?: boolean;
   listed: number;
   read: number;
   /** Messages put to the model in this look. */
@@ -143,6 +145,8 @@ export class MailWatch {
   private last: { at: number; look: MailLook } | null = null;
   /** Replies the notch is acting on right now: a look leaves them alone. */
   private readonly held = new Set<string>();
+  /** Whether the owner's own latest mail has been read for their voice since the brain started. */
+  private voiceRead = false;
   /** When each reply that waits was last seen, in the mailbox, to still be an answer to the last word. */
   private readonly checked = new Map<string, number>();
 
@@ -179,7 +183,7 @@ export class MailWatch {
       (look) => { this.last = { at: this.now(), look }; return look; },
       (error: unknown) => {
         this.log(`[notch] looking at the mail failed: ${error instanceof Error ? error.message : String(error)}`);
-        return none;
+        return { ...none, failed: true };
       },
     ).finally(() => { this.looking = null; });
     return this.looking;
@@ -194,11 +198,14 @@ export class MailWatch {
     const { store } = this.deps;
     const wait = this.deps.waitMs ?? MAIL_WAIT_MIN_MS;
     const owner: MailOwner = new Set([(await reader.owner()).toLowerCase()]);
-    // A full look begins with the owner's own latest mail: a reply is written in their voice, and by their name.
-    if (kind === 'sweep' && reader.sent) {
+    // The first look, and every full one, begins with the owner's own latest mail: a reply is written in
+    // their voice, and by their name. The first look is a short one, so that a reply is ready within a
+    // minute of the brain starting: it must not be the one reply written without their voice.
+    if ((kind === 'sweep' || !this.voiceRead) && reader.sent) {
       try {
         const own = (await reader.sent(MAIL_VOICE_DAYS)).slice(0, MAIL_VOICE_READ);
         for (let at = 0; at < own.length; at += MAIL_READ_BATCH) this.learnVoice(await reader.read(own.slice(at, at + MAIL_READ_BATCH)), owner);
+        this.voiceRead = true;
       } catch (error) {
         // Without it replies are plainer, not wrong: the look goes on.
         this.log(`[notch] the owner's own mail could not be read for their voice: ${error instanceof Error ? error.message.slice(0, 120) : 'no answer'}`);

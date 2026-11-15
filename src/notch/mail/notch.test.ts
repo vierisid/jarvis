@@ -40,6 +40,8 @@ function harness(rows: MailProposalRow[], options: {
   reading?: boolean;
   /** Whether Gmail is the site in front. */
   inGmail?: () => boolean;
+  /** Whether the whole month has been gone through. */
+  monthRead?: () => boolean;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -100,6 +102,7 @@ function harness(rows: MailProposalRow[], options: {
     },
     mailbox: () => (options.noMailbox ? null : mailbox),
     inGmail: options.inGmail,
+    monthRead: options.monthRead,
     now: () => AT + 10_000 + now,
     log: () => {},
   });
@@ -372,16 +375,45 @@ describe('coming to Gmail', () => {
     expect(h.line()).toBeNull();
   });
 
-  // The first look goes through a month. Coming to Gmail in the middle of it must not wait for its end.
-  test('while the mailbox is still being read it does not wait for that, and says nothing it does not know', async () => {
+  // Found on the owner's first try, 15 November 2026: Gmail was open, the month was still being read, and
+  // the notch said nothing at all. It says that it is reading, once, and what came of it when it has read.
+  test('while the mailbox is still being read it does not wait for that: it says so, once, and is owed an answer', async () => {
     const empty = harness([], { reading: true });
-    await empty.arrive();
+    expect(await empty.mail.arrived()).toBe('reading');
+    await settle();
     expect(empty.looks()).toBe(0);
+    expect(empty.said()).toBe('I am reading your mail. One moment.');
+    await empty.answer('done');
+    expect(await empty.mail.arrived()).toBe('reading');
+    await settle();
     expect(empty.line()).toBeNull();
+    // What is ready already speaks, reading or not.
     const some = harness([row()], { reading: true });
-    await some.arrive();
+    expect(await some.mail.arrived()).toBe('spoke');
+    await settle();
     expect(some.looks()).toBe(0);
     expect(some.said()).toBe('You have not replied to Leo. I drafted a reply.');
+  });
+
+  // The first look is the last two days. That nobody is waiting is not known until the month has been read.
+  test('"nobody is waiting" is kept for when the whole month has been read', async () => {
+    let monthRead = false;
+    const h = harness([], { monthRead: () => monthRead });
+    expect(await h.mail.arrived()).toBe('reading');
+    await settle();
+    expect(h.said()).toBe('I am reading your mail. One moment.');
+    await h.answer('done');
+    monthRead = true;
+    expect(await h.mail.arrived()).toBe('said');
+    await settle();
+    expect(h.said()).toBe('Nobody in your mail is waiting for a reply.');
+  });
+
+  test('a mailbox that cannot be reached is said to be so, whether or not the month was read', async () => {
+    const h = harness([], { monthRead: () => false, look: { through: null, listed: 0, read: 0, asked: 0, prepared: 0, overtaken: 0 } });
+    expect(await h.mail.arrived()).toBe('said');
+    await settle();
+    expect(h.said()).toBe('I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.');
   });
 
   test('when the mail cannot be seen, that is what it says', async () => {
