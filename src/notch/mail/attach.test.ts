@@ -82,7 +82,7 @@ describe('the mail layer, put together', () => {
     const h = harness(null, () => '{}');
     const leo = { name: 'Leo Bianchi', address: 'leo@lumen.example' };
     h.layer.store.put({
-      id: `${T1}:${NOW}`, thread: T1, messageAt: NOW, state: 'sent', who: leo, subject: 'Deck for Thursday?', to: [leo], cc: [], draft: 'x', time: null, missing: '', lookFor: '', found: null, tone: '',
+      id: `${T1}:${NOW}`, thread: T1, messageAt: NOW, state: 'sent', who: leo, subject: 'Deck for Thursday?', to: [leo], cc: [], draft: 'x', time: null, missing: '', lookFor: '', found: null, tone: '', told: '',
       model: 'm', tokensIn: 4100, tokensOut: 120, createdAt: NOW, updatedAt: NOW + 5, sentAt: NOW + 5,
     });
     expect(h.layer.sentSince(NOW)).toEqual([{ at: NOW + 5, text: 'Replied to Leo: Deck for Thursday?', small: '4,220 tokens' }]);

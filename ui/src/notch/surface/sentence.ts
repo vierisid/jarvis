@@ -5,6 +5,7 @@
  * and a strip under the line shows them all with a field to type another.
  * What was typed is read by the readers; what is not understood is refused.
  */
+import { NOTCH_WORD_LONG_MAX } from '../../../../src/notch/protocol.ts';
 import type { NotchPart, NotchWord } from '../../../../src/notch/protocol.ts';
 import { btn, el } from './dom.ts';
 import { KEYN, duo } from './hints.ts';
@@ -176,7 +177,7 @@ export function createSentence(deps: SentenceDeps): Sentence {
     if (!L) return;
     const f = document.createDocumentFragment();
     f.append(el('span', 'lab', L.label ?? 'Change'));
-    for (const o of L.options) {
+    for (const o of L.long ? [] : L.options) {
       const c = btn('o', o, () => { setLive(b, o); openPick(b); });
       c.setAttribute('aria-pressed', String(o === L.value));
       f.append(c);
@@ -185,8 +186,10 @@ export function createSentence(deps: SentenceDeps): Sentence {
     if (L.free || L.read || L.syn) {
       const inp = el('input');
       inp.type = 'text';
-      inp.maxLength = 28;
-      inp.placeholder = 'or type your own';
+      // A word holds a word or two. One that takes a sentence has a field as wide as the sheet.
+      inp.maxLength = L.long ? NOTCH_WORD_LONG_MAX : 28;
+      if (L.long) inp.classList.add('long');
+      inp.placeholder = L.long ? 'type it, then Enter' : 'or type your own';
       inp.autocomplete = 'off';
       inp.spellcheck = false;
       inp.setAttribute('aria-label', `Type your own: ${L.label ?? 'value'}`);
@@ -223,13 +226,21 @@ export function createSentence(deps: SentenceDeps): Sentence {
     pick.replaceChildren(f);
     deps.refit();
     armPick();
+    // A word that takes a sentence was pressed to be typed into: its field takes the keyboard at once.
+    if (L.long) {
+      const field = pick.querySelector('input');
+      if (field) { deps.focus(true); field.focus(); }
+    }
   }
 
   // A click moves to the next option, for when you do not want to think; the
   // strip shows them all, for when you do.
   function cycle(b: HTMLElement, dir: number): void {
     const L = words.get(b);
-    if (!L || !L.options.length) return;
+    if (!L) return;
+    // Nothing to step through: a word that takes a sentence opens its field.
+    if (L.long) { openPick(b); return; }
+    if (!L.options.length) return;
     const i = L.options.indexOf(L.value);
     setLive(b, L.options[(i + dir + L.options.length) % L.options.length] ?? L.value, dir);
     openPick(b);

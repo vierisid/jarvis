@@ -21,7 +21,7 @@ const AT = Date.UTC(2026, 10, 14, 9, 0);
 
 const row = (extra: Partial<MailProposalRow> = {}): MailProposalRow => ({
   id: mailProposalId(T1, AT), thread: T1, messageAt: AT, state: 'ready', who: leo, subject: 'Deck for Thursday?', to: [leo], cc: [anna],
-  draft: 'Hi Leo,\nThursday at 10:00 works for me.\nSam', time: 'Thursday at 10:00', missing: 'The deck itself.', lookFor: '', found: null, tone: '',
+  draft: 'Hi Leo,\nThursday at 10:00 works for me.\nSam', time: 'Thursday at 10:00', missing: 'The deck itself.', lookFor: '', found: null, tone: '', told: '',
   model: 'm', tokensIn: 1200, tokensOut: 80, createdAt: AT + 1, updatedAt: AT + 1, sentAt: null, ...extra,
 });
 
@@ -79,7 +79,7 @@ function harness(rows: MailProposalRow[], options: {
       return work(session);
     },
   };
-  const redrafts: [string, string][] = [];
+  const redrafts: [string, { tone?: string; told?: string }][] = [];
   const held: string[] = [];
   let looks = 0;
   const mail = attachNotchMail(inbox, {
@@ -87,11 +87,13 @@ function harness(rows: MailProposalRow[], options: {
     watch: {
       hold: (id) => { held.push(`hold ${id}`); },
       release: (id) => { held.push(`release ${id}`); },
-      redraft: async (id, tone) => {
-        redrafts.push([id, tone]);
+      redraft: async (id, change) => {
+        redrafts.push([id, change]);
         const before = store.proposal(id)!;
-        if (tone === 'more formally') return null;
-        const next = { ...before, draft: 'Thursday 10 works. Sam', time: null, tone };
+        if (change.tone === 'more formally' || change.told === 'cannot be written') return null;
+        const next = change.told
+          ? { ...before, draft: `Hi Leo,\n${change.told}.\nSam`, time: null, missing: '', told: change.told }
+          : { ...before, draft: 'Thursday 10 works. Sam', time: null, tone: change.tone ?? before.tone };
         store.put(next);
         return next;
       },
@@ -135,10 +137,24 @@ describe('the draft as it is shown', () => {
     expect(paper.lines.map(text)).toEqual(['Hi Leo,', '[Thursday at 10:00] works for me.', 'Sam']);
     expect(paper.lines[1]![1]).toEqual({ word: { name: 'when', value: 'Thursday at 10:00', options: ['Thursday at 10:00'], label: 'Time', read: 'dayTime' } });
     expect(blocks.slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual([
-      'I did not know: The deck itself.',
+      'I did not know: The deck itself. [tell me]',
       'Found in your Drive: Lumen deck v3',
       'Not sent yet. Tone [yours]',
     ]);
+    // The word beside what was not known takes a sentence, not a word.
+    const missing = blocks[1] as { say: NotchPart[] };
+    expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: [], label: 'Tell Jarvis', free: true, long: true } });
+  });
+
+  test('what the owner told is shown, with the one word to change it, and nothing missing has no word to tell', () => {
+    const told = mailDraftBlocks(row({ told: 'Central European Time', missing: 'Whether Thursday still suits Leo.' }));
+    expect(told.slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual([
+      'I did not know: Whether Thursday still suits Leo.',
+      'You told me: Central European Time [change]',
+      'Not sent yet. Tone [yours]',
+    ]);
+    const none = mailDraftBlocks(row({ missing: '' }));
+    expect(none.map((block) => JSON.stringify(block)).join('')).not.toContain('"told"');
   });
 
   test('the empty lines of a reply are the gaps between its paragraphs, not paragraphs of their own', () => {
@@ -245,11 +261,38 @@ describe('a prepared reply on the notch', () => {
     await h.arrive();
     await h.answer('yes');
     await h.answer('word', { word: 'tone', value: 'shorter' });
-    expect(h.redrafts).toEqual([[row().id, 'shorter']]);
+    expect(h.redrafts).toEqual([[row().id, { tone: 'shorter' }]]);
     expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Thursday 10 works. Sam']);
     expect(text((h.blocks().at(-1) as { say: NotchPart[] }).say)).toBe('Not sent yet. Tone [shorter]');
     await h.answer('yes');
     expect(h.plans[0]!.text).toBe('Thursday 10 works. Sam');
+  });
+
+  // The owner's ask after his first real use, 15 November 2026: "a way for me to input ... the things you did not know".
+  test('the owner says what was not known, and the reply is written again with it', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    expect(text((h.blocks()[1] as { say: NotchPart[] }).say)).toBe('I did not know: The deck itself. [tell me]');
+    await h.answer('word', { word: 'told', value: 'The deck goes out on Friday' });
+    expect(h.redrafts).toEqual([[row().id, { told: 'The deck goes out on Friday' }]]);
+    expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'The deck goes out on Friday.', 'Sam']);
+    expect(h.blocks().slice(1).map((block) => text((block as { say: NotchPart[] }).say))).toEqual(['You told me: The deck goes out on Friday [change]', 'Not sent yet. Tone [yours]']);
+    // And that is what is sent.
+    await h.answer('yes');
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nThe deck goes out on Friday.\nSam');
+    expect(h.store.proposal(row().id)!.told).toBe('The deck goes out on Friday');
+  });
+
+  test('the word as it stands, an empty one, or the same thing again, is not something told', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    for (const value of ['tell me', 'change', '', '   ']) await h.answer('word', { word: 'told', value });
+    expect(h.redrafts).toEqual([]);
+    await h.answer('word', { word: 'told', value: 'cannot be written' });
+    expect(text((h.blocks().at(-1) as { say: NotchPart[] }).say)).toBe('I could not write it again. This is the reply as it was. Tone [yours]');
+    expect(h.store.proposal(row().id)!.told).toBe('');
   });
 
   test('a tone that could not be written leaves the reply as it was, and says so', async () => {

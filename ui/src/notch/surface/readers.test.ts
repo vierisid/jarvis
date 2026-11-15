@@ -70,3 +70,20 @@ describe('the pieces the readers are made of', () => {
     expect(onlyWhen('invoice 114 is late')).toBe(false);
   });
 });
+
+// A word that takes a sentence: what the person tells Jarvis in their own words (the mail draft's "tell me").
+describe('a word that takes a sentence', () => {
+  const tell = { name: 'told', value: 'tell me', options: [] as string[], free: true, long: true };
+
+  test('holds a sentence, as one line, where a word holds a word or two', () => {
+    expect(readLive(tell, '  I am on Central European Time,\n UTC+1  ')).toBe('I am on Central European Time, UTC+1');
+    expect(readLive(tell, 'x'.repeat(400))!.length).toBe(200);
+    expect(readLive({ ...tell, long: false }, 'x'.repeat(400))!.length).toBe(28);
+  });
+
+  test('nothing typed is nothing told, and marks that could be markup are dropped', () => {
+    expect(readLive(tell, '   ')).toBeNull();
+    expect(readLive(tell, 'the <b>price</b> is "49"')).toBe('the bprice/b is 49');
+  });
+});
+

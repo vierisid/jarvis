@@ -154,7 +154,7 @@ describe('the replay', () => {
     await run({}, asked);
     const late = asked.find((user) => user.includes('Can you send the deck?'))!;
     expect(late).not.toContain('Here it is. Sam');
-    expect(late).toContain('It is Tue, 10 Nov 2026, 09:00.');
+    expect(late).toContain('It is Tue, 10 Nov 2026, 09:00, in');
     // Written 200 hours before now, so before that moment: it may be used as a sample.
     expect(late).toContain('An old note of mine');
   });

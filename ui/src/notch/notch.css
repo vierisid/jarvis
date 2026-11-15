@@ -180,6 +180,8 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .pick input.no { border-bottom-color: var(--fail); } .pick input.no::placeholder { color: var(--n-ink2); }
 .pick input { width: 150px; height: 24px; box-sizing: border-box; background: none; border: 0; border-bottom: 1px solid var(--notch-rule); outline: 0; color: var(--n-ink); font: 500 13.5px/1 var(--sans); caret-color: var(--citron); padding: 0 2px; }
 .pick input::placeholder { color: var(--n-dim); }
+/* A word that takes a sentence: its field is as wide as the row lets it be. */
+.pick input.long { flex: 1 1 240px; width: auto; min-width: 200px; }
 .pick input:focus { border-bottom-color: var(--citron); }
 .pick .o:focus-visible { outline: 2px solid var(--citron); outline-offset: 2px; }
 .say.ghost { position: absolute; flex: none; pointer-events: none; animation: ghost .2s var(--ease) forwards; }

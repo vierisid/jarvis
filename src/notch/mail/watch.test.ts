@@ -310,10 +310,26 @@ describe('a reply written again in another manner', () => {
     const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: (text) => (text.includes('asked for this reply to be written shorter') ? reply({ reply: 'Thursday 10 works. Sam', time: '' }) : reply()) });
     await watch.look('sweep');
     const [row] = store.ready();
-    const next = await watch.redraft(row!.id, 'shorter');
+    const next = await watch.redraft(row!.id, { tone: 'shorter' });
     expect(next).toMatchObject({ draft: 'Thursday 10 works. Sam', time: null, tone: 'shorter', tokensIn: 2400, tokensOut: 100, state: 'ready' });
     expect(store.proposal(row!.id)!.draft).toBe('Thursday 10 works. Sam');
     expect(asked.thinks.length).toBe(2);
+  });
+
+  test('with what the owner told: it reaches the model as theirs, outside the mail, and is kept with the reply', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: (text) => (text.includes('told you, for this reply') ? reply({ reply: 'Hi Leo,\nI am on Central European Time.\nSam', time: '', missing: '' }) : reply({ missing: 'Their time zone.' })) });
+    await watch.look('sweep');
+    const [row] = store.ready();
+    const next = await watch.redraft(row!.id, { told: '  I am on "Central European Time"\n ' });
+    expect(next).toMatchObject({ draft: 'Hi Leo,\nI am on Central European Time.\nSam', missing: '', told: 'I am on "Central European Time"', tone: '' });
+    const said = asked.thinks[1]!;
+    expect(said).toContain(`told you, for this reply: "I am on 'Central European Time'". This is true and it is theirs to say`);
+    // Before the mail's marks, never inside them.
+    expect(said.indexOf('told you, for this reply')).toBeLessThan(said.indexOf('<<<UNTRUSTED_CONTENT'));
+    // A later change of tone keeps what was told.
+    await watch.redraft(row!.id, { tone: 'shorter' });
+    expect(asked.thinks[2]).toContain('told you, for this reply');
+    expect(asked.thinks[2]).toContain('written shorter');
   });
 
   test('is not drafted when the thread has moved on, and the reply that was there stays', async () => {
@@ -321,7 +337,7 @@ describe('a reply written again in another manner', () => {
     await watch.look('sweep');
     const [row] = store.ready();
     box.set(T1, thread(T1, [message(leo, 24), message(anna, 1, 'I can take this one.')]));
-    expect(await watch.redraft(row!.id, 'shorter')).toBeNull();
+    expect(await watch.redraft(row!.id, { tone: 'shorter' })).toBeNull();
     expect(store.proposal(row!.id)!.draft).toBe(row!.draft);
   });
 });
