@@ -259,7 +259,8 @@ func elemGetPropertyBool(elem *ole.IDispatch, propertyId int) (bool, error) {
 		return false, fmt.Errorf("GetCurrentPropertyValue(%d): HRESULT 0x%x", propertyId, hr)
 	}
 	if v.VT == ole.VT_BOOL {
-		return v.Val != 0, nil
+		// A yes or no is the low 16 bits only (see oleBoolIsTrue in the sidecar).
+		return uint16(v.Val) != 0, nil
 	}
 	return false, nil
 }

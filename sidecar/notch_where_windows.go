@@ -487,7 +487,11 @@ func notchPasswordFocused(last bool, again chan byte) bool {
 		procWhereGetClassName.Call(gui.HwndFocus, uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
 		if strings.EqualFold(syscall.UTF16ToString(class[:]), "Edit") {
 			style, _, _ := procWhereGetWindowLong.Call(gui.HwndFocus, gwlStyle)
-			return style&esPassword != 0
+			is := style&esPassword != 0
+			if is && !last {
+				log.Printf("[notch] where: a password field has the keyboard (a Windows edit box that says so by its style)")
+			}
+			return is
 		}
 	}
 	// One question at a time: in a program that does not answer, more of them
@@ -504,7 +508,15 @@ func notchPasswordFocused(last bool, again chan byte) bool {
 				return false, nil
 			}
 			defer elem.Release()
-			return uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId), nil
+			is := uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId)
+			if is && !last {
+				// What kind of control said so, as its number: never its name
+				// or what is in it. If the eyes turn away where no password
+				// is, this line says what was believed to be one.
+				log.Printf("[notch] where: a password field has the keyboard (asked through UI Automation: a control of kind %d)",
+					uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
+			}
+			return is, nil
 		})
 		is, _ := val.(bool)
 		answer <- err == nil && is

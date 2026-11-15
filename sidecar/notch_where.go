@@ -340,6 +340,19 @@ func (w *NotchWhere) Refuses(app, title string) bool {
 	return notchLookFor(seen, w.never) != notchLooking
 }
 
+// oleBoolIsTrue reads a yes or no that Windows handed over in a VARIANT.
+//
+// A VARIANT's yes or no is 16 bits. The field it travels in is 64 bits wide,
+// and the other 48 are not promised to be zero: what answers from another
+// program can leave anything in them. Read whole, a "no" with stray bits
+// above it came out as "yes". That is how the notch came to believe a
+// password was being typed on the bare desktop and in ordinary windows, and
+// turned its eyes away (the owner's machine, 15 November 2026: five times in
+// four minutes, some of them for less than a second).
+func oleBoolIsTrue(val int64) bool {
+	return uint16(val) != 0
+}
+
 // payload is what the brain is told. While this program looks away the title
 // is not said: it is text from a window nobody is to read.
 func notchWherePayload(front notchFront, look notchLook, still bool, never []string) map[string]any {

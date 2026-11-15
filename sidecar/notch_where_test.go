@@ -205,3 +205,24 @@ func TestNotchWherePayloadNamesTheListAndNeverTheTitleWhileAway(t *testing.T) {
 		t.Error("an icon's key is its own, and nothing has none")
 	}
 }
+
+// A yes or no from Windows is 16 bits of a 64-bit field. The rest can hold
+// anything, and a "no" must stay a "no" whatever is above it.
+func TestOleBoolReadsOnlyItsSixteenBits(t *testing.T) {
+	for _, tc := range []struct {
+		val  int64
+		want bool
+	}{
+		{0, false},
+		{0xFFFF, true},                    // VARIANT_TRUE
+		{1, true},                         // some programs say yes as 1
+		{0x7FF6_1234_0000, false},         // no, with stray bits above it
+		{int64(-1) << 16, false},          // no, with every other bit set
+		{0x7FF6_1234_0000 | 0xFFFF, true}, // yes, with stray bits above it
+		{int64(-1), true},
+	} {
+		if got := oleBoolIsTrue(tc.val); got != tc.want {
+			t.Errorf("oleBoolIsTrue(%#x) = %v, want %v", tc.val, got, tc.want)
+		}
+	}
+}
