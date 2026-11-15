@@ -86,7 +86,8 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
       return [...rows.map((row) => listed(row)), ...forums.filter((row) => !have.has(row.id)).map((row) => listed(row, 'forums'))];
     },
     // A look reads a few threads at a time and goes on to the next: one that Gmail did not give is read by the next look.
-    read: async (rows) => (await gmailThreads(readingPage, rows, { batch: 6, pauses: [] })).threads,
+    // Four to a turn of the tab: what the owner asks for in the middle of a look waits for one such turn at most.
+    read: async (rows) => (await gmailThreads(readingPage, rows, { batch: 4, pauses: [] })).threads,
     // The owner's own latest mail, for their voice.
     sent: async (days) => (await gmailSearch(page, `in:sent newer_than:${Math.max(1, Math.floor(days))}d`, { pages: 1, step: reading })).map((row) => listed(row)),
   };
