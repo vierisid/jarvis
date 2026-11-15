@@ -166,6 +166,7 @@ export interface NotchPointDeps {
 }
 
 const AWAY: Record<string, string> = {
+  off: 'Watching is switched off, so I cannot point at anything.',
   password: 'A password is being typed. I am not looking.',
   bank: 'Your bank. I look away in here, so I cannot point in it.',
   never: 'You told me never to watch this app, so I cannot point in it.',

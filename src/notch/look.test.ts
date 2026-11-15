@@ -209,6 +209,7 @@ describe('why nothing was looked at', () => {
     expect(lookRefusal('password')).toBe('A password is being typed. I am not looking.');
     expect(lookRefusal('bank')).toBe('Your bank. I look away in here.');
     expect(lookRefusal('never')).toContain('never to watch this app');
+    expect(lookRefusal('off')).toBe('Watching is switched off, so I did not look.');
     expect(lookRefusal('something new')).toBe('I am not looking in here.');
   });
 });

@@ -259,6 +259,7 @@ export function lookOne(thing: NotchThing): NotchPart[] {
 }
 
 const REFUSALS: Record<string, string> = {
+  off: 'Watching is switched off, so I did not look.',
   password: 'A password is being typed. I am not looking.',
   bank: 'Your bank. I look away in here.',
   never: 'You told me never to watch this app, so I did not look.',

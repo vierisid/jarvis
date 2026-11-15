@@ -923,8 +923,10 @@ machine, is listed under the invariants.
     never read.
 80. **Nothing is read where Jarvis looks away, and a quick click waits for
     that to be known.** Whether the window is one Jarvis looks away from (a
-    password, a bank, an app on the list: 45 and 46) is decided on the machine
-    before anything is read or copied. Finding it out takes a few
+    password, a bank, an app on the list: 45 and 46), and whether watching is
+    switched off or Jarvis is asleep (50), is decided on the machine before
+    anything is read or copied: the person's "stop looking" covers this way
+    of looking too. Finding it out takes a few
     milliseconds beside the watch on the pointer, and a click can be done
     before it is known: so every line has its own state, and nothing is read
     or told until its press has finished finding out (`lookLine.ready`). The
