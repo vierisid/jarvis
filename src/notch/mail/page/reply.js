@@ -89,7 +89,7 @@ if (step === 'write') {
   if (!wanted || !now.startsWith(wanted)) return { ok: false, why: 'what is in the reply is not what was written', before, after: now.length };
   // Gmail says so, in the frame or beside it, once it has kept the draft.
   let saved = false;
-  for (let tries = 0; tries < 24 && !saved; tries++) { await sleep(250); saved = /draft saved|saved/i.test((frame.innerText || '').slice(-400)) || /draft saved/i.test(document.body.innerText || ''); }
+  for (let tries = 0; tries < 16 && !saved; tries++) { await sleep(250); saved = /draft saved/i.test(document.body.innerText || ''); }
   return { ok: true, written: true, saved, people: expected.size };
 }
 

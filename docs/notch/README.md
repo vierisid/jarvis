@@ -667,22 +667,37 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     is. A reply is never left half written: when a step fails, or something
     else takes the notch between the draft and the fuse, what was put in
     Gmail is taken out again.
-63. **One item per thread, asked again before it is shown.** A newer
+63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a line
     comes up the mailbox is asked whether the reply is still an answer to the
     last word, unless a look saw so in the last ninety seconds; before it is
     written into the thread it is always asked. Once the owner answers by
     hand, begins a draft, or the other side writes again, the reply leaves
-    the count by itself, within a minute.
-64. **It speaks up in one place for now: when the person comes to Gmail.**
+    by itself, within a minute.
+64. **Mail is one thing on the notch, and it never stands in front of the
+    text field.** Whatever is in the count comes before Home when the resting
+    notch is tapped (26), and mail that nobody has answered is there every
+    day: on the owner's mailbox the first look prepared about twenty replies.
+    So the replies are one item, `mail`, and it is in the count only while
+    there is a reply the owner has not seen. A reply has been seen once its
+    line came up or it was a row of the list they opened, whatever they did
+    then. After that it waits in Home, under the text field, as one row for
+    all of them ("3 replies drafted"), which opens the reply or the list. It
+    is kept, it is not said again, and Esc on the line about several, or on
+    the list, turns nobody's reply down: each is turned down on its own
+    draft. What has been seen is remembered until the brain restarts.
+65. **It speaks up in one place for now: when the person comes to Gmail.**
     The desktop app says which site is in front (pass 6). Coming to
-    `mail.google.com`, the newest reply that has not spoken yet takes the
-    notch if the notch is free. Each speaks once. Everywhere else a reply
-    joins the count. With nothing waiting it says "Nobody in your mail is
-    waiting for a reply", once in thirty minutes and only when a look
-    reached the mailbox; when none did, it says that it cannot see the mail.
-    While the desktop app looks away the site is not known, so nothing is
-    said. Speaking up from anywhere is pass 8.
+    `mail.google.com`, the newest reply the owner has not seen takes the
+    notch if the notch is free, as the one line "You have not replied to
+    Marco. I drafted a reply." Everywhere else a new reply joins the count,
+    and tapping the notch shows it: one line when one is unseen, "3 people
+    are waiting for a reply. I drafted them." and a list when several are.
+    With nothing waiting it says "Nobody in your mail is waiting for a
+    reply", once in thirty minutes and only when a look reached the mailbox;
+    when none did, it says that it cannot see the mail. While the desktop app
+    looks away the site is not known, so nothing is said. Speaking up from
+    anywhere is pass 8.
 
 What reaches the model, and how: the thread as text, inside the marks for
 outside content (`wrapUntrusted`); links as their words and their address;

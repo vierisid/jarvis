@@ -229,6 +229,36 @@ describe('a look at the mailbox', () => {
   });
 });
 
+describe('the owner\'s voice', () => {
+  test('a full look reads their own latest mail first, so that the first reply is already in their voice and by their name', async () => {
+    const mineOnly = thread(T2, [message(me, 30, 'Ciao Leo,\nva benissimo, a giovedì.\nSam')]);
+    const { watch, asked, box } = world([thread(T1, [message(leo, 24)])]);
+    const store = new MailStore(new Database(':memory:'));
+    const sentAsked: number[] = [];
+    const voiced = new MailWatch({
+      reader: async () => ({ through: 'browser', reader: {
+        owner: async () => me.address,
+        list: async () => [...box.values()].map((item) => listed(item)),
+        read: async (rows) => rows.flatMap((row) => (row.id === T2 ? [mineOnly] : box.get(row.id) ? [box.get(row.id)!] : [])),
+        sent: async (days) => { sentAsked.push(days); return [listed(mineOnly)]; },
+      } }),
+      store,
+      think: async (messages) => { asked.thinks.push(messages[1]!.content); return { content: JSON.stringify({ needs_reply: false, why: '', reply: '' }), model: 'm', input: 1, output: 1, cached: 0 }; },
+      now: () => NOW,
+      log: () => {},
+    });
+    await voiced.look('sweep');
+    expect(sentAsked).toEqual([14]);
+    expect(asked.thinks[0]).toContain('va benissimo, a giovedì.');
+    expect(asked.thinks[0]).toContain('mails Sam wrote, for their voice');
+    expect(voiced.name()).toBe('Sam');
+    // Only a full look does: the lighter ones do not go back for it.
+    await voiced.look('recent');
+    expect(sentAsked).toEqual([14]);
+    expect(watch.name()).toBe('');
+  });
+});
+
 describe('a reply written again in another manner', () => {
   test('is drafted again for the thread as it stands, and what it cost is added', async () => {
     const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { answer: (text) => (text.includes('asked for this reply to be written shorter') ? reply({ reply: 'Thursday 10 works. Sam', time: '' }) : reply()) });

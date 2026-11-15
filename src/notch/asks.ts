@@ -99,6 +99,13 @@ export interface NotchAsksDeps {
   today?: () => NotchBlock[];
   /** Where the person is and whether Jarvis is looking: Home's row about it, and the sheet it opens (where.ts). */
   see?: { row(): NotchBlock; open(stage: NotchStage): Promise<void> };
+  /**
+   * Replies to mail that are prepared and waiting for the owner's word
+   * (mail/notch.ts): Home's row about them, when there are any, and what it
+   * opens. They wait here so that they never stand between the owner and the
+   * text field.
+   */
+  mail?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   heardMs?: number;
   log?: (line: string) => void;
 }
@@ -769,10 +776,12 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       // is on the notch for seconds, and may have gone by unread.
       const last = ledger.asked(1)[0];
       const recent = last && last.answer && last.endedAt !== null && Date.now() - last.endedAt < NOTCH_LAST_ANSWER_MS ? last : null;
+      const mailRow = deps.mail?.row() ?? null;
       stage.put({
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
           ...(recent ? [{ kind: 'row' as const, id: 'last', lead: 'Last answer', say: [shortened(recent.answer ?? '', 90)], go: true }] : []),
+          ...(mailRow ? [mailRow] : []),
           ...(deps.see ? [deps.see.row()] : []),
           ...today,
           { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }] },
@@ -788,6 +797,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
       if (answer.act === 'go' && answer.row === 'see' && deps.see) {
         await deps.see.open(stage);
+        continue;
+      }
+      if (answer.act === 'go' && answer.row === 'mail' && deps.mail) {
+        await deps.mail.open(stage);
         continue;
       }
       if (answer.act === 'ask') {
