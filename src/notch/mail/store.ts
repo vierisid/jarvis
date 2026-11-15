@@ -50,6 +50,8 @@ export interface MailProposalRow {
   found: { id: string; name: string; kind: string }[] | null;
   /** How the draft was asked to be written, when the owner asked for another manner. Empty: as they write. */
   tone: string;
+  /** What the owner told Jarvis for this reply, after it said what it did not know. Empty: nothing. */
+  told: string;
   model: string;
   /** Tokens read and written for this message, every draft of it counted. */
   tokensIn: number;
@@ -72,7 +74,7 @@ export const mailProposalId = (thread: string, messageAt: number): string => `${
 interface StoredProposal {
   id: string; thread_id: string; message_at: number; state: string;
   who_name: string; who_address: string; subject: string; to_json: string; cc_json: string;
-  draft: string; time: string | null; missing: string; look_for: string; found_json: string | null; tone: string;
+  draft: string; time: string | null; missing: string; look_for: string; found_json: string | null; tone: string; told?: string | null;
   model: string; tokens_in: number; tokens_out: number; created_at: number; updated_at: number; sent_at: number | null;
 }
 
@@ -103,6 +105,7 @@ function rowOf(stored: StoredProposal): MailProposalRow {
     lookFor: stored.look_for,
     found,
     tone: stored.tone,
+    told: stored.told ?? '',
     model: stored.model,
     tokensIn: stored.tokens_in,
     tokensOut: stored.tokens_out,
@@ -143,6 +146,9 @@ export class MailStore {
       updated_at INTEGER NOT NULL,
       sent_at INTEGER
     )`);
+    // Added after the table was first made: a brain that already has the table gets the column.
+    const columns = (db.query('PRAGMA table_info(notch_mail_proposals)').all() as { name: string }[]).map((column) => column.name);
+    if (!columns.includes('told')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN told TEXT NOT NULL DEFAULT ''`);
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_thread ON notch_mail_proposals (thread_id)');
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_state ON notch_mail_proposals (state)');
   }
@@ -183,11 +189,11 @@ export class MailStore {
   put(row: MailProposalRow): void {
     this.db.run(
       `INSERT OR REPLACE INTO notch_mail_proposals
-       (id, thread_id, message_at, state, who_name, who_address, subject, to_json, cc_json, draft, time, missing, look_for, found_json, tone,
+       (id, thread_id, message_at, state, who_name, who_address, subject, to_json, cc_json, draft, time, missing, look_for, found_json, tone, told,
         model, tokens_in, tokens_out, created_at, updated_at, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [row.id, row.thread, row.messageAt, row.state, row.who.name, row.who.address, row.subject, JSON.stringify(row.to), JSON.stringify(row.cc),
-        row.draft, row.time, row.missing, row.lookFor, row.found ? JSON.stringify(row.found) : null, row.tone,
+        row.draft, row.time, row.missing, row.lookFor, row.found ? JSON.stringify(row.found) : null, row.tone, row.told,
         row.model, row.tokensIn, row.tokensOut, row.createdAt, row.updatedAt, row.sentAt],
     );
   }

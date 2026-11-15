@@ -37,7 +37,16 @@ export interface NotchWord {
   read?: 'day' | 'dayTime' | 'sched' | 'days' | 'lead' | 'where';
   syn?: Record<string, string[]>;
   free?: boolean;
+  /**
+   * It takes a sentence, not a word: something the person tells Jarvis in
+   * their own words. Pressing it opens a field to type in at once, wider and
+   * longer than a word's, and there is nothing to step through.
+   */
+  long?: boolean;
 }
+
+/** The most a word that takes a sentence may hold. */
+export const NOTCH_WORD_LONG_MAX = 200;
 
 export const NOTCH_MOODS = [
   'idle', 'look', 'listen', 'read', 'write', 'think', 'recall', 'search', 'work', 'happy', 'proud',

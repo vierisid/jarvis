@@ -3,6 +3,7 @@
  * understood, or refuses and keeps the old one. Nothing here touches the page,
  * so it can be tested as plain functions.
  */
+import { NOTCH_WORD_LONG_MAX } from '../../../../src/notch/protocol.ts';
 import type { NotchWord } from '../../../../src/notch/protocol.ts';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -69,7 +70,8 @@ export const READ: Record<NonNullable<NotchWord['read']>, Reader> = {
  * is, if the word takes anything.
  */
 export function readLive(L: NotchWord, raw: string): string | null {
-  const v = raw.replace(/[<>"&`]/g, '').trim().slice(0, 28), low = v.toLowerCase();
+  // A word holds a word or two. One that takes a sentence (something told to Jarvis) holds a sentence.
+  const v = raw.replace(/[<>"&`]/g, '').replace(/\s+/g, ' ').trim().slice(0, L.long ? NOTCH_WORD_LONG_MAX : 28), low = v.toLowerCase();
   if (!v) return null;
   const hit = L.options.find(o => o.toLowerCase() === low) ?? (low.length > 1 ? L.options.find(o => o.toLowerCase().startsWith(low)) : undefined);
   if (hit) return hit;

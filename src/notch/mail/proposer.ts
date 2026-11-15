@@ -40,6 +40,38 @@ export interface MailProposalInput {
    * notch: "shorter", "warmer", "more formal". A few plain words.
    */
   manner?: string;
+  /**
+   * What the owner told Jarvis for this reply, in their own words, after it
+   * said what it did not know: "Tuesday at 15:00 works", "the price is 49 a
+   * month". Theirs, and true: it is used, not weighed.
+   */
+  told?: string;
+}
+
+/** The most of what the owner told that is kept: a sentence. */
+export const MAIL_TOLD_MAX = 200;
+
+/** What the owner typed, as one line of plain text. */
+export function mailTold(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAIL_TOLD_MAX).trim();
+}
+
+/**
+ * The owner's time zone as a person says it: "Central European Standard
+ * Time, UTC+1". People ask for it before they send an invitation, and it is
+ * a thing Jarvis knows: it is never to be named as missing.
+ */
+export function mailZoneText(at: number, zone?: string): string {
+  try {
+    const parts = (name: 'long' | 'shortOffset'): string =>
+      new Intl.DateTimeFormat('en-GB', { timeZone: zone, timeZoneName: name }).formatToParts(at).find((part) => part.type === 'timeZoneName')?.value ?? '';
+    const long = parts('long');
+    const offset = parts('shortOffset').replace(/^GMT/, 'UTC').replace(/^UTC$/, 'UTC+0');
+    return long && offset && long !== offset ? `${long}, ${offset}` : long || offset;
+  } catch {
+    return '';
+  }
 }
 
 export interface MailProposal {
@@ -141,6 +173,7 @@ If it needs a reply, write the reply ${name} would send.
 - Write in the language of the last message.
 - Read every message whole before you write: a link stands after its words, between < and >, and the files that came with a message are named on its "Attached" line. What a message already gave (a link to book a time, a calendar invitation, a document, a file) is there to be used. Never ask for it again, and never name it as missing.
 - When they sent a link to book a time with them, do not propose times and do not ask for a link: say that ${name} will pick a time there.
+- You know ${name}'s time zone: it is given with the date. When they are asked for it, say it. Never name it as missing.
 - Say only what ${name} can say from what is in the thread and in their calendar. Never make up a fact, a price, a date, a decision, a promise or an attachment. When the reply would need something you do not have, write the reply without it and name what is missing in "missing".
 - Propose or accept a time only when the calendar shows ${name} is free then. If you do, copy the words that name the time, exactly as you wrote them in the reply, into "time".
 - When what is missing is a file or a document that ${name} would have (a deck, a contract, a sheet, a recording), put two to five words it would be found by, as they would stand in its name, in "look_for". Leave it empty for anything else.
@@ -157,9 +190,13 @@ export function mailProposalMessages(input: MailProposalInput): { role: 'system'
   const days = (input.calendar ?? []).slice(0, 60).map((event) => mailCalendarLine(event, zone));
   // The owner's own word for how it should read, and nothing but words: it stands outside the mail's marks.
   const manner = (input.manner ?? '').replace(/[^\p{L} -]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const told = mailTold(input.told ?? '');
+  const zoneText = mailZoneText(input.now, zone);
   const user = [
-    `It is ${when(input.now, zone)}.`,
+    `It is ${when(input.now, zone)}${zoneText ? `, in ${ownerName}'s time zone: ${zoneText}` : ''}.`,
     ...(manner ? [`${ownerName} asked for this reply to be written ${manner}. Keep what it says; change how it says it.`] : []),
+    // The owner's own words, typed on the notch for this reply: they stand outside the mail's marks.
+    ...(told ? [`${ownerName} told you, for this reply: "${told.replace(/"/g, "'")}". This is true and it is theirs to say: use it in the reply, and do not name as missing what it answers.`] : []),
     wrapUntrusted(mailThreadText(thread, owner, ownerName, zone), 'a mail thread'),
     input.calendar
       ? wrapUntrusted(days.length ? days.join('\n') : 'Nothing is in the calendar for these days.', `${ownerName}'s calendar for the coming days`)
