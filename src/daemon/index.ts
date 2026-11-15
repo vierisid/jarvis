@@ -755,6 +755,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   initScriptedModelGate({ hosted: isHostedInstall(jarvisConfig), localIntegration, devGate: notchDemoState === 'open' });
   // The turn store, for instructions given on the notch. Built far below.
   let notchTurnStore: BriefChatTransport | null = null;
+  // Where the files of a notch turn are kept (what was circled on the screen, a dropped file): made with the chat routes.
+  let notchAttachments: BriefAttachmentProvider | null = null;
   let notchSurface: NotchSurface | null = null;
   let notchDemo: NotchDemo | null = null;
   // The real things on the notch: approvals and the rest (src/notch/real.ts).
@@ -4691,6 +4693,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           config: () => agentService.getConfig(),
           llm: () => agentService.getLLMManager(),
           transport: () => notchTurnStore,
+          attachments: () => notchAttachments,
         }),
         // Mail (pass 7): Jarvis looks at the mailbox by itself, on a clock,
         // through a connection when one reads mail and in its own browser tab
@@ -5233,6 +5236,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     notchTurnStore = briefChatTransport;
     notchReal?.asks?.resume();
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
+    notchAttachments = briefAttachments;
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
     briefPreparedOpportunities = new PreparedOpportunities(getDb());
     briefOpportunityActivation = new OpportunityActivation(getDb());
@@ -6546,7 +6550,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // What is typed into the notch, and its recordings, are for the notch
     // alone (src/notch/surface.ts, src/notch/talk.ts): an instruction is not
     // an observation to pass round the dashboards.
-    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where', 'notch.around'];
+    // notch.look carries what was read off the screen where the person
+    // pointed: for the notch's question about it, and for nothing else.
+    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where', 'notch.around', 'notch.look'];
 
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double

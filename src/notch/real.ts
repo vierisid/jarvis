@@ -16,6 +16,7 @@ import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
 import type { NotchAsks, NotchAsksDeps } from './asks.ts';
 import { NotchLedger } from './ledger.ts';
+import { attachNotchLook, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
 import { attachNotchTalk } from './talk.ts';
 import type { NotchTalk, NotchTalkDeps, NotchTalkPort } from './talk.ts';
 import type { NotchApprovalWhere, NotchApprovals } from './approvals.ts';
@@ -107,6 +108,13 @@ export interface NotchRealDeps {
     /** The desktop app's recordings arrive as its events. */
     talkPort: NotchTalkPort;
     stt: NotchTalkDeps['stt'];
+    /**
+     * Look at this (pass 9): the desktop apps that say what was circled or
+     * clicked with the talk keys held, and the model's one sentence about one
+     * thing. A look with words is an instruction, so it needs the rest of
+     * asking.
+     */
+    look?: { port: NotchLookPort; describe?: NotchLookDeps['describe'] };
   };
   /**
    * Where the person is (pass 6): the desktop apps that say which app is in
@@ -157,6 +165,8 @@ export interface NotchReal {
   /** Meetings coming up, when the calendar can be reached. */
   soon: NotchSoon | null;
   talk: NotchTalk | null;
+  /** Looking at a thing on the screen, when a desktop app can. */
+  look: NotchLook | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
   /** Stops looking. */
@@ -227,6 +237,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     })
     : null;
   let talk: NotchTalk | null = null;
+  let lookAt: NotchLook | null = null;
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -249,7 +260,20 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       quiet: quiet ? notchQuietHome(quiet, () => inbox.calmed()) : undefined,
       log,
     });
-    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, log });
+    // Look at this (pass 9). It is joined to talking, because the same keys
+    // are held for both: what is said while a thing is circled is about it.
+    if (deps.asks.look) {
+      const owner = asks;
+      lookAt = attachNotchLook(deps.asks.look.port, {
+        inbox,
+        ask: (text, files) => { owner.typed(text, files); },
+        talking: (sidecarId) => talk?.open(sidecarId) ?? false,
+        describe: deps.asks.look.describe,
+        paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+        log,
+      });
+    }
+    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, look: lookAt ?? undefined, log });
   }
   const promises = deps.promises;
   const stopPromises = promises ? attachNotchPromises(inbox, { executor: promises.executor }) : () => {};
@@ -365,7 +389,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, mail, quiet, presence, around, soon,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, mail, quiet, presence, around, soon,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -373,6 +397,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       if (questionTimer) clearInterval(questionTimer);
       stopPromises(); stopPause();
       asks?.stop();
+      lookAt?.stop();
       where?.stop();
       mail?.stop();
       presence?.stop();

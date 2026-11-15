@@ -50,13 +50,36 @@ const WAITING_FOR_CHAT = 'Waiting for another chat to finish.';
 export type NotchMissReason = 'silence' | 'too_little' | 'failed' | 'no_stt' | 'too_long';
 
 /** The product's turn store, as the notch uses it. */
+/**
+ * Something that goes with the words of an instruction: the picture of what
+ * was circled on the screen and what was read there (./look.ts), or a file
+ * dropped on the notch (./drop.ts). It travels as an attachment of the turn,
+ * so the model reads it as outside content.
+ */
+export interface NotchAskFile {
+  kind: 'document' | 'image' | 'screenshot';
+  name: string;
+  mediaType: string;
+  bytes: Uint8Array;
+}
+
+/** What the door throws when the files of an instruction could not be kept with it. `why` is said to the person. */
+export class NotchFilesNotKept extends Error {
+  constructor(readonly why: string) { super(why); }
+}
+
 export interface NotchTurnDoor {
   /** Whether a turn can be taken now. False while the brain is starting or draining. */
   ready(): boolean;
   /** The id of the notch's conversation, made when there is none. */
   conversation(): string;
-  /** Starts a stored turn. Throws with a `status` of 409 when the conversation already has one. */
-  submit(turn: BriefTurnRef & { text: string }): void;
+  /**
+   * Starts a stored turn, with its files when it has any. Throws with a
+   * `status` of 409 when the conversation already has one, and a
+   * NotchFilesNotKept when the files could not be kept: then nothing was
+   * started.
+   */
+  submit(turn: BriefTurnRef & { text: string; files?: NotchAskFile[] }): void | Promise<void>;
   cancel(turn: BriefTurnRef): void;
   onEvent(listener: (event: BriefChatEvent) => void): () => void;
   /** Where a turn stands now, and its whole stored reply. Null when there is no such turn. */
@@ -114,8 +137,8 @@ export interface NotchAsksDeps {
 }
 
 export interface NotchAsks {
-  /** Something was typed. Comes back with the instruction's id. */
-  typed(text: string): string;
+  /** Something was typed, or asked about files that go with it. Comes back with the instruction's id. */
+  typed(text: string, files?: NotchAskFile[]): string;
   /** The talk keys went down: a recording has begun. Comes back with the instruction's id. */
   listen(talkId: string): string;
   /**
@@ -128,7 +151,7 @@ export interface NotchAsks {
    * The words. `cut` when listening stopped by itself at the limit: what was
    * heard may end in the middle of a sentence, so it is asked about first.
    */
-  words(talkId: string, text: string, more?: { cut?: boolean }): void;
+  words(talkId: string, text: string, more?: { cut?: boolean; files?: NotchAskFile[] }): void;
   /** Nothing was caught. */
   nothing(talkId: string, why: NotchMissReason): void;
   /** The recording was thrown away where it was made. */
@@ -162,6 +185,8 @@ interface Live {
   missed: NotchMissReason | null;
   /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
   cut?: boolean;
+  /** What goes with the words: what was circled on the screen, a file that was dropped. */
+  files?: NotchAskFile[];
   approvals: Set<string>;
   waiters: Set<() => void>;
 }
@@ -449,12 +474,16 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     ask.activity = null;
     byTurn.set(ref.turnId, ask);
     try {
-      turns.submit({ ...ref, text: ask.heard });
+      await turns.submit({ ...ref, text: ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
+      // Kept with the turn now: not held here as well.
+      ask.files = undefined;
     } catch (error) {
       const busy = (error as { status?: unknown } | null)?.status === 409;
-      const note = busy
-        ? 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.'
-        : 'It could not be started.';
+      const note = error instanceof NotchFilesNotKept
+        ? error.why
+        : busy
+          ? 'Its conversation is busy with something sent from the dashboard. Ask again when that is done.'
+          : 'It could not be started.';
       log(`[notch] an instruction could not be started: ${error instanceof Error ? error.message : String(error)}`);
       byTurn.delete(ref.turnId);
       ask.note = note;
@@ -821,11 +850,13 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
   }
 
-  function typed(text: string): string {
+  function typed(text: string, files?: NotchAskFile[]): string {
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
     ledger.open(id, 'typed', text);
-    begin(make(id, 'typed', 'heard', text));
+    const ask = make(id, 'typed', 'heard', text);
+    if (files?.length) ask.files = files;
+    begin(ask);
     return id;
   }
 
@@ -896,6 +927,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.phase = 'heard';
       ask.heard = text;
       if (more?.cut) ask.cut = true;
+      if (more?.files?.length) ask.files = more.files;
       bump(ask);
     },
     nothing(talkId, why) {

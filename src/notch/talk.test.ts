@@ -227,3 +227,109 @@ describe('what speech-to-text writes when there were no words', () => {
     expect(h.calls.at(-1)).toBe('words pc:a1 "Stop."');
   });
 });
+
+// Pass 9: a thing is circled with the same keys held that open the microphone.
+describe('a hold of the keys in which something was looked at', () => {
+  function withLook(stt: NotchTalkDeps['stt'] = () => ({ transcribe: async () => 'is this one late' }), looking = true) {
+    const calls: string[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
+    let gone: (sidecarId: string) => void = () => {};
+    const asks: NotchTalkDeps['asks'] = {
+      listen: (id) => { calls.push(`listen ${id}`); return id; },
+      released: (id) => { calls.push(`released ${id}`); return true; },
+      words: (id, text, more) => { calls.push(`words ${id} "${text}"${more?.cut ? ' cut' : ''} with ${(more?.files ?? []).map((file) => file.name).join('+') || 'nothing'}`); },
+      nothing: (id, why) => { calls.push(`nothing ${id} ${why}`); },
+      dropped: (id) => { calls.push(`dropped ${id}`); },
+      tell: () => {},
+    };
+    const sinces: number[] = [];
+    let at = 10_000;
+    const talk = attachNotchTalk(
+      { onEvent: (listener) => { onEvent = listener; }, onSidecarDisconnected: (listener) => { gone = listener; } },
+      {
+        asks, stt, openMs: 40, now: () => at, log: () => {},
+        look: {
+          during: (sidecarId, since) => { sinces.push(since); return looking && sidecarId === 'pc'; },
+          alone: (sidecarId) => { calls.push(`look alone ${sidecarId}`); },
+          files: async (sidecarId) => { calls.push(`look files ${sidecarId}`); return [{ kind: 'document', name: 'circled-on-screen.txt', mediaType: 'text/plain', bytes: new Uint8Array([1]) }]; },
+        },
+      });
+    const pcm = Buffer.alloc(16_000 * 2, 1).toString('base64');
+    return {
+      calls, talk, sinces, later: (ms: number) => { at += ms; }, disconnect: () => gone('pc'),
+      event: (payload: Record<string, unknown>, audio = false, sidecarId = 'pc'): void =>
+        onEvent(sidecarId, { event_type: NOTCH_TALK_EVENT, payload, ...(audio ? { binary: { type: 'inline', mime_type: 'audio/pcm', data: pcm } } : {}) }),
+    };
+  }
+
+  test('and nothing was said: it is not "I did not catch that". The line leaves and the look answers', async () => {
+    const h = withLook();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.later(2000);
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 0, duration_ms: 2000 }, true);
+    h.event({ phase: 'start', talk_id: 'a2' });
+    h.event({ phase: 'end', talk_id: 'a2', voiced_ms: 90, duration_ms: 900 }, true);
+    await settle();
+    expect(h.calls).toEqual([
+      'listen pc:a1', 'released pc:a1', 'dropped pc:a1', 'look alone pc',
+      'listen pc:a2', 'released pc:a2', 'dropped pc:a2', 'look alone pc',
+    ]);
+    // A click is quicker than the keys become talking: a look begun a moment before the recording opened is that hold's too.
+    expect(h.sinces[0]).toBe(10_000 - 1500);
+  });
+
+  test('and something was said: the words carry what was circled', async () => {
+    const h = withLook();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500, sample_rate: 16000 }, true);
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'look files pc', 'words pc:a1 "is this one late" with circled-on-screen.txt']);
+  });
+
+  test('speech-to-text wrote only a stock line: that is nothing said, and the look answers', async () => {
+    const h = withLook(() => ({ transcribe: async () => 'Thank you.' }));
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 300, duration_ms: 900 }, true);
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'dropped pc:a1', 'look alone pc']);
+  });
+
+  test('the words were lost, not absent: that is said, and the look still has its line', async () => {
+    const h = withLook(() => ({ transcribe: async () => { throw new Error('down'); } }));
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500 }, true);
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'nothing pc:a1 failed', 'look alone pc']);
+  });
+
+  test('a slip of the keys after the circle, or a desktop app that goes away: the recording is dropped and the look is not left waiting', () => {
+    const slip = withLook();
+    slip.event({ phase: 'start', talk_id: 'a1' });
+    slip.event({ phase: 'cancelled', talk_id: 'a1' });
+    expect(slip.calls).toEqual(['listen pc:a1', 'dropped pc:a1', 'look alone pc']);
+    const away = withLook();
+    away.event({ phase: 'start', talk_id: 'a1' });
+    away.disconnect();
+    expect(away.calls).toEqual(['listen pc:a1', 'dropped pc:a1', 'look alone pc']);
+  });
+
+  test('with no look in that hold everything is as it was', async () => {
+    const h = withLook(undefined, false);
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 0, duration_ms: 2000 }, true);
+    h.event({ phase: 'start', talk_id: 'a2' });
+    h.event({ phase: 'end', talk_id: 'a2', voiced_ms: 900, duration_ms: 1500 }, true);
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'nothing pc:a1 silence', 'listen pc:a2', 'released pc:a2', 'words pc:a2 "is this one late" with nothing']);
+  });
+
+  test('says whether a recording is open on a desktop app', () => {
+    const h = withLook();
+    expect(h.talk.open('pc')).toBe(false);
+    h.event({ phase: 'start', talk_id: 'a1' });
+    expect(h.talk.open('pc')).toBe(true);
+    expect(h.talk.open('laptop')).toBe(false);
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 0 }, true);
+    expect(h.talk.open('pc')).toBe(false);
+  });
+});
