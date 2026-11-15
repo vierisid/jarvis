@@ -6,25 +6,34 @@
  * let go is sent to the brain by the page itself, as the body of one request
  * to `/api/notch/drop`, because a file is too large for a message.
  *
- * What can be read is what a chat attachment can be: plain text, Markdown,
+ * What can be read: what a chat attachment can be (plain text, Markdown,
  * CSV, JSON, a PDF that has text in it, a PNG or a JPEG, up to the same
- * sizes. Such a file is asked about at once ("Summarise ..."), as an
- * instruction that carries it, and the answer comes as any answer does: one
- * line, or a sheet. Anything else is refused in a sentence that says what
- * kind of file it is and what would work instead. Nothing is guessed from a
- * file that cannot be read.
+ * sizes), and files that are made of words in another dress, which are
+ * turned into their words first (./drop-read.ts): a web page, a Word
+ * document, a spreadsheet, a deck, code and settings files. The owner asked
+ * for those on 15 November 2026, after an HTML file was turned away. Such a
+ * file is asked about at once ("Summarise ..."), as an instruction that
+ * carries it, and the answer comes as any answer does: one line, or a sheet.
+ * Anything else is refused in a sentence that says what kind of file it is
+ * and what would work instead. Nothing is guessed from a file that cannot be
+ * read.
  *
  * The file's name is the person's own. It is shown on the notch and given to
  * the model with the file. It is never written to a log.
  */
 import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { NotchAskFile } from './asks.ts';
+import { NOTCH_DROP_READERS, readDropped, type DropReader } from './drop-read.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import type { NotchSurface } from './surface.ts';
 
-/** The most the page sends: the largest file that could be read at all, with room for the request around it. */
-export const NOTCH_DROP_MAX_BYTES = ATTACHMENT_LIMITS.fileBytes;
+/**
+ * The most the page sends: the largest file that could be read at all. A
+ * Word file or a deck is mostly its pictures, so it may be far larger than
+ * the words that are taken from it.
+ */
+export const NOTCH_DROP_MAX_BYTES = 16 * 1024 * 1024;
 /** How long "let go of it here" stays up when the file is neither dropped nor taken away. */
 export const NOTCH_DROP_OVER_MS = 20_000;
 export const NOTCH_DROP_NAME_MAX = 120;
@@ -44,14 +53,14 @@ const BY_TYPE: Record<string, { kind: NotchAskFile['kind']; mediaType: string }>
 
 /** Kinds that cannot be read yet, each with the sentence that says so and what would work. */
 const NOT_YET: [RegExp, string][] = [
-  [/^(xlsx|xls|xlsm|ods|numbers)$/, 'a spreadsheet. I cannot read those yet. Saved as CSV, I can.'],
-  [/^(docx|doc|odt|rtf|pages)$/, 'a text document I cannot open yet. Saved as PDF or plain text, I can read it.'],
-  [/^(pptx|ppt|odp|key)$/, 'a presentation. I cannot read those yet. Saved as PDF, I can.'],
+  [/^(xls|ods|numbers)$/, 'a spreadsheet of a kind I cannot read yet. Saved as .xlsx or CSV, I can.'],
+  [/^(doc|odt|rtf|pages)$/, 'a text document of a kind I cannot open yet. Saved as .docx, PDF or plain text, I can read it.'],
+  [/^(ppt|odp|key)$/, 'a presentation of a kind I cannot read yet. Saved as .pptx or PDF, I can.'],
   [/^(mp3|wav|m4a|aac|ogg|flac|opus)$/, 'a sound file. I cannot listen to files yet.'],
   [/^(mp4|mov|mkv|avi|webm|m4v)$/, 'a video. I cannot watch files yet.'],
   [/^(zip|rar|7z|tar|gz|tgz)$/, 'an archive. I cannot open those. Drop a file from inside it.'],
   [/^(gif|webp|bmp|tif|tiff|heic|svg)$/, 'a picture of a kind I cannot read yet. As PNG or JPEG, I can.'],
-  [/^(exe|msi|dll|bat|cmd|ps1|sh|app|dmg)$/, 'a program. I do not read or run dropped programs.'],
+  [/^(exe|msi|dll|com|scr|app|dmg)$/, 'a program. I do not read or run dropped programs.'],
 ];
 
 /** A file's name made fit to show: no path, no control characters, not too long. */
@@ -64,7 +73,8 @@ export function dropName(raw: string): string {
 const extension = (name: string): string => (/\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1] ?? '').toLowerCase();
 
 export type DropVerdict =
-  | { ok: true; kind: NotchAskFile['kind']; mediaType: string }
+  /** `reader`: the file is turned into its words first, and travels as plain text. */
+  | { ok: true; kind: NotchAskFile['kind']; mediaType: string; reader?: DropReader }
   | { ok: false; why: string };
 
 /**
@@ -76,10 +86,17 @@ export function dropVerdict(name: string, mediaType: string, size: number): Drop
   const shown = name || 'That';
   if (!(size > 0)) return { ok: false, why: `${shown} is empty.` };
   const ext = extension(name);
-  const known = READABLE[ext] ?? BY_TYPE[mediaType.split(';')[0]!.trim().toLowerCase()] ?? null;
+  const type = mediaType.split(';')[0]!.trim().toLowerCase();
+  // Made of words in another dress: a web page, an Office file, code.
+  const reader = NOTCH_DROP_READERS[ext] ?? (type === 'text/html' ? 'html' : null);
+  if (reader && !READABLE[ext]) {
+    if (size > NOTCH_DROP_MAX_BYTES) return { ok: false, why: `${shown} is larger than I can read yet: ${Math.round(NOTCH_DROP_MAX_BYTES / (1024 * 1024))} MB is the most.` };
+    return { ok: true, kind: 'document', mediaType: 'text/plain', reader };
+  }
+  const known = READABLE[ext] ?? BY_TYPE[type] ?? null;
   if (!known) {
     for (const [pattern, sentence] of NOT_YET) if (pattern.test(ext)) return { ok: false, why: `${shown} is ${sentence}` };
-    return { ok: false, why: `I cannot read that kind of file yet${ext ? ` (.${ext})` : ''}. Text, CSV, a PDF, a PNG or a JPEG I can.` };
+    return { ok: false, why: `I cannot read that kind of file yet${ext ? ` (.${ext})` : ''}. Text, a web page, Word, Excel, PowerPoint, CSV, a PDF, a PNG or a JPEG I can.` };
   }
   const most = known.kind === 'document' ? ATTACHMENT_LIMITS.documentBytes : ATTACHMENT_LIMITS.fileBytes;
   if (size > most) {
@@ -89,11 +106,10 @@ export function dropVerdict(name: string, mediaType: string, size: number): Drop
   return { ok: true, kind: known.kind, mediaType: known.mediaType };
 }
 
-/** What is asked about a file that was dropped with no question. */
-export function dropQuestion(name: string, kind: NotchAskFile['kind']): string {
-  return kind === 'document'
-    ? `Summarise the file I dropped, ${name}: what it is, and the points that matter, in a few short lines.`
-    : `Tell me what the picture I dropped, ${name}, shows, in a few short lines.`;
+/** What is asked about a file that was dropped with no question. `cut`: it was long, and only its first part is there. */
+export function dropQuestion(name: string, kind: NotchAskFile['kind'], cut = false): string {
+  if (kind !== 'document') return `Tell me what the picture I dropped, ${name}, shows, in a few short lines.`;
+  return `Summarise the file I dropped, ${name}: what it is, and the points that matter, in a few short lines.${cut ? ' It is long: only its first part could be read, so say that the summary is of the first part.' : ''}`;
 }
 
 export interface NotchDropDeps {
@@ -171,8 +187,20 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
         deps.tell(['Only part of ', em(name), ' arrived, so I did not read it. Try dropping it again.'], 'sorry');
         return { taken: false };
       }
+      let bytes = dropped.bytes;
+      let cut = false;
+      if (verdict.reader) {
+        // A web page, an Office file, code: its words, as plain text under its own name.
+        const read = readDropped(verdict.reader, dropped.bytes);
+        if (!read) {
+          deps.tell(['I could not read ', em(name), '. It may be damaged, protected with a password, or hold no words.'], 'sorry');
+          return { taken: false };
+        }
+        bytes = new TextEncoder().encode(read.text);
+        cut = read.cut;
+      }
       if (dropped.count > 1) deps.tell([`One file at a time. I took the first: `, em(name), '.']);
-      deps.ask(dropQuestion(name, verdict.kind), [{ kind: verdict.kind, name, mediaType: verdict.mediaType, bytes: dropped.bytes }]);
+      deps.ask(dropQuestion(name, verdict.kind, cut), [{ kind: verdict.kind, name, mediaType: verdict.mediaType, bytes }]);
       return { taken: true };
     },
     stop() {
