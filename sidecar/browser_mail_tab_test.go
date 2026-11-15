@@ -199,12 +199,24 @@ func TestMailTabNavigateSaysWhereItLandedNotTheAddress(t *testing.T) {
 		done <- went{site, err}
 	}()
 
+	// Where it is now is asked first, and that page is marked as the one being left.
+	fb.answerValue(fb.nextCommand().ID, "https://calendar.google.com/calendar/u/0/r/week")
+	mark := fb.nextCommand()
+	if expr, _ := mark.Params["expression"].(string); !strings.Contains(expr, "__jarvisLeaving = true") {
+		t.Fatalf("the page being left was not marked: %v", mark.Params)
+	}
+	fb.answerValue(mark.ID, "")
 	cmd := fb.nextCommand()
 	if cmd.Method != "Page.navigate" || cmd.SessionID != "S-mail" || cmd.Params["url"] != "https://mail.google.com/mail/u/0/" {
 		t.Fatalf("navigate was %q %v on %q", cmd.Method, cmd.Params, cmd.SessionID)
 	}
 	fb.reply(cmd.ID)
-	// Still loading, then there.
+	// The old page still answering (nothing is concluded from it), then the new one loading, then there.
+	wait := fb.nextCommand()
+	if expr, _ := wait.Params["expression"].(string); !strings.Contains(expr, "__jarvisLeaving") {
+		t.Fatalf("the wait for the new page does not tell it from the old one: %v", wait.Params)
+	}
+	fb.answerValue(wait.ID, "")
 	fb.answerValue(fb.nextCommand().ID, "loading")
 	fb.answerValue(fb.nextCommand().ID, "complete")
 	// Google sent it to the sign-in page: that is an answer, not a failure.
@@ -219,10 +231,52 @@ func TestMailTabNavigateReportsAnAddressThatCouldNotBeReached(t *testing.T) {
 	fb := newFakeBrowser(t)
 	done := make(chan error, 1)
 	go func() { _, err := fb.client.mailTabNavigate("S-mail", "https://mail.google.com/"); done <- err }()
+	fb.answerValue(fb.nextCommand().ID, "about:blank")
+	fb.answerValue(fb.nextCommand().ID, "")
 	cmd := fb.nextCommand()
 	fb.write(map[string]any{"id": cmd.ID, "result": map[string]any{"errorText": "net::ERR_INTERNET_DISCONNECTED"}})
 	if err := <-done; err == nil || !strings.Contains(err.Error(), "ERR_INTERNET_DISCONNECTED") {
 		t.Fatalf("an unreachable address came back as %v", err)
+	}
+}
+
+func TestSameDocumentIsEverythingButWhatFollowsTheHash(t *testing.T) {
+	cases := []struct {
+		from, to string
+		same     bool
+	}{
+		{"https://mail.google.com/mail/u/0/#inbox", "https://mail.google.com/mail/u/0/#search/x", true},
+		{"https://mail.google.com/mail/u/0/", "https://mail.google.com/mail/u/0/#inbox", true},
+		{"https://mail.google.com/mail/u/0/#inbox", "https://mail.google.com/mail/u/0/?zx=abc#all/123", false},
+		{"https://calendar.google.com/calendar/u/0/r/week/2026/11/9", "https://calendar.google.com/calendar/u/0/r/week/2026/11/16", false},
+		{"", "https://mail.google.com/mail/u/0/", false},
+	}
+	for _, tc := range cases {
+		if got := sameDocument(tc.from, tc.to); got != tc.same {
+			t.Errorf("sameDocument(%q, %q) = %v, want %v", tc.from, tc.to, got, tc.same)
+		}
+	}
+}
+
+// A move inside the same document brings no new page: nothing is marked, and
+// the page that is there is the one that is waited for.
+func TestMailTabNavigateInsideTheSameDocumentMarksNothing(t *testing.T) {
+	fb := newFakeBrowser(t)
+	done := make(chan string, 1)
+	go func() {
+		site, _ := fb.client.mailTabNavigate("S-mail", "https://mail.google.com/mail/u/0/#search/deck")
+		done <- site
+	}()
+	fb.answerValue(fb.nextCommand().ID, "https://mail.google.com/mail/u/0/#inbox")
+	cmd := fb.nextCommand()
+	if cmd.Method != "Page.navigate" {
+		t.Fatalf("the page was marked for a move that brings no new page: %q %v", cmd.Method, cmd.Params)
+	}
+	fb.reply(cmd.ID)
+	fb.answerValue(fb.nextCommand().ID, "complete")
+	fb.answerValue(fb.nextCommand().ID, "mail.google.com")
+	if site := <-done; site != "mail" {
+		t.Fatalf("site = %q, want mail", site)
 	}
 }
 
