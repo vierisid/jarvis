@@ -25,24 +25,33 @@ describe('whether a dropped file can be read', () => {
     expect(dropVerdict('README', 'text/plain; charset=utf-8', 900)).toEqual({ ok: true, kind: 'document', mediaType: 'text/plain' });
   });
 
-  // The owner's test for pass 9: "Drop a spreadsheet: it says it cannot read that yet."
-  test('a spreadsheet is refused in a sentence that says what it is and what would work', () => {
-    expect(dropVerdict('Payouts.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 40_000))
-      .toEqual({ ok: false, why: 'Payouts.xlsx is a spreadsheet. I cannot read those yet. Saved as CSV, I can.' });
-    expect((dropVerdict('Budget.numbers', '', 40_000) as { why: string }).why).toContain('a spreadsheet');
+  // The owner, 15 November 2026, after an HTML file was turned away: "we can use other files as well".
+  test('a web page, a Word file, a spreadsheet, a deck and code are read as their words', () => {
+    for (const name of ['page.html', 'page.HTM', 'Contract.docx', 'Payouts.xlsx', 'Pitch.pptx', 'config.yaml', 'main.go', 'query.sql', 'run.ps1']) {
+      const verdict = dropVerdict(name, '', 40_000);
+      expect(verdict).toMatchObject({ ok: true, kind: 'document', mediaType: 'text/plain' });
+      expect((verdict as { reader?: string }).reader).toBeDefined();
+    }
+    expect(dropVerdict('Payouts.xlsx', '', 40_000)).toEqual({ ok: true, kind: 'document', mediaType: 'text/plain', reader: 'xlsx' });
+    // No end to the name, and the browser says it is a web page.
+    expect(dropVerdict('saved page', 'text/html', 900)).toEqual({ ok: true, kind: 'document', mediaType: 'text/plain', reader: 'html' });
+    // These may be far larger than their words: a deck is mostly its pictures.
+    expect(dropVerdict('Pitch.pptx', '', 9 * MB).ok).toBe(true);
+    expect(dropVerdict('Pitch.pptx', '', 17 * MB)).toEqual({ ok: false, why: 'Pitch.pptx is larger than I can read yet: 16 MB is the most.' });
   });
 
-  test('so is every other kind it cannot read, each in its own words', () => {
+  test('every kind it cannot read is refused in its own words, with what would work', () => {
     const why = (name: string): string => (dropVerdict(name, '', 40_000) as { why: string }).why;
-    expect(why('Contract.docx')).toBe('Contract.docx is a text document I cannot open yet. Saved as PDF or plain text, I can read it.');
-    expect(why('Pitch.pptx')).toContain('a presentation');
+    expect(why('Payouts.xls')).toBe('Payouts.xls is a spreadsheet of a kind I cannot read yet. Saved as .xlsx or CSV, I can.');
+    expect(why('Contract.doc')).toBe('Contract.doc is a text document of a kind I cannot open yet. Saved as .docx, PDF or plain text, I can read it.');
+    expect(why('Pitch.key')).toContain('a presentation');
     expect(why('Call with Anna.m4a')).toBe('Call with Anna.m4a is a sound file. I cannot listen to files yet.');
     expect(why('demo.mp4')).toContain('a video');
     expect(why('all.zip')).toContain('an archive');
     expect(why('anim.gif')).toContain('As PNG or JPEG, I can');
     expect(why('setup.exe')).toBe('setup.exe is a program. I do not read or run dropped programs.');
-    expect(why('thing.xyz')).toBe('I cannot read that kind of file yet (.xyz). Text, CSV, a PDF, a PNG or a JPEG I can.');
-    expect(why('thing')).toBe('I cannot read that kind of file yet. Text, CSV, a PDF, a PNG or a JPEG I can.');
+    expect(why('thing.xyz')).toBe('I cannot read that kind of file yet (.xyz). Text, a web page, Word, Excel, PowerPoint, CSV, a PDF, a PNG or a JPEG I can.');
+    expect(why('thing')).toContain('I cannot read that kind of file yet.');
   });
 
   test('a file that is empty or too large is said to be so, with the limit', () => {
@@ -190,11 +199,37 @@ describe('a file dropped on the notch', () => {
     expect(h.logs.join('\n')).toContain('300000 bytes');
   });
 
-  test('a spreadsheet is not asked about: the notch says it cannot read that yet', () => {
+  test('a file it cannot read is not asked about: the notch says what it is and what would work', () => {
     const h = harness();
-    expect(h.drop.take(h.file('Payouts.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 40_000))).toEqual({ taken: false });
+    expect(h.drop.take(h.file('Call with Anna.m4a', 'audio/mp4', 40_000))).toEqual({ taken: false });
     expect(h.asked).toEqual([]);
-    expect(h.told).toEqual(['Payouts.xlsx is a spreadsheet. I cannot read those yet. Saved as CSV, I can.']);
+    expect(h.told).toEqual(['Call with Anna.m4a is a sound file. I cannot listen to files yet.']);
+  });
+
+  test('a web page is asked about as its words, under its own name', () => {
+    const h = harness();
+    const page = new TextEncoder().encode('<html><head><script>steal()</script></head><body><h1>Receipt 114</h1><p>Paid in <b>full</b>.</p></body></html>');
+    expect(h.drop.take({ name: 'receipt.html', mediaType: 'text/html', size: page.length, bytes: page, count: 1 })).toEqual({ taken: true });
+    expect(h.asked[0]!.text).toBe('Summarise the file I dropped, receipt.html: what it is, and the points that matter, in a few short lines.');
+    const [file] = h.asked[0]!.files;
+    expect([file!.kind, file!.name, file!.mediaType]).toEqual(['document', 'receipt.html', 'text/plain']);
+    expect(new TextDecoder().decode(file!.bytes)).toBe('Receipt 114\nPaid in full.');
+  });
+
+  test('a long one is cut, and the question says so', () => {
+    const h = harness();
+    const long = new TextEncoder().encode('word '.repeat(60_000));
+    expect(h.drop.take({ name: 'log.yaml', mediaType: '', size: long.length, bytes: long, count: 1 })).toEqual({ taken: true });
+    expect(h.asked[0]!.text).toContain('only its first part could be read');
+    expect(h.asked[0]!.files[0]!.bytes.length).toBeLessThan(121_000);
+  });
+
+  test('a file that is not what its name says, or is locked, is said to be unreadable and nothing is asked', () => {
+    const h = harness();
+    const junk = new TextEncoder().encode('this is not a zip, whatever the end of its name says about it');
+    expect(h.drop.take({ name: 'Payouts.xlsx', mediaType: '', size: junk.length, bytes: junk, count: 1 })).toEqual({ taken: false });
+    expect(h.asked).toEqual([]);
+    expect(h.told).toEqual(['I could not read Payouts.xlsx. It may be damaged, protected with a password, or hold no words.']);
   });
 
   test('a file too large to read arrives without its bytes, and is said to be too large', () => {

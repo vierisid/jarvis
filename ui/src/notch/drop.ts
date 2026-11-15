@@ -20,7 +20,7 @@ import type { NotchFromPage } from '../../../src/notch/protocol.ts';
 
 /** Where a dropped file goes, and the most that is sent (src/notch/drop.ts). */
 export const NOTCH_DROP_PATH = '/api/notch/drop';
-export const NOTCH_DROP_MAX_BYTES = 4 * 1024 * 1024;
+export const NOTCH_DROP_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface NotchDropPort {
   send(message: NotchFromPage): void;
