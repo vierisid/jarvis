@@ -258,7 +258,7 @@ func (w *lookWindows) Snapshot(screen lookRect) lookSnapshot {
 // ---------------------------------------------------------------------------
 
 type lookInkCmd struct {
-	kind   uint8 // 1 begin, 2 line, 3 tag, 4 end
+	kind   uint8 // 1 begin, 2 line, 3 tag, 4 end, 5 a ring round a rectangle
 	a, b   lookPoint
 	screen lookRect
 	scale  float64
@@ -284,6 +284,9 @@ func (w *lookWindows) InkTag(text string, bounds lookRect) {
 	w.post(lookInkCmd{kind: 3, text: text, bounds: bounds})
 }
 func (w *lookWindows) InkEnd(stay time.Duration) { w.post(lookInkCmd{kind: 4, stay: stay}) }
+func (w *lookWindows) Ring(r lookRect, label string, stay time.Duration) {
+	w.post(lookInkCmd{kind: 5, bounds: r, text: label, stay: stay})
+}
 
 // lookUlwInfo mirrors Win32 UPDATELAYEREDWINDOWINFO.
 type lookUlwInfo struct {
@@ -476,6 +479,31 @@ func (w *lookWindows) inkThread() {
 			if cmd.stay <= 0 {
 				closeAll()
 				return
+			}
+			endAt = time.Now().Add(cmd.stay)
+		case 5:
+			// A ring round a thing: its own sheet, on the display the thing is on.
+			closeAll()
+			middle := lookPoint{cmd.bounds.X + cmd.bounds.W/2, cmd.bounds.Y + cmd.bounds.H/2}
+			screen, scale = w.Screen(middle)
+			s, err := newLookSheet(screen.X, screen.Y, screen.W, screen.H)
+			if err != nil {
+				log.Printf("[notch] look: no ring: %v", err)
+				return
+			}
+			sheet, ink = s, newNotchInk(screen.W, screen.H)
+			path := lookRingPath(lookRect{cmd.bounds.X - screen.X, cmd.bounds.Y - screen.Y, cmd.bounds.W, cmd.bounds.H}, 6*scale, 10*scale)
+			touched := lookRect{}
+			for i := range path {
+				a, b := path[i], path[(i+1)%len(path)]
+				touched = lookUnion(touched, ink.stroke(float64(a.X), float64(a.Y), float64(b.X), float64(b.Y), notchInkRadius*scale*0.8))
+			}
+			ink.paint(sheet.pixels, touched)
+			sheet.show(nil)
+			sheet.raise()
+			if cmd.text != "" {
+				tagText = cmd.text
+				tag = newLookTag(cmd.text, cmd.bounds, screen, scale)
 			}
 			endAt = time.Now().Add(cmd.stay)
 		}
@@ -842,4 +870,56 @@ func lookSiblings(state *uiaState, walker *ole.IDispatch, found []lookFound, lin
 		child.Release()
 	}
 	return things, len(things) > 0
+}
+
+// ---------------------------------------------------------------------------
+// The window the person is in, for "where is...?"
+// ---------------------------------------------------------------------------
+
+// platformNotchWindowRead reads the window the person is in: what it says of
+// itself, element by element, each with its place in the screen's own pixels.
+// It is the window in front, unless that is one of this program's own (the
+// notch has the keyboard while something is typed into it): then it is the
+// first window behind that is somebody else's.
+func platformNotchWindowRead() (map[string]any, error) {
+	var hwnd uintptr
+	var pid uint32
+	if fg := win32RootWindow(win32GetForegroundWindow()); fg != 0 && !ownWindow(fg) {
+		hwnd, pid = fg, win32GetWindowPid(fg)
+	} else {
+		for _, w := range enumTopWindows() {
+			if ownWindow(w.Hwnd) {
+				continue
+			}
+			if minimized, _, _ := procIsIconic.Call(w.Hwnd); minimized != 0 {
+				continue
+			}
+			// The desktop itself is not a window a person is "in".
+			if w.ClassName == "Progman" || w.ClassName == "WorkerW" || w.ClassName == "Shell_TrayWnd" {
+				continue
+			}
+			hwnd, pid = w.Hwnd, w.Pid
+			break
+		}
+	}
+	if hwnd == 0 || pid == 0 {
+		return nil, fmt.Errorf("no window of another program is open")
+	}
+	app, title := notchAppKey(processBaseName(pid)), win32WindowTitle(hwnd)
+	// Decided before anything is read (notch_where.go).
+	if away := notchLookAway(app, title); away != "" {
+		return map[string]any{"away": away}, nil
+	}
+	val, err := comThread.call(func(state *uiaState) (any, error) {
+		return uiaInspect(state, int(pid), 8, false, false)
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, _ := val.(map[string]any)
+	if result == nil {
+		return nil, fmt.Errorf("the window could not be read")
+	}
+	result["app"] = app
+	return result, nil
 }

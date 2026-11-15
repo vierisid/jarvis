@@ -31,9 +31,12 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // lookHands is what a platform does for a look.
@@ -58,6 +61,9 @@ type lookHands interface {
 	InkTag(text string, bounds lookRect)
 	// InkEnd takes the ink away after it has stayed this long.
 	InkEnd(stay time.Duration)
+	// Ring draws a ring round a rectangle of the screen, with a few words
+	// beside it, and takes both away after they have stayed this long.
+	Ring(r lookRect, label string, stay time.Duration)
 	// What is at a place, and what a line holds. Both may take a while.
 	// light: only what the tag needs (what kind of thing, and the name of
 	// one), not what is written inside each.
@@ -495,4 +501,99 @@ func (l *NotchLook) tell(job lookTaken) {
 	// Counts and sizes, never what was read.
 	log.Printf("[notch] look: %s, %d thing(s), picture %d bytes", how, len(things), len(picture))
 	send(notchLookPayload("taken", line.id, how, "", len(things), bounds, part), body)
+}
+
+// How long a ring may stay, at the least and at the most.
+const (
+	notchPointMinStay = 500 * time.Millisecond
+	notchPointMaxStay = 15 * time.Second
+)
+
+// parseNotchPoint reads a request to point at a rectangle of the screen:
+// where it is in the screen's own pixels, a few words to put beside it, and
+// how long it stays.
+func parseNotchPoint(params map[string]any) (lookRect, string, time.Duration, error) {
+	number := func(key string) (int, error) {
+		raw, ok := params[key].(float64)
+		if !ok || math.IsNaN(raw) || math.Abs(raw) > 200000 {
+			return 0, fmt.Errorf("notch.point: %s must be a number of screen pixels", key)
+		}
+		return int(math.Round(raw)), nil
+	}
+	var r lookRect
+	var err error
+	if r.X, err = number("x"); err != nil {
+		return lookRect{}, "", 0, err
+	}
+	if r.Y, err = number("y"); err != nil {
+		return lookRect{}, "", 0, err
+	}
+	if r.W, err = number("w"); err != nil {
+		return lookRect{}, "", 0, err
+	}
+	if r.H, err = number("h"); err != nil {
+		return lookRect{}, "", 0, err
+	}
+	if r.empty() {
+		return lookRect{}, "", 0, fmt.Errorf("notch.point: the rectangle has no size")
+	}
+	label, _ := params["label"].(string)
+	label = lookClean(label)
+	if utf8.RuneCountInString(label) > 60 {
+		label = string([]rune(label)[:59]) + "…"
+	}
+	stay := 5 * time.Second
+	if ms, ok := params["ms"].(float64); ok && !math.IsNaN(ms) {
+		stay = time.Duration(ms) * time.Millisecond
+	}
+	stay = max(notchPointMinStay, min(stay, notchPointMaxStay))
+	return r, label, stay, nil
+}
+
+// Point draws a ring round a rectangle of the screen. An error when there is
+// nothing to draw with here, or a line is being drawn by the person.
+func (l *NotchLook) Point(r lookRect, label string, stay time.Duration) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.hands == nil {
+		return fmt.Errorf("pointing is not available on this computer")
+	}
+	if l.pen.Busy() {
+		return fmt.Errorf("the person is drawing a line")
+	}
+	// A line that was finished is no longer the one on the screen: the ring takes its place.
+	l.line = nil
+	l.hands.Ring(r, label, stay)
+	return nil
+}
+
+// makeNotchPointHandler serves notch.point: the brain asks for a ring round
+// something it found in a window's own description of itself.
+func makeNotchPointHandler(l *NotchLook) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		r, label, stay, err := parseNotchPoint(params)
+		if err != nil {
+			return nil, err
+		}
+		if err := l.Point(r, label, stay); err != nil {
+			return nil, fmt.Errorf("notch.point: %w", err)
+		}
+		return &RPCResult{Result: map[string]any{"pointed": true}}, nil
+	}
+}
+
+// errNotchLookNotHere is the answer where the look has no platform under it.
+var errNotchLookNotHere = fmt.Errorf("looking at the screen is not built for this system yet")
+
+// makeNotchWindowHandler serves notch.window: what the window the person is
+// in says about itself, for "where is...?". Where this program looks away the
+// answer says so and holds nothing else.
+func makeNotchWindowHandler() RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		result, err := platformNotchWindowRead()
+		if err != nil {
+			return nil, fmt.Errorf("notch.window: %w", err)
+		}
+		return &RPCResult{Result: result}, nil
+	}
 }

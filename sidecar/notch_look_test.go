@@ -525,3 +525,32 @@ func TestLookShotCutsAPartOfTheScreenAsAPicture(t *testing.T) {
 		t.Fatal("no copy gave a picture")
 	}
 }
+
+func TestRingPathGoesRoundTheThingALittleOutsideIt(t *testing.T) {
+	r := lookRect{100, 200, 80, 24}
+	path := lookRingPath(r, 6, 10)
+	if len(path) < 16 {
+		t.Fatalf("%d points", len(path))
+	}
+	b := lookBounds(path)
+	if b != (lookRect{94, 194, 92, 36}) {
+		t.Fatalf("bounds %+v", b)
+	}
+	// Closed, it holds the thing whole: every corner of it is inside.
+	for _, corner := range [][2]float64{{101, 201}, {179, 201}, {101, 223}, {179, 223}, {140, 212}} {
+		if !lookInside(path, corner[0], corner[1]) {
+			t.Fatalf("%v is not inside the ring", corner)
+		}
+	}
+	// No point is on the thing itself.
+	for _, p := range path {
+		if r.holds(p.X, p.Y) {
+			t.Fatalf("%+v is on the thing", p)
+		}
+	}
+	// A thing smaller than the corners would be: the ring is still a ring.
+	small := lookRingPath(lookRect{10, 10, 2, 2}, 4, 30)
+	if sb := lookBounds(small); sb.W != 10 || sb.H != 10 || len(small) < 8 {
+		t.Fatalf("%+v, %d points", sb, len(small))
+	}
+}

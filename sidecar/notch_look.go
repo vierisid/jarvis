@@ -656,3 +656,34 @@ func lookPictureRect(bounds, screen lookRect) lookRect {
 	}
 	return r
 }
+
+// lookRingPath is a closed line round a rectangle, a little outside it, with
+// round corners: what the marker draws to point at a thing. The first point
+// is not repeated at the end.
+func lookRingPath(r lookRect, margin, radius float64) []lookPoint {
+	x0, y0 := float64(r.X)-margin, float64(r.Y)-margin
+	x1, y1 := float64(r.X+r.W)+margin, float64(r.Y+r.H)+margin
+	radius = math.Max(0, math.Min(radius, math.Min(x1-x0, y1-y0)/2))
+	var path []lookPoint
+	add := func(x, y float64) {
+		p := lookPoint{int(math.Round(x)), int(math.Round(y))}
+		if n := len(path); n == 0 || path[n-1] != p {
+			path = append(path, p)
+		}
+	}
+	// A corner is a quarter turn about its centre, in six steps.
+	corner := func(cx, cy, from float64) {
+		for i := 0; i <= 6; i++ {
+			a := from + float64(i)/6*math.Pi/2
+			add(cx+radius*math.Cos(a), cy+radius*math.Sin(a))
+		}
+	}
+	corner(x1-radius, y0+radius, -math.Pi/2) // top right, from the top edge round to the right edge
+	corner(x1-radius, y1-radius, 0)          // bottom right
+	corner(x0+radius, y1-radius, math.Pi/2)  // bottom left
+	corner(x0+radius, y0+radius, math.Pi)    // top left
+	if n := len(path); n > 1 && path[n-1] == path[0] {
+		path = path[:n-1]
+	}
+	return path
+}
