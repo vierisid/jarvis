@@ -208,6 +208,10 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // The notch surface's switch (src/notch/switch.ts). Not a credential. A
   // daemon restarted by the CLI must keep the owner's choice, on or off.
   'JARVIS_NOTCH',
+  // How long a mail waits before the notch prepares a reply, on a development
+  // brain that is trying a build (daemon/index.ts, read only while the notch's
+  // demo gate is open). A number of minutes. Not a credential.
+  'JARVIS_NOTCH_MAIL_WAIT_MINUTES',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's
