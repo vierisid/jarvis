@@ -20,13 +20,16 @@ const when = (text) => {
 };
 
 // The text of a piece of mail, with its line breaks, and without the history quoted inside it.
-const BLOCK = new Set(['P', 'DIV', 'BR', 'TR', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TABLE', 'BLOCKQUOTE', 'PRE', 'HR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER']);
+const BLOCK = new Set(['P', 'DIV', 'TR', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TABLE', 'BLOCKQUOTE', 'PRE', 'HR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER']);
 const SKIP = new Set(['STYLE', 'SCRIPT', 'HEAD', 'TITLE', 'IMG', 'SVG', 'NOSCRIPT']);
 const textOf = (root) => {
   let out = '';
   const walk = (node) => {
     if (node.nodeType === 3) { out += node.textContent.replace(/\s+/g, ' '); return; }
     if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+    // A line break is a line break every time: two of them, or one alone in a block, are the empty line
+    // between two paragraphs, which is how the writer set their mail out.
+    if (node.tagName === 'BR') { out += '\n'; return; }
     // What a mail program quotes of the earlier messages: the thread already has them.
     if (node.tagName === 'BLOCKQUOTE' || node.classList.contains('gmail_quote') || node.classList.contains('gmail_extra') || node.id === 'divRplyFwdMsg') {
       // A forwarded message is the point of the mail that carries it, so it stays.
