@@ -24,6 +24,19 @@ type notchKeyboard struct {
 	say  func(notchKeyAction)
 	mask func()
 	stop func()
+	// The look (notch_looker.go): told whether the talk pair alone is down,
+	// and asked first about Esc while a line is being drawn. Nil: no looking.
+	look notchKeysLook
+}
+
+// notchKeysLook is what the keyboard tells the look, and asks of it.
+type notchKeysLook interface {
+	// The talk pair, and nothing else, is down (or no longer is).
+	Keys(armed bool)
+	// Esc went down. True when it threw a line away: the key is the look's.
+	Esc() bool
+	// Esc came up. True when its going down was the look's.
+	EscUp() bool
 }
 
 // The pairs a machine has until its settings say otherwise.
@@ -106,12 +119,36 @@ func (kb *notchKeyboard) now() int64 { return time.Since(kb.start).Milliseconds(
 // before the key goes anywhere. It reports whether to keep the key from the
 // app in front.
 func (kb *notchKeyboard) key(kind notchKeyKind, mods notchMods) (swallow bool) {
+	look, taken := kb.look, false
+	if look != nil {
+		switch kind {
+		case notchKeyEscDown:
+			// A line that is being drawn is thrown away by Esc, and that is all
+			// Esc does then: it reaches no app (with the pair held it would be
+			// Windows' own Ctrl + Esc), and to the keys it is "another key",
+			// which ends the talking as a slip. What was being said round a
+			// thing that was let go is not an instruction.
+			if look.Esc() {
+				kind, taken = notchKeyOther, true
+			}
+		case notchKeyEscUp:
+			if look.EscUp() {
+				return true
+			}
+		}
+	}
 	kb.mu.Lock()
 	v := kb.engine.Feed(notchKeyEvent{Kind: kind, Mods: mods, At: kb.now()})
 	kb.arm(v.WakeAt)
+	// The pointer is the look's from the moment the pair is down, not from
+	// when the hold has become talking: a click is quicker than that.
+	armed := kb.engine.mods != 0 && kb.engine.mods == kb.engine.pairs.Talk.mask() && !kb.engine.spent
 	kb.mu.Unlock()
+	if look != nil {
+		look.Keys(armed)
+	}
 	kb.act(v)
-	return v.Swallow
+	return v.Swallow || taken
 }
 
 // arm sets the one timer the keys need: the moment a hold becomes talking.
@@ -165,6 +202,9 @@ func (kb *notchKeyboard) reset() {
 	ended := kb.engine.Reset()
 	kb.arm(0)
 	kb.mu.Unlock()
+	if kb.look != nil {
+		kb.look.Keys(false)
+	}
 	kb.act(notchKeyVerdict{Actions: ended})
 }
 
@@ -173,6 +213,9 @@ func (kb *notchKeyboard) setPairs(pairs notchKeyPairs) {
 	ended := kb.engine.SetPairs(pairs)
 	kb.arm(0)
 	kb.mu.Unlock()
+	if kb.look != nil {
+		kb.look.Keys(false)
+	}
 	kb.act(notchKeyVerdict{Actions: ended})
 }
 
