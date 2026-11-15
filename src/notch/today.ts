@@ -64,7 +64,11 @@ function doneSentence(request: ApprovalRequest): string {
 /** What was done today, newest first. */
 export function notchToday(deps: NotchTodayDeps): NotchTodayRow[] {
   const now = (deps.now ?? Date.now)();
-  const since = startOfDay(now);
+  return notchDoneBetween(deps, startOfDay(now), now);
+}
+
+/** What was done between two moments, newest first: the morning and evening lines count it (day.ts). */
+export function notchDoneBetween(deps: NotchTodayDeps, since: number, now: number): NotchTodayRow[] {
   const rows: NotchTodayRow[] = [];
   for (const request of deps.executedApprovals(200)) {
     // Done means a receipt that says so: one that was refused, failed, or may

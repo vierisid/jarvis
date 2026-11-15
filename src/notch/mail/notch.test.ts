@@ -38,6 +38,8 @@ function harness(rows: MailProposalRow[], options: {
   look?: MailLook | null;
   /** A look (the month, say) is under way. */
   reading?: boolean;
+  /** Whether Gmail is the site in front. */
+  inGmail?: () => boolean;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -97,6 +99,7 @@ function harness(rows: MailProposalRow[], options: {
       busy: () => options.reading === true,
     },
     mailbox: () => (options.noMailbox ? null : mailbox),
+    inGmail: options.inGmail,
     now: () => AT + 10_000 + now,
     log: () => {},
   });
@@ -385,6 +388,60 @@ describe('coming to Gmail', () => {
     const h = harness([], { look: { through: null, listed: 0, read: 0, asked: 0, prepared: 0, overtaken: 0 } });
     await h.arrive();
     expect(h.said()).toBe('I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.');
+  });
+});
+
+// Pass 8: a reply to a mail that has just come speaks from anywhere, always with its source.
+describe('from anywhere', () => {
+  test('outside Gmail the line names its source; in Gmail the place itself does', async () => {
+    let inGmail = false;
+    const h = harness([row()], { inGmail: () => inGmail });
+    h.mail.speak();
+    await settle();
+    expect(h.said()).toBe('In Gmail: you have not replied to Leo. I drafted a reply.');
+    expect(h.line()).toMatchObject({ kind: 'offer', src: 'mail', unasked: true });
+    expect((h.line()!.say[0] as { em: string }).em).toBe('In Gmail:');
+    await h.answer('fold');
+    inGmail = true;
+    h.store.put(row({ id: mailProposalId(T2, AT), thread: T2 }));
+    h.mail.speak();
+    await settle();
+    expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
+  });
+
+  test('several at once, outside Gmail, are one line with the source in front', async () => {
+    const other = row({ id: mailProposalId(T2, AT - 1000), thread: T2, messageAt: AT - 1000, who: anna });
+    const h = harness([row(), other], { inGmail: () => false });
+    await h.open();
+    expect(h.said()).toBe('In Gmail: 2 people are waiting for a reply. I drafted them.');
+  });
+
+  test('speaking does not take the notch from what is on it, and does not use up the reply\'s one say', async () => {
+    const h = harness([row()], { inGmail: () => false });
+    h.inbox.present('other', async (stage) => { await stage.say(['Something else.'], 5000); });
+    await settle();
+    h.mail.speak();
+    await settle();
+    expect(h.said()).toBe('Something else.');
+    await h.answer('done');
+    h.mail.speak();
+    await settle();
+    expect(h.said()).toBe('In Gmail: you have not replied to Leo. I drafted a reply.');
+  });
+
+  test('replies another line has told of do not each speak up after it, and wait in Home', async () => {
+    const other = row({ id: mailProposalId(T2, AT - 1000), thread: T2, messageAt: AT - 1000, who: anna, createdAt: AT - 500 });
+    const h = harness([row(), other], { inGmail: () => false });
+    expect(h.mail.newSince(AT)).toBe(1);
+    expect(h.mail.newSince(AT - 1000)).toBe(2);
+    h.mail.told();
+    await settle();
+    expect(h.count()).toBe(0);
+    expect(h.mail.newSince(AT - 1000)).toBe(0);
+    h.mail.speak();
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('2 replies drafted, waiting for your word');
   });
 });
 

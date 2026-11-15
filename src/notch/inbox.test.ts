@@ -10,7 +10,7 @@ import type { NotchSurfacePort } from './surface.ts';
 const settle = async (): Promise<void> => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
 /** A surface with a page that has said hello, and an inbox on it. */
-function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage: NotchStage) => Promise<void> } = {}) {
+function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage: NotchStage) => Promise<void>; maySpeak?: () => boolean } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -29,7 +29,7 @@ function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage:
     clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
   };
   const surface = new NotchSurface(port, (line) => logs.push(line));
-  const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), busy: options.busy, home: options.home });
+  const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), busy: options.busy, home: options.home, maySpeak: options.maySpeak });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   if (options.page !== false) fromPage({ type: 'hello', v: 1 });
   const line = (): NotchLine | null => surface.current().line;
@@ -512,3 +512,101 @@ describe('second batch of the edge-case audit', () => {
     expect(h.said()).toBe('work?');
   });
 });
+
+// Pass 8: a line nobody asked for comes up only in a still moment, and never in quiet hours.
+describe('speaking up only when it may', () => {
+  test('what arrives while the person is typing joins the count, and speaks when their hands go still', async () => {
+    let still = false;
+    const h = harness({ maySpeak: () => still });
+    const mail = item('mail', 'person');
+    h.inbox.add(mail);
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    still = true;
+    h.inbox.calmed();
+    await settle();
+    expect(h.said()).toBe('mail?');
+    expect(mail.shows).toEqual([true]);
+  });
+
+  // The notch's own manner, unchanged: of what arrived in the meantime one gets its say, and the others are in the count.
+  test('one thing speaks in a still moment, the oldest, and the others wait in the count', async () => {
+    let still = false;
+    const h = harness({ maySpeak: () => still });
+    h.inbox.add(item('first', 'person'));
+    h.inbox.add(item('second', 'person'));
+    still = true;
+    h.inbox.calmed();
+    await settle();
+    expect(h.said()).toBe('first?');
+    expect(h.count()).toBe(1);
+    await h.answer('yes');
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+  });
+
+  test('the person can still open the notch and find it there', async () => {
+    const h = harness({ maySpeak: () => false });
+    const mail = item('mail', 'person');
+    h.inbox.add(mail);
+    await h.open();
+    expect(h.said()).toBe('mail?');
+    expect(mail.shows).toEqual([false]);
+  });
+
+  test('what the person asked for, and what has a window already running, does not wait', async () => {
+    const h = harness({ maySpeak: () => false });
+    h.inbox.add(item('asked', 'person', { asked: true }));
+    await settle();
+    expect(h.said()).toBe('asked?');
+    await h.answer('yes');
+    h.inbox.add(item('fuse', 'clock', { urgent: true }));
+    await settle();
+    expect(h.said()).toBe('fuse?');
+  });
+
+  test('a notch that comes up while it may not speak says nothing until it may', async () => {
+    let still = false;
+    const h = harness({ page: false, maySpeak: () => still });
+    h.inbox.add(item('mail', 'person'));
+    h.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    expect(h.line()).toBeNull();
+    still = true;
+    h.inbox.calmed();
+    await settle();
+    expect(h.said()).toBe('mail?');
+  });
+
+  test('a still moment with nothing waiting to speak changes nothing, and does not take the notch from what is on it', async () => {
+    let still = false;
+    const h = harness({ maySpeak: () => still });
+    h.inbox.calmed();
+    await settle();
+    expect(h.line()).toBeNull();
+    h.inbox.add(item('asked', 'person', { asked: true }));
+    h.inbox.add(item('mail', 'person'));
+    await settle();
+    still = true;
+    h.inbox.calmed();
+    await settle();
+    expect(h.said()).toBe('asked?');
+  });
+
+  test('without the rule, anything speaks whenever the notch is free, as before', async () => {
+    const h = harness();
+    h.inbox.add(item('mail', 'person'));
+    await settle();
+    expect(h.said()).toBe('mail?');
+  });
+
+  test('open() is a tap on the resting notch', async () => {
+    const h = harness({ maySpeak: () => false });
+    h.inbox.add(item('mail', 'person'));
+    h.inbox.open();
+    await settle();
+    expect(h.said()).toBe('mail?');
+  });
+});
+

@@ -30,12 +30,19 @@ import type { NotchPauseDeps } from './pause.ts';
 import { attachNotchPromises } from './promises.ts';
 import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
+import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
+import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
+import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
+import { NotchPresence } from './presence.ts';
+import { NotchQuiet, notchQuietHome } from './quiet.ts';
+import { NotchSettings } from './settings.ts';
+import { attachNotchSoon, type NotchSoon } from './soon.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import { attachNotchSuggestions } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
-import { notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
+import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -112,6 +119,16 @@ export interface NotchRealDeps {
    * of the product: the database, the notch's own browser tab, the model.
    */
   mail?: Omit<NotchMailLayerDeps, 'paused' | 'log' | 'noClock'> & { noClock?: boolean };
+  /**
+   * From anywhere, and the shape of the day (pass 8). With this given: a
+   * line nobody asked for comes up only in a still moment and never in the
+   * person's quiet hours; a meeting is said ten minutes before; things are
+   * held during a call; the morning, the evening and "while you were away"
+   * have their lines; and a lost connection is said. `db` is where the quiet
+   * hours and the day of the last morning line are kept. `around` is how the
+   * desktop app says that a call is on and whether the machine is online.
+   */
+  day?: { db: Database; around?: NotchAroundPort; now?: () => number; noClock?: boolean };
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -131,6 +148,14 @@ export interface NotchReal {
   where: NotchWhere | null;
   /** The mail layer, when the brain was given what it needs. */
   mail: NotchMailLayer | null;
+  /** The person's quiet hours, when pass 8 is on. */
+  quiet: NotchQuiet | null;
+  /** Whether the person is there, when pass 8 is on. */
+  presence: NotchPresence | null;
+  /** Calls and the connection, when a desktop app can tell. */
+  around: NotchAround | null;
+  /** Meetings coming up, when the calendar can be reached. */
+  soon: NotchSoon | null;
   talk: NotchTalk | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
@@ -150,12 +175,32 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   // Made after the inbox, which opens it: yes at rest with nothing waiting.
   let asks: NotchAsks | null = null;
   const today = notchTodayScript(todayDeps);
+  // Pass 8: whether the person is there, and their quiet hours. Made before the inbox, which asks them
+  // whether a line may come up; what they set off is made after it and reached through these.
+  const dayNow = deps.day?.now ?? Date.now;
+  const settings = deps.day ? new NotchSettings(deps.day.db) : null;
+  const quiet = settings ? new NotchQuiet(settings, dayNow) : null;
+  let day: NotchDay | null = null;
+  let calmed: () => void = () => {};
+  const presence = settings ? new NotchPresence({
+    settings,
+    calm: () => calmed(),
+    left: (at) => day?.left(at),
+    back: (away) => { void day?.back(away); },
+    morning: (away) => day?.morning(away),
+    now: dayNow,
+    clock: deps.clock,
+    log,
+  }) : null;
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
     clock: deps.clock,
     log,
     home: (stage) => (asks ? asks.home(stage) : today(stage)),
+    // Only in a still moment, not to an empty chair, and never in the quiet hours.
+    ...(presence && quiet ? { maySpeak: () => presence.still() && !presence.isAway() && !quiet.now() } : {}),
   });
+  calmed = () => inbox.calmed();
   const approvals = attachNotchApprovals(inbox, {
     approvalManager: deps.approvalManager,
     approve: deps.approve,
@@ -176,6 +221,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       watching: deps.where.watching,
       // Coming to Gmail is where a prepared reply speaks up (pass 7).
       arrived: (site) => mail?.arrived(site),
+      // Their hands: still, away, back, the first time today (pass 8).
+      hands: (still) => presence?.hands(still),
       log,
     })
     : null;
@@ -198,6 +245,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
       // Replies that are prepared wait in Home, one row for all of them (pass 7).
       mail: deps.mail ? { row: () => mail?.mail.homeRow() ?? null, open: async (stage) => { await mail?.mail.open(stage); } } : undefined,
+      // The quiet hours are changed where they are shown. Ending them lets what waited speak.
+      quiet: quiet ? notchQuietHome(quiet, () => inbox.calmed()) : undefined,
       log,
     });
     talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, log });
@@ -226,6 +275,55 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   if (deps.mail) {
     const emergency = deps.emergency;
     mail = attachMailLayer(inbox, { ...deps.mail, paused: emergency ? () => emergency.getState() !== 'normal' : undefined, log });
+  }
+  // Pass 8, the rest of it: the calendar as a source, calls and the connection, and the lines of the day.
+  let soon: NotchSoon | null = null;
+  let around: NotchAround | null = null;
+  const dayTimers: ReturnType<typeof setInterval>[] = [];
+  if (deps.day && settings) {
+    const layer = mail;
+    const asleep = (): boolean => (deps.emergency ? deps.emergency.getState() !== 'normal' : false);
+    if (layer) soon = attachNotchSoon(inbox, { calendar: (from, to) => layer.calendar(from, to), now: dayNow, log });
+    if (deps.day.around) {
+      around = attachNotchAround(surface, inbox, deps.day.around, {
+        meetingNow: () => soon?.meetingNow() ?? false,
+        asleep,
+        // What could not be read while there was no connection is read now.
+        backOnline: () => { void layer?.look('glance'); },
+        clock: deps.clock,
+        now: dayNow,
+        log,
+      });
+    }
+    const lines = new Set(['morning', 'evening', 'back', NOTCH_MAIL_ITEM]);
+    day = attachNotchDay(inbox, {
+      settings,
+      done: (since, until) => notchDoneBetween(todayDeps, since, until).length,
+      // What needs the person: everything in the count that is not one of these lines or a meeting, and every reply that is drafted.
+      waiting: () => inbox.waiting().filter((item) => !lines.has(item.id) && !item.id.startsWith('soon:')).length + (layer?.store.ready().length ?? 0),
+      away: () => presence?.isAway() ?? false,
+      mail: layer ? { newSince: (at) => layer.mail.newSince(at), told: () => layer.mail.told(), open: (stage) => layer.mail.open(stage) } : undefined,
+      calendar: soon ? { ahead: () => soon!.ahead(), look: () => soon!.look() } : undefined,
+      now: dayNow,
+      log,
+    });
+    if (!deps.day.noClock) {
+      const theDay = day;
+      const meetings = soon;
+      // Every half minute: what is ten minutes away. Every minute: the evening line, and anything that waited
+      // for the quiet hours to end. Every five minutes: the calendar itself, so that a meeting made a
+      // quarter of an hour ahead is still said ten minutes before.
+      let ticks = 0;
+      const every = setInterval(() => {
+        ticks++;
+        if (asleep()) return;
+        meetings?.tick();
+        if (ticks % 2 === 0) { theDay.tick(); inbox.calmed(); }
+        if (ticks % 10 === 2) void meetings?.look();
+      }, 30_000);
+      every.unref?.();
+      dayTimers.push(every);
+    }
   }
   const news = attachNotchNews(inbox, { openFailures: deps.openFailures, log });
   news.sync();
@@ -267,7 +365,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   timer.unref?.();
 
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, mail,
+    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, mail, quiet, presence, around, soon,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -277,6 +375,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       asks?.stop();
       where?.stop();
       mail?.stop();
+      presence?.stop();
+      around?.stop();
+      for (const timer of dayTimers) clearInterval(timer);
     },
   };
 }
