@@ -385,6 +385,13 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
   const graceMs = deps.graceMs ?? NOTCH_LOOK_GRACE_MS;
   const takeMs = deps.takeMs ?? NOTCH_LOOK_TAKE_MS;
   const under = new Map<string, Under>();
+  /**
+   * Looks whose words went on without them, because they took too long to be
+   * read. If one arrives after all it is not answered by itself: the question
+   * it belonged to has been asked, and "what does this tell me?" on top of it
+   * would be a second answer to something else.
+   */
+  const late = new Set<string>();
   let said = 0;
   let stopped = false;
 
@@ -499,6 +506,7 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
       return;
     }
     if (phase !== 'taken') return;
+    if (late.delete(id)) return;
     // A click can be told before its `begun`: both are for the same look.
     if (!look || look.id !== id) {
       if (look) end(sidecarId, look, null);
@@ -533,7 +541,12 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
     }
     return new Promise((resolve) => {
       look.waiters.push((looked) => resolve(looked && !looked.refused ? looked : null));
-      after(look, takeMs, () => end(sidecarId, look, null));
+      after(look, takeMs, () => {
+        if (late.size > 32) late.clear();
+        late.add(look.id);
+        log(`[notch] a look was not read within ${takeMs} ms: the words that came with it go on without it`);
+        end(sidecarId, look, null);
+      });
     });
   };
 

@@ -286,6 +286,40 @@ describe('a hold of the keys in which something was looked at', () => {
     expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'look files pc', 'words pc:a1 "is this one late" with circled-on-screen.txt']);
   });
 
+  // The owner, 16 November 2026: "I circle the installs number and ask, how many of these were in the last
+  // two days? It disregards my question and still asks what the number means." What he circled reached the
+  // brain while his words were still with speech-to-text: no recording was open, so the look answered alone.
+  test('the keys are up and the words are not in yet: the recording still counts as open, so a look told now waits for them', async () => {
+    let write: (words: string) => void = () => {};
+    const h = withLook(() => ({ transcribe: () => new Promise<string>((resolve) => { write = resolve; }) }));
+    expect(h.talk.open('pc')).toBe(false);
+    h.event({ phase: 'start', talk_id: 'a1' });
+    expect(h.talk.open('pc')).toBe(true);
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 1900, duration_ms: 5600, sample_rate: 16000 }, true);
+    await settle();
+    // With speech-to-text. Nothing has been decided about the look.
+    expect(h.talk.open('pc')).toBe(true);
+    expect(h.talk.open('other')).toBe(false);
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1']);
+    write('how many of these were in the last two days');
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1', 'released pc:a1', 'look files pc', 'words pc:a1 "how many of these were in the last two days" with circled-on-screen.txt']);
+    expect(h.talk.open('pc')).toBe(false);
+  });
+
+  test('speech-to-text that fails or says nothing does not leave the recording open', async () => {
+    const down = withLook(() => ({ transcribe: async () => { throw new Error('down'); } }));
+    down.event({ phase: 'start', talk_id: 'a1' });
+    down.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500 }, true);
+    await settle();
+    expect(down.talk.open('pc')).toBe(false);
+    const quiet = withLook(() => ({ transcribe: async () => '' }));
+    quiet.event({ phase: 'start', talk_id: 'a1' });
+    quiet.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500 }, true);
+    await settle();
+    expect(quiet.talk.open('pc')).toBe(false);
+  });
+
   test('speech-to-text wrote only a stock line: that is nothing said, and the look answers', async () => {
     const h = withLook(() => ({ transcribe: async () => 'Thank you.' }));
     h.event({ phase: 'start', talk_id: 'a1' });

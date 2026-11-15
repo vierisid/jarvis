@@ -57,16 +57,31 @@ describe('a file dragged over the notch\'s page', () => {
     h.stop();
   });
 
-  test('let go, the first file is sent to the brain, and nothing more is said when it arrived', async () => {
+  test('let go, the files are sent to the brain one after another, in order, and nothing more is said when they arrived', async () => {
     const h = page();
     document.dispatchEvent(drag('dragenter', [pdf()]));
     const drop = drag('drop', [pdf(), new File(['x'], 'second.txt')]);
     document.dispatchEvent(drop);
     await settle();
     expect(drop.prevented()).toBe(true);
-    expect(h.uploads).toEqual([['Deck.pdf', 2]]);
+    expect(h.uploads).toEqual([['Deck.pdf', 2], ['second.txt', 2]]);
     expect(h.sent).toEqual([{ type: 'drag', state: 'over' }]);
     h.stop();
+  });
+
+  test('no more than three of a drop are sent, and none after one that did not arrive', async () => {
+    const h = page();
+    const five = ['a', 'b', 'c', 'd', 'e'].map((name) => new File(['x'], `${name}.txt`));
+    document.dispatchEvent(drag('drop', five));
+    await settle();
+    expect(h.uploads).toEqual([['a.txt', 5], ['b.txt', 5], ['c.txt', 5]]);
+    h.stop();
+    const lost = page(async (file) => file.name !== 'b.txt');
+    document.dispatchEvent(drag('drop', five));
+    await settle();
+    expect(lost.uploads.map(([name]) => name)).toEqual(['a.txt', 'b.txt']);
+    expect(lost.sent).toEqual([{ type: 'drag', state: 'lost' }]);
+    lost.stop();
   });
 
   test('a file that did not arrive is said to be lost, whether the brain refused the request or it never got there', async () => {

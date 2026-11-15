@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,8 +20,10 @@ import (
 // The look on Windows: the watch on the pointer, the ink, and the reading.
 //
 // The pointer is watched with a low-level mouse hook, and only while the talk
-// pair is down or a line is being drawn: at every other time there is no hook
-// and nothing of this program stands between the mouse and the apps. The hook
+// pair is down, a line is being drawn, or a click on a thing that was pointed
+// at is waited for (that one is only seen, never kept): at every other time
+// there is no hook and nothing of this program stands between the mouse and
+// the apps. The hook
 // is built like the keyboard's (notch_keys_windows.go): a thread of its own,
 // every function resolved before it goes in, and a callback that only asks the
 // pen. A click a program sent is not a click a person made, and is never
@@ -42,6 +45,7 @@ const (
 	notchWmMouseMove     = 0x0200
 	notchWmLButtonDown   = 0x0201
 	notchWmLButtonUp     = 0x0202
+	notchWmRButtonUp     = 0x0205
 	notchLlmhfInjected   = 0x00000001
 	notchLookWmSync      = 0x8000 + 0x61 // WM_APP + 0x61: look again at whether to watch
 	notchLookSrcCopy     = 0x00CC0020
@@ -72,7 +76,7 @@ var (
 )
 
 func notchLookHook(nCode int32, wParam uintptr, lParam uintptr) uintptr {
-	if nCode == 0 && (wParam == notchWmMouseMove || wParam == notchWmLButtonDown || wParam == notchWmLButtonUp) {
+	if nCode == 0 && (wParam == notchWmMouseMove || wParam == notchWmLButtonDown || wParam == notchWmLButtonUp || wParam == notchWmRButtonUp) {
 		if l := notchLookNow.Load(); l != nil {
 			// The documented exception to vet's unsafe.Pointer rule: lParam IS
 			// a pointer, handed over by Windows for the length of this call.
@@ -90,6 +94,11 @@ func notchLookHook(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 					if l.Up(x, y) {
 						return 1
 					}
+					// A click that is the app's own: seen, when one is waited
+					// for (something was pointed at), and never kept.
+					l.Clicked(x, y)
+				case notchWmRButtonUp:
+					l.Clicked(x, y)
 				}
 			}
 		}
@@ -316,7 +325,7 @@ func (w *lookWindows) Snapshot(screen lookRect) lookSnapshot {
 // ---------------------------------------------------------------------------
 
 type lookInkCmd struct {
-	kind   uint8 // 1 begin, 2 line, 3 tag, 4 end, 5 a ring round a rectangle
+	kind   uint8 // 1 begin, 2 line, 3 tag, 4 end; 6 the hand goes to a rectangle and rings it, 7 that was clicked, 8 the hand goes home
 	a, b   lookPoint
 	screen lookRect
 	scale  float64
@@ -342,8 +351,27 @@ func (w *lookWindows) InkTag(text string, bounds lookRect) {
 	w.post(lookInkCmd{kind: 3, text: text, bounds: bounds})
 }
 func (w *lookWindows) InkEnd(stay time.Duration) { w.post(lookInkCmd{kind: 4, stay: stay}) }
-func (w *lookWindows) Ring(r lookRect, label string, stay time.Duration) {
-	w.post(lookInkCmd{kind: 5, bounds: r, text: label, stay: stay})
+func (w *lookWindows) Point(r lookRect, label string, stay time.Duration) {
+	w.post(lookInkCmd{kind: 6, bounds: r, text: label, stay: stay})
+}
+func (w *lookWindows) PointHit() { w.post(lookInkCmd{kind: 7}) }
+func (w *lookWindows) PointEnd() { w.post(lookInkCmd{kind: 8}) }
+
+// notchHandHome is where the hand lives: inside the notch, at the top of its
+// window. False when the notch has no window.
+func (w *lookWindows) notchHandHome() (lookPoint, bool) {
+	win := notchWin.Load()
+	if win == nil || win.hwnd == 0 {
+		return lookPoint{}, false
+	}
+	var rc w32Rect
+	if ok, _, _ := procGetWindowRect.Call(win.hwnd, uintptr(unsafe.Pointer(&rc))); ok == 0 {
+		return lookPoint{}, false
+	}
+	middle := lookPoint{int(rc.Left+rc.Right) / 2, int(rc.Top) + 8}
+	_, scale := w.Screen(middle)
+	// The resting notch is 32 px high at 100%: a little above its lower edge.
+	return lookPoint{middle.X, int(rc.Top) + int(20*scale)}, true
 }
 
 // lookUlwInfo mirrors Win32 UPDATELAYEREDWINDOWINFO.
@@ -460,8 +488,9 @@ func (s *lookSheet) destroy() {
 	s.pixels = nil
 }
 
-// inkThread owns the ink's window and the tag's. It draws what it is told
-// to, in the order it is told, and takes both away when their time is up.
+// inkThread owns the ink's window, the tag's and the hand's. It draws what it
+// is told to, in the order it is told, moves what is moving, and takes
+// everything away when its time is up.
 func (w *lookWindows) inkThread() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -473,8 +502,36 @@ func (w *lookWindows) inkThread() {
 		screen  lookRect
 		scale   = 1.0
 		endAt   time.Time
+
+		// The hand: Jarvis's own pointer, in a small window of its own that is
+		// moved, so that the sheet under it is not painted again as it flies.
+		hand      *lookSheet
+		handPic   *notchHand
+		handScale float64
+		// Where its tip is.
+		tip lookPoint
+		fly struct {
+			on       bool
+			from, to lookPoint
+			began    time.Time
+			took     time.Duration
+			// Leaving the notch it grows and comes into sight. Going home it does the opposite, and is gone.
+			grow, home bool
+		}
+		ring struct {
+			// To be drawn when the hand has landed; being drawn.
+			due, on bool
+			pieces  []lookPoint
+			drawn   int
+			began   time.Time
+			bounds  lookRect
+			text    string
+			stay    time.Duration
+		}
+		// When the hand, left on a thing that was clicked, goes home by itself.
+		homeAt time.Time
 	)
-	closeAll := func() {
+	closeInk := func() {
 		if tag != nil {
 			tag.destroy()
 			tag = nil
@@ -484,6 +541,58 @@ func (w *lookWindows) inkThread() {
 			sheet = nil
 		}
 		ink, tagText, endAt = nil, "", time.Time{}
+		ring.due, ring.on, ring.pieces, ring.drawn = false, false, nil, 0
+	}
+	closeHand := func() {
+		if hand != nil {
+			hand.destroy()
+			hand = nil
+		}
+		handPic, fly.on, homeAt = nil, false, time.Time{}
+	}
+	closeAll := func() {
+		closeInk()
+		closeHand()
+	}
+	// placeHand shows the hand with its tip at a place, at a part of its size and strength.
+	placeHand := func(x, y, size, strength float64) {
+		if hand == nil || handPic == nil {
+			return
+		}
+		handPic.frame(hand.pixels, size, strength)
+		hand.x, hand.y = int32(math.Round(x-handPic.tipX)), int32(math.Round(y-handPic.tipY))
+		hand.show(nil)
+	}
+	goHome := func() {
+		closeInk()
+		if hand == nil {
+			return
+		}
+		home, ok := w.notchHandHome()
+		if !ok {
+			closeHand()
+			return
+		}
+		fly.on, fly.from, fly.to, fly.began, fly.took, fly.grow, fly.home = true, tip, home, time.Now(), notchHandHome, false, true
+		homeAt = time.Time{}
+	}
+	// startRing puts up the sheet the ring is drawn on, under the hand.
+	startRing := func() {
+		ring.due = false
+		s, err := newLookSheet(screen.X, screen.Y, screen.W, screen.H)
+		if err != nil {
+			log.Printf("[notch] look: no ring: %v", err)
+			return
+		}
+		sheet, ink = s, newNotchInk(screen.W, screen.H)
+		local := lookRect{ring.bounds.X - screen.X, ring.bounds.Y - screen.Y, ring.bounds.W, ring.bounds.H}
+		ring.pieces = lookPathPieces(lookRingPath(local, 6*scale, 10*scale), 6*scale)
+		ring.drawn, ring.began, ring.on = 0, time.Now(), true
+		sheet.show(nil)
+		sheet.raise()
+		if hand != nil {
+			hand.raise()
+		}
 	}
 	pump := func() {
 		for {
@@ -513,13 +622,13 @@ func (w *lookWindows) inkThread() {
 			sheet.show(nil)
 			sheet.raise()
 		case 2:
-			if sheet == nil || ink == nil || !endAt.IsZero() {
+			if sheet == nil || ink == nil || !endAt.IsZero() || ring.on || hand != nil {
 				return
 			}
 			touched := ink.stroke(float64(cmd.a.X-screen.X), float64(cmd.a.Y-screen.Y), float64(cmd.b.X-screen.X), float64(cmd.b.Y-screen.Y), notchInkRadius*scale)
 			*dirty = lookUnion(*dirty, touched)
 		case 3:
-			if sheet == nil || cmd.text == tagText {
+			if sheet == nil || cmd.text == tagText || hand != nil {
 				return
 			}
 			tagText = cmd.text
@@ -531,7 +640,7 @@ func (w *lookWindows) inkThread() {
 				tag = newLookTag(cmd.text, cmd.bounds, screen, scale)
 			}
 		case 4:
-			if sheet == nil {
+			if sheet == nil || hand != nil {
 				return
 			}
 			if cmd.stay <= 0 {
@@ -539,38 +648,68 @@ func (w *lookWindows) inkThread() {
 				return
 			}
 			endAt = time.Now().Add(cmd.stay)
-		case 5:
-			// A ring round a thing: its own sheet, on the display the thing is on.
-			closeAll()
+		case 6:
+			// The hand goes to a thing. Whatever was ringed before is taken
+			// down first; the hand, if it is out, sets off from where it is.
+			closeInk()
 			middle := lookPoint{cmd.bounds.X + cmd.bounds.W/2, cmd.bounds.Y + cmd.bounds.H/2}
 			screen, scale = w.Screen(middle)
-			s, err := newLookSheet(screen.X, screen.Y, screen.W, screen.H)
-			if err != nil {
-				log.Printf("[notch] look: no ring: %v", err)
+			from, grow := tip, false
+			if hand == nil || handScale != scale {
+				was := hand != nil
+				closeHand()
+				pic := newNotchHand(scale)
+				if s, err := newLookSheet(0, 0, pic.w, pic.h); err != nil {
+					log.Printf("[notch] look: no hand: %v", err)
+				} else {
+					hand, handPic, handScale = s, pic, scale
+					if !was {
+						grow = true
+						if home, ok := w.notchHandHome(); ok {
+							from = home
+						} else {
+							// No notch to come out of: from the top of the display the thing is on.
+							from = lookPoint{screen.X + screen.W/2, screen.Y + int(12*scale)}
+						}
+					}
+				}
+			}
+			ring.due, ring.on, ring.bounds, ring.text, ring.stay = true, false, cmd.bounds, cmd.text, cmd.stay
+			homeAt = time.Time{}
+			if hand == nil {
+				// Without the hand the ring is still worth having.
+				startRing()
 				return
 			}
-			sheet, ink = s, newNotchInk(screen.W, screen.H)
-			path := lookRingPath(lookRect{cmd.bounds.X - screen.X, cmd.bounds.Y - screen.Y, cmd.bounds.W, cmd.bounds.H}, 6*scale, 10*scale)
-			touched := lookRect{}
-			for i := range path {
-				a, b := path[i], path[(i+1)%len(path)]
-				touched = lookUnion(touched, ink.stroke(float64(a.X), float64(a.Y), float64(b.X), float64(b.Y), notchInkRadius*scale*0.8))
+			to := lookHandRest(cmd.bounds, scale)
+			fly.on, fly.from, fly.to, fly.began, fly.took, fly.grow, fly.home = true, from, to, time.Now(), lookHandFlight(from, to), grow, false
+			tip = from
+			if grow {
+				placeHand(float64(from.X), float64(from.Y), notchHandSmall, 0)
+			} else {
+				placeHand(float64(from.X), float64(from.Y), 1, 1)
 			}
-			ink.paint(sheet.pixels, touched)
-			sheet.show(nil)
-			sheet.raise()
-			if cmd.text != "" {
-				tagText = cmd.text
-				tag = newLookTag(cmd.text, cmd.bounds, screen, scale)
+			hand.raise()
+		case 7:
+			// Clicked: the ring is not left lying over what the click opened.
+			closeInk()
+			if hand != nil && !fly.home {
+				homeAt = time.Now().Add(notchHandLinger)
 			}
-			endAt = time.Now().Add(cmd.stay)
+		case 8:
+			goHome()
 		}
 	}
 	for {
 		var tick <-chan time.Time
-		if sheet != nil {
-			// A window is up: its messages are answered, and its time is watched.
-			tick = time.After(30 * time.Millisecond)
+		if sheet != nil || hand != nil {
+			// Something is up: its messages are answered, its time is watched,
+			// and what is moving is moved.
+			every := 30 * time.Millisecond
+			if fly.on || ring.on {
+				every = 8 * time.Millisecond
+			}
+			tick = time.After(every)
 		}
 		dirty := lookRect{}
 		select {
@@ -587,14 +726,75 @@ func (w *lookWindows) inkThread() {
 			}
 		case <-tick:
 		}
+		now := time.Now()
+		if fly.on && hand != nil {
+			gone := now.Sub(fly.began)
+			if gone >= fly.took {
+				fly.on = false
+				tip = fly.to
+				if fly.home {
+					closeHand()
+				} else {
+					placeHand(float64(tip.X), float64(tip.Y), 1, 1)
+					if ring.due {
+						startRing()
+					}
+				}
+			} else {
+				part := float64(gone) / float64(fly.took)
+				x, y := lookHandAt(fly.from, fly.to, part)
+				size, strength := 1.0, 1.0
+				if fly.grow {
+					size = notchHandSmall + (1-notchHandSmall)*lookEase(0.2, 0.7, 0.2, 1, float64(gone)/float64(notchHandGrow))
+					strength = math.Min(1, float64(gone)/float64(180*time.Millisecond))
+				}
+				if fly.home {
+					size = 1 - (1-notchHandSmall)*part
+					strength = 1 - part*part
+				}
+				tip = lookPoint{int(math.Round(x)), int(math.Round(y))}
+				placeHand(x, y, size, strength)
+			}
+		}
+		if ring.on && sheet != nil && ink != nil {
+			part := float64(now.Sub(ring.began)) / float64(notchHandRing)
+			upTo := len(ring.pieces) - 1
+			if part < 1 {
+				upTo = int(part * float64(upTo))
+			}
+			for ring.drawn < upTo {
+				a, b := ring.pieces[ring.drawn], ring.pieces[ring.drawn+1]
+				dirty = lookUnion(dirty, ink.stroke(float64(a.X), float64(a.Y), float64(b.X), float64(b.Y), notchInkRadius*scale*0.8))
+				ring.drawn++
+			}
+			if part >= 1 {
+				ring.on = false
+				if ring.text != "" {
+					tagText = ring.text
+					tag = newLookTag(ring.text, ring.bounds, screen, scale)
+					if hand != nil {
+						hand.raise()
+					}
+				}
+				endAt = now.Add(ring.stay)
+			}
+		}
 		if sheet != nil && ink != nil && !dirty.empty() {
 			ink.paint(sheet.pixels, dirty)
 			sheet.show(&dirty)
 		}
-		if sheet != nil {
+		if sheet != nil || hand != nil {
 			pump()
-			if !endAt.IsZero() && time.Now().After(endAt) {
-				closeAll()
+			if !endAt.IsZero() && now.After(endAt) {
+				if hand != nil {
+					// The ring had its time and nobody clicked: the hand goes home.
+					goHome()
+				} else {
+					closeAll()
+				}
+			}
+			if !homeAt.IsZero() && now.After(homeAt) {
+				goHome()
 			}
 		}
 	}
@@ -969,7 +1169,19 @@ func platformNotchWindowRead() (map[string]any, error) {
 		return map[string]any{"away": away}, nil
 	}
 	val, err := comThread.call(func(state *uiaState) (any, error) {
-		return uiaInspect(state, int(pid), 8, false, false)
+		result, err := uiaInspect(state, int(pid), 8, false, false)
+		if err != nil {
+			return nil, err
+		}
+		// What is open on top of the window comes first in the list: it is
+		// what the person is looking at, and the list may be cut short.
+		if popups := notchPopupElements(state, int(pid), hwnd); len(popups) > 0 {
+			rest, _ := result["elements"].([]map[string]any)
+			result["elements"] = append(popups, rest...)
+			result["element_count"] = len(popups) + len(rest)
+			result["popups"] = len(popups)
+		}
+		return result, nil
 	})
 	if err != nil {
 		return nil, err
@@ -980,4 +1192,67 @@ func platformNotchWindowRead() (map[string]any, error) {
 	}
 	result["app"] = app
 	return result, nil
+}
+
+// The most that is read of what is open on top of a window.
+const notchPopupElementLimit = 160
+
+// notchPopupElements reads what a program has open on top of its window: a
+// menu, a list dropped down from a box, a right-click menu. Each of those is
+// a window of its own with no title bar, and is never the window "in front",
+// so reading the window in front leaves it out. Without it, the second step
+// of anything that begins with a menu could not be found: the menu is exactly
+// where it is.
+//
+// Only the same program's windows, only those on the screen, and only those
+// without a title bar: a second full window of the program is not what the
+// person is in. A menu Windows itself draws (its class is "#32768") belongs
+// to the program that opened it, and is taken the same way.
+func notchPopupElements(state *uiaState, pid int, front uintptr) []map[string]any {
+	root, err := uiaGetRootElement(state.automation)
+	if err != nil || root == nil {
+		return nil
+	}
+	defer root.Release()
+	ofProgram, err := uiaCreatePropertyCondition(state.automation, UIA_ProcessIdPropertyId, pid)
+	if err != nil || ofProgram == nil {
+		return nil
+	}
+	defer ofProgram.Release()
+	tops, err := uiaElementFindAll(root, TreeScope_Children, ofProgram)
+	if err != nil || tops == nil {
+		return nil
+	}
+	defer tops.Release()
+	all, err := uiaCreateTrueCondition(state.automation)
+	if err != nil || all == nil {
+		return nil
+	}
+	defer all.Release()
+	var found []map[string]any
+	budget := newWalkBudget()
+	count := uiaArrayLength(tops)
+	for i := 0; i < count && len(found) < notchPopupElementLimit; i++ {
+		top := uiaArrayGetElement(tops, i)
+		if top == nil {
+			continue
+		}
+		hwnd := uintptr(uiaElementGetPropertyInt(top, UIA_NativeWindowHandlePropertyId))
+		_, _, w, h := uiaElementGetBoundingRect(top)
+		titled := hwnd != 0 && getWindowLong(hwnd, gwlStyle)&wsCaption == wsCaption
+		if hwnd == 0 || hwnd == front || titled || w <= 0 || h <= 0 || ownWindow(hwnd) || uiaElementGetPropertyBool(top, UIA_IsOffscreenPropertyId) {
+			top.Release()
+			continue
+		}
+		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+			top.Release()
+			continue
+		}
+		walkTree(state, all, top, 0, 6, false, false, nil, &found, budget)
+		top.Release()
+	}
+	if len(found) > notchPopupElementLimit {
+		found = found[:notchPopupElementLimit]
+	}
+	return found
 }

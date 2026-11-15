@@ -279,8 +279,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         log,
       });
     }
-    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, look: lookAt ?? undefined, log });
-    // A file dropped on the notch (pass 9) is asked about at once, as an instruction that carries it.
+    // What is said while a dropped file waits for its question is about that file: the words take it.
+    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, look: lookAt ?? undefined, held: () => drop?.claim() ?? [], log });
+    // A file dropped on the notch (pass 9) waits for its question: one of three offered, typed, or said.
     const owner = asks;
     drop = attachNotchDrop(surface, inbox, {
       ask: (text, files) => { owner.typed(text, files); },
