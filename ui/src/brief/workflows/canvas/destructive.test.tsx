@@ -49,19 +49,19 @@ test("a refused publish says which step is wrong in plain words", async () => {
   const refusal = Object.assign(new Error("Request unavailable (422)"), { status: 422, body: { error: "step_x (settings.input.mapping.h): ...", code: "WORKFLOW_NOT_READY",
     issues: [{ node: "draft", path: "settings.input.payload", code: "REFERENCE_SCOPE", message: 'Reference "step_1" is missing, later in the graph, or outside this branch/loop scope' }] } });
   await room({ publish: async () => { throw refusal; }, edit: undefined });
-  await React.act(async () => button("Publish version").click());
+  await React.act(async () => button("Save and turn on").click());
   await settle();
   expect(feedback()).toContain("Publishing stopped.");
   expect(feedback()).toContain('"Draft the follow-up" uses the result of a step that was deleted or does not run before it (step_1)');
   expect(feedback()).not.toContain("could not be confirmed");
   // An answer with no readable body keeps the old advice to reopen.
   await room({ publish: async () => { throw new Error("Request unavailable (500)"); } });
-  await React.act(async () => button("Publish version").click());
+  await React.act(async () => button("Save and turn on").click());
   await settle();
   expect(feedback()).toContain("could not be confirmed");
   // A server failure's own text is internal, not a reason a person can act on.
   await room({ publish: async () => { throw Object.assign(new Error("Request unavailable (500)"), { status: 500, body: { error: "SQLITE_BUSY: database is locked" } }); } });
-  await React.act(async () => button("Publish version").click());
+  await React.act(async () => button("Save and turn on").click());
   await settle();
   expect(feedback()).toContain("could not be confirmed");
   expect(feedback()).not.toContain("SQLITE");

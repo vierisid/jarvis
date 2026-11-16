@@ -8,6 +8,7 @@
  * the engine doesn't see spurious RPC errors during shutdown.
  */
 
+import { redactEngineText } from "../runtime/engine-console-redaction";
 import type { SandboxRegistry } from "./sandbox-registry";
 import type {
   NotifyContractHandlers,
@@ -228,7 +229,8 @@ export class DefaultWorkerHandlers
   private appendLog(sandboxId: string, stream: "stdout" | "stderr", message: string): void {
     const runId = this.requireRunId(sandboxId);
     if (!runId) return;
-    const entry: LogLine = { sandboxId, runId, stream, message, ts: Date.now() };
+    // The engine withholds failed-request bodies and headers; this is the backstop.
+    const entry: LogLine = { sandboxId, runId, stream, message: redactEngineText(message), ts: Date.now() };
     const buf = this.logBuffer.get(sandboxId) ?? [];
     buf.push(entry);
     let chars = buf.reduce((n, line) => n + line.message.length, 0);
