@@ -59,7 +59,7 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 
 | Case | What happens |
 | --- | --- |
-| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed |
+| On time, or up to two minutes late | Runs; lateness over a minute shows as delayed. In normal conditions a time starts within about a second of its minute (the scheduler checks every second) |
 | Later than two minutes (host asleep, process stalled, Jarvis off) | Recorded as missed, not run |
 | A long sleep | The time still within two minutes runs; the newest 100 missed are listed, older ones counted in one row, back seven days |
 | Restart within two minutes after a time | Runs, late, once |
@@ -141,10 +141,31 @@ work again, rerun it in Jarvis.
 | Started | 200 `{ ok, outcome: "started", fireId, runId }` |
 | Repeat | 200 `{ ok, outcome: "duplicate", duplicate: true, fireId, runId }` |
 | Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
-| Workflow off, changed or gone | 404; a retry after it is turned back on runs |
+| Workflow turned off | 404 `{ error }` saying the workflow is turned off (a Webhook-trigger workflow only; past 60 such lookups a minute across all ids the reply is `Webhook not found`); a retry after it is turned back on runs |
+| Workflow changed or gone | 404 `Webhook not found`, as for an id that never existed |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
 | Not recorded | 500 |
+
+### What the workflow receives
+
+The body is read once, signature checked on those exact bytes, and only then
+parsed, so parsing never changes what is signed. The Content-Type is not
+signed, so a delivery's identity (an event id in the body) is read from the
+bytes as JSON whatever it says: the same signed bytes sent again as a form
+are still a repeat.
+
+| Content type | In `{{trigger}}` |
+| --- | --- |
+| JSON object | its fields, at the top level |
+| JSON array or other JSON value | `trigger.body` |
+| `application/x-www-form-urlencoded` | the form fields at the top level, so `{{trigger.name}}` works; a repeated name is an array |
+| `multipart/form-data` | its text fields, as above; file parts are dropped |
+| Anything else, or invalid JSON | the raw text in `trigger.body` |
+
+Every delivery also carries `trigger._webhook`: `method`, `url`, `headers`,
+`timestamp`, and `query`, the URL's query string as fields (a repeated name is
+an array; none gives `{}`). A body field called `_webhook` is overwritten.
 
 ## Events
 

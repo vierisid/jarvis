@@ -7,8 +7,26 @@
  */
 
 import type { ClassifiedEvent } from './event-classifier.ts';
-import type { IAgentService } from './agent-service-interface.ts';
+import type { BackgroundTurnOptions } from './background-agent-service.ts';
 import { wrapUntrusted, inlineUntrusted } from '../roles/untrusted.ts';
+import { AwarenessHeldError, awarenessHistoryVisible } from '../awareness/history-guard.ts';
+import { AWARENESS_EVENT_TYPE_MAP } from '../workflows/runtime/event-types.ts';
+
+/** The agent a reaction runs on: the background agent (daemon step 10c). */
+export interface ReactorAgent {
+  handleMessage(text: string, channel?: string, options?: BackgroundTurnOptions): Promise<string>;
+}
+
+/**
+ * Events read from the screen (#1314 follow-up): their data carries OCR text
+ * and window titles. While screen awareness is off none is reacted to, a
+ * queued one is dropped, and a reaction that finishes after the switch went
+ * off is not shown.
+ */
+const SCREEN_EVENT_TYPES: ReadonlySet<string> = new Set([...Object.keys(AWARENESS_EVENT_TYPE_MAP), 'screen_capture']);
+export function isScreenEvent(classified: ClassifiedEvent): boolean {
+  return SCREEN_EVENT_TYPES.has(classified.event.type);
+}
 
 export type ReactorConfig = {
   /** Max reactions per event type within the cooldown window */
@@ -37,7 +55,7 @@ type ReactionRecord = {
 export type ReactionCallback = (text: string, priority: 'urgent' | 'normal') => void;
 
 export class EventReactor {
-  private agentService: IAgentService | null = null;
+  private agentService: ReactorAgent | null = null;
   private config: ReactorConfig;
   private reactionLog: ReactionRecord[] = [];
   private seenHashes = new Set<string>();
@@ -52,7 +70,7 @@ export class EventReactor {
   /**
    * Wire the reactor to the agent service (called during daemon startup).
    */
-  setAgentService(agent: IAgentService): void {
+  setAgentService(agent: ReactorAgent): void {
     this.agentService = agent;
   }
 
@@ -72,6 +90,8 @@ export class EventReactor {
       console.warn('[EventReactor] No agent service configured, skipping reaction');
       return false;
     }
+
+    if (isScreenEvent(classified) && !awarenessHistoryVisible()) return false;
 
     const hash = this.hashEvent(classified);
 
@@ -112,10 +132,17 @@ export class EventReactor {
       const prompt = this.buildReactionPrompt(classified);
       console.log(`[EventReactor] Reacting to ${classified.priority} event: ${classified.reason}`);
 
-      const response = await this.agentService!.handleMessage(prompt, 'system');
+      // A screen event's turn is held by the awareness switch and kept out of the primary history.
+      const screen = isScreenEvent(classified);
+      const response = screen
+        ? await this.agentService!.handleMessage(prompt, 'system', { screenDerived: true })
+        : await this.agentService!.handleMessage(prompt, 'system');
 
       // Record the reaction
       this.recordReaction(hash, classified.event.type);
+
+      // Awareness turned off while it ran: the reaction is screen-derived, so it is not shown.
+      if (screen && !awarenessHistoryVisible()) return;
 
       // Broadcast via callback
       const priority = classified.priority === 'critical' ? 'urgent' : 'normal';
@@ -123,7 +150,8 @@ export class EventReactor {
         this.onReaction(response, priority);
       }
     } catch (err) {
-      console.error('[EventReactor] Reaction failed:', err);
+      if (err instanceof AwarenessHeldError) console.log(`[EventReactor] Reaction held: screen awareness is off (${classified.event.type})`);
+      else console.error('[EventReactor] Reaction failed:', err);
     } finally {
       this.processing = false;
 
@@ -138,6 +166,7 @@ export class EventReactor {
       const hash = this.hashEvent(next);
 
       // Re-check dedup and cooldowns before processing queued event
+      if (isScreenEvent(next) && !awarenessHistoryVisible()) continue;
       if (this.seenHashes.has(hash)) continue;
       if (!this.canReactForType(next.event.type)) continue;
       if (!this.canReactGlobally()) break;
