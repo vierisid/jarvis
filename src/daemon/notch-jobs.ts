@@ -141,6 +141,14 @@ export function notchJobDeps(options: NotchJobOptions): NonNullable<NotchRealDep
       manager.onSidecarConnected((sidecar) => ask(sidecar.id));
     },
     teach: {
+      // A Mac's desktop app has no way yet to find a button again by what it
+      // is called (its reading of a window carries no such identity), so a
+      // job shown there is done again by place.
+      byPlace() {
+        const at = machine();
+        const os = at ? at.manager.listSidecars().find((sidecar) => sidecar.id === at.id)?.os ?? '' : '';
+        return /darwin|mac/i.test(os);
+      },
       recorder: {
         async start(maxMs) {
           if (!isDesktopEnabled()) return { ok: false, why: 'Desktop control is switched off in settings, so I cannot watch.' };

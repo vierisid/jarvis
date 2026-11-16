@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -290,13 +291,6 @@ func notchActFront(hwnd uintptr) bool {
 	return false
 }
 
-func notchActHands() lookHands {
-	if notchLookHands == nil {
-		return nil
-	}
-	return notchLookHands
-}
-
 // notchActPress sends Jarvis's pointer to a place, then presses there with
 // the system's pointer and puts that back where it was. hwnd is the window
 // the press is meant for, or 0 for whatever is at the place.
@@ -417,6 +411,32 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		}
 		return done(map[string]any{"win": win.payload(), "app": win.App})
 
+	case "find":
+		// The window a step named, as it is now; or, when its program was
+		// started again since, that program's topmost window of the same size.
+		same := func(win watchWin) bool {
+			return absInt(win.W-act.Win.W) <= 2 && absInt(win.H-act.Win.H) <= 2
+		}
+		if hwnd, _, refusal := notchActWindowNow(act); refusal == nil {
+			if win, ok := watchWindowOf(hwnd); ok && same(win) {
+				return done(map[string]any{"win": win.payload(), "app": win.App})
+			}
+		}
+		if act.App != "" {
+			for _, top := range enumTopWindows() {
+				if ownWindow(top.Hwnd) {
+					continue
+				}
+				if small, _, _ := procIsIconic.Call(top.Hwnd); small != 0 {
+					continue
+				}
+				if win, ok := watchWindowOf(top.Hwnd); ok && strings.EqualFold(win.App, act.App) && same(win) {
+					return done(map[string]any{"win": win.payload(), "app": win.App})
+				}
+			}
+		}
+		return refuse(&notchActError{"gone", "no window of that program is there at that size"})
+
 	case "hand":
 		hands := notchActHands()
 		if hands == nil {
@@ -531,6 +551,23 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		}
 		return done(nil)
 
+	case "type":
+		// Words typed where the keyboard is, in the window they were typed in when the job was shown.
+		hwnd, _, refusal := notchActWindowNow(act)
+		if refusal != nil {
+			return refuse(refusal)
+		}
+		if !notchActFront(hwnd) {
+			return refuse(&notchActError{"front", "another window is in front"})
+		}
+		if windowKeyReach(hwnd) == keysBlocked {
+			return refuse(&notchActError{"elevated", "that window runs as administrator"})
+		}
+		if err := typeTextNative(act.Text, false); err != nil {
+			return refuse(&notchActError{"failed", err.Error()})
+		}
+		return done(nil)
+
 	case "copy":
 		// What is selected is copied, and only its shape is told. The
 		// clipboard is emptied first, so that "nothing was copied" is not
@@ -642,5 +679,5 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 			"shape": clipShapeOf(shape).payload(),
 		})
 	}
-	return nil, fmt.Errorf("notch.act: do must be click, keys, copy, paste, hand, home, front, count or pitch")
+	return nil, fmt.Errorf("notch.act: do must be click, keys, type, copy, paste, hand, home, front, find, count or pitch")
 }

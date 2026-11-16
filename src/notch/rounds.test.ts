@@ -140,6 +140,21 @@ describe('the same thing done twice, one place further along', () => {
   });
 });
 
+describe('on a Mac', () => {
+  test('Cmd is to its shortcuts what Ctrl is on Windows: the same job is seen, and its copy and paste are known', () => {
+    const macRow = (n: number): WatchStep[] => [
+      click(FILE, 120, 200 + 22 * n), keys(FILE, 'cmd,c'), click(SHEET, 300, 400 + 20 * n, 'cmd'), keys(SHEET, 'cmd,v'),
+    ];
+    const rounds = findRounds([...macRow(0), ...macRow(1)])!;
+    expect(rounds.steps.map((step) => (step.kind === 'keys' ? [step.keys, step.copy === true, step.paste === true] : step.mods ?? ''))).toEqual([
+      '', ['cmd,c', true, false], 'cmd', ['cmd,v', false, true],
+    ]);
+    expect(roundsCopy(rounds)).toBe(true);
+    for (const spec of ['cmd,c', 'cmd,shift,v', 'cmd,tab', 'cmd,backspace', 'ctrl,a']) expect(watchKeysOk(spec)).toBe(true);
+    expect(parseWatchEvent({ kind: 'click', win: SHEET, pt: { x: 1, y: 1 }, mods: 'cmd' }, 9)).toMatchObject({ mods: 'cmd' });
+  });
+});
+
 describe('a round is a circle', () => {
   // Found by test: turned down after two rows, the offer came back at the next click, as if it were another job.
   test('the person who goes on by hand is in the same job, at another step of it', () => {
