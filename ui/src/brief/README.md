@@ -279,10 +279,23 @@ is unchanged.
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
   wheel input over the goal scrolls the room.
 - `today/figma-reference.json` records the source values.
-- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` and
-  `RecentActivity` take an `OutcomeBinding`; `outcomeView` passes it through only when `source` is
-  `"fixture"` in preview mode, or `"live"` with both the `outcomes` and `goalMeasurements` capabilities
-  enabled in live mode; anything else renders "unavailable". No live provider is wired yet.
+- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` takes an
+  `OutcomeBinding`; `outcomeView` passes it through only when `source` is `"fixture"` in preview mode, or
+  `"live"` with both the `outcomes` and `goalMeasurements` capabilities enabled in live mode; anything else
+  renders "unavailable". `RecentActivity` takes a plain view binding of the matching source and does not
+  depend on those capabilities. No live provider is wired for Outcomes yet.
+- Today's Recent activity is built by `today/activity/model.ts` from one bounded read,
+  `GET /api/workflow-runs/recent?limit=5` (`today/activity/read.ts`): the latest production, top-level run of
+  each workflow in the caller's project, newest first. Test runs, single-step tests and subflow child runs are
+  never candidates, and a removed workflow is left out as the Workflows room leaves it out. The read costs one
+  index seek per workflow, not a pass over run history. It is a reconciliation projection over the `runs` and
+  `today` domains, so workflow events and the client's regular polling refresh it while Today is open.
+- A row is the workflow name (invisible and bidi control characters dropped, capped at 120 characters), a plain
+  status (Done, Failed, Running, Queued, Stopped, or a wait) and a local time, and opens `workflow` with the
+  flow, version and run ids. Only a run waiting on a person (approval or input request) says "Waiting for
+  you"; a run paused on a timer reads "Waiting until <time>", and any other pause reads "Waiting".
+  Verified outcomes may add rows but never decide whether the list is empty or unavailable. Rows carry
+  identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
   `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
@@ -528,6 +541,34 @@ ingredients (ready, loading, unavailable). It sends no request.
   `workflowCanvasRegistration(useBinding)`, not in the production registry; F-21 supplies the scoped,
   redacted request before it is mounted live.
 - `workflows/canvas/figma-reference.json` records the UI-23 source values and bounded deviations.
+- The page reads as a job Jarvis does, not a node graph. `WorkflowSummary` shows one plain-English
+  sentence above the tools, generated deterministically from the draft graph by `summarizeWorkflow`
+  (`v2/rooms/workflows/workflow-summary.ts`): the trigger in words, then each step as a short phrase,
+  routers as "if ... otherwise ...", loops as "for each ...". It makes no model call, is capped near
+  280 characters (the rest is counted as "and N more steps"), and falls back to the step's display name,
+  then a humanized piece name, for anything it does not know. It follows unsaved edits.
+- Schedules read as words everywhere (`schedule-words.ts`): the trigger card subtitle, the trigger panel
+  and the summary. A zone is shown only when a person chose it (`settings.chosenTimezone`), as the
+  scheduler uses it. `ScheduleEditor` covers every day, weekdays and chosen days at a time in a
+  timezone, and writes the existing `cron_expression` and `timezone` fields; the stored format and the
+  schedule piece are unchanged. An expression it cannot express opens as "Custom (cron)" with the raw
+  text, and the daylight-saving policy sits under Advanced. Both schedule names read the same: the
+  built-in `schedule` and the catalog `@activepieces/piece-schedule` (its inputs are turned into the
+  cron the piece writes). The words say what really fires: a step that does not divide the period
+  (`*/59` minutes, `*/7` hours) lists the real times because it restarts each hour or day, and day
+  29 to 31 says it skips months without it. The editor offers no minutes picker, so it cannot write
+  an uneven step; Custom (cron) goes through the same words. Only what `src/lib/cron-scheduler.ts`
+  accepts reads as a schedule (numbers, lists, ranges, steps): day names, `?`, `L`, `W` and `#` fall
+  back to the raw text, and the catalog inputs are read as the piece reads them (a non-integer hour is
+  0). The zone rule is the trigger manager's for both names, and the editor's zone picker shows the
+  Jarvis default for a stored zone nobody picked. Step and piece names in the summary go through
+  `forCard` (`src/util/card-text.ts`), so a bidi or invisible character cannot reorder the sentence.
+  The All workflows "Runs when" label
+  (`src/brief/workflow-trigger-label.ts`) still words schedules separately.
+- Step labels use no developer terms: a plain piece step carries no label chip (AI judgment steps keep
+  theirs), the panel header says "Trigger", and a piece missing from the catalog shows a humanized name.
+  `advanced-fields.ts` lists the fields a step's panel keeps under a collapsed "Advanced" (the notify
+  step's meeting freshness guard and notification identity), so the message and channels come first.
 
 `?brief=preview&specimen=workflow-canvas#/_brief_preview` opens the page over an in-memory fixture flow
 (with branches, loops and a detached chain). Save stays in memory; anything else answers 403.
@@ -599,8 +640,14 @@ run response). It sends no request.
 ## Workflow management
 
 - `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
-  Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
-  Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+  On/Off switch and the bin are separate targets, and Delete confirms inside its own row.
+  `workflows/status-words.ts` is the one place server facts (ENABLED/DISABLED, published or draft,
+  readiness) become founder words, shared by the list and the workflow page: On or Off, plus at most
+  one note (Needs setup, Setup status unknown, Draft changes not live yet; while On, a draft that is
+  not live wins, since its setup gaps do not stop the running version). Published, Unpublished, Ready
+  and Paused are not shown. The one draft action is "Save and turn on" (publishing also turns the
+  workflow on).
+  Draft is never a switch state.
 - `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
   the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
   expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
@@ -682,6 +729,15 @@ actions only change local fixture state.
 - Editing buffers a complete typed email or calendar document. Save does not approve: it yields a new
   revision and approval to review. A read that changes or removes the decision keeps the unsaved
   text and Cancel, and disables Save.
+- Held runs: a workflow whose approval cards are at their limit parks its further runs with no card
+  (`workflows/runtime/deferred-cards.ts`). F-12 lists them as ONE `kind: "held"` entry per workflow
+  (`decisionId` `held:<flowId>`, `held: { workflowName, count }`, inspect only), never as one
+  recovery row per run. The entry says plainly how many are waiting and that answering a request
+  above lets the next one ask. The count rule: a held entry is a note, not a decision. It is not
+  counted in the Needs you count, Today's queue count or the sidebar badge, and it is never offered
+  to the document room. Only entries that ask the owner for something count. A held run stopped
+  by Kill, turn-off or cancel before its step ever asked leaves no row either: nothing was sent and
+  nothing is asked (the #1364 rule), and an accepted commitment's work card shows again.
 - Wiring (not done here): aggregate every F-12 `GET /api/brief/decisions` page and restart on
   `queue_changed`; join each item with F-14 `GET /api/brief/decisions/:id/document` only when the
   revisions match. POST the F-14 document endpoint with `{ requestId, revision, action }` plus
@@ -868,11 +924,15 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
+- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Conversation (voice), Check-ins and
   Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.
+- The AI provider row names the current provider and model from `GET /api/config/llm` (the response the
+  AI settings page uses; keys are never read or shown) and its action opens that page through the
+  `credentials` destination, so there is one place that edits it. A missing provider or key says so in
+  plain words. Hosted installs on Usejarvis AI show that, with no key prompt or action.
 - Voice saves only one of the listed canonical choices, revision-bound, and reports the saved value
   separately from live application (applied, restart required, failed, unconfirmed). A lost or
   failed save keeps the selection; Retry re-reads first and reports a conflict instead of
