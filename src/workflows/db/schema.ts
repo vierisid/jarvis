@@ -246,6 +246,11 @@ const STATEMENTS: string[] = [
   // waiting: 8.4 ms a flow with 50k PAUSED runs ahead of the ended one.
   `CREATE INDEX IF NOT EXISTS idx_flow_run_ended ON flow_run(project_id, flow_id, created DESC, id DESC)
     WHERE status IN ${ENDED_RUN_STATUSES_SQL} AND step_name_to_test IS NULL`,
+  // Each workflow's latest real run, for Today's Recent activity
+  // (listRecentRuns). Over the run history index a workflow whose runs are all
+  // tests or subflow children was walked to its first run on every poll.
+  `CREATE INDEX IF NOT EXISTS idx_flow_run_recent ON flow_run(project_id, flow_id, created DESC, id DESC)
+    WHERE environment = 'PRODUCTION' AND parent_run_id IS NULL AND step_name_to_test IS NULL`,
 
   // Durable effect identity and dispatch fence, independent of run-log uploads.
   `CREATE TABLE IF NOT EXISTS workflow_effect (
