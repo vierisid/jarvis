@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { memoryRows } from "./fixtures";
-import { validPage } from "./model";
+import { basisWords, sourceWords, validPage } from "./model";
 
 const page = () => ({
   items: [memoryRows()[0]!],
@@ -48,3 +48,11 @@ for (const broken of [
     }
     expect(validPage(body, { limit: broken === "limit" ? 2 : 50 })).toBe(false);
   });
+
+test("provenance reads in plain words, not raw stored values", () => {
+  expect(sourceWords("llm_extraction")).toBe("Learned from a chat");
+  expect(sourceWords("user_profile")).toBe("Added by you");
+  expect(sourceWords("meeting_notes")).toBe("Meeting notes");
+  expect(basisWords("inferred")).toBe("Inferred");
+  expect(basisWords("confirmed")).toBe("Confirmed by you");
+});
