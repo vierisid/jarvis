@@ -464,13 +464,15 @@ describe('near-miss spellings found by review', () => {
   });
 
   test('a jarvis export archive is refused wherever it sits', () => {
-    // --full puts .secrets.key, the workflow key and the sidecar keypair in it
-    // verbatim, and they are ASCII, so a plain text read prints them.
-    for (const name of ['jarvis-export-2026-01-01T00-00-00.tar', 'jarvis-backup-x.tar.zst']) {
+    // Every default export puts .secrets.key, the workflow key and the sidecar
+    // keypair in it verbatim, and they are ASCII, so a plain text read prints
+    // them. jarvis-backup.tar is the name the README tells people to use.
+    for (const name of ['jarvis-export-2026-01-01T00-00-00.tar', 'jarvis-backup-x.tar.zst', 'jarvis-backup.tar', 'jarvis-export.tar.gz']) {
       expect(refused(join(home, name)), name).toBe(true);
       expect(refused(join(home, 'Downloads', name)), name).toBe(true);
     }
     expect(refused(join(home, 'notes.tar'))).toBe(false);
+    expect(refused(join(home, 'jarvis-backups.tar'))).toBe(false);
   });
 
   test("Jarvis's own units are refused wherever systemd keeps them", () => {
