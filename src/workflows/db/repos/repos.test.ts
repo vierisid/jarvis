@@ -9,6 +9,7 @@ import {
   deleteFlow,
   getFlow,
   listFlows,
+  listAllFlows,
   parseFlowMetadata,
   setPublishedVersion,
   updateFlowMetadata,
@@ -52,12 +53,22 @@ afterEach(() => {
   setEncryptionKey(null);
 });
 
+// The smallest step that needs no piece catalog, so a publishable graph can be built in a bare test database.
+const ROUTER_STEP = { name: "step_1", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchType: "FALLBACK", branchName: "Otherwise" }] }, children: [null] };
+
 describe("flow repo", () => {
   test("createFlow uses the default project and creates a DISABLED flow", () => {
     const flow = createFlow();
     expect(flow.project_id).toBe(DEFAULT_IDS.project);
     expect(flow.status).toBe("DISABLED");
     expect(flow.id.length).toBe(21);
+  });
+
+  test("listAllFlows returns every flow where listFlows stops at its page size", () => {
+    for (let i = 0; i < 130; i++) createFlow();
+    expect(listFlows().length).toBe(100);
+    expect(listAllFlows().length).toBe(130);
+    expect(listAllFlows(DEFAULT_IDS.project, { status: "ENABLED" }).length).toBe(0);
   });
 
   test("listFlows orders by updated DESC and respects status filter", async () => {
@@ -73,7 +84,7 @@ describe("flow repo", () => {
 
   test("updateFlowStatus and setPublishedVersion mutate fields", () => {
     const flow = createFlow();
-    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: { name: "trigger", type: "EMPTY" } }).id);
+    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: { name: "trigger", type: "EMPTY", nextAction: ROUTER_STEP } }).id);
     setPublishedVersion(flow.id, version.id);
     updateFlowStatus(flow.id, "ENABLED");
     const got = getFlow(flow.id);
@@ -516,6 +527,26 @@ describe("mergeRunOutputsIntoSampleData (auto-capture)", () => {
     const v = getFlowVersion(versionId)!;
     expect(v.sampleData?.wrapped).toEqual({ a: 1 });
     expect(v.sampleData?.bare).toEqual({ b: 2 });
+  });
+
+  test("stores what the step returned, not the engine's step record around it", () => {
+    const versionId = newDraft();
+    mergeRunOutputsIntoSampleData(versionId, {
+      step_1: { output: { type: "PIECE", status: "SUCCEEDED", input: { value: 1 }, output: { echo: "hello" } } },
+      step_2: { output: { type: "PIECE", status: "SUCCEEDED", input: {}, output: "text" } },
+    });
+    const v = getFlowVersion(versionId)!;
+    expect(v.sampleData?.step_1).toEqual({ echo: "hello" });
+    expect(v.sampleData?.step_2).toBeUndefined();
+  });
+
+  test("keeps a step's own { type, status, output } result when the type is not an engine step type", () => {
+    const versionId = newDraft();
+    mergeRunOutputsIntoSampleData(versionId, {
+      // An already-unwrapped step record: one unwrap reaches what the step returned.
+      step_1: { type: "PIECE", status: "SUCCEEDED", input: {}, output: { type: "invoice", status: "paid", output: { total: 3 } } },
+    });
+    expect(getFlowVersion(versionId)!.sampleData?.step_1).toEqual({ type: "invoice", status: "paid", output: { total: 3 } });
   });
 
   test("does not clobber user-pinned cells", () => {

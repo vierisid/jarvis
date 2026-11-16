@@ -164,7 +164,9 @@ renders it, so the room's ancestors stay mounted; only the navigation chrome is 
 - Navigation data (`BriefNavigationData` in `shell/navigation/model.ts`) is read-only. Loading,
   unavailable and stale reads show "unavailable", never a healthy connection, a plan or zero counts.
   `planFromBilling` adapts the existing `/api/billing` snapshot (`v2/billing/useBilling`) to a plan
-  name; do not fetch billing again or add a plan tier.
+  name; do not fetch billing again or add a plan tier. A self-hosted install never requests
+  `/api/billing` (the daemon answers 503): the shell reads billing with `enabled: false` there and
+  shows "Self-hosted".
 - The account menu only navigates to the Profile, Settings and Billing rooms. It performs no account
   action and puts no email or token in the DOM.
 - Changing rooms resets the content scroll to the top; sidebar, theme, chat and same-room selection
@@ -279,7 +281,8 @@ is unchanged.
 - Slots are plain nodes supplied and gated by their owners; the layout invents no fallback cards.
   `slots.goal` renders through `PebbleCompanion` into the one companion slot `PebbleLayout` keeps above
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
-  wheel input over the goal scrolls the room.
+  wheel input over the goal scrolls the room, and the card is placed from where the greeting really
+  sits, so notices above Today (paused, storage, connection) push it down instead of being covered.
 - `today/figma-reference.json` records the source values.
 - Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` takes an
   `OutcomeBinding`; `outcomeView` passes it through only when `source` is `"fixture"` in preview mode, or
@@ -300,8 +303,11 @@ is unchanged.
   identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
-  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
-  never sums runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
+  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value, and may also
+  be `estimated`: the server counts every successful production root run (not one that continued past a failure) at the workflow's owner-set
+  minutes or an estimate from its steps, and the view labels it "estimated" and shows the basis in the
+  bar tooltips and "Data basis". An estimate never qualifies a goal figure. A started day with no runs renders an empty zero bar ("No time saved"); a future day is blank. Bars carry the short weekday, the full date is in the tooltip. The view itself never sums
+  runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
   not measured yet", and a measured zero shows 0. "Data basis" lists each figure's qualification, as-of
   time and evidence count.
 - Only changed digits fade (`BRIEF_MOTION.selection.enter`); mount, remount and a new window or goal do
@@ -765,8 +771,15 @@ actions only change local fixture state.
 
 - `goals/` is the D-24 Goals room (`goals` and `completed-goals`): goal selectors above one ordered
   path of stage cards, and settled summary cards with milestones under Completed. The room only
-  reads and navigates; it has no goal writer, calculation or approval path. `onCreate` is optional and
+  reads and navigates; it has no calculation or approval path. `onCreate` is optional and
   must open the host's existing goal-creation flow.
+- The only writes are the optional `GoalsPort.write`: "Log progress" (a typed value, or a counted
+  entry with a short note and optional link), "Set how to measure this" and "Activate" for a draft.
+  They use the existing measurement, counted-entry and status routes with the goal's
+  `measurementRevision`; a stale revision reads "This goal changed since you opened it. Refresh and
+  try again." and server wording is never shown. A request id is reused on a retry of the same input.
+  A save refreshes the room and Today's goal read. Draft goals are named "Draft: review and activate"
+  and a hidden-draft notice shows on the Active filter.
 - Each goal is a `GoalDatum`: `BriefGoal` plus owner-written title strings, with F-15's
   `progress { value, basis, rollup: "independent" }` required. The percent comes from `progress.value`
   (0..1) only, never from value/target, a title or child stages. A count is shown only with a
@@ -932,8 +945,11 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Conversation (voice), Check-ins and
-  Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
+- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Permissions and
+  approvals (the Authority link, second section), Conversation (voice) and Workspace controls.
+  Check-in preferences and active hours are not shown: the profile-settings contract always
+  answers `check_in_not_supported` and the daemon ignores `heartbeat.active_hours`. Appearance is
+  the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.
@@ -945,8 +961,7 @@ actions only change local fixture state.
   separately from live application (applied, restart required, failed, unconfirmed). A lost or
   failed save keeps the selection; Retry re-reads first and reports a conflict instead of
   overwriting a change made elsewhere. Realtime voice, Authority, Connected workspace and Advanced
-  settings only navigate through host callbacks. Check-in frequency and active hours are shown as
-  unavailable. Hosted installs never expose provider setup.
+  settings only navigate through host callbacks. Hosted installs never expose provider setup.
 - It reads and writes only through `SettingsPort`. `createSettingsPort(scopeId, host)`
   (`account/settings/adapter.ts`) is the live port over F-23's `GET /api/brief/profile-settings`
   and `PATCH /api/brief/profile-settings/voice` (default off). No production host builds this
