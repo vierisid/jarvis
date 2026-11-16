@@ -27,6 +27,7 @@ import { projectFailure, type DeliveryResult, type UserFailure } from '../../fai
 import { dismissChatFailures, listChatFailures } from '../../failures/chat';
 import { getRunRecovery } from './recovery';
 import { runFailure } from './run-failure';
+import { runAsShown } from './step-credentials';
 
 export interface OpenFailure {
   failure: UserFailure;
@@ -107,13 +108,13 @@ function succeededSince(flowId: string, created: number): boolean {
     .get(flowId, created);
 }
 
-type Workflow = { name: string; nodes: FlowTriggerNode[]; steps: Map<string, string> };
+type Workflow = { name: string; nodes: FlowTriggerNode[]; steps: Map<string, string>; trigger: FlowTriggerNode | undefined };
 function workflowFor(versionId: string, cache: Map<string, Workflow>): Workflow {
   let entry = cache.get(versionId);
   if (!entry) {
     const version = getFlowVersion(versionId);
     const nodes = walkFlowNodes(version?.trigger);
-    entry = { name: version?.displayName || 'A workflow', nodes, steps: new Map(nodes.map(node => [node.name, node.displayName || node.name])) };
+    entry = { name: version?.displayName || 'A workflow', nodes, steps: new Map(nodes.map(node => [node.name, node.displayName || node.name])), trigger: version?.trigger };
     cache.set(versionId, entry);
   }
   return entry;
@@ -147,8 +148,10 @@ export function listOpenFailures(now = Date.now(), projectId?: string): OpenFail
     .all(...(projectId === undefined ? [] : [projectId])) as Array<{ key: string; source: 'run' | 'delivery'; run_id: string; effect_id: string | null }>;
   for (const entry of open) {
     if (entry.source === 'run') {
-      const run = getFlowRun(entry.run_id);
-      const workflow = run ? workflowFor(run.flowVersionId, workflows) : null;
+      const stored = getFlowRun(entry.run_id);
+      const workflow = stored ? workflowFor(stored.flowVersionId, workflows) : null;
+      // Its message as run history shows it: no generated password or old webhook credential.
+      const run = stored && workflow ? runAsShown(stored, workflow.trigger) : stored;
       const failure = run && workflow ? runFailure(run, undefined, workflow.nodes) : null;
       if (!run || !workflow || !failure || dismissed.has(failure.key)
         || (failure.effect === 'none' ? run.status === 'STOPPED' || succeededSince(run.flowId, run.created)
