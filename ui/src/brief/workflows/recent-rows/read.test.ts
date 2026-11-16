@@ -1,15 +1,31 @@
 import { expect, test } from "bun:test";
 import { readRecentWorkflows } from "./read";
-test("current API reads canonical IDs/status, excludes never-run drafts, never forwards captured output",async()=>{
-  const urls:string[]=[];const state=await readRecentWorkflows(async url=>{urls.push(url);
-    return Response.json(url.startsWith('/api/workflows?')?[{id:"a"},{id:"b"}]:url.includes('/a/runs')?{items:[{id:"run-a",flowId:"a",flowVersionId:"v-a",status:"FAILED",environment:"PRODUCTION",startTime:42,steps:{private:"CANARY"}}],nextOffset:1}:url.includes('/b/runs')?{items:[],nextOffset:null}:{latestDraft:{displayName:"Brief"}});
-  });expect(state).toMatchObject({status:"ready",data:[{flowId:"a",versionId:"v-a",runId:"run-a",name:"Brief",status:"FAILED",result:"Run failed",at:42}]});expect(JSON.stringify(state)).not.toContain("CANARY");expect(urls.every(url=>url.startsWith('/api/workflows'))).toBe(true);
+const run = (over: Record<string, unknown> = {}) => ({ id: "run-a", flowId: "a", flowVersionId: "v-a", status: "FAILED", environment: "PRODUCTION", startTime: 42, created: 40, displayName: "Brief", ...over });
+test("one request reads the recent runs and names; captured output is never forwarded", async () => {
+  const urls: string[] = [];
+  const state = await readRecentWorkflows(async url => { urls.push(url); return Response.json({ items: [run({ steps: { out: { secret: "SECRET-OUTPUT" } } })] }); });
+  expect(urls).toEqual(["/api/workflows/recent-runs?limit=6"]);
+  expect(state).toMatchObject({ status: "ready", data: [{ flowId: "a", versionId: "v-a", runId: "run-a", name: "Brief", status: "FAILED", result: "Run failed", at: 42 }] });
+  expect(JSON.stringify(state)).not.toContain("SECRET-OUTPUT");
 });
-test("unavailable run reads are not an empty collection",async()=>{const state=await readRecentWorkflows(async url=>Response.json(url.includes('?limit=50')?[{id:"a"}]:{}, {status:url.includes('/runs')?503:200}));expect(state.status).toBe("unavailable");});
-test("partial reads preserve known rows and disclose incompleteness",async()=>{const state=await readRecentWorkflows(async url=>Response.json(url.includes('?limit=50')?[{id:"a"},{id:"b"}]:url.includes('/a/runs')?{items:[{id:"r",flowId:"a",flowVersionId:"v",status:"SUCCEEDED",environment:"TESTING",created:1,startTime:null}],nextOffset:1}:{}, {status:url.includes('/b/runs')?503:200}));expect(state.status).toBe("stale");expect('data' in state&&state.data[0]?.environment).toBe("TESTING");});
-test("cross-flow or malformed runs cannot be displayed",async()=>{const state=await readRecentWorkflows(async url=>Response.json(url.includes('?limit=50')?[{id:"a"}]:{items:[{id:"r",flowId:"other",status:"SUCCEEDED"}],nextOffset:1}));expect(state.status).toBe("unavailable");});
-test("inventory is paginated and capped; workers never run more than four reads",async()=>{
- let active=0,max=0,calls=0;const state=await readRecentWorkflows(async url=>{calls++;active++;max=Math.max(max,active);await Bun.sleep(1);active--;const params=new URL(url,"http://test").searchParams;const offset=Number(params.get('offset'));return Response.json(url.includes('/runs')?{items:[],nextOffset:null}:Array.from({length:offset===200?1:50},(_,i)=>({id:`f${offset+i}`})));});expect(state.status).toBe("unavailable");expect(calls).toBe(205);expect(max).toBe(4);
+test("the request count does not grow with the number of workflows", async () => {
+  let calls = 0;
+  const items = Array.from({ length: 6 }, (_, i) => run({ id: `r${i}`, flowId: `f${i}`, startTime: 100 - i, displayName: `Flow ${i}` }));
+  const state = await readRecentWorkflows(async () => { calls++; return Response.json({ items }); });
+  expect(calls).toBe(1);
+  expect(state).toMatchObject({ status: "ready" });
+  expect((state as unknown as { data: { name: string }[] }).data.map(r => r.name)).toEqual(["Flow 0", "Flow 1", "Flow 2", "Flow 3", "Flow 4", "Flow 5"]);
 });
-test("empty inventory has no run requests and stays distinct",async()=>{let calls=0;const state=await readRecentWorkflows(async()=>{calls++;return Response.json([]);});expect(state.status).toBe("empty");expect(calls).toBe(1);});
-test("a bare run array (the pre-#652 shape) is not read as a page",async()=>{const state=await readRecentWorkflows(async url=>Response.json(url.includes('?limit=50')?[{id:"a"}]:url.includes('/runs')?[{id:"r",flowId:"a",flowVersionId:"v",status:"SUCCEEDED",environment:"PRODUCTION",startTime:1}]:{}));expect(state.status).toBe("unavailable");});
+test("a failed read is unavailable, not an empty list", async () => {
+  expect(await readRecentWorkflows(async () => Response.json({}, { status: 503 }))).toMatchObject({ status: "unavailable" });
+  expect(await readRecentWorkflows(async () => { throw new Error("offline"); })).toMatchObject({ status: "unavailable" });
+});
+test("no runs yet is empty", async () => {
+  expect(await readRecentWorkflows(async () => Response.json({ items: [] }))).toEqual({ status: "empty" });
+});
+test("a malformed row is skipped and disclosed; a bare array is not read as a page", async () => {
+  const state = await readRecentWorkflows(async () => Response.json({ items: [run(), run({ id: "", flowId: "b" }), run({ id: "r3", flowId: "c", environment: "STAGING" })] }));
+  expect(state).toMatchObject({ status: "stale", data: [{ flowId: "a" }] });
+  expect(await readRecentWorkflows(async () => Response.json([run()]))).toMatchObject({ status: "unavailable" });
+  expect(await readRecentWorkflows(async () => Response.json({ items: [run({ id: "x", flowId: "y", environment: "NOPE" })] }))).toMatchObject({ status: "unavailable" });
+});
