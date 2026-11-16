@@ -22,6 +22,7 @@ export const SETTINGS_EXAMPLES = [
   "unavailable",
   "unsupported",
   "error",
+  "no-provider",
 ] as const;
 export type SettingsExample = (typeof SETTINGS_EXAMPLES)[number];
 export function settingsEnvelope(data: SettingsValue) {
@@ -112,6 +113,17 @@ export function makeSettingsFixture(
       });
       if (example === "unavailable") return new Response(null, { status: 403 });
       if (example === "unsupported") return new Response(null, { status: 501 });
+      if (path === "/api/config/llm")
+        return Response.json(
+          example === "no-provider"
+            ? { providers: {}, default: null, tiers: {}, hosted_llm: false }
+            : hosted
+              ? { providers: {}, default: "usejarvis_ai:uj-chat", hosted_llm: true }
+              : {
+                  providers: { anthropic: { kind: "anthropic", has_api_key: true } },
+                  default: "anthropic:claude-sonnet-4-5",
+                },
+        );
       if (init.method !== "PATCH")
         return failReads
           ? new Response(null, { status: 503 })
