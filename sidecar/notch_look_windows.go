@@ -52,8 +52,6 @@ const (
 	notchLookCaptureBlt  = 0x40000000
 	uiaLocalizedTypeID   = 30004
 	uiaValueValueID      = 30045
-	notchLookClimb       = 5
-	notchLookPartRunes   = 120
 	notchLookTagFontPx   = 13
 	notchLookTagPadX     = 10
 	notchLookTagPadY     = 6
@@ -531,15 +529,6 @@ type inkHand struct {
 		grow, home bool
 	}
 }
-
-// How many pointers Jarvis has. One shows the way ("where is"). A job done
-// where it can be seen uses up to three, one for each place a round touches,
-// so that none of them has to cross the screen for every step.
-const notchHandCount = 3
-
-// A pointer that is out for a job and hears nothing more goes home by itself:
-// the brain went away in the middle.
-const notchHandJobIdle = 25 * time.Second
 
 // inkThread owns the ink's window, the tag's and the hands'. It draws what it
 // is told to, in the order it is told, moves what is moving, and takes

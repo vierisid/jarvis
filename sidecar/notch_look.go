@@ -54,6 +54,10 @@ const (
 	notchLookTextRunes = 200
 	// The most children of one container that are gone through.
 	notchLookMaxSiblings = 400
+	// How far up from the thing under a place the reading climbs to find the
+	// thing a person means, and how long one cell of a row may be.
+	notchLookClimb     = 5
+	notchLookPartRunes = 120
 )
 
 // How a look was made.
@@ -852,3 +856,12 @@ func lookPathPieces(path []lookPoint, step float64) []lookPoint {
 func lookGrown(r lookRect, by int) lookRect {
 	return lookRect{r.X - by, r.Y - by, r.W + 2*by, r.H + 2*by}
 }
+
+// How many pointers Jarvis has. One shows the way ("where is"). A job done
+// where it can be seen uses up to three, one for each place a round touches,
+// so that none of them has to cross the screen for every step.
+const notchHandCount = 3
+
+// A pointer that is out for a job and hears nothing more goes home by itself:
+// the brain went away in the middle.
+const notchHandJobIdle = 25 * time.Second
