@@ -54,7 +54,7 @@ describe('OpenAIProvider HTTP failures', () => {
     const at = new Date(Date.now() + 30_000).toUTCString();
     globalThis.fetch = (async () => errorResponse(503, { 'Retry-After': at })) as unknown as typeof fetch;
     const dated = await new OpenAIProvider('k').chat([{ role: 'user', content: 'hi' }]).catch((e) => e);
-    expect(dated.code).toBe('network');
+    expect(dated.code).toBe('server');
     expect(dated.retryAfterMs).toBeGreaterThan(25_000);
     expect(dated.retryAfterMs).toBeLessThanOrEqual(30_000);
 

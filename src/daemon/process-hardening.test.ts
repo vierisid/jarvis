@@ -278,6 +278,9 @@ describe('who may import this module', () => {
       // in-engine watchdog are measured against a real non-dumpable owner.
       join('src', 'workflows', 'runner', 'engine-runtime', 'engine-reaper.test.ts'),
       join('src', 'workflows', 'runner', 'engine-runtime', 'engine-lifecycle.test.ts'),
+      // A stand-in daemon that hardens itself, so `jarvis stop` is measured
+      // against a lock holder whose /proc/<pid>/fd it cannot read.
+      join('src', 'cli', 'stop-verifies-lock-holder.test.ts'),
     ]);
     const mayMention = new Set([
       ...mayImport,

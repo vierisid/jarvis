@@ -1,4 +1,4 @@
-import { draftRevision, updateSavedDraft } from './workflow-draft-update';
+import { draftRevision, stepNameRefusal, updateSavedDraft } from './workflow-draft-update';
 import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards';
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
@@ -104,7 +104,7 @@ import type {
 } from "./workflow-composer.ts";
 import { forCard } from "../../util/card-text.ts";
 import { wrapUntrusted } from "../../roles/untrusted.ts";
-import { workflowNameProblem } from "../../workflows/display-name.ts";
+import { nameTooLongMessage, workflowNameProblem } from "../../workflows/display-name.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -571,7 +571,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           //     short-circuits the silent-empty-flow failure mode the
           //     user reported. The error message walks the agent toward
           //     the right next call.
-          const name = requireWorkflowName(params);
+          const name = requireWorkflowName(params, "create");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
             const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps));
@@ -654,7 +654,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireWorkflowName(params), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps)),
+            await actCompose(requireWorkflowName(params, "compose"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps)),
             "a composed workflow and the composer's text",
           );
         default:
@@ -950,14 +950,15 @@ function requireFlowIn(project: string, params: Record<string, unknown>): FlowRo
 }
 
 /**
- * `name` under the shared blank rule (`workflows/display-name.ts`): trimmed,
- * never without a visible character. No length cap here yet: the read side
- * (`FLOW_NAME_MAX_CHARS`) bounds what reaches the model, and its tests write
- * long names through this tool.
+ * `name` under the shared rule (`workflows/display-name.ts`): trimmed, never
+ * without a visible character, at most 512 characters like the routes. The
+ * read side (`FLOW_NAME_MAX_CHARS`) still bounds what reaches the model, for
+ * rows the editor wrote or written before the cap.
  */
-function requireWorkflowName(params: Record<string, unknown>): string {
-  const check = workflowNameProblem(params["name"], Infinity);
+function requireWorkflowName(params: Record<string, unknown>, action: string): string {
+  const check = workflowNameProblem(params["name"]);
   if (check.ok) return check.name;
+  if (check.problem === "too_long") throw new Error(`${action}: ${nameTooLongMessage("the workflow name", check.length)}`);
   throw new Error("'name' parameter is required and must be a non-empty string");
 }
 
@@ -1440,6 +1441,16 @@ async function actCompose(
   /** Library IDs this call's Authority gate named; see approvedInstalls. */
   preinstall: string[] = [],
 ): Promise<Record<string, unknown>> {
+  // Before the LLM is spent on it. create and compose checked `name` already;
+  // continue_setup arrives here with the name its setup was started under,
+  // which may predate the cap.
+  const named = workflowNameProblem(name);
+  if (!named.ok && named.problem === "too_long") {
+    const nameRefusal = nameTooLongMessage("the workflow name", named.length);
+    throw new Error(context?.workflowSetup
+      ? `continue_setup: ${nameRefusal}; this setup cannot be continued, so compose it again under a shorter name`
+      : `compose: ${nameRefusal}`);
+  }
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
   }
@@ -1558,10 +1569,16 @@ async function actCompose(
   // the user must publish + enable explicitly.
   // One transaction: a draft the save rules refuse (a webhook secret under
   // the floor, #1153) leaves no empty flow behind.
-  const flowName = result.flow.displayName.trim() || name;
+  // The composer's own name for the flow, unless it is blank or over the cap
+  // the caller's name was held to.
+  const composerName = workflowNameProblem(result.flow.displayName);
+  const flowName = composerName.ok ? composerName.name : name;
   // A secret the composer wrote meets the floor however the store would treat it (#1153).
   const secretRefusal = assistantWebhookSecretRefusal(null, result.flow.trigger);
   if (secretRefusal) throw new Error(secretRefusal);
+  // Step names are held to the same cap as an update's; nothing is saved.
+  const stepRefusal = stepNameRefusal(null, result.flow.trigger);
+  if (stepRefusal) throw new Error(`compose: the composed workflow's ${stepRefusal}; nothing was saved, compose it again`);
   const { flow, version } = getWorkflowDb().transaction(() => {
     const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
     return { flow, version: createDraftVersion({ flowId: flow.id, displayName: flowName, trigger: result.flow.trigger }) };

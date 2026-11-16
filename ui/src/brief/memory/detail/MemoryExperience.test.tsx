@@ -542,3 +542,31 @@ test("return reloads the previously loaded page window and focuses a neighbor be
     "fixture-many-081",
   );
 });
+
+test("Keep private says what it means, flips on click, and shows in the list", async () => {
+  await render();
+  await open();
+  expect(host.textContent).toContain(
+    "Keep private leaves this fact out of everything sent to the AI model. It stays visible here.",
+  );
+  await click("Keep private");
+  expect(host.textContent).toContain(
+    "Private: this stays in your Memory but is never sent to the AI model.",
+  );
+  expect(host.textContent).toContain(
+    "Kept private. It stays here and is not sent to the AI model.",
+  );
+  expect(button("Allow in AI context")).toBeTruthy();
+  await click("All memories");
+  expect(
+    host
+      .querySelector('.brief-memory-row[data-fact-id="fixture-memory-0"]')!
+      .textContent,
+  ).toContain("Private");
+  await open();
+  await click("Allow in AI context");
+  expect(host.textContent).toContain(
+    "No longer private. It can be sent to the AI model again.",
+  );
+  expect(button("Keep private")).toBeTruthy();
+});
