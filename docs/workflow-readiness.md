@@ -6,6 +6,19 @@ persisted graph. Trigger registration also checks existing enabled records at
 startup. Incomplete disabled drafts can still be saved. A submitted `valid`
 flag cannot mark a broken graph ready.
 
+A graph that is only a trigger is a valid draft but cannot be turned on: it
+would run to a green success having done nothing. Every enable path (publish,
+the HTTP status switch, the chat tool's enable and publish, the Brief workflow
+list) refuses it with the readiness 422 and one `NO_STEPS` issue on the trigger ("This workflow has no steps yet.
+Add at least one step after the trigger, then turn it on.") until at least one
+step follows the trigger. Readiness itself, runs and trigger registration still
+accept a trigger-only graph, so drafts, the editor and the composer are not
+affected, and a workflow already enabled with no steps keeps its state until it
+is turned off; turning it on again is then refused. The Brief workflow list
+shows such a workflow as blocked. A version write (create or patch) answers 400
+when `trigger` is present but is not an object; leaving it out still seeds the
+empty default.
+
 Run admission also compares the connections and computer a flow was enabled
 against with what they resolve to now. A replaced credential, a connection
 deleted and created again, a reconnected Google account or a computer no longer
@@ -95,6 +108,13 @@ resolved nor included in the recorded router input; the saved graph is unchanged
 First-match routers also stop before resolving any later branch. All-match
 routers evaluate each branch; unvisited branches retain empty condition lists. Other router
 operators still reject missing values when evaluated, as do ordinary action inputs.
+A number condition (`NUMBER_IS_GREATER_THAN`, `NUMBER_IS_LESS_THAN`, `NUMBER_IS_EQUAL_TO`) needs a number
+on both sides; text that is not a number (`abc`) fails the router step and names the value, instead of
+making the condition false and taking another branch. Numeric text such as `10`, ` 42 `, `1e3` or
+`-0.5` is read as a number, and blank text, `null` and booleans read as 0, 0 and 1/0 as before.
+Text that used to be compared as text, such as two ISO dates or `abc` equal to `abc`, now fails;
+use a date or text condition for it. The failure quotes the value as the run records it (a
+connection reads `**REDACTED**`), on one escaped line of at most 60 characters.
 A condition's operator must be one the engine implements. "Starts with" has two accepted
 spellings that mean the same test: `TEXT_START_WITH`, the engine's value, which the dashboard
 saves, and `TEXT_STARTS_WITH`, its enum key, which composed workflows write. Readiness rejects
