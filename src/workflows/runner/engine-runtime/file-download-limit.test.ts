@@ -32,7 +32,7 @@ function daemon(hosts: unknown, status = 200) {
   return { context: { apiUrl: `http://127.0.0.1:${server.port}/`, engineToken: 'engine-token' }, asked, stop: () => server.stop(true) };
 }
 
-test('an oversized download is a refusal, which the file processor fails the step on; another download error gives no file', async () => {
+test('an oversized download is a refusal, which the file processor fails the step on; text that names no file is told so', async () => {
   const tooLarge = new ResponseTooLargeError('HTTP response refused: it is larger than the cap');
   expect(tooLarge).toBeInstanceOf(EgressRefusedError);
   expect(egressRefusalIn({ cause: tooLarge })).toBe(tooLarge);
@@ -40,8 +40,8 @@ test('an oversized download is a refusal, which the file processor fails the ste
   const d = daemon(['127.0.0.1']);
   try {
     await expect(fileProcessor({}, 'http://127.0.0.1:9/big.pdf', d.context)).rejects.toThrow(/resolves to 127\.0\.0\.1/);
-    // Anything else stays upstream's empty file.
-    expect(await fileProcessor({}, 'not a url', d.context)).toBeNull();
+    // Text that names no file is told so in plain words (file chaining).
+    expect(await fileProcessor({}, 'not a url', d.context).catch((e: Error) => e.message)).toMatch(/needs a file from an earlier step/);
   } finally { d.stop(); }
 });
 
