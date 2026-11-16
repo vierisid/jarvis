@@ -42,6 +42,19 @@ function remove(flowId: string) {
 function restart() { service.stop(); closeWorkflowDb(); initWorkflowDb(file);
   service = new WorkflowRemoval(getWorkflowDb(), DEFAULT_IDS.project, () => clock); service.start(runtime); }
 
+test('an enabled workflow whose trigger could not be registered reads blocked with the reason, not ready', () => {
+  const { flow } = fixture('Leap day');
+  updateFlowStatus(flow.id, 'ENABLED');
+  const reason = 'The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.';
+  let problem: string | null = null;
+  service.start({ refresh: async () => {}, registrationProblem: () => problem });
+  expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness).toMatchObject({ state: 'ready', reason: null });
+  problem = reason;
+  expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness).toMatchObject({ state: 'blocked', reason });
+  updateFlowStatus(flow.id, 'DISABLED');
+  expect(service.read().data.items.find(i => i.flowId === flow.id)!.readiness.state).toBe('ready');
+});
+
 test('remove, reload and reverse-order Undo retain exact identities, history and original slots paused', () => {
   const a = fixture('A'), b = fixture('B'), c = fixture('C');
   lockVersion(b.version.id); setPublishedVersion(b.flow.id, b.version.id); updateFlowStatus(b.flow.id, 'ENABLED');
@@ -321,4 +334,13 @@ test('R4: an invalid pinned draft cannot borrow readiness from an older runnable
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' })))
     .toMatchObject({ status: 'rejected', code: 'not_ready' });
   expect(getFlow(flow.id)?.status).toBe('DISABLED');
+});
+
+test('the latest run of a workflow that went on past a failed step reads as such, not as a plain success', () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Lookup', trigger: { name: 'trigger', type: 'EMPTY', settings: {},
+    nextAction: { name: 'bad', type: 'PIECE', displayName: 'Look up', settings: { pieceName: 'p', actionName: 'a', input: {} } } } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  updateRun(run.id, { steps: { bad: { output: { type: 'PIECE', status: 'FAILED' } } } });
+  expect(service.read().data.items.find(i => i.flowId === flow.id)?.latestRun).toEqual({ runId: run.id, label: 'Finished with a failed step' });
 });
