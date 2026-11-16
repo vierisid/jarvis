@@ -73,6 +73,10 @@ panel has been closed for 4 hours while that device's sidecar is connected, or
 an absolute 12-hour cap. A sleeping or offline machine accrues no idle time at
 all, so closing the lid over lunch does not cost you your open windows, and
 neither does a brain restart - sessions are persisted.
+A browser that arrives after its session ended gets a plain page saying so,
+with the way back: open Jarvis again from the desktop app, or mint a fresh
+device token with `jarvis enroll`. API and WebSocket callers still get a JSON
+`401`.
 
 The only public (unauthenticated) routes are `/health`, `/sidecar/connect`,
 the JWKS endpoint (`/api/sidecars/.well-known/jwks.json`), and
