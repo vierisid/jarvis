@@ -489,9 +489,10 @@ replay, offline and unavailable). It sends nothing.
   retry never creates a second draft. A receipt must echo the request id, prompt, name and exact ordered
   ingredient pins, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
   `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
-- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
-  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
-  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) make one read of
+  `GET /api/workflows/recent-runs?limit=6`: the newest run of each workflow, most recent first, with the
+  workflow's name, whatever the number of workflows; no implicit polling. A missed read reports
+  `unavailable`, a malformed row `stale`, never complete recency.
   Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
   run ids. The host owns invocation, caching and abort on scope change.
 - `workflows/create/figma-reference.json` records the UI-21 source values.
@@ -600,6 +601,12 @@ ingredients (ready, loading, unavailable). It sends no request.
   accepted under that ID) withdraws the ID in the same transaction, so one still in transit can no
   longer start (#1162), and unlocks Run for a new, explicit request; any other answer leaves it
   uncertain.
+- History lists runs of every version; a row opens with the version that run used (#1398), since the
+  inspection answers a run only for its own version. When that locked version is no longer the
+  published one, the host passes `supersededBy` (the published version's ID): Runs and Canvas say it
+  is an earlier version shown read only and offer `Open current version` in place of Run, and the
+  host leaves out `port.start` and Canvas `edit` (so no new draft is copied from it) while keeping
+  `port.reconcile` for a request still waiting on that version.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
@@ -762,6 +769,14 @@ actions only change local fixture state.
   `GET .../document?requestId=<original>`. Persist requests before dispatch and reconcile them after
   reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
   one decision owner before activation.
+- One count: `host/needs-you.tsx` `needsYouCount` (document decisions with an action, other queued rows
+  still asking, workflow input requests, and `listedNoticeCount`: the unread notification rows the room
+  lists from the same snapshot, saved workflow reminders included, plus voice confirmation cards) feeds
+  Today's request count, the sidebar badge and the room heading. Read notices are history and not counted;
+  a pending approval listed there (decisions off) counts until it resolves. A disconnected list shows
+  nothing and counts nothing. A held-runs note (`kind: 'held'`) is never counted. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
+  show in an "In progress" group. Card titles never show raw tool ids (`plainDecisionTitle`). Workflow
+  input requests render above the permission list, one line each with the focused one open.
 - Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`
   requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
   and, in live mode, the `decisions` capability.
