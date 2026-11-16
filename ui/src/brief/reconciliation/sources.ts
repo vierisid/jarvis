@@ -6,6 +6,7 @@ import type { WorkflowRemoval } from '../../../../src/brief/workflow-removal';
 import type { OutcomeSummary } from '../../../../src/brief/outcomes';
 import type { Goal } from '../../../../src/goals/types';
 import type { WorkItem } from '../../../../src/goals/work-items';
+import { readWorkflowPages } from '../workflows/manage-list/pages';
 import { ReadFailure, type Read, type Source } from './resource';
 
 type ObjectValue = Record<string, any>;
@@ -96,7 +97,7 @@ export function memorySource(options: Omit<MemoryStreamQuery, 'cursor'> & { page
 type WorkflowList = ReturnType<WorkflowRemoval['read']>['data'];
 export function workflowsSource(get: GetJson = getJson): Source<WorkflowList> {
   return { domains: ['workflows'], capability: 'workflowRemoval', read: async signal => {
-    const result = envelope<WorkflowList>(await get('/api/brief/workflows', signal), data => object(data) && text(data.scopeId)
+    const result = envelope<WorkflowList>(await readWorkflowPages(path => get(path, signal)), data => object(data) && text(data.scopeId)
       && Array.isArray(data.items) && data.items.every((item: unknown) => object(item) && text(item.flowId) && text(item.revision))
       && Array.isArray(data.removals) && Array.isArray(data.slots));
     if (!result.data) throw invalid();

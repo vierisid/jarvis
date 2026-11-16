@@ -600,3 +600,54 @@ export function chainScopeFor(root: FlowStepNode, stepName: string): ChainScope 
   }
   return null;
 }
+
+/**
+ * A blank placeholder: the step "Add next step" creates before a piece is
+ * chosen. No piece, no action and no inputs, so there is nothing to lose by
+ * turning it into something else.
+ */
+export function isBlankStep(step: FlowStepNode): boolean {
+  if (step.type !== "PIECE") return false;
+  const settings = step.settings;
+  if (settings?.pieceName || settings?.actionName) return false;
+  return Object.keys(settings?.input ?? {}).length === 0;
+}
+
+/**
+ * A PIECE step still waiting for its piece or action. Clicking it (or Enter on
+ * it) in the legacy editor opens the chooser instead of the settings. Wider
+ * than `isBlankStep`: a step with a piece but no action counts, and choosing
+ * Loop, If or Router for it still lands as a loose node, so the piece stays.
+ */
+export function needsPieceChoice(step: FlowStepNode): boolean {
+  return step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
+}
+
+/**
+ * A fresh control-flow step with sensible defaults. IF and ROUTER are both a
+ * `ROUTER` for the engine; `settings.routerKind` is the UI marker that locks
+ * IF to a True/False split and lets ROUTER rename and add branches. LOOP has an
+ * empty `items` template; its body is added later.
+ */
+export function buildControlFlowStep(name: string, kind: "LOOP_ON_ITEMS" | "IF" | "ROUTER"): FlowStepNode {
+  if (kind === "LOOP_ON_ITEMS") {
+    return { name, type: "LOOP_ON_ITEMS", displayName: "Loop on items", settings: { items: "" } };
+  }
+  const condition = [[{ firstValue: "", operator: "TEXT_EXACTLY_MATCHES", secondValue: "" }]];
+  const isIf = kind === "IF";
+  return {
+    name,
+    type: "ROUTER",
+    displayName: isIf ? "If" : "Router",
+    settings: {
+      executionType: "EXECUTE_FIRST_MATCH",
+      routerKind: isIf ? "if" : "router",
+      branches: [
+        // One empty condition is seeded so the panel opens with a row ready to fill.
+        { branchName: isIf ? "True" : "Branch 1", branchType: "CONDITION", conditions: condition },
+        { branchName: isIf ? "False" : "Else", branchType: "FALLBACK" },
+      ],
+    },
+    children: [null, null],
+  };
+}
