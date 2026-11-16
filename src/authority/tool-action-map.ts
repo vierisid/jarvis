@@ -334,6 +334,8 @@ export function substituteAboveLevel(
     allowed: true,
     requiresApproval: true,
     actionCategory: decision.actionCategory,
+    // The level fell short; the card is what lets it ask instead.
+    source: 'level',
     reason: `${decision.actionCategory} ${ABOVE_LEVEL_SUBSTITUTION}`
       + `${floor.profileLabel ? ` (${floor.profileLabel})` : ''}`
       + ' and requires user approval',

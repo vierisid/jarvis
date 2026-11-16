@@ -85,6 +85,16 @@ test('a rename is trimmed and a whitespace-only name is refused',async()=>{
   expect(output.changed).toBe(true);expect(getFlowVersion(version.id)!.displayName).toBe('Tidy name');
 });
 
+test('a rename is held to the shared 512 cap: 512 is saved, 513 and blank are refused',async()=>{
+  const {flow,version}=fixture();
+  let v=await read(flow.id);
+  await expect(call({...args(flow.id,v,[]),name:'n'.repeat(513)})).rejects.toThrow('name is 513 characters; the limit is 512');
+  await expect(call({...args(flow.id,v,[]),name:''})).rejects.toThrow('name must be a nonempty string of at most 512 characters');
+  expect(getFlowVersion(version.id)!.displayName).toBe('Existing workflow');
+  expect((await call({...args(flow.id,v,[]),name:'n'.repeat(512)})).changed).toBe(true);
+  expect(getFlowVersion(version.id)!.displayName).toBe('n'.repeat(512));
+});
+
 test('a stale revision rejects editor changes and concurrent repairs atomically',async()=>{
   const {flow,version}=fixture(),v=await read(flow.id);
   updateDraftVersion(version.id,{displayName:'Newer editor change'});

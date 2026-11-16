@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runUpdate, type Spawner, type SpawnResult } from './update.ts';
+import { writeLaunchRecord } from './lifecycle.ts';
 import type { InstallMethod, InstallMethodInfo } from './install-method.ts';
 
 let workDir: string;
@@ -327,6 +328,60 @@ describe('runUpdate — script install', () => {
     // The checkout was the meaningful operation; bun install is recoverable.
     expect(result.outcome).toBe('updated');
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe('runUpdate - restart keeps the start options', () => {
+  const lsRemote = (tag: string): string => `${'0'.repeat(40)}\trefs/tags/${tag}\n`;
+  const runningPid = 4242;
+
+  async function updateAndRestart(): Promise<string[][]> {
+    const { spawn } = recordingSpawner([
+      { exitCode: 0, stdout: lsRemote('v1.0.0') }, // git ls-remote
+      { exitCode: 0, stdout: 'v1.0.0\n' }, // git describe: up to date
+    ]);
+    const launched: string[][] = [];
+    const result = await runUpdate({
+      packageRoot: workDir,
+      spawn,
+      detect: () => fakeInfo('script'),
+      checkRunning: () => runningPid,
+      stopDaemon: async () => ({ wasRunning: true, pid: runningPid, graceful: true, stopped: true }),
+      launchDaemon: (args) => { launched.push(args); },
+    });
+    expect(result.exitCode).toBe(0);
+    return launched;
+  }
+
+  test('restarts with the flags the stopped daemon recorded', async () => {
+    const dataDir = join(workDir, 'data');
+    writeLaunchRecord({ pid: runningPid, detached: false, noOpen: false, port: 4100, dataDir, noLocalTools: true, systemConfigPath: '/etc/jarvis/system.yaml' });
+
+    expect(await updateAndRestart()).toEqual([[
+      'start', '--no-open',
+      '--port', '4100',
+      '--data-dir', dataDir,
+      '--no-local-tools',
+      '--system-config', '/etc/jarvis/system.yaml',
+    ]]);
+  });
+
+  test('ignores a record another daemon left behind', async () => {
+    writeLaunchRecord({ pid: runningPid + 1, detached: false, noOpen: false, noLocalTools: false, port: 4100 });
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
+  });
+
+  test('restarts with no extra flags when the daemon was started without any', async () => {
+    writeLaunchRecord({ pid: runningPid, detached: false, noOpen: false, noLocalTools: false });
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
+  });
+
+  test('always restarts detached with --no-open, whatever the record says about those', async () => {
+    writeLaunchRecord({ pid: runningPid, detached: true, noOpen: false, noLocalTools: false, port: 4100 });
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open', '--port', '4100']]);
   });
 });
 

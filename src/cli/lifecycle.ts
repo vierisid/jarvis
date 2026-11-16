@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import os from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import YAML from 'yaml';
 import { flockHeldBy, getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
@@ -608,13 +608,25 @@ export function parsePortArg(args: string[]): { port: number | undefined } | { e
  * `start -d --no-local-tools` ran a daemon WITH local tools, and `--data-dir`
  * pointed it at the default data dir.
  */
-export function detachedDaemonArgs(entry: string, opts: {
+export function detachedDaemonArgs(entry: string, opts: DaemonStartOptions): string[] {
+  return [entry, 'start', '--no-open', ...daemonStartFlags(opts)];
+}
+
+/** The options that change what a daemon does, as `jarvis start` takes them. */
+export interface DaemonStartOptions {
   port?: number;
   dataDir?: string;
   noLocalTools: boolean;
   systemConfigPath?: string;
-}): string[] {
-  const args = [entry, 'start', '--no-open'];
+}
+
+/**
+ * The flags, after `start --no-open`, that start a daemon with these options:
+ * shared by `jarvis start -d` and `jarvis update`, which both launch a daemon
+ * from inside the CLI rather than from the user's own command line.
+ */
+export function daemonStartFlags(opts: DaemonStartOptions): string[] {
+  const args: string[] = [];
   if (opts.port) args.push('--port', String(opts.port));
   if (opts.dataDir) args.push('--data-dir', opts.dataDir);
   if (opts.noLocalTools) args.push('--no-local-tools');
@@ -640,28 +652,78 @@ function launchRecordPath(): string {
   return join(dirname(getPidPath()), 'jarvis.launch.json');
 }
 
+/**
+ * Record how the daemon with `record.pid` was started. Paths are stored
+ * absolute, resolved against this start's directory, because `jarvis restart`
+ * and `jarvis update` may run from somewhere else. Written as a fresh 0600 file
+ * renamed into place: writeFileSync's mode applies only when it creates the
+ * file, and it would follow a symlink at the path. Best effort: a failure costs
+ * only the restart's memory of the flags, which restart and update then say.
+ */
 export function writeLaunchRecord(record: LaunchRecord): void {
-  try { writeFileSync(launchRecordPath(), JSON.stringify(record), { mode: 0o600 }); } catch { /* restart just falls back to plain args */ }
+  const path = launchRecordPath();
+  const temp = `${path}.${process.pid}.tmp`;
+  try {
+    const stored: LaunchRecord = { ...record };
+    if (stored.dataDir) stored.dataDir = resolve(stored.dataDir);
+    if (stored.systemConfigPath) stored.systemConfigPath = resolve(stored.systemConfigPath);
+    try { unlinkSync(temp); } catch { /* none left over */ }
+    const fd = openSync(temp, 'wx', 0o600);
+    try {
+      writeSync(fd, JSON.stringify(stored));
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, path);
+  } catch {
+    try { unlinkSync(temp); } catch { /* not created */ }
+  }
 }
 
 export function clearLaunchRecord(): void {
   try { unlinkSync(launchRecordPath()); } catch { /* absent */ }
 }
 
-/** The record for the daemon with this pid. A record left by an earlier daemon is ignored. */
+/** Longest path argv will carry; a longer one is not one a daemon started with. */
+const MAX_RECORDED_PATH_CHARS = 4096;
+
+/**
+ * A recorded path the next daemon may be started with. Recorded absolute, so a
+ * relative one was not written by writeLaunchRecord and would resolve against
+ * wherever the restart runs; one starting with '-' would be read by the new
+ * cmdStart as a flag (`--data-dir -d` would detach every child again); a NUL
+ * cannot be passed in argv at all.
+ */
+function recordedPath(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_RECORDED_PATH_CHARS
+    && isAbsolute(value) && !value.startsWith('-') && !value.includes('\0')
+    ? value
+    : undefined;
+}
+
+/**
+ * The record for the daemon with this pid. A record left by an earlier daemon
+ * is ignored, and so is one that is not a regular file of this user's that no
+ * one else can write: whoever wrote it could otherwise choose the next
+ * daemon's data dir or config.
+ */
 export function readLaunchRecord(pid: number): LaunchRecord | null {
   try {
-    const raw = JSON.parse(readFileSync(launchRecordPath(), 'utf-8')) as Partial<LaunchRecord> | null;
+    const path = launchRecordPath();
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return null;
+    if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) return null;
+    if ((stat.mode & 0o022) !== 0) return null;
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Partial<LaunchRecord> | null;
     if (!raw || raw.pid !== pid) return null;
-    const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
     return {
       pid,
       detached: raw.detached === true,
       noOpen: raw.noOpen === true,
       noLocalTools: raw.noLocalTools === true,
       port: validPort(raw.port) ?? undefined,
-      dataDir: str(raw.dataDir),
-      systemConfigPath: str(raw.systemConfigPath),
+      dataDir: recordedPath(raw.dataDir),
+      systemConfigPath: recordedPath(raw.systemConfigPath),
     };
   } catch {
     return null;

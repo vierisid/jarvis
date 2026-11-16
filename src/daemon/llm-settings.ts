@@ -27,6 +27,7 @@ import {
 } from './usejarvis-ai.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
+import { redactSecrets } from '../util/redact.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMProvider } from '../llm/provider.ts';
 import {
@@ -844,6 +845,31 @@ async function probeUsableModel(
 }
 
 /**
+ * A provider's error text, safe to hand back to whoever asked for the test.
+ *
+ * Provider error bodies can echo the credential they were sent (a gateway
+ * repeating the bad key, an `Authorization` line in a proxy's dump), and this
+ * text reaches the dashboard's Test button. The exact keys in play go first,
+ * because a self-hosted gateway's key need not have any prefix redactSecrets
+ * recognizes, in the forms a body most often carries them: as sent, trimmed,
+ * URL-encoded (a query string) and JSON-escaped (a JSON error body). Then the
+ * shared patterns. A partial echo (a masked `abcd...wxyz`) is not caught, and
+ * gives away only the characters it shows.
+ */
+function redactProviderError(text: string, keys: ReadonlyArray<string | undefined>): string {
+  const forms = keys.flatMap((key) => {
+    if (!key?.trim()) return [];
+    return [key, key.trim()].flatMap((k) => [k, encodeURIComponent(k), JSON.stringify(k).slice(1, -1)]);
+  });
+  // Longest first, so a padded key is not left with its padding around a
+  // marker the trimmed form already put in.
+  const exact = [...new Set(forms)].sort((a, b) => b.length - a.length);
+  let out = text;
+  for (const key of exact) out = out.split(key).join('***redacted***');
+  return redactSecrets(out);
+}
+
+/**
  * Test a provider's credentials by instantiating it and sending a one-token
  * chat. Uses the supplied credentials if given, otherwise the current config.
  *
@@ -910,6 +936,8 @@ export async function testLLMProvider(
   // explicit empty base_url instead of falling back to the stored gateway.
   const apiKey = opts.api_key ?? storedApiKey;
   const baseUrl = hasExplicitBaseUrl ? requestedBaseUrl : configuredBaseUrl;
+  // Both keys, whichever was sent: a provider's error must not show either.
+  const scrub = (text: string) => redactProviderError(text, [opts.api_key, storedApiKey]);
 
   // Same validation as the save path - a test must not be able to smuggle in
   // a header name that Save would have rejected. Report it as a failed test
@@ -962,7 +990,7 @@ export async function testLLMProvider(
       if ('model' in probe) return { ok: true, model: probe.model, models };
       return {
         ok: false,
-        error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of the ${probe.probed} tried${probe.lastError ? `: ${probe.lastError}` : ''}`,
+        error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of the ${probe.probed} tried${probe.lastError ? `: ${scrub(probe.lastError)}` : ''}`,
         models,
       };
     }
@@ -975,7 +1003,7 @@ export async function testLLMProvider(
       if ('model' in probe) return { ok: true, model: probe.model, models };
       return {
         ok: false,
-        error: `The OpenAI-compatible endpoint listed models, but none of the first ${probe.probed} accepted a test request${probe.lastError ? `: ${probe.lastError}` : ''}`,
+        error: `The OpenAI-compatible endpoint listed models, but none of the first ${probe.probed} accepted a test request${probe.lastError ? `: ${scrub(probe.lastError)}` : ''}`,
         models,
       };
     }
@@ -985,6 +1013,6 @@ export async function testLLMProvider(
     );
     return { ok: true, model: testModel ?? resp.model, ...(models ? { models } : {}) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { ok: false, error: scrub(err instanceof Error ? err.message : String(err)) };
   }
 }

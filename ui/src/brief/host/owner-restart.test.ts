@@ -68,3 +68,24 @@ test('temporary host failure keeps edits and recovers without replaying mutation
   mock.set({ ...initial, generation: 'recovered' }); await owner!.reconciliation.refresh();
   expect(owner!.active()).toBe(true); expect(owner!.hasUnsaved()).toBe(true); expect(mock.revoked()).toBe(0);
 });
+
+function setupEnded() {
+  let status = 200, revoked = 0, ended = 0;
+  owner = createDashboardOwner(initial, { storage: sessionStorage,
+    fetch: (async path => String(path) === '/api/brief/host' ? Response.json(initial, { status }) : new Response(null, { status: 404 })) as typeof fetch,
+    changed() {}, unauthorized() { revoked++; }, sessionEnded() { ended++; }, explain() {}, confirm: async () => true, runInput: async () => null,
+    revealConversationItem() {}, replayTutorial: async () => ({ state: 'unavailable' }) });
+  owner.reconciliation.start();
+  return { expire() { status = 401; }, revoked: () => revoked, ended: () => ended };
+}
+test('a session that ends while edits are unsaved keeps the owner, and so the edits, and says so once', async () => {
+  const mock = setupEnded(); owner!.setWorkflowDirty('draft', true); await owner!.reconciliation.refresh();
+  mock.expire(); await owner!.reconciliation.refresh(); await owner!.reconciliation.refresh();
+  expect(owner!.active()).toBe(true); expect(owner!.hasUnsaved()).toBe(true);
+  expect(owner!.sessionEnded()).toBe(true); expect(mock.ended()).toBe(1); expect(mock.revoked()).toBe(0);
+});
+test('a session that ends with nothing unsaved still retires the owner', async () => {
+  const mock = setupEnded(); await owner!.reconciliation.refresh();
+  mock.expire(); await owner!.reconciliation.refresh();
+  expect(owner!.active()).toBe(false); expect(mock.revoked()).toBe(1); expect(mock.ended()).toBe(0);
+});

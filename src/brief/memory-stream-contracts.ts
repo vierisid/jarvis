@@ -22,6 +22,8 @@ export interface MemoryStreamItem extends BriefMemory {
   updatedAt: number;
   validity: { from: number | null; to: number | null };
   sourceSummary: { labels: string[]; evidenceCount: number };
+  /** The owner kept this fact out of what is sent to an AI model. It stays visible here. */
+  private: boolean;
   detailHref: string;
   historyHref: string;
   supersededBy: string | null;

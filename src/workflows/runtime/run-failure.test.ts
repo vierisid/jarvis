@@ -10,6 +10,7 @@ import { saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-ef
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { getFlowRun } from '../db/repos/flow-run';
 import { runFailure, runFailureNotice } from './run-failure';
+import { failureText } from '../../failures/projection';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -159,6 +160,30 @@ describe('runFailure (Q-19)', () => {
     expect(runFailure(fail({ name: '<engine>', displayName: 'engine', errorMessage: 'RPC timeout' }))).toMatchObject({
       category: 'internal', effect: 'unknown', headline: 'The run failed, and Jarvis cannot tell whether it took effect.',
       next: [{ step: 'check_before_running_again' }, { step: 'open_details' }] });
+  });
+
+  // The audit's 1000-item loop: the engine stopped the run at the size Jarvis keeps for one run.
+  const LOG_CAP = 'executeFlow(run r1) -> LOG_SIZE_EXCEEDED\nAutomatic retry is disabled.';
+  test('a run stopped at the data size it may keep says so, not that Jarvis cannot tell', () => {
+    const { fail } = setup('RUNNING', 'jarvisOnly');
+    const failure = runFailure(fail({ name: '<engine>', displayName: 'engine', errorMessage: LOG_CAP }))!;
+    expect(failure).toMatchObject({ category: 'invalid_input', effect: 'none', code: 'RUN_LOG_SIZE_EXCEEDED',
+      headline: 'The run stopped: it produced more data than Jarvis keeps for one run (10 MB).', outcome: 'Nothing after that point ran.' });
+    expect(failure.next.map(n => n.step)).toEqual(['handle_less_data', 'open_details']);
+    expect(failureText(failure)).not.toContain('cannot tell');
+  });
+
+  test('another engine status whose detail mentions the data limit is not read as it', () => {
+    const { fail } = setup('RUNNING', 'jarvisOnly');
+    const failure = runFailure(fail({ name: '<engine>', displayName: 'engine', errorMessage: 'executeFlow(run r1) -> INTERNAL_ERROR: x -> LOG_SIZE_EXCEEDED' }))!;
+    expect(failure.code).not.toBe('RUN_LOG_SIZE_EXCEEDED');
+  });
+
+  test('a run stopped at the data size reads the steps before it the careful way', () => {
+    const { run, fail } = setup('RUNNING', 'codeThenNotify');
+    updateRun(run.id, { steps: { code: { status: 'SUCCEEDED', output: {} } } });
+    expect(runFailure(fail({ name: '<engine>', displayName: 'engine', errorMessage: LOG_CAP }))).toMatchObject({
+      effect: 'partial', outcome: 'Nothing after that point ran. Steps up to that point had already run.' });
   });
 
   test('a CODE step that ran before a failed Jarvis step: this step did nothing, but running again repeats it', () => {
