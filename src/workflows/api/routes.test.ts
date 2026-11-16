@@ -7,7 +7,7 @@ import { setCronTimezone } from '../../lib/cron-scheduler';
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeWorkflowDb, initWorkflowDb } from "../db/index";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db/index";
 import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
@@ -825,6 +825,20 @@ describe("workflow API: runs", () => {
       const theirs = await seedFlow(OTHER_PROJECT);
       expect((await start(createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT }), theirs.flowId)).status).toBe(202);
     });
+  });
+
+  test("POST /:id/run leaves no run behind when the job cannot be written", async () => {
+    const post = routes["/api/workflows"]?.POST;
+    const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    // A failure between the run row and its job (a crash, a full disk) must
+    // leave neither behind, or the run sits QUEUED forever with nothing to start it.
+    getWorkflowDb().run(`CREATE TRIGGER no_jobs BEFORE INSERT ON workflow_job BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    const run = routes["/api/workflows/:id/run"]?.POST;
+    const { status } = await callJson(run, reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}));
+    expect(status).toBeGreaterThanOrEqual(500);
+    const rows = getWorkflowDb().query<{ n: number }, [string]>("SELECT count(*) AS n FROM flow_run WHERE flow_id = ?").get(flowId)!;
+    expect(rows.n).toBe(0);
   });
 
   test("POST /:id/run with stepNameToTest prefers DRAFT over PUBLISHED", async () => {
