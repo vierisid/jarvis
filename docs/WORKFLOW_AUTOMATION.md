@@ -1398,6 +1398,20 @@ ternaries, and `flattenNestedKeys(data, path)`.
 
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+A written property name (`a.constructor`, `a['constructor']`, or one built only
+from literals such as `a['con' + 'structor']`) is refused when the flow is saved.
+A property name taken from run data (`a[b.key]`) is checked when the flow runs.
+
+A step after a router that reads a step inside one of its branches gets a
+readiness notice, because that step ran only if its branch was taken, unless the
+reference has a fallback (`{{a.out ?? 'none'}}`) or is the single value of a
+Default value step. It is a notice, not a refusal: readiness is checked again
+whenever a trigger fires, and a workflow that always takes that branch works.
+A child call inside a loop whose payload changes per item is refused unless its
+invocation key also uses something that changes per item (`{{loop.item.id}}`,
+`{{loop.index}}`), because the second pass would reuse the first pass's key with
+different data. A fixed key with a fixed payload is one call, reused by every pass.
+A reused key that reaches run time is recorded as not started.
 
 A step may have any name the readiness check allows, including `toString`,
 `valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
@@ -1998,6 +2012,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
+| GET | `/api/workflows/recent-runs` | "Recently run": the newest run of each workflow in the caller's project, most recent first, with the workflow's `displayName`. `?limit` (default 6, 1 to 20). Workflows removed in Brief are left out; no step output. Answers `{ items }` |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding, cancellation and `continuedFailures` |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
