@@ -112,7 +112,7 @@ import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
-  getConnectionByExternalId,
+  connectionExists,
   getConnectionInProject,
   listConnections,
   updateConnectionById,
@@ -121,6 +121,7 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { refuseConnectionFields } from "./connection-input";
 import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
@@ -1237,7 +1238,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: withRefreshProblem(pastedOAuth2Status(c.type, c.value), opts.credentialResolver?.refreshProblem(c)) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1301,14 +1302,33 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) {
             return err("value must be an object");
           }
+          const fieldProblem = refuseConnectionFields({
+            externalId: body.externalId,
+            displayName: body.displayName,
+            type: body.type,
+            pieceName: body.pieceName,
+            ...(opts.pieceRegistry
+              ? { isKnownPiece: (name: string) => !!opts.pieceRegistry?.get(name) || CATALOG.some((entry) => entry.npmPackage === name) }
+              : {}),
+          });
+          if (fieldProblem) return err(fieldProblem);
           // Soft schema check per type. Catches the common mistake of saving
           // an OAUTH2 connection with no `access_token` (the piece would
           // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
+          // Adding never replaces. The same external id for the same piece
+          // used to overwrite the saved secret and pause every published
+          // workflow that uses it, with a toast that said "added". Changing a
+          // saved key is Rotate, which says what it will pause.
+          if (connectionExists(callerProject(req), body.pieceName, body.externalId)) {
+            return err(
+              `A connection with the external id "${body.externalId.slice(0, 80)}" already exists for this piece. Use Rotate on it to change its key, or choose a different external id.`,
+              409,
+            );
+          }
           // An OAuth2 token with `expires_in` is dated now, as upstream dates
           // the tokens it stores, so Jarvis knows when to refresh it (#954).
-          const previous = getConnectionByExternalId(callerProject(req), body.pieceName, body.externalId);
           const conn = upsertConnection({
             projectId: callerProject(req),
             externalId: body.externalId,
@@ -1316,7 +1336,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             type: body.type,
             pieceName: body.pieceName,
             pieceVersion: body.pieceVersion ?? "0.0.0",
-            value: stampOAuth2Claim(body.type, body.value, previous?.value),
+            value: stampOAuth2Claim(body.type, body.value, undefined),
           });
           return ok(
             {
@@ -2315,31 +2335,37 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             stepName: body.stepNameToTest,
             inputOverride: sampleInputOverride?.[body.stepNameToTest] as Record<string, unknown> | undefined,
           } : undefined);
-          const run = createFlowRun({
-            flowId: id,
-            flowVersionId: versionId,
-            environment: body.environment ?? "PRODUCTION",
-            triggeredBy: body.triggeredBy,
-            stepNameToTest: body.stepNameToTest,
-            startTime: Date.now(),
-          });
-          enqueue({
-            jobType: "RUN_FLOW",
-            payload: {
-              runId: run.id,
-              payload: body.payload ?? {},
-              ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
-              ...(sampleData ? { sampleData } : {}),
-              ...(sampleInputOverride ? { sampleInputOverride } : {}),
-            },
-            flowRunId: run.id,
-            flowId: id,
-            flowVersionId: versionId,
-            // No auto-retry: flow code with side effects (notify, send
-            // email, hit API) would duplicate on retry. The user gets a
-            // clear FAILED status and clicks Run again if they want.
-            maxAttempts: 1,
-          });
+          // One transaction: a crash between the two writes must not leave a
+          // run QUEUED forever with no job behind it.
+          const { environment, triggeredBy } = body;
+          const run = getWorkflowDb().transaction(() => {
+            const created = createFlowRun({
+              flowId: id,
+              flowVersionId: versionId,
+              environment: environment ?? "PRODUCTION",
+              triggeredBy,
+              stepNameToTest: body.stepNameToTest,
+              startTime: Date.now(),
+            });
+            enqueue({
+              jobType: "RUN_FLOW",
+              payload: {
+                runId: created.id,
+                payload: body.payload ?? {},
+                ...(body.stepNameToTest ? { stepNameToTest: body.stepNameToTest } : {}),
+                ...(sampleData ? { sampleData } : {}),
+                ...(sampleInputOverride ? { sampleInputOverride } : {}),
+              },
+              flowRunId: created.id,
+              flowId: id,
+              flowVersionId: versionId,
+              // No auto-retry: flow code with side effects (notify, send
+              // email, hit API) would duplicate on retry. The user gets a
+              // clear FAILED status and clicks Run again if they want.
+              maxAttempts: 1,
+            });
+            return created;
+          })();
           return ok(run, 202);
         }),
     },
@@ -2716,6 +2742,21 @@ function clampPage(params: URLSearchParams, defaultLimit: number): { limit: numb
     limit: Math.max(1, Math.min(LISTING_MAX_LIMIT, Math.trunc(numParam(params.get("limit")) ?? defaultLimit))),
     offset: Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0)),
   };
+}
+
+/** Why an OAuth2 row's refresh cannot work, as `CredentialResolver.refreshProblem` says it. */
+type RefreshProblem = NonNullable<ReturnType<CredentialResolver["refreshProblem"]>>;
+
+/**
+ * An OAuth2 row's status plus why its refresh cannot work, when it carries
+ * refresh details and the resolver knows they do not (a refresh refused or
+ * unanswered, or a token URL this install never connects to).
+ */
+function withRefreshProblem(
+  status: ReturnType<typeof pastedOAuth2Status>,
+  problem: RefreshProblem | null | undefined,
+): (NonNullable<ReturnType<typeof pastedOAuth2Status>> & { refreshProblem?: RefreshProblem }) | null {
+  return status && status.refreshable && problem ? { ...status, refreshProblem: problem } : status;
 }
 
 /**
