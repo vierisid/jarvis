@@ -680,6 +680,16 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the
   failure. That step still gets `text`; it never gets `parsed`.
+- An empty reply (nothing, or only whitespace and characters that render as
+  nothing, such as a zero-width space) from a step with no JSON contract is
+  `EMPTY_AI_REPLY`, an `error` with effect `may_have_occurred` (the provider
+  processed the request, as for `INVALID_JSON_OUTPUT`): the step fails by
+  default, so later steps never run on an empty string, and with
+  `requireSuccess: false` it is data to route on. Any visible reply, however
+  short (`0`, `No`), is an answer. A step that asks for JSON keeps
+  `INVALID_JSON_OUTPUT` for an empty reply. Upgrading changes published
+  workflows: an Ask step that used to succeed with an empty reply now fails it
+  unless `Require valid output` is off.
 - `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
@@ -721,6 +731,16 @@ cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
+
+When the agent finishes but some of its tool calls failed, were denied or named
+a tool that is not available, the step keeps its outcome (published workflows
+that finish today keep finishing unless `Required tools` says otherwise), and
+its output adds `warning` (how many calls did not work and which tools, at most
+five named) and `toolErrors` (name and bounded, credential-redacted error text
+per failed call, at most ten). A tool name is the model's own and is clipped to
+one line of 64 characters. The
+agent's final message may read as success; these fields are where a person reading
+the run sees what was not done.
 
 ### Required nested workflow continuation
 
@@ -879,7 +899,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -1378,6 +1398,20 @@ ternaries, and `flattenNestedKeys(data, path)`.
 
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+A written property name (`a.constructor`, `a['constructor']`, or one built only
+from literals such as `a['con' + 'structor']`) is refused when the flow is saved.
+A property name taken from run data (`a[b.key]`) is checked when the flow runs.
+
+A step after a router that reads a step inside one of its branches gets a
+readiness notice, because that step ran only if its branch was taken, unless the
+reference has a fallback (`{{a.out ?? 'none'}}`) or is the single value of a
+Default value step. It is a notice, not a refusal: readiness is checked again
+whenever a trigger fires, and a workflow that always takes that branch works.
+A child call inside a loop whose payload changes per item is refused unless its
+invocation key also uses something that changes per item (`{{loop.item.id}}`,
+`{{loop.index}}`), because the second pass would reuse the first pass's key with
+different data. A fixed key with a fixed payload is one call, reused by every pass.
+A reused key that reaches run time is recorded as not started.
 
 A step may have any name the readiness check allows, including `toString`,
 `valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
