@@ -1,6 +1,8 @@
 import { EmergencyStatusBanner, EmergencyStatusContext, useEmergencyStatus } from './EmergencyStatus';
+import { StorageStatusBanner, useStorageStatus } from './StorageStatus';
 import { humanRequestNeedsAttention } from '../../../../src/workflows/runtime/human-input-contract';
 import { HumanInputsContext, OwnerAttentionContext, ownerAttentionCount, HumanInputInbox, useHumanInputQueue, hasLocalDraft } from './HumanInputs';
+import { NeedsYouContext, documentDecisionCount, listedNoticeCount, needsYouCount, useOtherDecisions } from './needs-you';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { DashboardEntry, BriefHost } from '../entry/DashboardEntry';
@@ -181,8 +183,18 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   // comes back before the next poll must not show a stale "status unavailable" notice.
   const [retries, setRetries] = useState(0);
   const emergency = useEmergencyStatus(host.transport, `${owner.emergencyRevision}:${owner.isConnected}:${retries}`);
+  const storageProblem = useStorageStatus(host.transport);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
   const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // The one derivation of "needs you": Today, the sidebar badge and the room all read it.
+  const decisionsOn = isBriefCapabilityEnabled(host.capabilities(), 'decisions');
+  const documents = useBriefProjection(host.data.decisionRead);
+  // Each read fetches one document per row: poll at full rate only while the room is open.
+  const others = useOtherDecisions(host.data.ports.otherDecisions, decisionsOn, false, route.room === 'needs-you' ? 10_000 : 60_000);
+  // Counted from the same snapshot the room lists, plus the voice confirmation cards it shows,
+  // so nothing is counted that the room hides (disconnected, filtered) and nothing listed goes uncounted.
+  const noticeCount = listedNoticeCount(dashboardAttentionSnapshot(owner.isConnected, notices.items, host.capabilities())) + owner.clarifiers.length + owner.repeatBacks.length;
+  const needsCount = needsYouCount({ documents: documentDecisionCount(documents.data), others: others.rows, humanInputs: humanPending, notices: noticeCount });
   // Socket closed and the status read failing: Jarvis cannot be reached. Counts read
   // from before the outage are then stale, so they are hidden rather than shown as current.
   const lost = useConnectionLost(!owner.isConnected && emergency === 'unavailable');
@@ -205,8 +217,10 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     if (owner.roomNavRequest && !owner.roomActionRequests.some(request => request.ts === owner.roomNavRequest?.ts))
       void host.navigation.intent(owner.roomNavRequest.key, false);
   }, [owner.roomNavRequest?.ts]);
+  const inbox = <HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />;
   // A reminder a workflow sent is for the founder: unread ones lead the Needs you room, the rest stay below.
-  const isNewStored = (item: { stored?: boolean; unread: boolean }) => item.stored === true && item.unread;
+  // The lead list sits in the decisions room, which is not shown with decisions off: then they stay in one list.
+  const isNewStored = (item: { stored?: boolean; unread: boolean }) => decisionsOn && item.stored === true && item.unread;
   const storedNew = notices.items.filter(isNewStored);
   const attentionFor = (items: typeof notices.items, heading?: string) => <AttentionRoutes snapshot={dashboardAttentionSnapshot(owner.isConnected, items, host.capabilities())}
     navigation={host.navigation} roomAvailable={host.available} markRead={identity => notices.markRead(identity.id)} heading={heading} />;
@@ -214,7 +228,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   // What Today's all-clear must also wait for; Needs you shows all of it. Unknown is null.
   const ownerAttention = ownerAttentionCount({ connected: owner.isConnected, inputsKnown: !!humanInputs.loaded && !humanInputs.error, inputs: humanPending, stored: storedNew.length,
     clarifiers: owner.clarifiers.length, repeatBacks: owner.repeatBacks.length, approvals: owner.approvals.length, decisionsListed: isBriefCapabilityEnabled(host.capabilities(), 'decisions') });
-  const attention = <><HumanInputInbox queue={humanInputs} http={host.transport} focusId={route.room === 'needs-you' ? route.selection.inputId : undefined} />{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
+  const attention = <>{attentionFor(notices.items.filter(item => !isNewStored(item)), storedNew.length ? 'Earlier notifications' : undefined)}
     <section aria-label="Voice confirmations">{owner.clarifiers.map(item => <ClarifierCard key={item.id} {...item}
       onConfirm={() => void resolveAttention('clarifier', item.id, 'confirm')} onCancel={() => void resolveAttention('clarifier', item.id, 'cancel')} />)}
       {owner.repeatBacks.map(item => <RepeatBackCard key={item.id} {...item}
@@ -227,14 +241,14 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     return { ...host.rooms, 'needs-you': { ...host.rooms['needs-you']!, Body: ({ shell }: { shell: BriefShellPort }) => <><Body shell={shell} />{latest.current}</> } };
   }, [host]);
   const RetainedBody = retained ? getRoomBody(retained) : null;
-  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><OwnerAttentionContext.Provider value={ownerAttention}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
+  return <StoredNoticesContext.Provider value={storedNotices}><EmergencyStatusContext.Provider value={emergency}><HumanInputsContext.Provider value={{ pending: humanPending }}><NeedsYouContext.Provider value={{ count: needsCount, others: others.rows, failed: others.failed, reload: others.reload, clear: others.clear, inbox }}><OwnerAttentionContext.Provider value={ownerAttention}><RoomActionBridge requests={owner.roomActionRequests} ack={owner.ackRoomActionRequests}
     forceIdle={() => {}} wsRef={owner.wsRef} beforeDispatch={async request => {
       if (!host.active()) return false;
       const result = await host.navigation.intent(request.room, true);
       return result.state === 'opened' && host.active();
     }} />{message && <p className="brief-host-notice" role="status">{message}</p>}
     {!lost && !!humanPending && route.room !== 'needs-you' && <aside className="brief-human-banner" role="status">{humanPending} workflow {humanPending === 1 ? 'request needs' : 'requests need'} your attention. <button onClick={() => void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null }))}>Open Needs you</button></aside>}
-    <BriefHost route={route} rooms={rooms} notice={lost ? <ConnectionLostBanner retry={retryConnection} /> : <EmergencyStatusBanner state={!owner.isConnected && emergency === 'unavailable' ? 'loading' : emergency} open={() => host.navigation.navigate('emergency-controls')} />} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
+    <BriefHost route={route} rooms={rooms} notice={<><StorageStatusBanner problem={storageProblem} />{lost ? <ConnectionLostBanner retry={retryConnection} /> : <EmergencyStatusBanner state={!owner.isConnected && emergency === 'unavailable' ? 'loading' : emergency} open={() => host.navigation.navigate('emergency-controls')} />}</>} visibility={{ open, setOpen }} guardShell={base => { shellRef.current = base;
       const guarded = host.guardShell(base);
       return beforeNavigate ? { ...guarded, navigate: next => { void beforeNavigate().then(ok => { if (ok) guarded.navigate(next); }); } } : guarded;
     }}
@@ -242,7 +256,7 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
         ...UNKNOWN_NAVIGATION, workspaceName: null, hosting: host.descriptor().installMode,
         connection: lost ? 'offline' : owner.isConnected ? 'connected' : owner.status.mode === 'loading' ? 'reconnecting' : 'offline',
         account: { name: profile.base?.answers.preferred_name ?? null, plan: planFromBilling(billing) },
-        badges: { 'needs-you': lost ? undefined : notices.items.length + humanPending || undefined },
+        badges: { 'needs-you': lost ? undefined : needsCount || undefined },
       } } } }} conversation={{ source: 'live', content: <HostConversation host={host} /> }}>
       {children ?? (RetainedBody && <LiveDataProvider value={{ approvals: owner.approvals, clarifiers: owner.clarifiers, repeatBacks: owner.repeatBacks,
         notices: owner.notices, taskEvents: owner.taskEvents, contentEvents: owner.contentEvents, agentActivity: owner.agentActivity,
@@ -254,5 +268,5 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
     </BriefHost>
     {route.room !== 'needs-you' && toast.notice && <ReminderToast notice={toast.notice} onDismiss={() => { notices.markRead(toast.notice!.id); toast.hide(); }}
       onView={() => { toast.hide(); void host.navigation.open(() => ({ target: { kind: 'brief', route: { room: 'needs-you', selection: {} } }, message: null })); }} />}
-  </OwnerAttentionContext.Provider></HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
+  </OwnerAttentionContext.Provider></NeedsYouContext.Provider></HumanInputsContext.Provider></EmergencyStatusContext.Provider></StoredNoticesContext.Provider>;
 }
