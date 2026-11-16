@@ -74,6 +74,11 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/** Whether the document list may hold the request a link names: only actionable rows are shown there, and an unsettled read may still hold it. */
+export function namedInDocuments(all: Pick<Snapshot<readonly DecisionView[]>, 'state' | 'data'>, approvalId: string | undefined): boolean {
+  if (!(all.state === 'ready' || all.state === 'empty' || all.state === 'stale')) return true;
+  return !!approvalId && !!all.data?.some(row => row.actions.length > 0 && row.paper.decision.approval?.approvalId === approvalId);
+}
 /**
  * Everything that currently asks something of the owner, counted from the sources Needs you shows: document
  * decisions with an action, the other queued decisions (workflow approvals, permissions, recoveries) and the
@@ -201,8 +206,10 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const stored = useContext(StoredNoticesContext);
     const [otherCount, setOtherCount] = useState<number | null>(null);
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
+    // A link's request may sit in either list; only when neither has it is it gone.
+    const elsewhere = namedInDocuments(all, shell.route.selection.approvalId);
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
-      <PendingDecisions onCount={setOtherCount} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
+      <PendingDecisions onCount={setOtherCount} elsewhere={elsewhere} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
     today: { ...BRIEF_ROOMS.today, Body: Today }, goals: { ...BRIEF_ROOMS.goals, Body: Goal }, 'completed-goals': { ...BRIEF_ROOMS['completed-goals'], Body: Goal },
