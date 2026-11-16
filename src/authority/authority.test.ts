@@ -142,7 +142,9 @@ describe('AuthorityEngine', () => {
   });
 
   test('context rule: time_range', () => {
-    const now = new Date();
+    // A pinned hour: reading the clock here and again in the engine could
+    // straddle an hour boundary.
+    const now = { getHours: () => 13 };
     const engine = new AuthorityEngine(makeConfig({
       context_rules: [{
         id: 'no-email-at-night',
@@ -152,7 +154,7 @@ describe('AuthorityEngine', () => {
         effect: 'deny',
         description: 'No emails during current hour',
       }],
-    }));
+    }), { currentHour: () => 13 });
     const decision = engine.checkAuthority(makeCheckParams({
       agentAuthorityLevel: 7,
       actionCategory: 'send_email',
