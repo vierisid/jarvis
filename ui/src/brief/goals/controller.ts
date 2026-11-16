@@ -1,6 +1,10 @@
 import type { BriefReadState } from "../contracts";
 import {
   validCollection,
+  GOAL_SAVE_FAILED_TEXT,
+  type GoalDatum,
+  type GoalWrite,
+  type GoalWritesPort,
   visibleGoals,
   type GoalCollection,
   type GoalFilter,
@@ -30,7 +34,8 @@ export class GoalsController {
   private alive = true;
   private access = false;
   readonly positions = new Map<string, number>();
-  constructor(private port: GoalsPort) {
+  /** `changed` refreshes every other view of the goals (Today's goal card) after a save. */
+  constructor(private port: GoalsPort, private changed: () => void = () => {}) {
     this.source = port.source;
     this.scopeId = port.scopeId;
   }
@@ -105,6 +110,31 @@ export class GoalsController {
       });
     }
   }
+  get canWrite() {
+    return !!this.port.write;
+  }
+  /** Save through the host, then read the goals again so every view shows the new progress. */
+  async write(run: (write: GoalWritesPort) => Promise<GoalWrite>): Promise<GoalWrite> {
+    const write = this.port.write;
+    if (!write || !this.alive) return { ok: false, message: GOAL_SAVE_FAILED_TEXT };
+    let result: GoalWrite;
+    try {
+      result = await run(write);
+    } catch {
+      return { ok: false, message: GOAL_SAVE_FAILED_TEXT };
+    }
+    // A refused save may still mean the goal moved on: read it again either way.
+    this.changed();
+    await this.refresh();
+    return result;
+  }
+  logValue = (goal: GoalDatum, input: { requestId: string; value: number; measuredAt: number }) =>
+    this.write((w) => w.logValue(goal, input));
+  addEntry = (goal: GoalDatum, input: { requestId: string; note: string; link: string }) =>
+    this.write((w) => w.addEntry(goal, input));
+  defineMeasure = (goal: GoalDatum, input: { requestId: string; kind: "number" | "count"; unit: string; baseline: number; target: number }) =>
+    this.write((w) => w.defineMeasure(goal, input));
+  activate = (goal: GoalDatum) => this.write((w) => w.activate(goal));
   setTab(tab: GoalTab) {
     if (this.state.tab !== tab) {
       this.publish({ tab });
