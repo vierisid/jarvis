@@ -4,6 +4,8 @@ import { BriefTooltip } from "../../components/controls";
 import { useBriefMotion, useBriefReducedMotion } from "../../motion";
 import { composerAvailability, draftError, prefillSuggestion, type ComposerBinding, type ComposerSuggestion } from "./model";
 import { SendPebble } from "./SendPebble";
+import { AiSettingsLink } from "../../components/AiSettingsLink";
+import { AI_PROVIDER_NEEDED_MESSAGE } from "../../../../../src/brief/ai-provider-needed";
 import "./composer.css";
 
 interface Props {
@@ -134,7 +136,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
     });
   }
   return <div className="brief-composer" data-composer-mode="ready" data-reduced-motion={reduced} data-conversation-id={binding.conversationId}>
-    <div className="brief-composer-status" id={`${id}-status`} role="status">{status || ""}</div>
+    <div className="brief-composer-status" id={`${id}-status`} role="status">{status || ""}{status === AI_PROVIDER_NEEDED_MESSAGE && <> <AiSettingsLink /></>}</div>
     {!!suggestions.length && <div className="brief-composer-suggestions" aria-label={suggestionsLabel}>
       {suggestions.map(suggestion => <button type="button" key={suggestion.id} aria-disabled={binding.metadataPending}
         onPointerDown={event => event.preventDefault()} onClick={() => suggest(suggestion.text)}>{suggestion.label}</button>)}

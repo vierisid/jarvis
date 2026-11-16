@@ -7,6 +7,7 @@ import { initWorkflowDb, getWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../
 import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { claimNextJob, enqueue as enqueueJob } from '../workflows/db/repos/job-queue';
 import { runFailure } from '../workflows/runtime/run-failure';
 import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
 import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
@@ -327,6 +328,31 @@ test('a failed run takes its wording from the typed failure projection; a succee
   const ok = run(); updateRun(ok.id, { status: 'SUCCEEDED' });
   expect(service.detail(flowId, ok.id)).toMatchObject({ failure: null, recovery: null, status: 'succeeded' });
 });
+test('run detail says who started the run and names steps as the workflow does', () => {
+  const triggerOf = (triggeredBy?: string) => {
+    const r = createFlowRun({ flowId, flowVersionId: versionId, triggeredBy }); updateRun(r.id, { status: 'SUCCEEDED' });
+    return service.detail(flowId, r.id).trigger;
+  };
+  expect(triggerOf('brief_manual')).toBe('Started by you');
+  expect(triggerOf('dashboard')).toBe('Started by you');
+  expect(triggerOf('trigger:webhook')).toBe('Webhook');
+  expect(triggerOf('trigger:cron')).toBe('Schedule');
+  expect(triggerOf('trigger:engine')).toBe('App trigger');
+  expect(triggerOf('dashboard:test-from-here')).toBe('Started by you');
+  expect(triggerOf('assistant:manage_workflow')).toBe('Started by Jarvis');
+  expect(triggerOf('workflow:run_workflow')).toBe('Another workflow');
+  expect(triggerOf('work_item:w1:decision:d1')).toBe('Accepted work proposal');
+  expect(triggerOf('something:else')).toBe('Unknown');
+  // No label and no trigger: only a person can have started it.
+  expect(triggerOf(undefined)).toBe('Started by you');
+  const piece = createDraftVersion({ flowId, displayName: 'Piece', trigger: { name: 'trigger', type: 'PIECE_TRIGGER', displayName: 'Catch hook', settings: {},
+    nextAction: { name: 'step_1', type: 'CODE', displayName: 'Tidy\u202E the\n  names\u202C', settings: { sourceCode: { code: 'x', packageJson: '{}' } } } } });
+  const locked = lockVersion(piece.id).id;
+  const r = createFlowRun({ flowId, flowVersionId: locked }); updateRun(r.id, { status: 'SUCCEEDED', steps: { trigger: { status: 'SUCCEEDED' }, step_1: { status: 'SUCCEEDED' }, gone: { status: 'SUCCEEDED' } } });
+  const d = service.detail(flowId, r.id);
+  expect(d.trigger).toBe('Unknown');
+  expect(d.steps.map(s => s.title).sort()).toEqual(['Catch hook', 'Step gone', 'Tidy the names']);
+});
 test('recorded connections come from the Q-05 run bindings, identity only', () => {
   const r = run(); updateRun(r.id, { status: 'SUCCEEDED' });
   const put = (externalId: string, record: unknown) => db.run('INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)', [r.id, externalId, JSON.stringify(record)]);
@@ -614,4 +640,14 @@ test('failed expression inspection explains the repair without leaking expressio
   expect(description).not.toContain('validate the draft');
   const exposed = JSON.stringify(detail);
   for (const secret of ['private_customer_email', 'secret-token', '/private/path', 'WorkflowExpressionError:']) expect(exposed).not.toContain(secret);
+});
+test('a run waiting for a free worker says what it is waiting behind', () => {
+  const ahead = run(), mine = run();
+  enqueueJob({ jobType: 'RUN_FLOW', flowRunId: ahead.id, payload: { runId: ahead.id } });
+  enqueueJob({ jobType: 'RUN_FLOW', flowRunId: mine.id, payload: { runId: mine.id } });
+  expect(service.detail(flowId, mine.id).summary).toContain('Waiting for another workflow run to finish (1 ahead).');
+  claimNextJob();
+  expect(service.detail(flowId, mine.id).summary).toContain('Waiting for another workflow run to finish (1 ahead).');
+  claimNextJob();
+  expect(service.detail(flowId, mine.id).summary).not.toContain('Waiting for another');
 });

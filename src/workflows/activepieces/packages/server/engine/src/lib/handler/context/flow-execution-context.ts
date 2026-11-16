@@ -1,7 +1,7 @@
 import { assertEqual, BaseStepOutput, EngineGenericError, executionJournal, FailedStep, FlowActionType, FlowRunStatus, GenericStepOutput, isNil, LoopStepOutput, LoopStepResult, RespondResponse, StepOutput, StepOutputStatus } from '@activepieces/shared'
 import { loggingUtils } from '../../helper/logging-utils'
 import { StepExecutionPath } from './step-execution-path'
-import { stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'
+import { ownStep, stepExpressionOutput } from '../../../../../../../../runtime/engine-expression-data'
 
 
 export type FlowVerdict = {
@@ -56,7 +56,7 @@ export class FlowExecutorContext {
     public getLoopStepOutput({ stepName }: { stepName: string }): LoopStepOutput | undefined {
         const stateAtPath = executionJournal.getStateAtPath({ path: this.currentPath.path, steps: this.steps })
 
-        const stepOutput = stateAtPath[stepName]
+        const stepOutput = ownStep(stateAtPath, stepName)
         if (isNil(stepOutput)) {
             return undefined
         }
@@ -67,7 +67,7 @@ export class FlowExecutorContext {
 
     public isCompleted({ stepName }: { stepName: string }): boolean {
         const stateAtPath = executionJournal.getStateAtPath({ path: this.currentPath.path, steps: this.steps })
-        const stepOutput = stateAtPath[stepName]
+        const stepOutput = ownStep(stateAtPath, stepName)
         if (isNil(stepOutput)) {
             return false
         }
@@ -76,7 +76,7 @@ export class FlowExecutorContext {
 
     public isPaused({ stepName }: { stepName: string }): boolean {
         const stateAtPath = executionJournal.getStateAtPath({ path: this.currentPath.path, steps: this.steps })
-        const stepOutput = stateAtPath[stepName]
+        const stepOutput = ownStep(stateAtPath, stepName)
         if (isNil(stepOutput)) {
             return false
         }
@@ -110,7 +110,7 @@ export class FlowExecutorContext {
     }
 
     public getStepOutput(stepName: string, path?: StepExecutionPath['path']): StepOutput | undefined {
-        return executionJournal.getStep({ stepName, path: path ?? this.currentPath.path, steps: this.steps })
+        return ownStep(executionJournal.getStateAtPath({ path: path ?? this.currentPath.path, steps: this.steps }), stepName)
     }
 
     public setCurrentPath(currentStatePath: StepExecutionPath): FlowExecutorContext {
@@ -144,7 +144,8 @@ export class FlowExecutorContext {
     public currentState(referencedStepNames?: string[]): Record<string, unknown> {
         const referencedSteps = referencedStepNames 
             ?  referencedStepNames.reduce((acc, stepName) => {
-                if (this.steps[stepName]) acc[stepName] = this.steps[stepName]
+                const recorded = ownStep(this.steps, stepName)
+                if (recorded) acc[stepName] = recorded
                 return acc
             }, {} as Record<string, StepOutput>)
             : this.steps
