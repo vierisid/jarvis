@@ -41,7 +41,12 @@ export type WatchStep =
   /** The desktop app looked away for a while. */
   | { kind: 'gap'; at: number };
 
-/** One step of a round as Jarvis does it: the place moves on by `dx, dy` every round. */
+/**
+ * One step of a round as Jarvis does it: the place moves on by `dx, dy` every
+ * round. `dx` is always 0 today: a round goes down or up a list. `dy` is
+ * first what the hand did, in whole pixels, and is then made exact from the
+ * screen (jobs.ts: sureRounds), where it need not be a whole number.
+ */
 export type RoundStep =
   | { kind: 'click'; app: string; win: WatchWin; x: number; y: number; dx: number; dy: number; mods?: string; hand: number }
   | { kind: 'keys'; app: string; win: WatchWin; keys: string; copy?: boolean; paste?: boolean };
@@ -57,10 +62,12 @@ export interface Rounds {
 
 /** The longest round, in steps. */
 export const NOTCH_ROUND_MAX_STEPS = 12;
-/** A place that moved less than this did not move: the hand is not that steady. */
+/** A place that moved less than this, down or up, did not move: the hand is not that steady. */
 export const NOTCH_ROUND_STILL_PX = 5;
-/** A place that moved at least this much moved on. Between the two it is neither, and there is no round. */
+/** A place that moved at least this much, down or up, moved on. Between the two it is neither, and there is no round. */
 export const NOTCH_ROUND_MOVE_PX = 8;
+/** A place that stayed where it was may be this far to the side: the same button is not pressed on the same pixel. */
+export const NOTCH_ROUND_SIDE_PX = 24;
 /** The longest one round may take by hand, and the longest pause between two. */
 export const NOTCH_ROUND_MAX_MS = 90_000;
 /** How many steps of what was watched are kept. */
@@ -133,13 +140,13 @@ function between(a: WatchStep, b: WatchStep): { dx: number; dy: number } | 'same
   if (!sameWin(a.win, b.win) || (a.mods ?? '') !== (b.mods ?? '')) return null;
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  const still = (d: number): boolean => Math.abs(d) < NOTCH_ROUND_STILL_PX;
-  const moved = (d: number): boolean => Math.abs(d) >= NOTCH_ROUND_MOVE_PX;
-  if (still(dx) && still(dy)) return 'same';
-  // Things in a row or a column stand in a line: it moves on along one axis, and holds on the other.
-  if (moved(dy) && still(dx)) return { dx: 0, dy };
-  if (moved(dx) && still(dy)) return { dx, dy: 0 };
-  if (moved(dx) && moved(dy)) return { dx, dy };
+  // It stayed where it was: the same thing pressed again. Further to the side
+  // than a button is wide, it is another thing in the same row, and a job
+  // that goes across is not one this can carry: columns are not evenly wide.
+  if (Math.abs(dy) < NOTCH_ROUND_STILL_PX) return Math.abs(dx) <= NOTCH_ROUND_SIDE_PX ? 'same' : null;
+  // It moved on down or up a list. How far to the side the hand landed is the
+  // hand, not the job: a cell is clicked anywhere along its width.
+  if (Math.abs(dy) >= NOTCH_ROUND_MOVE_PX) return { dx: 0, dy };
   return null;
 }
 
@@ -182,7 +189,8 @@ export function findRounds(steps: WatchStep[]): Rounds | null {
         const want = moves[i]!;
         if (move === null) return false;
         if (want === 'same' || move === 'same') return want === move;
-        return Math.abs(move.dx - want.dx) < NOTCH_ROUND_STILL_PX && Math.abs(move.dy - want.dy) < NOTCH_ROUND_STILL_PX;
+        // The same way, and about as far: two clicks on two rows are never exactly a row apart.
+        return Math.sign(move.dy) === Math.sign(want.dy) && Math.abs(move.dy - want.dy) <= Math.max(NOTCH_ROUND_MOVE_PX, Math.abs(want.dy) / 2);
       });
       if (!same) break;
       shown++;
@@ -212,8 +220,9 @@ export function findRounds(steps: WatchStep[]): Rounds | null {
 
 /** Where a click of round `k` lands (1 is the first round after the last one done by hand). Null when that is outside its window. */
 export function roundPlace(step: Extract<RoundStep, { kind: 'click' }>, k: number): { x: number; y: number } | null {
-  const x = step.x + k * step.dx;
-  const y = step.y + k * step.dy;
+  // How far it moves on need not be a whole number of pixels. The place is.
+  const x = Math.round(step.x + k * step.dx);
+  const y = Math.round(step.y + k * step.dy);
   return x >= 0 && y >= 0 && x < step.win.w && y < step.win.h ? { x, y } : null;
 }
 
