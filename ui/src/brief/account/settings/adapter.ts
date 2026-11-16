@@ -1,6 +1,7 @@
 import {
   DESTINATIONS,
   readSettings,
+  readAiProvider,
   readVoice,
   revision,
   type SettingsPort,
@@ -47,9 +48,27 @@ export function createSettingsPort(
       return { state: "error" };
     }
   };
+  const readAi: SettingsPort["readAiProvider"] = async (signal) => {
+    if (!host) return { state: "unsupported" };
+    try {
+      const response = await host.request("/api/config/llm", {
+        cache: "no-store",
+        signal,
+      });
+      if ([401, 403].includes(response.status)) return { state: "unavailable" };
+      if (!response.ok || signal.aborted) return { state: "error" };
+      const data = readAiProvider(await response.json());
+      return data && !signal.aborted
+        ? { state: "ready", data }
+        : { state: "error" };
+    } catch {
+      return { state: "error" };
+    }
+  };
   return {
     scopeId,
     source: "live",
+    readAiProvider: readAi,
     canWrite: host?.canWrite === true,
     read,
     destinations: Object.fromEntries(
