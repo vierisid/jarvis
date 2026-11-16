@@ -320,7 +320,7 @@ function RunDocument({ run }: { run: RunDetail }) {
       </h3>
       <dl className="brief-run-metadata">
         <dt>Trigger</dt>
-        <dd>{run.trigger ?? "Not recorded"}</dd>
+        <dd>{run.trigger ?? "Unknown"}</dd>
         <dt>Started</dt>
         <dd>{date(run.startedAt)}</dd>
         <dt>Run ID</dt>
