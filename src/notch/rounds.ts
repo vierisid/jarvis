@@ -290,6 +290,38 @@ export function roundsToDo(rounds: Rounds, after: number): number {
   return copyAt >= 0 && sourceAt(rounds) > copyAt ? after + 1 : after;
 }
 
+/**
+ * Gives a round the exact distances already measured for the same job a
+ * moment ago, when the person has done another step or another round since.
+ * The round is a circle, so the two may begin at different steps: they are
+ * laid over each other at the turn where every step is the same kind of
+ * thing in the same window. Null when they do not fit, or a distance that
+ * was measured no longer agrees with what the hand did: then it has to be
+ * measured again.
+ */
+export function carryExact(measured: Rounds, latest: Rounds): Rounds | null {
+  const n = latest.steps.length;
+  if (n !== measured.steps.length) return null;
+  const fits = (a: RoundStep, b: RoundStep): boolean => {
+    if (a.kind === 'keys' || b.kind === 'keys') return a.kind === 'keys' && b.kind === 'keys' && a.keys === b.keys && sameWin(a.win, b.win);
+    if (!sameWin(a.win, b.win) || (a.mods ?? '') !== (b.mods ?? '')) return false;
+    // Both stay, or both move the same way by about as much.
+    if (a.dy === 0 || b.dy === 0) return a.dy === 0 && b.dy === 0;
+    return Math.sign(a.dy) === Math.sign(b.dy) && Math.abs(a.dy - b.dy) <= Math.abs(a.dy) / 2;
+  };
+  for (let turn = 0; turn < n; turn++) {
+    if (!latest.steps.every((step, i) => fits(measured.steps[(i + turn) % n]!, step))) continue;
+    return {
+      ...latest,
+      steps: latest.steps.map((step, i): RoundStep => {
+        const was = measured.steps[(i + turn) % n]!;
+        return step.kind === 'click' && was.kind === 'click' ? { ...step, dy: was.dy } : step;
+      }),
+    };
+  }
+  return null;
+}
+
 /** The programs a round touches, in the order it touches them, each once. */
 export function roundsApps(rounds: Rounds): string[] {
   const apps: string[] = [];
