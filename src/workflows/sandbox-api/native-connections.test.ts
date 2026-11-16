@@ -3,7 +3,7 @@ import { createWorkflowRoutes } from "../api/routes";
 import { CredentialResolver } from "../credentials/adapter";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { setEncryptionKey } from "../db/encryption";
-import { upsertConnection } from "../db/repos/app-connection";
+import { listConnections, upsertConnection } from "../db/repos/app-connection";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
@@ -38,6 +38,16 @@ afterEach(async () => {
 });
 
 async function save(externalId: string, pieceName = "fixture-piece", token = TOKEN) {
+  // Adding refuses an existing connection; saving again is a Rotate (PATCH).
+  const existing = listConnections().find(c => c.externalId === externalId && c.pieceName === pieceName);
+  if (existing) {
+    const patch = createWorkflowRoutes()["/api/workflows/connections/:id"]!.PATCH!;
+    const rotated = Object.assign(new Request(`http://localhost/api/workflows/connections/${existing.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ value: { access_token: token } }),
+    }), { params: { id: existing.id } });
+    expect((await patch(rotated)).status).toBe(200);
+    return existing.id;
+  }
   const post = createWorkflowRoutes()["/api/workflows/connections"]!.POST!;
   const response = await post(new Request("http://localhost/api/workflows/connections", {
     method: "POST", headers: { "Content-Type": "application/json" },
