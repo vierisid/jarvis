@@ -22,7 +22,8 @@ failure itself.
 
 ### Evidence is typed
 
-Classification reads typed fields only, never the wording of a message:
+Classification reads typed fields only, never the wording of a message, with
+one narrow exception below:
 
 - an action outcome's `status`, `effect` and `code` (`ActionOutcome`);
 - a readiness issue's `code`;
@@ -50,6 +51,16 @@ reading:
 `failureEvidence(error)` maps a thrown error to evidence by its type. An error
 with no typed shape is `unknown`: its text is kept as detail, and for work that
 can change things outside Jarvis it reads as "may have taken effect".
+
+The exception is a failed workflow step whose error text is the only record of
+a result that is already known (`src/failures/step-error.ts`). An HTTP or
+GraphQL step whose server answered 4xx was turned away, so nothing took effect.
+A call step whose child run ended Failed fails with the cause named, and what
+its steps did stays open. Both are read only for those pieces and only from the
+step's own text. A timeout, a dropped connection, a 5xx, a child that timed out
+or never reported back, and every other untyped error keep the "may have taken
+effect" reading. The runtime's own wrappers ("daemon responded 409: {json}",
+"blocked CODE: message") are removed from the detail of an untyped failure.
 
 `src/failures/fixtures.ts` holds one canonical failure per category and the
 timeouts that must never read as "nothing happened".

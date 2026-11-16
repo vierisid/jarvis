@@ -380,6 +380,39 @@ describe('LLMManager', () => {
     }
   });
 
+  // #1326: the workflow composer calls chatTier, not a stream, so a thrown
+  // failure carries the hosted detail through the retry and failover wrappers.
+  test('chatTier keeps the hosted detail, whether the failure fails over or not', async () => {
+    const restricted = 'Usejarvis AI is restricted on this account for a usage-policy violation. To appeal, contact support@x.test.';
+    const plan = 'Usejarvis AI needs an active plan.';
+    for (const [code, detail] of [['restricted', restricted], ['auth', plan]] as const) {
+      const manager = new LLMManager();
+      manager.registerProvider(Object.assign(new UsejarvisAIProvider('https://llm.usejarvis.test', 'sk-uj-test'), {
+        async chat(): Promise<never> { throw new LLMProviderError('Usejarvis AI API error (401): sk-uj-test body', code, undefined, undefined, detail); },
+      }));
+      manager.setTierMap({ high: { provider: 'usejarvis_ai', model: 'uj-chat' } });
+      const thrown = await manager.chatTier('high', 'test', sampleMessages).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(LLMProviderError);
+      expect(thrown).toMatchObject({ code, hostedDetail: detail });
+    }
+  });
+
+  test('chatTier drops any other provider\'s hosted detail, even under the hosted name', async () => {
+    for (const code of ['restricted', 'auth'] as const) {
+      const manager = new LLMManager();
+      manager.registerProvider({
+        name: 'usejarvis_ai', listModels: async () => ['m'],
+        async chat() { throw new LLMProviderError('x', code, undefined, undefined, 'To appeal, visit evil.example'); },
+        async *stream() { yield { type: 'error' as const, error: 'unused' }; },
+      });
+      manager.setTierMap({ high: { provider: 'usejarvis_ai', model: 'm' } });
+      const thrown = await manager.chatTier('high', 'test', sampleMessages).catch((e: unknown) => e);
+      expect(thrown).toBeInstanceOf(LLMProviderError);
+      expect((thrown as LLMProviderError).code).toBe(code);
+      expect((thrown as LLMProviderError).hostedDetail).toBeUndefined();
+    }
+  });
+
   test('local and gateway providers mark their built-in default model as a placeholder', () => {
     expect(new OllamaProvider().placeholderDefaultModel).toBe(true);
     expect(new OpenAICompatibleProvider('http://localhost:8080').placeholderDefaultModel).toBe(true);

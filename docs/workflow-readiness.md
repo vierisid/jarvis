@@ -95,6 +95,13 @@ resolved nor included in the recorded router input; the saved graph is unchanged
 First-match routers also stop before resolving any later branch. All-match
 routers evaluate each branch; unvisited branches retain empty condition lists. Other router
 operators still reject missing values when evaluated, as do ordinary action inputs.
+A number condition (`NUMBER_IS_GREATER_THAN`, `NUMBER_IS_LESS_THAN`, `NUMBER_IS_EQUAL_TO`) needs a number
+on both sides; text that is not a number (`abc`) fails the router step and names the value, instead of
+making the condition false and taking another branch. Numeric text such as `10`, ` 42 `, `1e3` or
+`-0.5` is read as a number, and blank text, `null` and booleans read as 0, 0 and 1/0 as before.
+Text that used to be compared as text, such as two ISO dates or `abc` equal to `abc`, now fails;
+use a date or text condition for it. The failure quotes the value as the run records it (a
+connection reads `**REDACTED**`), on one escaped line of at most 60 characters.
 A condition's operator must be one the engine implements. "Starts with" has two accepted
 spellings that mean the same test: `TEXT_START_WITH`, the engine's value, which the dashboard
 saves, and `TEXT_STARTS_WITH`, its enum key, which composed workflows write. Readiness rejects
