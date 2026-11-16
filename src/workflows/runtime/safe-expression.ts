@@ -117,6 +117,19 @@ class Parser {
     return left;
   }
 
+  /** `[key]`: a literal key gets the same forbidden-name check as the dot form. A key
+   * built only from literals (`['__pro' + 'to__']`) is worked out here and checked too,
+   * so it is refused when the flow is saved rather than on every run. */
+  private bracketKey(): Node {
+    let key = this.expression(); this.require(']');
+    if (key.kind !== 'literal' && !hasReference(key)) {
+      const value = evaluateTree(key, Object.create(null));
+      if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) key = { kind: 'literal', value };
+    }
+    if (key.kind === 'literal' && typeof key.value === 'string') checkKey(key.value);
+    return key;
+  }
+
   private primary(): Node {
     const token = this.tokens[this.index++];
     if (!token) return fail('missing value');
@@ -158,10 +171,10 @@ class Parser {
     } else return fail('unsupported value');
     while (true) {
       if (this.take('[')) {
-        const key = this.expression(); this.require(']'); node = { kind: 'member', object: node, key };
+        node = { kind: 'member', object: node, key: this.bracketKey() };
       } else if (this.take('.') || this.take('?.')) {
         if (this.take('[')) {
-          const key = this.expression(); this.require(']'); node = { kind: 'member', object: node, key };
+          node = { kind: 'member', object: node, key: this.bracketKey() };
         } else {
           const key = this.tokens[this.index++];
           if (!key || key.kind !== 'identifier') fail('expected property name');
@@ -193,6 +206,66 @@ export function workflowExpressionReferences(script: string): Set<string> {
     }
   }
   return references;
+}
+
+/** References that sit inside a `??`, where the author wrote for an absent value:
+ * `{{a ?? 'none'}}` and `{{a ?? b}}` guard `a` (and `b`); `{{a + b}}` guards
+ * nothing. Never reads values or executes the expression. */
+export function workflowExpressionGuardedReferences(script: string): Set<string> {
+  const guarded = new Set<string>();
+  const roots = (start: Node, into: Set<string>) => {
+    const pending = [start];
+    while (pending.length) {
+      const node = pending.pop()!;
+      switch (node.kind) {
+        case 'reference': into.add(node.name); break;
+        case 'array': pending.push(...node.items); break;
+        case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+        case 'member': pending.push(node.object, node.key); break;
+        case 'unary': pending.push(node.value); break;
+        case 'binary': pending.push(node.left, node.right); break;
+        case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+        case 'flatten': pending.push(node.data, node.path); break;
+      }
+    }
+  };
+  const pending = [new Parser(tokenize(script)).parse()];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'member': pending.push(node.object, node.key); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary':
+        if (node.operator === '??') roots(node, guarded); else pending.push(node.left, node.right);
+        break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return guarded;
+}
+
+/** True when a property name is computed from data (`a[b.c]`) rather than written
+ * out. Such a name can only be checked against the forbidden list when it runs. */
+export function workflowExpressionHasComputedKey(script: string): boolean {
+  const pending = [new Parser(tokenize(script)).parse()];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'member':
+        if (node.key.kind !== 'literal') return true;
+        pending.push(node.object); break;
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary': pending.push(node.left, node.right); break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return false;
 }
 
 /** Shared budget bounds evaluation, flatten traversal and materialized output. */
@@ -284,8 +357,30 @@ export function workflowInterpolationText(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** True when any part of the tree reads data; false for a tree of literals only. */
+function hasReference(start: Node): boolean {
+  const pending = [start];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'reference': return true;
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'member': pending.push(node.object, node.key); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary': pending.push(node.left, node.right); break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return false;
+}
+
 function evaluateParsed(script: string, context: Record<string, unknown>): unknown {
-  const tree = new Parser(tokenize(script)).parse();
+  return evaluateTree(new Parser(tokenize(script)).parse(), context);
+}
+
+function evaluateTree(tree: Node, context: Record<string, unknown>): unknown {
   const budget = new Budget();
   const evaluate = (node: Node, depth = 0): unknown => {
     budget.visit(depth);
