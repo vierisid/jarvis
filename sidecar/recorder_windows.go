@@ -94,8 +94,16 @@ type clickSite struct {
 }
 
 type recorderEvent struct {
-	kind string    // typing_started | commit | flush | click
+	kind string    // typing_started | commit | flush | click | keys | typed | record_end
 	site clickSite // click only; carries the point as well as the windows
+	// click: what was held down with it ("shift"). keys: the named key or
+	// shortcut ("ctrl,c"), never a key that types.
+	keys string
+	// keys: the window that was in front when the key went down.
+	front uintptr
+	// What the hooks were in for when this happened: a recording ("Watch
+	// me"), or the notch watching by itself. A recording comes first.
+	rec, watch bool
 }
 
 type recorderHook struct {
@@ -103,6 +111,17 @@ type recorderHook struct {
 	tid      uint32
 	typed    atomic.Bool // printable keys arrived since the last flush
 	stopOnce sync.Once
+
+	// Why the hooks are in. Either or both. The callbacks read them on every
+	// event, so that a recording that ends while the notch still watches does
+	// not go on being recorded.
+	recording atomic.Bool
+	watching  atomic.Bool
+	// The notch, watching by itself, was told "typed" and has seen no step
+	// since: it is not told again for every letter.
+	watchTyped atomic.Bool
+	// How the worker is reached from outside the callbacks.
+	events chan recorderEvent
 
 	// downSite is the site sampled at the last left-button press, handed to
 	// the click event emitted at the release. It is not synchronised, and
@@ -207,11 +226,36 @@ var (
 	// through comThread.call touch these.
 	recPendingElem *ole.IDispatch
 	recPendingInfo *recordedElement
+
+	// What the hooks are wanted for, under hookMu: a recording, the notch's
+	// own watching, or both. They are in while either is wanted.
+	hookWantRecord bool
+	hookWantWatch  bool
 )
 
 func init() {
 	inputHookStart = startInputRecording
 	inputHookStop = stopInputRecording
+	notchWatchSet = setNotchWatching
+}
+
+// Flags Windows puts on an event that a program made and no hand did.
+const (
+	llmhfInjected = 0x01
+	llkhfInjected = 0x10
+)
+
+// hookMods reads which modifier keys are down, from inside a hook callback.
+// Four table lookups: nothing that waits.
+func hookMods() watchMods {
+	down := func(vk uintptr) bool {
+		state, _, _ := procGetAsyncKeyState.Call(vk)
+		return state&asyncKeyHeldHi != 0
+	}
+	m := watchMods{Ctrl: down(0x11), Alt: down(0x12), Shift: down(0x10), Win: down(0x5B) || down(0x5C)}
+	// AltGr is the right Alt, which Windows reports with the left Ctrl.
+	m.AltGr = m.Ctrl && down(0xA5)
+	return m
 }
 
 // warmHookProcs resolves every user32 entry point the hook callbacks use,
@@ -232,6 +276,7 @@ func warmHookProcs() error {
 		procGetAncestor,
 		procWindowFromPoint,
 		procGetGUIThreadInfo,
+		procGetAsyncKeyState,
 	} {
 		if err := p.Find(); err != nil {
 			return fmt.Errorf("resolving %s: %w", p.Name, err)
@@ -240,12 +285,44 @@ func warmHookProcs() error {
 	return nil
 }
 
-// startInputRecording installs the hooks. Called under recorderOpMu from
-// handleRecorderStart; hookMu additionally guards activeRecorderHook so a
-// stop that races an in-flight install cannot leave hooks behind.
+// startInputRecording puts the hooks in for a recording. Called under
+// recorderOpMu from handleRecorderStart; hookMu additionally guards
+// activeRecorderHook so a stop that races an in-flight install cannot leave
+// hooks behind.
 func startInputRecording() error {
 	hookMu.Lock()
 	defer hookMu.Unlock()
+	if err := installInputHooks(); err != nil {
+		return err
+	}
+	hookWantRecord = true
+	activeRecorderHook.recording.Store(true)
+	return nil
+}
+
+// setNotchWatching puts the hooks in, or lets them go, for the notch watching
+// by itself. What it sees is told as shapes only (notch_watch.go).
+func setNotchWatching(on bool) error {
+	hookMu.Lock()
+	defer hookMu.Unlock()
+	if !on {
+		hookWantWatch = false
+		if h := activeRecorderHook; h != nil {
+			h.watching.Store(false)
+		}
+		removeInputHooksIfIdle()
+		return nil
+	}
+	if err := installInputHooks(); err != nil {
+		return err
+	}
+	hookWantWatch = true
+	activeRecorderHook.watching.Store(true)
+	return nil
+}
+
+// installInputHooks installs the hooks if they are not in. With hookMu held.
+func installInputHooks() error {
 	if activeRecorderHook != nil {
 		return nil
 	}
@@ -254,8 +331,8 @@ func startInputRecording() error {
 		return err
 	}
 
-	h := &recorderHook{stopCh: make(chan struct{})}
 	evCh := make(chan recorderEvent, 64)
+	h := &recorderHook{stopCh: make(chan struct{}), events: evCh}
 
 	go recorderWorker(h, evCh)
 
@@ -275,18 +352,26 @@ func startInputRecording() error {
 			// callback, which is the documented vet exception here.
 			ms := (*msllHookStruct)(unsafe.Pointer(lParam))
 			x, y := int(ms.Pt.X), int(ms.Pt.Y)
-			switch wParam {
-			case wmLButtonDownRec:
+			rec, watch := h.recording.Load(), h.watching.Load()
+			// A click a program made is not something the person did: above
+			// all Jarvis's own, when it does a job again where it can be
+			// seen. Recorded, it would be taken for the person's next round.
+			if ms.Flags&llmhfInjected != 0 {
+				rec, watch = false, false
+			}
+			switch {
+			case !rec && !watch:
+			case wParam == wmLButtonDownRec:
 				// Sample the target at the PRESS, not at the release.
 				// Activation and menu dismissal both happen on the press,
 				// so a site read at the release can already name the window
 				// that replaced the one clicked -- the window revealed
 				// behind a closing menu, or the app that just came up.
 				h.downSite = h.sampleClickSite(x, y)
-				if h.typed.Swap(false) {
+				if rec && h.typed.Swap(false) {
 					enqueue(recorderEvent{kind: "flush"})
 				}
-			case wmLButtonUp:
+			default:
 				site := h.downSite
 				h.downSite = clickSite{}
 				if !pressSiteStillApplies(site.X, site.Y, site.Valid, x, y) {
@@ -296,7 +381,8 @@ func startInputRecording() error {
 					// resolves at describe the same place.
 					site = h.sampleClickSite(x, y)
 				}
-				enqueue(recorderEvent{kind: "click", site: site})
+				h.watchTyped.Store(false)
+				enqueue(recorderEvent{kind: "click", site: site, keys: watchClickMods(hookMods()), rec: rec, watch: watch})
 			}
 		}
 		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
@@ -306,17 +392,34 @@ func startInputRecording() error {
 	keyboardProc := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam uintptr) uintptr {
 		if nCode >= 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
 			ks := (*kbdllHookStruct)(unsafe.Pointer(lParam))
-			switch ks.VkCode {
-			case vkReturnRec, vkTabRec:
-				if h.typed.Swap(false) {
-					enqueue(recorderEvent{kind: "commit"})
-				}
-			default:
-				// Mark that the person is typing into the focused field. The
-				// character itself is not recorded; the committed value is
-				// read from UIA at flush time.
-				if isPrintableVk(ks.VkCode) && !h.typed.Swap(true) {
-					enqueue(recorderEvent{kind: "typing_started"})
+			rec, watch := h.recording.Load(), h.watching.Load()
+			// Keys a program pressed are not the person's: Jarvis's own, above all.
+			if ks.Flags&llkhfInjected != 0 {
+				rec, watch = false, false
+			}
+			if rec || watch {
+				// Which key it is decides only what kind of thing happened: a
+				// named key or a shortcut is a step and is named; a key that
+				// types is "typing", and which key it was goes no further than
+				// this line (notch_watch.go).
+				kind, spec := watchKey(ks.VkCode, hookMods())
+				switch kind {
+				case watchKeyStep:
+					if rec && (ks.VkCode == vkReturnRec || ks.VkCode == vkTabRec) && h.typed.Swap(false) {
+						enqueue(recorderEvent{kind: "commit"})
+					}
+					h.watchTyped.Store(false)
+					enqueue(recorderEvent{kind: "keys", keys: spec, front: win32GetForegroundWindow(), rec: rec, watch: watch})
+				case watchKeyTyped:
+					// Mark that the person is typing into the focused field. The
+					// character itself is not recorded; the committed value is
+					// read from UIA at flush time.
+					if rec && isPrintableVk(ks.VkCode) && !h.typed.Swap(true) {
+						enqueue(recorderEvent{kind: "typing_started"})
+					}
+					if watch && !rec && !h.watchTyped.Swap(true) {
+						enqueue(recorderEvent{kind: "typed", front: win32GetForegroundWindow(), watch: true})
+					}
 				}
 			}
 		}
@@ -370,12 +473,29 @@ func startInputRecording() error {
 
 func stopInputRecording() {
 	hookMu.Lock()
+	defer hookMu.Unlock()
+	hookWantRecord = false
+	if h := activeRecorderHook; h != nil {
+		h.recording.Store(false)
+		h.typed.Store(false)
+		// The field that was being typed into is let go, as it is when the
+		// hooks come out: the hooks may stay in now, for the notch.
+		select {
+		case h.events <- recorderEvent{kind: "record_end"}:
+		default:
+		}
+	}
+	removeInputHooksIfIdle()
+}
+
+// removeInputHooksIfIdle takes the hooks out when nothing wants them. With
+// hookMu held.
+func removeInputHooksIfIdle() {
 	h := activeRecorderHook
-	activeRecorderHook = nil
-	hookMu.Unlock()
-	if h == nil {
+	if h == nil || hookWantRecord || hookWantWatch {
 		return
 	}
+	activeRecorderHook = nil
 	h.stopOnce.Do(func() {
 		close(h.stopCh)
 		procPostThreadMsg.Call(uintptr(h.tid), wmQuit, 0, 0)
@@ -407,7 +527,24 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 			case "commit", "flush":
 				flushTypingField()
 			case "click":
-				captureClick(e.site)
+				if e.rec {
+					captureClick(e.site, e.keys)
+				} else if e.watch {
+					watchTellClick(e.site, e.keys)
+				}
+			case "keys":
+				if e.rec {
+					recordKeys(e.front, e.keys)
+				} else if e.watch {
+					watchTellKeys(e.front, e.keys)
+				}
+			case "typed":
+				watchTellTyped(e.front)
+			case "record_end":
+				_, _ = comThread.call(func(state *uiaState) (any, error) {
+					releasePendingField()
+					return nil, nil
+				})
 			}
 		}
 	}
@@ -511,7 +648,7 @@ func flushTypingField() {
 // element reflects the just-finished action. site is what the hook recorded
 // about where the click went when it went there; the settle is why that
 // cannot be worked out here instead.
-func captureClick(site clickSite) {
+func captureClick(site clickSite, mods string) {
 	// The point comes from the site, not from the release, so the window
 	// recorded and the point resolved against are the same place. They
 	// differ by at most clickSlopPx, which is enough to land on the
@@ -563,7 +700,40 @@ func captureClick(site clickSite) {
 	}
 	payload := interactionPayload(rec)
 	payload["action"] = "click"
+	// Where in its window the click landed, and which window that was: what a
+	// job done several times over is told apart by (notch_watch.go).
+	if win, ok := watchWindowOf(site.HostHwnd); ok {
+		payload["win"] = win.payload()
+		payload["pt"] = map[string]any{"x": site.X - win.left, "y": site.Y - win.top}
+	}
+	if mods != "" {
+		payload["mods"] = mods
+	}
 	log.Printf("[recorder] click: %s %q (app=%s)", rec.Role, rec.Name, rec.App)
+	emitInteraction(payload)
+}
+
+// recordKeys tells a named key or a shortcut pressed during a recording: a
+// step of its own, pressed again as it was when the job is done again.
+func recordKeys(front uintptr, keys string) {
+	front = win32RootWindow(front)
+	if front == 0 || ownWindow(front) {
+		// Pressed in one of Jarvis's own windows: not part of what is shown.
+		return
+	}
+	win, _ := watchWindowOf(front)
+	payload := map[string]any{
+		"surface": "desktop", "ts": time.Now().UnixMilli(), "secure": false,
+		"action": "press_keys", "value": keys,
+	}
+	if win.App != "" {
+		payload["app"] = win.App
+		payload["win"] = win.payload()
+	}
+	if title := win32WindowTitle(front); title != "" {
+		payload["title"] = title
+	}
+	log.Printf("[recorder] press_keys: %s (app=%s)", keys, win.App)
 	emitInteraction(payload)
 }
 

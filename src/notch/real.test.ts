@@ -12,7 +12,9 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
-import { closeDb, initDatabase } from '../vault/schema.ts';
+import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
+import type { RawInteraction } from '../skills/recorder.ts';
+import { NOTCH_WATCH_EVENT } from './catch.ts';
 import { NOTCH_PLAIN_LINE_COLUMNS, notchApprovalSentence, notchApprovalWay } from './approvals.ts';
 import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -308,5 +310,115 @@ describe('Today', () => {
     expect(blocks).toHaveLength(NOTCH_TODAY_MAX + 1);
     expect(blocks.at(-1)).toEqual({ kind: 'note', say: ['And 3 more, in the dashboard.'] });
     expect(blocks[0]).toMatchObject({ kind: 'row', lead: '12:00', say: ['Thing 0'] });
+  });
+});
+
+describe('doing it in view, put together (pass 10)', () => {
+  function world() {
+    let onPage: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    let onWatch: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
+    const fromPage = (message: unknown): void => onPage('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const sent: Record<string, unknown>[] = [];
+    const calls: string[] = [];
+    const shown: RawInteraction[] = [];
+    const hearers = new Set<(interaction: RawInteraction, count: number) => void>();
+    let watchAsked = 0;
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      jobs: {
+        db: getDb(), noClock: true,
+        hands: { act: async (request) => { sent.push(request); return request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true }; } },
+        watchPort: { onEvent(listener) { onWatch = listener; } },
+        count: async () => 2,
+        hold: () => {},
+        watch: () => { watchAsked++; },
+        teach: {
+          recorder: {
+            async start() { calls.push('start'); return { ok: true }; },
+            async stop() { calls.push('stop'); return shown.splice(0); },
+            onStep(listener) { hearers.add(listener); return () => { hearers.delete(listener); }; },
+          },
+          save: (interactions) => ({ ok: true, skill: 'shown-notepad', steps: interactions.length, notes: [], apps: ['Notepad'] }),
+          describe: async () => 'saves the file',
+          forget() {},
+          effect: () => ({ pays: false, deletes: false, missing: false }),
+          runSkill: async (_skill, _from, run) => { run.onProgress(1); return { end: { how: 'done' }, next: 1 }; },
+        },
+      },
+      lookMs: 3_600_000, log: () => {},
+    });
+    live = real;
+    const line = (): NotchLine | null => surface.current().line;
+    const said = (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : 'word' in part ? part.word.value : '')).join('');
+    const type = async (words: string): Promise<void> => {
+      fromPage({ type: 'open' });
+      await settle();
+      fromPage({ type: 'answer', id: line()!.id, act: 'ask', text: words });
+      await settle();
+      await settle();
+    };
+    const answer = async (act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await settle(); await settle(); };
+    let ts = Date.now();
+    const hand = (payload: Record<string, unknown>): void => onWatch('pc', { event_type: NOTCH_WATCH_EVENT, payload: { ...payload, ts: (ts += 200) } });
+    const does = async (interaction: RawInteraction): Promise<void> => { shown.push(interaction); for (const hear of [...hearers]) hear(interaction, shown.length); await settle(); };
+    return { real, sent, calls, line, said, type, answer, hand, does, watchAsked: () => watchAsked };
+  }
+  const FILE = { id: '0x1a', pid: 100, w: 900, h: 700 };
+  const SHEET = { id: '0x2b', pid: 200, w: 1200, h: 800 };
+  const row = (w: ReturnType<typeof world>, n: number): void => {
+    w.hand({ kind: 'click', app: 'notepad', win: FILE, pt: { x: 120, y: 200 + 22 * n } });
+    w.hand({ kind: 'keys', app: 'notepad', win: FILE, keys: 'ctrl,c' });
+    w.hand({ kind: 'click', app: 'excel', win: SHEET, pt: { x: 300, y: 400 + 20 * n } });
+    w.hand({ kind: 'keys', app: 'excel', win: SHEET, keys: 'ctrl,v' });
+  };
+
+  test('the desktop apps are asked to tell what the hands do, and the parts are all there', () => {
+    const w = world();
+    expect(w.watchAsked()).toBe(1);
+    expect(w.real.jobs && w.real.catcher && w.real.teach && w.real.put).toBeTruthy();
+  });
+
+  // The plan's test, step 1, typed in Home: it reaches the recorder with no model and no turn in between.
+  test('"Watch me" typed in Home starts a showing; yes ends it; and the job is in Home after', async () => {
+    const w = world();
+    await w.type('Watch me');
+    expect(w.calls).toEqual(['start']);
+    expect(w.said()).toBe('Watching. Do it once by hand, then press done.');
+    await w.does({ action: 'click', ref: { role: 'Button', name: 'Save', path: [], ordinal: 0, sig: 's' }, ts: 1, app: 'notepad' });
+    expect(w.said()).toBe('Watching. Step 1: clicked Save.');
+    await w.answer('yes');
+    expect(w.calls).toEqual(['start', 'stop']);
+    expect(w.said()).toBe('Learned it in 1 step: saves the file. Do it every Monday at 9:00?');
+    expect(w.real.teach!.row()).toMatchObject({ id: 'learned' });
+  });
+
+  // The plan's test, step 7.
+  test('two rows pasted by hand, with nothing said: it offers to take over, and a yes does the rest and lists it in Today', async () => {
+    const w = world();
+    row(w, 0);
+    row(w, 1);
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    await settle();
+    expect(w.said()).toBe('I can take it from here. 2 left.');
+    await w.answer('yes');
+    // Two rows at the pace a program is given to take each step in: under two seconds.
+    await new Promise((resolve) => setTimeout(resolve, 1900));
+    await settle();
+    expect(w.sent.filter((request) => request.do === 'keys' && request.keys === 'ctrl,v').length).toBe(2);
+    expect(w.real.jobs!.done(0)).toMatchObject([{ text: 'Pasted 2 from notepad into excel', undoable: true }]);
+  });
+
+  test('while Jarvis is being shown a job, what the hands do is not a job to take over', async () => {
+    const w = world();
+    await w.type('Watch me');
+    row(w, 0);
+    row(w, 1);
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(w.said()).toBe('Watching. Do it once by hand, then press done.');
   });
 });

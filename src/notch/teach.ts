@@ -1,0 +1,670 @@
+/**
+ * Teaching Jarvis a job by showing it: "Watch me", then "done" (pass 10).
+ *
+ * Saying "Watch me" starts the product's own recorder on the person's
+ * machine (src/skills/recorder.ts). Saying it is the permission: on the
+ * notch there is no card to click first. For as long as it watches, the
+ * notch says so and counts the steps it saw. Yes, or the word "done", ends
+ * it; Esc throws it away. What was shown is saved as a skill, signed like any
+ * other, and is then one of two things:
+ *
+ *   - the same few steps done twice, one place further along (./rounds.ts):
+ *     Jarvis offers to go on from there, as it does when it catches such a
+ *     job by itself.
+ *   - anything else: a job it can do again as it was shown, when asked ("run
+ *     it"), or at a time of the week. At that time it asks first, on the
+ *     notch, and does it on a yes: a job that drives the person's screen does
+ *     not start while nobody is looking.
+ *
+ * A job that pays for something is never run from here. A job that deletes
+ * something asks once before it runs.
+ */
+import type { Database } from 'bun:sqlite';
+import type { RawInteraction } from '../skills/recorder.ts';
+import type { NotchCatch } from './catch.ts';
+import { countRequest } from './catch.ts';
+import type { NotchInbox } from './inbox.ts';
+import {
+  newRoundsRun, roundsPlan, roundsWords,
+  type NotchJobEnd, type NotchJobHands, type NotchJobPlan, type NotchJobs, type NotchRunOptions,
+} from './jobs.ts';
+import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
+import { findRounds, roundsApps, roundsCopy, roundsToDo, watchKeysOk, type Rounds, type WatchStep } from './rounds.ts';
+import { NotchStageEnded, type NotchStage } from './stage.ts';
+
+/** How long a teaching may last. The desktop app takes its hooks out at the same time by itself. */
+export const NOTCH_TEACH_MAX_MS = 10 * 60_000;
+/** How long after its time a job is still offered. Later than that, the time was missed and it waits for the next. */
+export const NOTCH_SCHEDULE_LATE_MS = 30 * 60_000;
+/** How long the rounds of a teaching are still where to go on from. */
+export const NOTCH_TEACH_FRESH_MS = 3 * 60_000;
+export const NOTCH_SCHEDULES = ['Monday at 9:00', 'Monday at 14:00', 'Friday at 16:00', 'day at 9:00'];
+
+const em = (text: string): NotchPart => ({ em: text });
+const word = (name: string, value: string, options: string[], more: Partial<NotchWord> = {}): NotchPart =>
+  ({ word: { name, value, options, ...more } });
+
+const LEAD = '(?:(?:ok(?:ay)?|hey|jarvis|please|now|so)[,\\s]+)*';
+
+/** "Watch me", "watch this", "let me show you": the person is about to show a job. */
+export function watchMeRequest(text: string): boolean {
+  const said = text.trim();
+  if (said.split(/\s+/).length > 14) return false;
+  return new RegExp(`^${LEAD}watch me\\b`, 'i').test(said)
+    || new RegExp(`^${LEAD}(?:watch (?:this|what i do|how i do (?:it|this))|let me show you|i(?:'ll| will) show you|learn this|guardami|ti faccio vedere|ti mostro)\\b[\\s,.!]*(?:how\\b.*)?$`, 'i').test(said);
+}
+
+/** "Done", "that's it": the showing is over. */
+export function teachDoneWord(text: string): boolean {
+  return new RegExp(`^${LEAD}(?:done|i'?m done|i am done|that'?s (?:it|all)|that is (?:it|all)|finished|fatto|finito|stop watching)[\\s.!]*$`, 'i').test(text.trim());
+}
+
+const NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50,
+  a: 1, an: 1, another: 1, once: 1, twice: 2,
+};
+
+/**
+ * "Run it on nine rows", "do the rest", "do it again", "take it from here":
+ * the last job that was shown, or begun by hand, is to be done. `count` is
+ * how many, when a number was said.
+ */
+export function runItRequest(text: string): { count: number | null } | null {
+  const said = text.trim().toLowerCase().replace(/[.!?]+$/, '');
+  if (!said || said.split(/\s+/).length > 12) return null;
+  const lead = new RegExp(`^${LEAD}`, 'i');
+  const rest = said.replace(lead, '');
+  const fits = /^(?:run|do|repeat|redo) (?:it|that|this|the same|them)\b/.test(rest)
+    || /^(?:do|finish|run) the (?:rest|others?|remaining|next)\b/.test(rest)
+    || /^(?:do|run) (?:(?:another|\d{1,3}|[a-z]+) )?more$/.test(rest)
+    || /^(?:finish|continue) (?:it|them|that)\b/.test(rest)
+    || /^(?:take it from here|take over|keep going|go on|continue|carry on)(?: (?:for|with|on) .*)?$/.test(rest)
+    || /^(?:fai|finisci) (?:il resto|gli altri|le altre)\b/.test(rest);
+  if (!fits) return null;
+  const digits = /\b(\d{1,3})\b/.exec(rest);
+  if (digits) return { count: Math.max(1, Number(digits[1])) };
+  for (const part of rest.split(/[\s-]+/)) {
+    // "a" and "an" count only before "more" or "time": "do it on a row" is not a count worth guessing.
+    if ((part === 'a' || part === 'an') && !/\b(?:a|an) (?:more|time|few)\b/.test(rest)) continue;
+    if (part in NUMBERS) return { count: NUMBERS[part]! };
+  }
+  return { count: null };
+}
+
+/** "Undo", "undo that", "take it back": the last thing Jarvis pasted is taken back. */
+export function undoRequest(text: string): boolean {
+  return new RegExp(`^${LEAD}(?:undo|take (?:it|that) back|annulla)(?: (?:it|that|this|the paste|my paste|your paste|the last (?:one|thing|paste)))?[\\s.!]*$`, 'i').test(text.trim());
+}
+
+/** When a job is done by the week: on one day, or every day, at a time. */
+export interface NotchSchedule { day: number | null; hour: number; minute: number }
+
+const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+/** Reads "Monday at 9:00" and "day at 9:00", as the notch's lit word writes them. */
+export function parseSchedule(text: string): NotchSchedule | null {
+  const found = /^\s*([a-z]+) at (\d{1,2})[:.](\d{2})\s*$/i.exec(text);
+  if (!found) return null;
+  const name = found[1]!.toLowerCase();
+  const hour = Number(found[2]);
+  const minute = Number(found[3]);
+  if (hour > 23 || minute > 59) return null;
+  if (name === 'day') return { day: null, hour, minute };
+  const day = DAYS.indexOf(name);
+  return day < 0 ? null : { day, hour, minute };
+}
+
+/** The next time after `after`, on this machine's clock. */
+export function nextScheduled(schedule: NotchSchedule, after: number): number {
+  const at = new Date(after);
+  at.setSeconds(0, 0);
+  at.setHours(schedule.hour, schedule.minute);
+  for (let tries = 0; tries < 9; tries++) {
+    if (at.getTime() > after && (schedule.day === null || at.getDay() === schedule.day)) return at.getTime();
+    at.setDate(at.getDate() + 1);
+    at.setHours(schedule.hour, schedule.minute, 0, 0);
+  }
+  return at.getTime();
+}
+
+/** How a shortcut is said: "Ctrl + C", "Enter". */
+export function keysSaid(keys: string): string {
+  const names: Record<string, string> = {
+    ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', enter: 'Enter', tab: 'Tab', delete: 'Delete', insert: 'Insert',
+    pageup: 'Page Up', pagedown: 'Page Down', end: 'End', home: 'Home', left: 'Left', up: 'Up', right: 'Right', down: 'Down',
+    backspace: 'Backspace', space: 'Space',
+  };
+  return keys.split(',').map((part) => names[part] ?? part.toUpperCase()).join(' + ');
+}
+
+const short = (text: string, max: number): string => {
+  const one = text.replace(/\s+/g, ' ').trim();
+  return [...one].length <= max ? one : `${[...one].slice(0, max - 1).join('').trimEnd()}…`;
+};
+
+/** One step of a showing, as the notch says it while it watches. */
+export function teachStepSaid(interaction: RawInteraction): string {
+  const name = short(interaction.ref?.name ?? '', 40);
+  switch (interaction.action) {
+    case 'click': return name ? `clicked ${name}` : 'a click';
+    case 'set_value': return name ? `typed into ${name}` : 'typed into a field';
+    case 'press_keys': return `pressed ${keysSaid(interaction.value ?? '')}`;
+    case 'launch_app': return 'opened an app';
+    default: return 'opened a page';
+  }
+}
+
+/** What was shown, as shapes: for telling whether it was the same thing done twice. */
+export function teachShapes(interactions: RawInteraction[]): WatchStep[] {
+  return interactions.map((it): WatchStep => {
+    if (it.action === 'click' && it.win && it.pt && it.pt.x >= 0 && it.pt.y >= 0 && it.pt.x < it.win.w && it.pt.y < it.win.h) {
+      return { kind: 'click', app: it.app ?? '', win: it.win, x: it.pt.x, y: it.pt.y, at: it.ts, ...(it.mods ? { mods: it.mods } : {}) };
+    }
+    if (it.action === 'press_keys' && it.win && watchKeysOk(it.value ?? '')) {
+      return { kind: 'keys', app: it.app ?? '', win: it.win, keys: it.value!, at: it.ts };
+    }
+    // Typing, or a step with no place: there is a part here that a round cannot carry.
+    return { kind: it.action === 'set_value' ? 'typed' : 'gap', at: it.ts };
+  });
+}
+
+/** Rounds moved on by `n`: after Jarvis did that many, the next one starts further along. */
+export function advanceRounds(rounds: Rounds, n: number, at: number): Rounds {
+  return {
+    ...rounds, at,
+    steps: rounds.steps.map((step) => (step.kind === 'click' ? { ...step, x: step.x + n * step.dx, y: step.y + n * step.dy } : step)),
+  };
+}
+
+/** A job that was shown, as it is kept. */
+export interface NotchLearned {
+  id: string;
+  createdAt: number;
+  /** The name of the skill that holds its steps. */
+  skill: string;
+  /** What it does, in a few words. */
+  what: string;
+  steps: number;
+  /** "Monday at 9:00", or null when it is done on request only. */
+  schedule: string | null;
+  nextAt: number | null;
+}
+
+interface StoredLearned { id: string; created_at: number; skill: string; what: string; steps: number; schedule: string | null; next_at: number | null }
+
+export class NotchLearnedStore {
+  constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
+    db.run(`CREATE TABLE IF NOT EXISTS notch_learned (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      skill TEXT NOT NULL,
+      what TEXT NOT NULL,
+      steps INTEGER NOT NULL,
+      schedule TEXT,
+      next_at INTEGER
+    )`);
+  }
+
+  add(skill: string, what: string, steps: number): NotchLearned {
+    const id = crypto.randomUUID();
+    this.db.run('INSERT INTO notch_learned (id, created_at, skill, what, steps) VALUES (?, ?, ?, ?, ?)', [id, this.now(), skill, what.slice(0, 200), steps]);
+    return this.get(id)!;
+  }
+
+  get(id: string): NotchLearned | null {
+    const row = this.db.query<StoredLearned, [string]>('SELECT * FROM notch_learned WHERE id = ?').get(id);
+    return row ? this.parse(row) : null;
+  }
+
+  /** Newest first. */
+  all(): NotchLearned[] {
+    return this.db.query<StoredLearned, []>('SELECT * FROM notch_learned ORDER BY created_at DESC LIMIT 50').all().map((row) => this.parse(row));
+  }
+
+  schedule(id: string, schedule: string | null, nextAt: number | null): void {
+    this.db.run('UPDATE notch_learned SET schedule = ?, next_at = ? WHERE id = ?', [schedule, nextAt, id]);
+  }
+
+  remove(id: string): void {
+    this.db.run('DELETE FROM notch_learned WHERE id = ?', [id]);
+  }
+
+  /** The ones whose time has come. */
+  due(now: number): NotchLearned[] {
+    return this.db.query<StoredLearned, [number]>('SELECT * FROM notch_learned WHERE next_at IS NOT NULL AND next_at <= ? ORDER BY next_at').all(now)
+      .map((row) => this.parse(row));
+  }
+
+  private parse(row: StoredLearned): NotchLearned {
+    return { id: row.id, createdAt: row.created_at, skill: row.skill, what: row.what, steps: row.steps, schedule: row.schedule, nextAt: row.next_at };
+  }
+}
+
+/** What saving a showing came to. */
+export type NotchSaved =
+  | { ok: true; skill: string; steps: number; notes: string[]; apps: string[] }
+  | { ok: false; why: string };
+
+/** What a saved job would do beyond clicking, read from its steps. */
+export interface NotchSkillEffect { pays: boolean; deletes: boolean; missing: boolean }
+
+export interface NotchTeachDeps {
+  inbox: NotchInbox;
+  jobs: NotchJobs;
+  hands: NotchJobHands;
+  db: Database;
+  /** The product's recorder, on the person's machine and in the brain. */
+  recorder: {
+    /** Starts watching. `why` is said to the person when it could not. */
+    start(maxMs: number): Promise<{ ok: true } | { ok: false; why: string }>;
+    /** Stops watching and gives what was shown. */
+    stop(): Promise<RawInteraction[]>;
+    /** Hears each step as it is seen. Comes back with how to stop hearing. */
+    onStep(listener: (interaction: RawInteraction, count: number) => void): () => void;
+  };
+  /** Saves what was shown as a skill. */
+  save(interactions: RawInteraction[]): NotchSaved;
+  /** Says what a job does in a few words, from the notes of its steps. Null when it cannot. */
+  describe?(notes: string[]): Promise<string | null>;
+  /** Removes a saved job's skill. */
+  forget(skill: string): void;
+  /** What a saved job would do beyond clicking. */
+  effect(skill: string): NotchSkillEffect;
+  /**
+   * Does a saved job once, as it was shown, from step `from`. `target` is
+   * told where a step is about to land, in the screen's own pixels.
+   */
+  runSkill(skill: string, from: number, options: NotchRunOptions & { target(at: { x: number; y: number }): Promise<void> }):
+    Promise<{ end: NotchJobEnd; next: number }>;
+  /** How many more there are of a round (catch.ts). */
+  count?(request: Record<string, unknown>): Promise<number | null>;
+  /** The jobs caught by themselves: "do the rest" may mean one of those. */
+  catcher?: () => NotchCatch | null;
+  paused?: () => boolean;
+  now?: () => number;
+  log?: (line: string) => void;
+}
+
+export interface NotchTeach {
+  /** Whether Jarvis is being shown a job now. */
+  watching(): boolean;
+  /**
+   * What the notch does itself with these words, if they are for it: "Watch
+   * me", "done" while it watches, "run it on nine rows", "undo that". Null
+   * when they are an instruction like any other.
+   */
+  route(text: string): { did: string; run(): void } | null;
+  /** Home's row about the jobs it was shown, when there are any, and the sheet it opens. */
+  row(): NotchBlock | null;
+  open(stage: NotchStage): Promise<void>;
+  /** Looks at the clock: a job whose time has come is offered. */
+  tick(): void;
+  stop(): void;
+}
+
+export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const now = deps.now ?? Date.now;
+  const store = new NotchLearnedStore(deps.db, now);
+  /** The showing under way. */
+  let session: { count: number; last: string; ended: 'done' | 'gone' | null; waiters: Set<() => void>; unhear: () => void; cap: ReturnType<typeof setTimeout> | null } | null = null;
+  /** The rounds of the last showing, moved on by what Jarvis did since: where "run it on nine rows" goes on from. */
+  let fresh: { rounds: Rounds; learned: string } | null = null;
+  let stopped = false;
+  let tells = 0;
+
+  const tell = (parts: NotchPart[], mood: 'careful' | 'look' | 'sorry' | 'confused' = 'careful', ms = 4000): void => {
+    const id = `teach-tell-${++tells}`;
+    deps.inbox.add({
+      id, subject: id, class: 'person', speaks: true, urgent: true, once: true, asked: true,
+      title: () => parts,
+      play: async (stage) => { await stage.say(parts, ms, { mood }); return 'settled'; },
+    });
+  };
+
+  const wake = (): void => {
+    if (!session) return;
+    const waiters = [...session.waiters];
+    session.waiters.clear();
+    for (const waiter of waiters) waiter();
+  };
+
+  async function countLeft(rounds: Rounds): Promise<number | null> {
+    const request = countRequest(rounds);
+    if (!request || !deps.count) return null;
+    try {
+      const after = await deps.count(request);
+      return after === null ? null : roundsToDo(rounds, after);
+    } catch { return null; }
+  }
+
+  /** Runs rounds from where they stand, and keeps where they have got to for "go on" said later. */
+  function startRounds(rounds: Rounds, count: number | null, learnedId: string): boolean {
+    const run = newRoundsRun(rounds, count);
+    const plan = roundsPlan(run, deps.hands, roundsWords(rounds, roundsApps(rounds)));
+    const began = deps.jobs.start({
+      ...plan,
+      async run(options) {
+        const end = await plan.run(options);
+        // Where the next one would begin, should the person ask for more.
+        if (fresh?.learned === learnedId) fresh = { rounds: advanceRounds(rounds, run.done, now()), learned: learnedId };
+        return end;
+      },
+    });
+    if (began) fresh = { rounds, learned: learnedId };
+    return began;
+  }
+
+  /** A saved job as something the notch can run once, step by step. */
+  function skillPlan(learned: NotchLearned): NotchJobPlan {
+    let next = 0;
+    const steps = (n: number): string => (n === 1 ? '1 step' : `${n} steps`);
+    return {
+      kind: 'skill', total: learned.steps,
+      words: { doing: 'Doing it as you showed me', said: steps, title: (done) => `Did what you showed me: ${learned.what} (${done} of ${steps(learned.steps)})` },
+      done: () => next,
+      puts: () => [],
+      canGoOn: () => next < learned.steps,
+      async run(options) {
+        const result = await deps.runSkill(learned.skill, next, {
+          ...options,
+          onProgress: (done) => { next = done; options.onProgress(done); },
+          // Jarvis's pointer goes to the place before the step lands there.
+          target: async (at) => {
+            try {
+              const sent = await deps.hands.act({ do: 'hand', screen: true, x: at.x, y: at.y, hand: 0 });
+              // It is seen to land before the step does.
+              if (sent?.ms && sent.ms > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(900, sent.ms! + 60)));
+            } catch { /* the step does not wait for a pointer */ }
+          },
+        });
+        next = result.next;
+        return result.end;
+      },
+    };
+  }
+
+  /** Does a saved job once. A job that pays is refused; one that deletes asks first. */
+  function startSkill(learned: NotchLearned): void {
+    const effect = deps.effect(learned.skill);
+    if (effect.missing) { tell(['I no longer have that job. Show me again.'], 'sorry'); return; }
+    if (effect.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
+    const begin = (): void => {
+      if (!deps.jobs.start(skillPlan(learned))) tell(['I am in the middle of something else.']);
+    };
+    if (!effect.deletes) { begin(); return; }
+    const id = `teach-delete-${++tells}`;
+    deps.inbox.add({
+      id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
+      title: () => ['That job deletes something. Do it?'],
+      play: async (stage) => {
+        const answer = await stage.offer(['That job ', em('deletes'), ' something. Do it?'], 'do it', { mood: 'careful', fold: 0 });
+        if (answer.act === 'yes') begin();
+        return 'settled';
+      },
+    });
+  }
+
+  /** What was shown is over: it is saved, and the notch says what it learned and what it can do with it. */
+  async function learned(stage: NotchStage, interactions: RawInteraction[]): Promise<void> {
+    if (interactions.length === 0) {
+      await stage.say(['I saw nothing to learn. Show me any time.'], 2800);
+      return;
+    }
+    let saved: NotchSaved;
+    try { saved = deps.save(interactions); } catch (error) {
+      log(`[notch] what was shown could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      saved = { ok: false, why: 'I could not save what you showed me. Nothing was kept.' };
+    }
+    if (!saved.ok) {
+      await stage.say([saved.why], 4600, { mood: 'sorry' });
+      return;
+    }
+    let what: string | null = null;
+    try { what = (await Promise.race([deps.describe?.(saved.notes) ?? null, stage.wait(6000).then(() => null)])) ?? null; } catch (error) {
+      if (error instanceof NotchStageEnded) throw error;
+    }
+    const where = saved.apps.length ? `in ${saved.apps.slice(0, 2).join(' and ')}` : 'on your screen';
+    const row = store.add(saved.skill, what ?? `${saved.steps} steps ${where}`, saved.steps);
+    log(`[notch] a job was shown and saved: ${saved.steps} step(s)`);
+    const rounds = findRounds(teachShapes(interactions));
+    if (rounds && now() - rounds.at < NOTCH_TEACH_FRESH_MS) {
+      // The same thing done twice: the rest of it is there to do now.
+      fresh = { rounds, learned: row.id };
+      const left = await countLeft(rounds);
+      const per = rounds.steps.length;
+      const parts: NotchPart[] = [
+        'Learned it in ', em(per === 1 ? '1 step' : `${per} steps`), ', done ', em(rounds.shown === 2 ? 'twice' : `${rounds.shown} times`),
+        '. I can take it from here', ...(left && left > 0 ? [': ', em(`${left} left`)] : []), '.',
+      ];
+      if (left === 0) {
+        await stage.say(['Learned it in ', em(per === 1 ? '1 step' : `${per} steps`), ', done ', em(rounds.shown === 2 ? 'twice' : `${rounds.shown} times`), '. Nothing is left to do there.'], 4600, { mood: 'proud', mark: 'check' });
+        return;
+      }
+      const answer = await stage.offer(parts, 'take over', { mood: 'proud', fold: 0 });
+      if (answer.act !== 'yes') return;
+      if (left === null && !roundsCopy(rounds)) {
+        await stage.say(['Tell me how many: "run it on nine".'], 4200);
+        return;
+      }
+      if (!startRounds(rounds, left, row.id)) await stage.say(['I am in the middle of something else.'], 3000, { mood: 'careful' });
+      return;
+    }
+    // A job to do again as it was shown: on request, or at a time of the week.
+    let when = NOTCH_SCHEDULES[0]!;
+    const say = (): NotchPart[] => [
+      'Learned it in ', em(saved.steps === 1 ? '1 step' : `${saved.steps} steps`), ...(what ? [': ', what] : []),
+      '. Do it every ', word('when', when, NOTCH_SCHEDULES, { label: 'Schedule', read: 'sched' }), '?',
+    ];
+    const id = stage.id();
+    stage.put({ id, kind: 'offer', say: say(), yes: 'yes', mood: 'proud', fold: 0 });
+    for (;;) {
+      const answer = await stage.answer(id, ['yes', 'no', 'fold', 'word']);
+      if (answer.act === 'word') {
+        if (answer.word === 'when' && parseSchedule(answer.value ?? '')) when = answer.value!;
+        // Said again as it stands: a value that is not a time of the week does not stay on the line.
+        stage.surface.update(id, { say: say() });
+        continue;
+      }
+      if (answer.act !== 'yes') {
+        await stage.say(['Kept. Say "run it" when you want it done.'], 3200);
+        return;
+      }
+      const schedule = parseSchedule(when);
+      if (schedule) store.schedule(row.id, when, nextScheduled(schedule, now()));
+      await stage.say(['Every ', em(when), ', I will ask you here and do it on your yes.'], 5200, { mood: 'happy', mark: 'check' });
+      return;
+    }
+  }
+
+  function watch(): void {
+    if (session) { tell(['I am watching already. Press done when you have shown me.']); return; }
+    if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.']); return; }
+    if (deps.jobs.busy()) { tell(['I am in the middle of something. Stop it first.']); return; }
+    const mine = { count: 0, last: '', ended: null as 'done' | 'gone' | null, waiters: new Set<() => void>(), unhear: () => {}, cap: null as ReturnType<typeof setTimeout> | null };
+    session = mine;
+    deps.catcher?.()?.reset();
+    let started: Promise<{ ok: true } | { ok: false; why: string }> | null = deps.recorder.start(NOTCH_TEACH_MAX_MS);
+    mine.unhear = deps.recorder.onStep((interaction, count) => {
+      if (session !== mine) return;
+      mine.count = count;
+      mine.last = teachStepSaid(interaction);
+      wake();
+    });
+    // The desktop app stops by itself at the same time: this is the brain's own end of it.
+    mine.cap = setTimeout(() => { if (session === mine && !mine.ended) { mine.ended = 'gone'; wake(); } }, NOTCH_TEACH_MAX_MS);
+    (mine.cap as { unref?: () => void }).unref?.();
+    const over = (): void => {
+      mine.unhear();
+      if (mine.cap) clearTimeout(mine.cap);
+      if (session === mine) session = null;
+    };
+    deps.inbox.add({
+      id: 'teach', subject: 'teach', class: 'person', speaks: true, urgent: true, asked: true, returns: true,
+      title: () => ['Watching what you show me'],
+      play: async (stage) => {
+        if (started) {
+          const began = await started;
+          started = null;
+          if (!began.ok) {
+            over();
+            await stage.say([began.why], 4600, { mood: 'sorry' });
+            return 'settled';
+          }
+        }
+        const line = (): NotchPart[] => (mine.count === 0
+          ? ['Watching. Do it once by hand, then press done.']
+          : ['Watching. ', em(`Step ${mine.count}`), ': ', mine.last, '.']);
+        const id = stage.id();
+        stage.put({ id, kind: 'offer', say: line(), yes: 'done', mood: 'curious', fold: 0 });
+        const answered = stage.answer(id, ['yes', 'no']);
+        answered.catch(() => {});
+        let shown = mine.count;
+        for (;;) {
+          const what = await Promise.race([
+            answered.then((answer) => answer.act),
+            new Promise<'changed'>((resolve) => { mine.waiters.add(() => resolve('changed')); }),
+          ]);
+          if (what === 'no') {
+            // Esc: thrown away. Nothing of it is kept.
+            over();
+            await deps.recorder.stop().catch(() => []);
+            return 'settled';
+          }
+          if (what === 'yes' || mine.ended) {
+            const ran = mine.ended === 'gone';
+            over();
+            const interactions = await deps.recorder.stop().catch((): RawInteraction[] => []);
+            if (ran && interactions.length > 0) await stage.say(['I stopped watching after ten minutes. I keep what I saw.'], 3600, { mood: 'careful' });
+            await learned(stage, interactions);
+            return 'settled';
+          }
+          if (mine.count !== shown) {
+            shown = mine.count;
+            stage.surface.update(id, { say: line() });
+            // A nod for each step it saw.
+            stage.surface.act({ gesture: 'nodg' });
+          }
+        }
+      },
+    });
+  }
+
+  /** "Run it", with or without a number. */
+  async function runIt(count: number | null): Promise<void> {
+    if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.']); return; }
+    if (deps.jobs.busy()) { tell(['I am in the middle of something. Stop it first.']); return; }
+    // The rounds of the last showing, while they are still where to go on from.
+    if (fresh && now() - fresh.rounds.at < NOTCH_TEACH_FRESH_MS) {
+      let n = count;
+      if (n === null) {
+        n = await countLeft(fresh.rounds);
+        if (n === 0) { tell(['Nothing is left to do there.'], 'look'); return; }
+        if (n === null && !roundsCopy(fresh.rounds)) { tell(['Tell me how many: "run it on nine".']); return; }
+      }
+      if (!startRounds(fresh.rounds, n, fresh.learned)) tell(['I am in the middle of something else.']);
+      return;
+    }
+    // A job begun by hand and not shown: the catcher has it.
+    const took = await deps.catcher?.()?.take(count);
+    if (took === 'started') return;
+    if (took === 'nothing') { tell(['Nothing is left to do there.'], 'look'); return; }
+    if (took === 'how-many') { tell(['Tell me how many: "do the next nine".']); return; }
+    if (took === 'busy') { tell(['I am in the middle of something else.']); return; }
+    if (fresh) {
+      // It was the same thing done twice, and too long ago: the windows may have moved on since.
+      fresh = null;
+      tell(['Do one by hand first, then say it again. I go on from where you are.'], 'careful', 5200);
+      return;
+    }
+    const [last] = store.all();
+    if (!last) { tell(['I have not been shown a job yet. Say "watch me" and do it once.'], 'confused', 4600); return; }
+    startSkill(last);
+  }
+
+  /** The jobs it was shown, as a sheet: each can be run, taken off its schedule, or forgotten. */
+  async function open(stage: NotchStage): Promise<void> {
+    for (;;) {
+      const all = store.all();
+      const blocks: NotchBlock[] = all.length === 0
+        ? [{ kind: 'note', say: ['Nothing yet. Say "watch me", do a job once, and press done.'] }]
+        : all.map((row): NotchBlock => ({
+          kind: 'row', id: row.id, say: [short(row.what, 90)], small: row.schedule ? `every ${row.schedule}` : 'on request',
+          buttons: [
+            { id: 'run', label: 'Run' },
+            ...(row.schedule ? [{ id: 'unschedule', label: 'Stop asking', quiet: true }] : []),
+            { id: 'forget', label: 'Forget', quiet: true },
+          ],
+        }));
+      const answer = await stage.sheet([all.length === 1 ? 'Jobs you showed me: 1' : `Jobs you showed me: ${all.length}`], blocks);
+      if (answer.act !== 'button' || !answer.row) return;
+      const row = store.get(answer.row);
+      if (!row) continue;
+      if (answer.button === 'run') { startSkill(row); return; }
+      if (answer.button === 'unschedule') { store.schedule(row.id, null, null); continue; }
+      if (answer.button === 'forget') {
+        // A delete asks.
+        const sure = await stage.offer(['Forget ', em(short(row.what, 60)), '?'], 'forget', { mood: 'careful', fold: 0 });
+        if (sure.act === 'yes') {
+          try { deps.forget(row.skill); } catch (error) { log(`[notch] a shown job's skill could not be removed: ${error instanceof Error ? error.message : String(error)}`); }
+          store.remove(row.id);
+          if (fresh?.learned === row.id) fresh = null;
+        }
+      }
+    }
+  }
+
+  return {
+    watching: () => session !== null,
+    route(text) {
+      if (stopped) return null;
+      if (session && teachDoneWord(text)) {
+        const mine = session;
+        return { did: 'Ended the showing.', run: () => { if (session === mine && !mine.ended) { mine.ended = 'done'; wake(); } } };
+      }
+      if (watchMeRequest(text)) return { did: 'Began watching what you show me.', run: watch };
+      if (undoRequest(text)) {
+        return { did: 'Took back my last paste.', run: () => { if (!deps.jobs.undoLast()) tell(['Nothing of mine to undo.'], 'look', 2800); } };
+      }
+      const run = runItRequest(text);
+      // Only when there is something it could mean: otherwise the words are an instruction like any other.
+      if (run && (fresh || store.all().length > 0 || deps.catcher?.()?.last())) {
+        return { did: 'Did the job again.', run: () => { void runIt(run.count); } };
+      }
+      return null;
+    },
+    row() {
+      const n = store.all().length;
+      return n === 0 ? null : { kind: 'row', id: 'learned', say: [em(n === 1 ? '1 job' : `${n} jobs`), ' you showed me.'], go: true };
+    },
+    open,
+    tick() {
+      if (stopped || deps.paused?.()) return;
+      const at = now();
+      for (const row of store.due(at)) {
+        const schedule = row.schedule ? parseSchedule(row.schedule) : null;
+        if (!schedule || row.nextAt === null) { store.schedule(row.id, null, null); continue; }
+        const due = row.nextAt;
+        store.schedule(row.id, row.schedule, nextScheduled(schedule, at));
+        // Its time passed while nobody could be asked: it is not done late.
+        if (at - due > NOTCH_SCHEDULE_LATE_MS) continue;
+        const id = `sched:${row.id}`;
+        deps.inbox.add({
+          id, subject: id, class: 'clock', speaks: true,
+          title: () => ['Shall I do ', em(short(row.what, 60)), ' now?'],
+          check: () => store.get(row.id)?.schedule === row.schedule && now() - due < 4 * 3_600_000,
+          play: async (stage) => {
+            const answer = await stage.offer(['It is ', em(row.schedule!.replace(/^day at /, '')), '. Shall I do it now: ', short(row.what, 70), '?'], 'do it', { mood: 'look' });
+            if (answer.act === 'yes') startSkill(row);
+            return answer.act === 'fold' ? 'waits' : 'settled';
+          },
+        });
+      }
+    },
+    stop() {
+      stopped = true;
+      if (session) { session.unhear(); if (session.cap) clearTimeout(session.cap); session = null; void deps.recorder.stop().catch(() => {}); }
+    },
+  };
+}

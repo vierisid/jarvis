@@ -906,3 +906,49 @@ func TestClickUnattributableErrorIsItsOwnKind(t *testing.T) {
 		t.Fatal("an unrelated capture failure must not read as a dropped click")
 	}
 }
+
+// recPebble stands in for the pebble: it keeps the lines it was asked to show.
+type recPebble struct {
+	PebbleService
+	mu    sync.Mutex
+	texts []string
+}
+
+func (p *recPebble) SetText(text string) error {
+	p.mu.Lock()
+	p.texts = append(p.texts, text)
+	p.mu.Unlock()
+	return nil
+}
+func (p *recPebble) SetState(PebbleState) error { return nil }
+func (p *recPebble) shown() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.texts...)
+}
+
+// A recording started from the notch ("Watch me") is shown on the notch's own
+// line for as long as it lasts. The pebble's line would say it a second time,
+// in a second place.
+func TestARecordingStartedFromTheNotchLeavesThePebbleAlone(t *testing.T) {
+	newRecorderHarness(t)
+	pebble := &recPebble{}
+	setRecorderIndicator(pebble)
+	t.Cleanup(func() { setRecorderIndicator(nil) })
+
+	if _, err := handleRecorderStart(map[string]any{"max_ms": float64(60_000), "quiet": true}); err != nil {
+		t.Fatal(err)
+	}
+	stopRecording("rpc")
+	if got := pebble.shown(); len(got) != 0 {
+		t.Fatalf("a quiet recording wrote on the pebble: %q", got)
+	}
+
+	// Quiet is one recording's, not a setting: the next one says it is recording.
+	if _, err := handleRecorderStart(map[string]any{"max_ms": float64(60_000)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := pebble.shown(); len(got) == 0 || got[0] != "Recording a skill" {
+		t.Fatalf("the recording after a quiet one did not say it was recording: %q", got)
+	}
+}

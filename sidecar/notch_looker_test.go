@@ -74,8 +74,20 @@ func (h *fakeHands) Point(r lookRect, label string, stay time.Duration) {
 }
 func (h *fakeHands) PointHit() { h.note("point hit") }
 func (h *fakeHands) PointEnd() { h.note("point end") }
+func (h *fakeHands) HandTo(n int, at lookPoint, beside bool) time.Duration {
+	h.note("hand %d to %d,%d", n, at.X, at.Y)
+	return 0
+}
+func (h *fakeHands) HandsHome() { h.note("hands home") }
+func (h *fakeHands) Hover(text string, at lookPoint) {
+	if text != "" {
+		h.note("hover %s", text)
+	}
+}
 func (h *fakeHands) ThingAt(at lookPoint, light bool) (lookThing, bool) {
 	h.note("thing at %d,%d light=%v", at.X, at.Y, light)
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return h.at, h.at.Kind != ""
 }
 func (h *fakeHands) ThingsIn(line []lookPoint, light bool) []lookThing {

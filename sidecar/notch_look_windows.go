@@ -325,13 +325,21 @@ func (w *lookWindows) Snapshot(screen lookRect) lookSnapshot {
 // ---------------------------------------------------------------------------
 
 type lookInkCmd struct {
-	kind   uint8 // 1 begin, 2 line, 3 tag, 4 end; 6 the hand goes to a rectangle and rings it, 7 that was clicked, 8 the hand goes home
+	// 1 begin, 2 line, 3 tag, 4 end; 6 the hand goes to a rectangle and rings
+	// it, 7 that was clicked, 8 every hand goes home; 9 a hand of a job goes to
+	// a place, 10 the words beside the person's own pointer
+	kind   uint8
 	a, b   lookPoint
 	screen lookRect
 	scale  float64
 	text   string
 	bounds lookRect
 	stay   time.Duration
+	// 9: which hand, whether it comes up beside the person's pointer, and
+	// where to say how long its way takes.
+	n      int
+	beside bool
+	reply  chan time.Duration
 }
 
 func (w *lookWindows) post(cmd lookInkCmd) {
@@ -356,6 +364,26 @@ func (w *lookWindows) Point(r lookRect, label string, stay time.Duration) {
 }
 func (w *lookWindows) PointHit() { w.post(lookInkCmd{kind: 7}) }
 func (w *lookWindows) PointEnd() { w.post(lookInkCmd{kind: 8}) }
+
+// HandTo sends one of the hands to a place and says how long its way takes.
+func (w *lookWindows) HandTo(n int, at lookPoint, beside bool) time.Duration {
+	if n < 0 || n >= notchHandCount {
+		n = 0
+	}
+	reply := make(chan time.Duration, 1)
+	w.post(lookInkCmd{kind: 9, n: n, a: at, beside: beside, reply: reply})
+	select {
+	case took := <-reply:
+		return took
+	case <-time.After(500 * time.Millisecond):
+		// The ink is busy or its line is full: the step does not wait for the hand.
+		return 0
+	}
+}
+func (w *lookWindows) HandsHome() { w.post(lookInkCmd{kind: 8}) }
+func (w *lookWindows) Hover(text string, at lookPoint) {
+	w.post(lookInkCmd{kind: 10, text: text, a: at})
+}
 
 // notchHandHome is where the hand lives: inside the notch, at the top of its
 // window. False when the notch has no window.
@@ -488,7 +516,32 @@ func (s *lookSheet) destroy() {
 	s.pixels = nil
 }
 
-// inkThread owns the ink's window, the tag's and the hand's. It draws what it
+// inkHand is one of Jarvis's own pointers, in a small window of its own that
+// is moved, so that the sheet under it is not painted again as it flies.
+type inkHand struct {
+	sheet *lookSheet
+	// Where its tip is.
+	tip lookPoint
+	fly struct {
+		on       bool
+		from, to lookPoint
+		began    time.Time
+		took     time.Duration
+		// Leaving the notch it grows and comes into sight. Going home it does the opposite, and is gone.
+		grow, home bool
+	}
+}
+
+// How many pointers Jarvis has. One shows the way ("where is"). A job done
+// where it can be seen uses up to three, one for each place a round touches,
+// so that none of them has to cross the screen for every step.
+const notchHandCount = 3
+
+// A pointer that is out for a job and hears nothing more goes home by itself:
+// the brain went away in the middle.
+const notchHandJobIdle = 25 * time.Second
+
+// inkThread owns the ink's window, the tag's and the hands'. It draws what it
 // is told to, in the order it is told, moves what is moving, and takes
 // everything away when its time is up.
 func (w *lookWindows) inkThread() {
@@ -503,22 +556,10 @@ func (w *lookWindows) inkThread() {
 		scale   = 1.0
 		endAt   time.Time
 
-		// The hand: Jarvis's own pointer, in a small window of its own that is
-		// moved, so that the sheet under it is not painted again as it flies.
-		hand      *lookSheet
+		hands     [notchHandCount]*inkHand
 		handPic   *notchHand
 		handScale float64
-		// Where its tip is.
-		tip lookPoint
-		fly struct {
-			on       bool
-			from, to lookPoint
-			began    time.Time
-			took     time.Duration
-			// Leaving the notch it grows and comes into sight. Going home it does the opposite, and is gone.
-			grow, home bool
-		}
-		ring struct {
+		ring      struct {
 			// To be drawn when the hand has landed; being drawn.
 			due, on bool
 			pieces  []lookPoint
@@ -530,7 +571,19 @@ func (w *lookWindows) inkThread() {
 		}
 		// When the hand, left on a thing that was clicked, goes home by itself.
 		homeAt time.Time
+		// The words that follow the pointer while a thing is held to be put somewhere.
+		hover     *lookSheet
+		hoverText string
+		hoverAt   lookPoint
 	)
+	anyHand := func() bool {
+		for _, h := range hands {
+			if h != nil {
+				return true
+			}
+		}
+		return false
+	}
 	closeInk := func() {
 		if tag != nil {
 			tag.destroy()
@@ -543,38 +596,85 @@ func (w *lookWindows) inkThread() {
 		ink, tagText, endAt = nil, "", time.Time{}
 		ring.due, ring.on, ring.pieces, ring.drawn = false, false, nil, 0
 	}
-	closeHand := func() {
-		if hand != nil {
-			hand.destroy()
-			hand = nil
+	closeHover := func() {
+		if hover != nil {
+			hover.destroy()
+			hover = nil
 		}
-		handPic, fly.on, homeAt = nil, false, time.Time{}
+		hoverText = ""
+	}
+	closeHand := func(i int) {
+		if hands[i] != nil {
+			hands[i].sheet.destroy()
+			hands[i] = nil
+		}
+		if !anyHand() {
+			handPic, homeAt = nil, time.Time{}
+		}
+	}
+	closeHands := func() {
+		for i := range hands {
+			closeHand(i)
+		}
 	}
 	closeAll := func() {
 		closeInk()
-		closeHand()
+		closeHands()
 	}
-	// placeHand shows the hand with its tip at a place, at a part of its size and strength.
-	placeHand := func(x, y, size, strength float64) {
-		if hand == nil || handPic == nil {
+	// placeHand shows a hand with its tip at a place, at a part of its size and strength.
+	placeHand := func(h *inkHand, x, y, size, strength float64) {
+		if h == nil || handPic == nil {
 			return
 		}
-		handPic.frame(hand.pixels, size, strength)
-		hand.x, hand.y = int32(math.Round(x-handPic.tipX)), int32(math.Round(y-handPic.tipY))
-		hand.show(nil)
+		handPic.frame(h.sheet.pixels, size, strength)
+		h.sheet.x, h.sheet.y = int32(math.Round(x-handPic.tipX)), int32(math.Round(y-handPic.tipY))
+		h.sheet.show(nil)
 	}
-	goHome := func() {
-		closeInk()
-		if hand == nil {
+	sendHome := func(i int) {
+		h := hands[i]
+		if h == nil || h.fly.home {
 			return
 		}
 		home, ok := w.notchHandHome()
 		if !ok {
-			closeHand()
+			closeHand(i)
 			return
 		}
-		fly.on, fly.from, fly.to, fly.began, fly.took, fly.grow, fly.home = true, tip, home, time.Now(), notchHandHome, false, true
+		h.fly.on, h.fly.from, h.fly.to, h.fly.began, h.fly.took, h.fly.grow, h.fly.home = true, h.tip, home, time.Now(), notchHandHome, false, true
+	}
+	goHome := func() {
+		closeInk()
+		for i := range hands {
+			sendHome(i)
+		}
 		homeAt = time.Time{}
+	}
+	// bringHand gives the hand numbered i, making it when it is not out. Fresh
+	// says it was made now and has yet to come into sight. Nil when no hand
+	// could be made.
+	bringHand := func(i int, at lookPoint) (h *inkHand, fresh bool) {
+		_, s := w.Screen(at)
+		if handPic != nil && handScale != s {
+			// Another display, drawn at another size: the hands are made again.
+			closeHands()
+		}
+		if handPic == nil {
+			handPic, handScale = newNotchHand(s), s
+		}
+		if hands[i] != nil {
+			if hands[i].fly.home {
+				// On its way home: it turns round where it is.
+				hands[i].fly.home = false
+			}
+			return hands[i], false
+		}
+		made, err := newLookSheet(0, 0, handPic.w, handPic.h)
+		if err != nil {
+			log.Printf("[notch] look: no hand: %v", err)
+			return nil, false
+		}
+		hands[i] = &inkHand{sheet: made}
+		return hands[i], true
 	}
 	// startRing puts up the sheet the ring is drawn on, under the hand.
 	startRing := func() {
@@ -590,8 +690,10 @@ func (w *lookWindows) inkThread() {
 		ring.drawn, ring.began, ring.on = 0, time.Now(), true
 		sheet.show(nil)
 		sheet.raise()
-		if hand != nil {
-			hand.raise()
+		for _, h := range hands {
+			if h != nil {
+				h.sheet.raise()
+			}
 		}
 	}
 	pump := func() {
@@ -604,10 +706,52 @@ func (w *lookWindows) inkThread() {
 			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 		}
 	}
+	// A hand sets off for a place: out of the notch (or from beside the
+	// person's own pointer) when it is new, from where it is when it is out.
+	// It comes back with how long the way takes.
+	setOff := func(i int, to lookPoint, beside, quick bool) time.Duration {
+		h, fresh := bringHand(i, to)
+		if h == nil {
+			return 0
+		}
+		from, grow := h.tip, false
+		if fresh {
+			grow = true
+			switch home, ok := w.notchHandHome(); {
+			case beside:
+				// The baton: it comes up where the person's hand is, and goes on from there.
+				from = to
+			case ok:
+				// Each hand leaves the notch a little apart from the others.
+				from = lookPoint{home.X + int(float64((i*2-(notchHandCount-1))*8)*handScale), home.Y}
+			default:
+				// No notch to come out of: from the top of the display the thing is on.
+				sc, s := w.Screen(to)
+				from = lookPoint{sc.X + sc.W/2, sc.Y + int(12*s)}
+			}
+		}
+		took := lookHandFlight(from, to)
+		if quick && !fresh {
+			took = time.Duration(lookHandHop(from, to)) * time.Millisecond
+		}
+		if beside && fresh {
+			took = notchHandGrow
+		}
+		h.fly.on, h.fly.from, h.fly.to, h.fly.began, h.fly.took, h.fly.grow, h.fly.home = true, from, to, time.Now(), took, grow, false
+		h.tip = from
+		if grow {
+			placeHand(h, float64(from.X), float64(from.Y), notchHandSmall, 0)
+		} else {
+			placeHand(h, float64(from.X), float64(from.Y), 1, 1)
+		}
+		h.sheet.raise()
+		return took
+	}
 	handle := func(cmd lookInkCmd, dirty *lookRect) {
 		switch cmd.kind {
 		case 1:
 			closeAll()
+			closeHover()
 			screen, scale = cmd.screen, cmd.scale
 			s, err := newLookSheet(screen.X, screen.Y, screen.W, screen.H)
 			if err != nil {
@@ -622,13 +766,13 @@ func (w *lookWindows) inkThread() {
 			sheet.show(nil)
 			sheet.raise()
 		case 2:
-			if sheet == nil || ink == nil || !endAt.IsZero() || ring.on || hand != nil {
+			if sheet == nil || ink == nil || !endAt.IsZero() || ring.on || anyHand() {
 				return
 			}
 			touched := ink.stroke(float64(cmd.a.X-screen.X), float64(cmd.a.Y-screen.Y), float64(cmd.b.X-screen.X), float64(cmd.b.Y-screen.Y), notchInkRadius*scale)
 			*dirty = lookUnion(*dirty, touched)
 		case 3:
-			if sheet == nil || cmd.text == tagText || hand != nil {
+			if sheet == nil || cmd.text == tagText || anyHand() {
 				return
 			}
 			tagText = cmd.text
@@ -640,7 +784,7 @@ func (w *lookWindows) inkThread() {
 				tag = newLookTag(cmd.text, cmd.bounds, screen, scale)
 			}
 		case 4:
-			if sheet == nil || hand != nil {
+			if sheet == nil || anyHand() {
 				return
 			}
 			if cmd.stay <= 0 {
@@ -651,62 +795,67 @@ func (w *lookWindows) inkThread() {
 		case 6:
 			// The hand goes to a thing. Whatever was ringed before is taken
 			// down first; the hand, if it is out, sets off from where it is.
+			// The other hands, out for a job that is over, go home.
 			closeInk()
+			for i := 1; i < notchHandCount; i++ {
+				sendHome(i)
+			}
 			middle := lookPoint{cmd.bounds.X + cmd.bounds.W/2, cmd.bounds.Y + cmd.bounds.H/2}
 			screen, scale = w.Screen(middle)
-			from, grow := tip, false
-			if hand == nil || handScale != scale {
-				was := hand != nil
-				closeHand()
-				pic := newNotchHand(scale)
-				if s, err := newLookSheet(0, 0, pic.w, pic.h); err != nil {
-					log.Printf("[notch] look: no hand: %v", err)
-				} else {
-					hand, handPic, handScale = s, pic, scale
-					if !was {
-						grow = true
-						if home, ok := w.notchHandHome(); ok {
-							from = home
-						} else {
-							// No notch to come out of: from the top of the display the thing is on.
-							from = lookPoint{screen.X + screen.W/2, screen.Y + int(12*scale)}
-						}
-					}
-				}
-			}
 			ring.due, ring.on, ring.bounds, ring.text, ring.stay = true, false, cmd.bounds, cmd.text, cmd.stay
 			homeAt = time.Time{}
-			if hand == nil {
+			if setOff(0, lookHandRest(cmd.bounds, scale), false, false); hands[0] == nil {
 				// Without the hand the ring is still worth having.
 				startRing()
-				return
 			}
-			to := lookHandRest(cmd.bounds, scale)
-			fly.on, fly.from, fly.to, fly.began, fly.took, fly.grow, fly.home = true, from, to, time.Now(), lookHandFlight(from, to), grow, false
-			tip = from
-			if grow {
-				placeHand(float64(from.X), float64(from.Y), notchHandSmall, 0)
-			} else {
-				placeHand(float64(from.X), float64(from.Y), 1, 1)
-			}
-			hand.raise()
 		case 7:
 			// Clicked: the ring is not left lying over what the click opened.
 			closeInk()
-			if hand != nil && !fly.home {
+			if hands[0] != nil && !hands[0].fly.home {
 				homeAt = time.Now().Add(notchHandLinger)
 			}
 		case 8:
 			goHome()
+		case 9:
+			// A hand of a job goes to the place its next step lands on. No
+			// ring: the thing that happens there is what is seen.
+			closeInk()
+			took := setOff(cmd.n, cmd.a, cmd.beside, true)
+			homeAt = time.Now().Add(notchHandJobIdle)
+			if cmd.reply != nil {
+				cmd.reply <- took
+			}
+		case 10:
+			// The words beside the person's pointer: what would be put here.
+			if cmd.text == "" {
+				closeHover()
+				return
+			}
+			if cmd.text == hoverText && absInt(cmd.a.X-hoverAt.X) < 3 && absInt(cmd.a.Y-hoverAt.Y) < 3 {
+				return
+			}
+			if hover != nil {
+				hover.destroy()
+				hover = nil
+			}
+			sc, s := w.Screen(cmd.a)
+			hoverText, hoverAt = cmd.text, cmd.a
+			hover = newLookTag(cmd.text, lookRect{cmd.a.X - int(10*s), cmd.a.Y - int(10*s), int(20 * s), int(20 * s)}, sc, s)
 		}
 	}
 	for {
 		var tick <-chan time.Time
-		if sheet != nil || hand != nil {
+		flying := false
+		for _, h := range hands {
+			if h != nil && h.fly.on {
+				flying = true
+			}
+		}
+		if sheet != nil || hover != nil || anyHand() {
 			// Something is up: its messages are answered, its time is watched,
 			// and what is moving is moved.
 			every := 30 * time.Millisecond
-			if fly.on || ring.on {
+			if flying || ring.on {
 				every = 8 * time.Millisecond
 			}
 			tick = time.After(every)
@@ -727,34 +876,37 @@ func (w *lookWindows) inkThread() {
 		case <-tick:
 		}
 		now := time.Now()
-		if fly.on && hand != nil {
-			gone := now.Sub(fly.began)
-			if gone >= fly.took {
-				fly.on = false
-				tip = fly.to
-				if fly.home {
-					closeHand()
-				} else {
-					placeHand(float64(tip.X), float64(tip.Y), 1, 1)
-					if ring.due {
-						startRing()
-					}
-				}
-			} else {
-				part := float64(gone) / float64(fly.took)
-				x, y := lookHandAt(fly.from, fly.to, part)
-				size, strength := 1.0, 1.0
-				if fly.grow {
-					size = notchHandSmall + (1-notchHandSmall)*lookEase(0.2, 0.7, 0.2, 1, float64(gone)/float64(notchHandGrow))
-					strength = math.Min(1, float64(gone)/float64(180*time.Millisecond))
-				}
-				if fly.home {
-					size = 1 - (1-notchHandSmall)*part
-					strength = 1 - part*part
-				}
-				tip = lookPoint{int(math.Round(x)), int(math.Round(y))}
-				placeHand(x, y, size, strength)
+		for i, h := range hands {
+			if h == nil || !h.fly.on {
+				continue
 			}
+			gone := now.Sub(h.fly.began)
+			if gone >= h.fly.took {
+				h.fly.on = false
+				h.tip = h.fly.to
+				if h.fly.home {
+					closeHand(i)
+					continue
+				}
+				placeHand(h, float64(h.tip.X), float64(h.tip.Y), 1, 1)
+				if i == 0 && ring.due {
+					startRing()
+				}
+				continue
+			}
+			part := float64(gone) / float64(h.fly.took)
+			x, y := lookHandAt(h.fly.from, h.fly.to, part)
+			size, strength := 1.0, 1.0
+			if h.fly.grow {
+				size = notchHandSmall + (1-notchHandSmall)*lookEase(0.2, 0.7, 0.2, 1, float64(gone)/float64(notchHandGrow))
+				strength = math.Min(1, float64(gone)/float64(180*time.Millisecond))
+			}
+			if h.fly.home {
+				size = 1 - (1-notchHandSmall)*part
+				strength = 1 - part*part
+			}
+			h.tip = lookPoint{int(math.Round(x)), int(math.Round(y))}
+			placeHand(h, x, y, size, strength)
 		}
 		if ring.on && sheet != nil && ink != nil {
 			part := float64(now.Sub(ring.began)) / float64(notchHandRing)
@@ -772,8 +924,10 @@ func (w *lookWindows) inkThread() {
 				if ring.text != "" {
 					tagText = ring.text
 					tag = newLookTag(ring.text, ring.bounds, screen, scale)
-					if hand != nil {
-						hand.raise()
+					for _, h := range hands {
+						if h != nil {
+							h.sheet.raise()
+						}
 					}
 				}
 				endAt = now.Add(ring.stay)
@@ -783,10 +937,10 @@ func (w *lookWindows) inkThread() {
 			ink.paint(sheet.pixels, dirty)
 			sheet.show(&dirty)
 		}
-		if sheet != nil || hand != nil {
+		if sheet != nil || hover != nil || anyHand() {
 			pump()
 			if !endAt.IsZero() && now.After(endAt) {
-				if hand != nil {
+				if anyHand() {
 					// The ring had its time and nobody clicked: the hand goes home.
 					goHome()
 				} else {

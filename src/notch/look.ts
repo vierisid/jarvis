@@ -67,6 +67,8 @@ export interface NotchThing {
   value: string;
   /** The texts inside it in reading order: the cells of a row. */
   parts: string[];
+  /** What the system calls it ("Edit", "Document"), when it said. */
+  role?: string;
 }
 
 export interface NotchLooked {
@@ -83,6 +85,8 @@ export interface NotchLooked {
   picture: Uint8Array | null;
   /** The whole window round it, made smaller. */
   window: Uint8Array | null;
+  /** The middle of what was clicked or circled, in the screen's own pixels, when the desktop app said where. */
+  at?: { x: number; y: number };
 }
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -111,12 +115,13 @@ export function parseNotchLookBody(bytes: Uint8Array): Pick<NotchLooked, 'app' |
   const things: NotchThing[] = [];
   for (const entry of Array.isArray(told.things) ? told.things.slice(0, NOTCH_LOOK_MAX_THINGS) : []) {
     if (typeof entry !== 'object' || entry === null) continue;
-    const thing = entry as { kind?: unknown; name?: unknown; value?: unknown; parts?: unknown };
+    const thing = entry as { kind?: unknown; name?: unknown; value?: unknown; parts?: unknown; role?: unknown };
     things.push({
       kind: /^[a-z][a-z ]{0,19}$/.test(typeof thing.kind === 'string' ? thing.kind : '') ? (thing.kind as string) : 'thing',
       name: clean(thing.name),
       value: clean(thing.value),
       parts: (Array.isArray(thing.parts) ? thing.parts.slice(0, NOTCH_LOOK_MAX_PARTS) : []).map((part) => clean(part)).filter(Boolean),
+      ...(typeof thing.role === 'string' && /^[A-Za-z]{1,24}$/.test(thing.role) ? { role: thing.role } : {}),
     });
   }
   const around = (Array.isArray(told.around) ? told.around.slice(0, 40) : []).map((name) => clean(name, 80)).filter(Boolean).slice(0, NOTCH_LOOK_MAX_AROUND);
@@ -351,6 +356,12 @@ export interface NotchLookDeps {
   modelReady?: () => boolean;
   /** Everything is stopped (Esc twice). */
   paused?: () => boolean;
+  /**
+   * A look was told (./put.ts). True when it was a place pointed at while a
+   * thing is held: then it is asked "put it here?" there, and the look
+   * neither answers nor goes with any words.
+   */
+  shown?: (sidecarId: string, looked: NotchLooked) => boolean;
   now?: () => number;
   graceMs?: number;
   takeMs?: number;
@@ -522,10 +533,19 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
     }
     // Counts, never what was read.
     log(`[notch] a look was told: ${how}, ${refused ? `refused (${refused})` : `${body?.things.length ?? 0} thing(s), ${body?.around.length ?? 0} name(s) round them, picture ${body?.picture?.length ?? 0} bytes, window ${body?.window?.length ?? 0} bytes`}`);
+    const rect = (typeof payload.rect === 'object' && payload.rect !== null ? payload.rect : {}) as Record<string, unknown>;
+    const place = [rect.x, rect.y, rect.w, rect.h].every((value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 200_000)
+      ? { x: Math.round((rect.x as number) + (rect.w as number) / 2), y: Math.round((rect.y as number) + (rect.h as number) / 2) } : undefined;
     look.looked = {
       id, how, refused, app: body?.app ?? '', title: body?.title ?? '', around: body?.around ?? [], things: body?.things ?? [],
-      picture: body?.picture ?? null, window: body?.window ?? null,
+      picture: body?.picture ?? null, window: body?.window ?? null, ...(place ? { at: place } : {}),
     };
+    let taken = false;
+    try { taken = deps.shown?.(sidecarId, look.looked) === true; } catch (error) {
+      log(`[notch] a look could not be held: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // Pointed at as a place to put something: asked about there, and nothing else comes of this look.
+    if (taken) { end(sidecarId, look, null); return; }
     settle(sidecarId, look);
   });
 

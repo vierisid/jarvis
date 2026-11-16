@@ -311,3 +311,83 @@ describe('runSkill', () => {
     expect(seen).toEqual(['snap:browser', 'act:browser']);
   });
 });
+
+describe('a run that is watched, stopped and gone on with', () => {
+  const three = (): Skill => skill([
+    { action: 'click', ref: ref('Button', 'One', 'one') },
+    { action: 'press_keys', value: 'enter' },
+    { action: 'click', ref: ref('Button', 'Two', 'two') },
+  ]);
+  const surface: SkillSurface = { nodes: [node('Button', 'One', 'one', 1), node('Button', 'Two', 'two', 2)] };
+
+  it('tells the watcher of every step, before it is dispatched and when it has ended', async () => {
+    const { deps, acts } = scriptedDeps([surface]);
+    const seen: string[] = [];
+    const result = await runSkill(three(), {}, deps, {
+      onStep: (event) => {
+        // The watcher hears of a step before anything of it was sent.
+        if (event.phase === 'start' && event.index === 0) expect(acts.length).toBe(0);
+        seen.push(`${event.phase} ${event.index + 1}/${event.total} ${event.step.action}${event.target ? ` on ${event.target.name}` : ''}${event.ok === undefined ? '' : event.ok ? ' ok' : ' failed'}`);
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([
+      'start 1/3 click on One', 'end 1/3 click ok',
+      'start 2/3 press_keys', 'end 2/3 press_keys ok',
+      'start 3/3 click on Two', 'end 3/3 click ok',
+    ]);
+  });
+
+  it('asked to stop, it dispatches nothing more and says where it stopped', async () => {
+    const { deps, acts, raws } = scriptedDeps([surface]);
+    const stop = new AbortController();
+    const result = await runSkill(three(), {}, deps, { signal: stop.signal, onStep: (event) => { if (event.phase === 'end' && event.index === 0) stop.abort(); } });
+    expect(result).toMatchObject({ ok: false, stoppedAt: 1 });
+    expect(result.failedAt).toBeUndefined();
+    expect(acts).toEqual([[1, 'click', undefined]]);
+    expect(raws).toEqual([]);
+  });
+
+  it('a stop asked while the watcher has its moment still lands before the step', async () => {
+    const { deps, acts } = scriptedDeps([surface]);
+    const stop = new AbortController();
+    const result = await runSkill(three(), {}, deps, { signal: stop.signal, onStep: (event) => { if (event.phase === 'start' && event.index === 0) stop.abort(); } });
+    expect(result).toMatchObject({ ok: false, stoppedAt: 0 });
+    expect(acts).toEqual([]);
+  });
+
+  it('going on starts at the step it stopped before, and nothing is done twice', async () => {
+    const { deps, acts, raws } = scriptedDeps([surface]);
+    const stop = new AbortController();
+    const first = await runSkill(three(), {}, deps, { signal: stop.signal, onStep: (event) => { if (event.phase === 'end' && event.index === 0) stop.abort(); } });
+    const second = await runSkill(three(), {}, deps, { from: first.stoppedAt });
+    expect(second.ok).toBe(true);
+    expect(second.steps.map((step) => step.index)).toEqual([1, 2]);
+    expect(acts).toEqual([[1, 'click', undefined], [2, 'click', undefined]]);
+    expect(raws).toEqual([['desktop', 'press_keys', 'enter']]);
+  });
+
+  it('after a failure it says where to go on from: the step itself if nothing of it was sent, the next one if it was', async () => {
+    // The target of the last step is not on the screen: nothing of it was dispatched.
+    const missing = scriptedDeps([{ nodes: [node('Button', 'One', 'one', 1)] }]);
+    expect(await runSkill(three(), {}, missing.deps)).toMatchObject({ ok: false, failedAt: 2, resumeAt: 2 });
+    // The key press threw from inside the dispatch: it may have happened.
+    const thrown = scriptedDeps([surface]);
+    thrown.deps.raw = async () => { throw new Error('the machine went away'); };
+    expect(await runSkill(three(), {}, thrown.deps)).toMatchObject({ ok: false, failedAt: 1, resumeAt: 2 });
+    // Dispatched once and not verified: it is never dispatched again.
+    const unverified = scriptedDeps([surface]);
+    const send = skill([{ action: 'click', ref: ref('Button', 'One', 'one'), postcondition: { kind: 'surface_changed' } }]);
+    expect(await runSkill(send, {}, unverified.deps)).toMatchObject({ ok: false, failedAt: 0, resumeAt: 1 });
+    expect(unverified.acts.length).toBe(1);
+  });
+
+  it('a watcher that throws does not stop the run, and a step that is not there cannot be gone on from', async () => {
+    const { deps, acts } = scriptedDeps([surface]);
+    expect((await runSkill(three(), {}, deps, { onStep: () => { throw new Error('the watcher broke'); } })).ok).toBe(true);
+    expect(acts.length).toBe(2);
+    const refused = await runSkill(three(), {}, deps, { from: 7 });
+    expect(refused).toMatchObject({ ok: false, failedAt: -1 });
+    expect(acts.length).toBe(2);
+  });
+});

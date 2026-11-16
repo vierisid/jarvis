@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { BriefChatEvent, BriefChatPayload, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
-import { NOTCH_NOT_CAUGHT, NotchFilesNotKept, answerShape, attachNotchAsks, ledgerDetail, ledgerWord, plainLines, rememberSentence } from './asks.ts';
+import { NOTCH_HEARD_MS, NOTCH_NOT_CAUGHT, NotchFilesNotKept, answerShape, attachNotchAsks, ledgerDetail, ledgerWord, plainLines, rememberSentence } from './asks.ts';
 import type { NotchAskFile, NotchAsksDeps, NotchRemembered, NotchTurnDoor } from './asks.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchItem } from './inbox.ts';
@@ -1113,5 +1113,112 @@ describe('a question about where something is', () => {
     await settle();
     expect(h.door.texts()).toEqual([]);
     expect(row(h)).toMatchObject({ state: 'stopped' });
+  });
+});
+
+describe('words the notch acts on itself (pass 10)', () => {
+  function sided(more: Partial<NotchAsksDeps> = {}) {
+    const ran: string[] = [];
+    const h = harness({ deps: { side: (words) => (/^watch me/i.test(words) ? { did: 'Began watching what you show me.', run: () => { ran.push(words); } } : null), ...more } });
+    return { h, ran };
+  }
+
+  test('typed: no turn is started, it is done once, and the ledger says what was done', async () => {
+    const { h, ran } = sided();
+    await h.type('Watch me');
+    expect(ran).toEqual(['Watch me']);
+    expect(h.door.texts()).toEqual([]);
+    // It has no line of its own: what it set off shows itself.
+    expect(h.line()).toBeNull();
+    expect(row(h)).toMatchObject({ state: 'done', kind: 'notch', did: ['Began watching what you show me.'], answer: 'Began watching what you show me.' });
+    // Seen: it does not come back after a restart as an answer nobody closed.
+    expect(h.ledger.unseen()).toEqual([]);
+  });
+
+  test('spoken: the words are shown for their moment, then acted on, once', async () => {
+    const { h, ran } = sided();
+    await h.speak('t1', 'Watch me');
+    expect(h.line()).toMatchObject({ kind: 'listen', heard: 'Watch me' });
+    expect(ran).toEqual([]);
+    await h.advance(NOTCH_HEARD_MS);
+    expect(ran).toEqual(['Watch me']);
+    expect(h.door.texts()).toEqual([]);
+    expect(h.line()).toBeNull();
+    // Esc in that moment turns them away like any other words.
+    await h.speak('t2', 'Watch me');
+    await h.answer('no');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(ran).toEqual(['Watch me']);
+  });
+
+  test('it needs no model, and what is running does not stand in its way', async () => {
+    const { h, ran } = sided({ modelReady: () => false });
+    await h.type('Watch me');
+    expect(ran).toEqual(['Watch me']);
+    const busy = sided();
+    await busy.h.type('Summarise my inbox');
+    expect(busy.h.door.texts()).toEqual(['Summarise my inbox']);
+    // Typed while a turn is running: it is not told "I am still on the last thing".
+    busy.h.asks.typed('Watch me');
+    await settle();
+    expect(busy.ran).toEqual(['Watch me']);
+    expect(row(busy.h)).toMatchObject({ state: 'done', kind: 'notch' });
+  });
+
+  test('with everything stopped it is not done', async () => {
+    const { h, ran } = sided({ paused: () => true });
+    await h.type('Watch me');
+    expect(ran).toEqual([]);
+    expect(h.said()).toBe('Everything is stopped. Wake me first.');
+  });
+
+  test('other words are an instruction like any other, and so are words that carry a file', async () => {
+    const { h, ran } = sided();
+    await h.type('What is on my calendar?');
+    expect(h.door.texts()).toEqual(['What is on my calendar?']);
+    const withFile = sided();
+    withFile.h.asks.typed('Watch me', [{ kind: 'document', name: 'a.txt', mediaType: 'text/plain', bytes: new Uint8Array([1]) }]);
+    await settle();
+    expect(withFile.ran).toEqual([]);
+    expect(ran).toEqual([]);
+  });
+
+  test('one that breaks is said in the log, and is still done only once', async () => {
+    const h = harness({ deps: { side: () => ({ did: 'Tried.', run: () => { throw new Error('it broke'); } }) } });
+    await h.type('Watch me');
+    expect(h.logs.join('\n')).toContain('something the notch does itself failed: it broke');
+    expect(row(h)).toMatchObject({ state: 'done', kind: 'notch' });
+  });
+});
+
+describe('Home, with jobs in it (pass 10)', () => {
+  test('the jobs Jarvis was shown have a row, and it opens their sheet', async () => {
+    const opened: string[] = [];
+    const h = harness({ deps: { learned: {
+      row: () => ({ kind: 'row', id: 'learned', say: ['1 job you showed me.'], go: true }),
+      open: async (stage) => { opened.push('learned'); await stage.sheet(['Jobs you showed me: 1'], []); },
+    } } });
+    await h.open();
+    const blocks = (h.line() as { blocks: { id?: string }[] }).blocks;
+    expect(blocks.some((block) => block.id === 'learned')).toBe(true);
+    await h.answer('go', { row: 'learned' });
+    expect(opened).toEqual(['learned']);
+    expect(h.said()).toBe('Jobs you showed me: 1');
+  });
+
+  // The plan's test, step 6: "Undo the paste from Today. The rows are gone."
+  test('Undo on a row of today takes that job back', async () => {
+    const undone: string[] = [];
+    const h = harness({ deps: {
+      today: () => [{ kind: 'row', id: 'job:abc', lead: '10:02', say: ['Pasted 7 from Notepad into Excel'], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] }],
+      undoJob: (id) => { undone.push(id); },
+    } });
+    await h.open();
+    await h.answer('button', { button: 'undo', row: 'job:abc' });
+    expect(undone).toEqual(['abc']);
+    // A button of another row, or of no job, undoes nothing.
+    await h.open();
+    await h.answer('button', { button: 'undo', row: 'mail' });
+    expect(undone).toEqual(['abc']);
   });
 });
