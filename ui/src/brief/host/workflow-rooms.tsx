@@ -24,8 +24,11 @@ import { WorkflowViewHeader } from '../workflows/runs/WorkflowViewHeader';
 import type { InspectionSelection } from '../../../../src/brief/workflow-context-contracts';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { HostTransport } from './http';
-import { post } from './http';
+import { post, RequestError } from './http';
 import { needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
+
+/** The workflow and its version were read, but no run has the selected id. */
+class RunNotFound extends Error {}
 
 export interface WorkflowHost {
   scopeId: string; transport: HostTransport; capabilities(): unknown;
@@ -131,7 +134,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
     const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; supersededBy: string | null; inspection: InspectionSelection } | null>(null);
-    const [error, setError] = useState(false), [revision, retry] = useState(0);
+    const [error, setError] = useState<false | 'unavailable' | 'run-missing'>(false), [revision, retry] = useState(0);
     // A draft that was found but could not be opened (a broken graph): the one thing that can be done with it is discard it.
     const [brokenDraft, setBrokenDraft] = useState<string | null>(null);
     const [discarding, setDiscarding] = useState<'idle' | 'asking' | 'working' | 'failed'>('idle');
@@ -148,14 +151,16 @@ export function createWorkflowRooms(host: WorkflowHost) {
         if (!version || version.flowId !== flowId || !['DRAFT', 'LOCKED'].includes(version.state)) throw new Error('Version unavailable');
         if (shell.route.room === 'workflow-draft' && version.state !== 'DRAFT') throw new Error('Draft changed');
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
-        const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
+        // The workflow and version were just read, so a 404 here is the run that is missing.
+        const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal })
+          .catch((e: unknown) => { throw runId && e instanceof RequestError && e.status === 404 ? new RunNotFound() : e; });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
         // A run opened from history carries the version it ran on (#1398); once another
         // version is published that one is shown read only, never run or copied into a draft.
         const published = typeof detail.published?.id === 'string' ? detail.published.id as string : null;
         const supersededBy = version.state === 'LOCKED' && published && published !== version.id ? published : null;
         if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), supersededBy, inspection: value.data });
-      })().catch(() => { if (!abort.signal.aborted) { setError(true); setBrokenDraft(draftSeen); } });
+      })().catch((e: unknown) => { if (!abort.signal.aborted) { setError(e instanceof RunNotFound ? 'run-missing' : 'unavailable'); setBrokenDraft(e instanceof RunNotFound ? null : draftSeen); } });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
     const discard = async () => {
@@ -166,7 +171,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
         shell.navigate({ room: 'all-workflows', selection: {} });
       } catch { setDiscarding('failed'); }
     };
-    if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
+    if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error === 'run-missing' ? 'This run was not found.' : error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
       {error && brokenDraft && discarding === 'idle' && <p>If this draft cannot be opened, you can throw it away. Anything published stays as it is.</p>}
       {discarding === 'failed' && <p role="alert">The draft could not be discarded. It may be what a turned-on workflow runs, have runs recorded, or be the workflow's only version, which is removed with the workflow from All workflows. Turn the workflow off or try again.</p>}
       {discarding === 'asking' && <p role="alert">Discard this draft for good? Its steps cannot be brought back.</p>}

@@ -27,6 +27,8 @@ export function ensureFactSchema(db: Database): void {
     for (const [name, declaration] of Object.entries({
       predicate_key: 'TEXT', value_key: 'TEXT', scope: "TEXT NOT NULL DEFAULT ''",
       status: "TEXT NOT NULL DEFAULT 'active'", superseded_by: 'TEXT', valid_from: 'INTEGER', valid_to: 'INTEGER',
+      // The owner's Keep private switch: 1 keeps the fact out of every prompt. Additive, so a rollback still reads the table.
+      is_private: 'INTEGER NOT NULL DEFAULT 0',
     })) if (!columns.has(name)) db.run(`ALTER TABLE facts ADD COLUMN ${name} ${declaration}`);
     db.run(`CREATE TABLE IF NOT EXISTS fact_evidence (
       id TEXT PRIMARY KEY, fact_id TEXT NOT NULL REFERENCES facts(id) ON DELETE CASCADE,

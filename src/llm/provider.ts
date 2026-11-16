@@ -162,7 +162,8 @@ export function classifyHttpStatus(status: number): LLMErrorCode {
   if (status === 498) return 'network';
   if (status === 404) return 'not_found';
   if (status === 400 || status === 422) return 'bad_request';
-  if (status === 502 || status === 503 || status === 504) return 'network';
+  // A gateway or overloaded provider that ANSWERED with an error is an error
+  // the provider returned, not a provider that could not be reached.
   if (status >= 500) return 'server';
   return 'unknown';
 }
@@ -200,14 +201,27 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
     s.includes('rate limit') || s.includes('too many requests') ||
     s.includes('insufficient_quota') || s.includes('quota')
   ) return 'rate_limit';
-  if (
-    /\b(502|503|504)\b/.test(s) ||
-    s.includes('timeout') || /\btimed\s+out\b/.test(s) || s.includes('temporarily unavailable') ||
+  // A stated 4xx (`<label> API error (400): ...`, `API error: HTTP 400: ...`)
+  // is a verdict on the request. Words or numbers in the body that follow it
+  // ("timeout", "max 512") must not turn it into an outage, which would retry
+  // it and send the same conversation to another provider.
+  const stated = /\berror \((\d{3})\)|\bhttp (\d{3})\b/.exec(s);
+  const statedStatus = stated ? Number(stated[1] ?? stated[2]) : undefined;
+  const statedRequestError = statedStatus !== undefined && statedStatus >= 400 && statedStatus < 500
+    && statedStatus !== 408 && statedStatus !== 498;
+  if (!statedRequestError && (
+    s.includes('timeout') || /\btimed\s+out\b/.test(s) ||
     s.includes('econnrefused') || s.includes('enotfound') ||
+    s.includes('econnreset') || s.includes('socket connection was closed') || s.includes('connection closed') ||
+    s.includes('epipe') || s.includes('ehostunreach') || s.includes('enetunreach') || s.includes('unable to connect') ||
     s.includes('network')
-  ) return 'network';
+  )) return 'network';
+  // The provider answered, but not with a usable reply.
+  if (!statedRequestError && (
+    /\b(502|503|504)\b/.test(s) || s.includes('temporarily unavailable') || s.includes('malformed_http') || s.includes('malformed http')
+  )) return 'server';
   if (/\b404\b/.test(s) || s.includes('not found') || s.includes('model_not_found')) return 'not_found';
-  if (/\b5\d\d\b/.test(s) || s.includes('internal server error')) return 'server';
+  if (!statedRequestError && (/\b5\d\d\b/.test(s) || s.includes('internal server error'))) return 'server';
   if (
     /\b(?:tools?|tool[_ -](?:calling|use)|function[_ -]calling)['"]?\s+(?:(?:is|are)\s+)?(?:not supported|unsupported)\b/.test(s) ||
     /\b(?:does not|doesn't|do not|cannot)\s+support\s+(?:tools?|tool[_ -](?:calling|use)|function[_ -]calling)\b/.test(s) ||
@@ -215,6 +229,16 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
   ) return 'unsupported_tools';
   if (/\b(400|422)\b/.test(s) || s.includes('bad request') || s.includes('invalid_request')) return 'bad_request';
   return 'unknown';
+}
+
+/**
+ * A dropped connection or a reply that is not HTTP at all. Worth exactly one
+ * more try: either a blip, or a server broken in a way waiting does not fix.
+ */
+export function isTransportGlitch(message: string | undefined | null): boolean {
+  const s = (message ?? '').toLowerCase();
+  return s.includes('econnreset') || s.includes('socket connection was closed') || s.includes('connection closed')
+    || s.includes('malformed_http') || s.includes('malformed http') || s.includes('epipe');
 }
 
 export type LLMOptions = {

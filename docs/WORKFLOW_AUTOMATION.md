@@ -545,12 +545,21 @@ Three things about #598 are load bearing beyond the frame itself:
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
   `displayName` that is not a string with a visible character (it is trimmed)
-  or exceeds 512 characters, or
-  that holds a control character, a line or paragraph separator or a lone
-  surrogate (a name the flow already stores is let through, so a workflow
-  named before that rule can still be saved; every writer stores a name on one
-  line without the bidi controls and never blank, `storedDisplayName`; the
-  blank rule is `workflows/display-name.ts`). All of
+  or exceeds 512 characters, or that holds a control character, a line or
+  paragraph separator or a lone surrogate (a name the flow already stores is
+  let through, so a workflow named before that rule can still be saved; every
+  writer stores a name on one line without the bidi controls and never blank,
+  `storedDisplayName`). The blank rule and the 512 cap are one rule in
+  `workflows/display-name.ts` (`workflowNameProblem`,
+  `FLOW_DISPLAY_NAME_MAX_CHARS`), shared by every name write: these routes,
+  the assistant's `manage_workflow` `create`, `compose`, `continue_setup` and
+  `update`, and the chat draft-update tool. `manage_workflow` also holds the
+  step `name` / `displayName` a compose saves or an update writes to the same
+  512. A composer-chosen workflow name that is blank or over it falls back to
+  the caller's name; a composed step name over it refuses the compose. An
+  over-long step value the draft already carries stays where it is without
+  blocking other edits, but cannot be copied to another step or field. The
+  dashboard's version routes do not check step names. All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -901,7 +910,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. Its built-in fonts show Western European text only: "Text to PDF" and "Add Text to PDF" fail on emoji, Chinese, Japanese or other scripts, naming up to five of the characters (invisible ones as U+ codes); "Text to PDF" can print a ? instead when "Replace characters the PDF cannot show" is on. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The text helper's "Markdown to HTML" returns sanitised HTML: raw HTML in the Markdown keeps only an allowlist of formatting tags and attributes, so scripts, `<style>` and inline `style`, frames, forms, SVG, comments, event handlers and URLs other than http(s), mailto, tel or relative are dropped, and an unknown tag keeps only its text (a table column's alignment is kept as `align`). Slugify is unchanged, so slugs saved workflows already use as keys stay the same. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. These steps refuse input they cannot honour instead of returning garbage: "JSON to XML" fails on a key that is not a valid XML name, an attribute field that is not an object, or a control character XML cannot hold (and escapes attribute values, which upstream wrote as they were), "Base64 Decode" on text that is not base64, and "Generate Password" on a length outside 1 to 256. The text helper's "Markdown to HTML" returns sanitised HTML: raw HTML in the Markdown keeps only an allowlist of formatting tags and attributes, so scripts, `<style>` and inline `style`, frames, forms, SVG, comments, event handlers and URLs other than http(s), mailto, tel or relative are dropped, and an unknown tag keeps only its text (a table column's alignment is kept as `align`). Slugify is unchanged, so slugs saved workflows already use as keys stay the same. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -2047,6 +2056,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
 | GET | `/api/workflows/recent-runs` | "Recently run": the newest run of each workflow in the caller's project, most recent first, with the workflow's `displayName`. `?limit` (default 6, 1 to 20). Workflows removed in Brief are left out; no step output. Answers `{ items }` |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
+| GET | `/api/workflows/run-history` | The run-history retention setting and what is stored: `{ keep, options, runs, oldestAt, bytes, dataBytes, logBytes }`. `?keep=90d` adds `wouldRemoveRuns`, the finished runs that choice would delete now |
+| PATCH | `/api/workflows/run-history` | `{ keep }`, one of `forever`, `1y`, `90d`, `30d`. A limit also starts a clean-up in the background |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding, cancellation and `continuedFailures` |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
@@ -2064,7 +2075,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
 | GET, POST | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in (503 when webhooks are not enabled in the build) |
 | POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit). 403 for a workflow input or approval request |
-| GET | `/api/workflow-inputs` | The signed-in workspace's workflow input and approval requests: every pending one, the 20 most recently closed (answered, expired or cancelled, by close time), and every undismissed one whose outcome needs attention. Each carries `generation` (which instance of a shared form this is; it counts up when the form is asked again after it closed), `closedAt` once closed, `runs` (the run status of each run that asked this instance of the request, no step outputs), `closureReason: "workflow_changed"` when it was withdrawn, and `dismissedAt` once dismissed. `historyCursor` is the cursor for older closed requests, or `null` |
+| GET | `/api/workflow-inputs?limit=` | The signed-in workspace's workflow input and approval requests: the pending ones, oldest deadline first, at most `limit` of them (1 to 500, default 100; 400 otherwise) with `pendingTotal` counting every pending request whatever the page, the 20 most recently closed (answered, expired or cancelled, by close time), and every undismissed one whose outcome needs attention. Each carries `generation` (which instance of a shared form this is; it counts up when the form is asked again after it closed), `closedAt` once closed, `runs` (the run status of each run that asked this instance of the request, no step outputs), `closureReason: "workflow_changed"` when it was withdrawn, and `dismissedAt` once dismissed. `historyCursor` is the cursor for older closed requests, or `null`. Run statuses for the whole page are read together, so the cost of a read does not grow with the number of pending requests. Text a workflow author wrote (title, question, field labels, workflow name, key) is returned without the invisible and control characters an approval card drops (bidirectional controls such as U+202E, every other format or default-ignorable character, and C0/C1 controls other than tab and line breaks; `withoutCardInvisibles` in `src/util/card-text.ts`); the stored request keeps it as written |
 | GET | `/api/workflow-inputs/history?cursor=` | The next 20 closed requests before `cursor`, newest close first: `{ requests, nextCursor }`. 400 for a malformed cursor |
 | GET | `/api/workflow-inputs/:id` | One request of the signed-in workspace, whatever its age: `{ request }`. 404 outside the workspace |
 | POST | `/api/workflow-inputs/:id` | Answer one request: `{ decision: "submit", answers, generation }` for a form, `"approve"` or `"reject"` for an approval, or `"cancel"`. `generation` is the one the request was read with (it may be left out only for generation 0). Body at most 64,000 bytes, counted as it arrives (413). 409 for an answer to an earlier instance of a reopened form, once it is answered differently, or when the run's draft workflow was edited since the request was asked (the request is then withdrawn); 422 for invalid answers |
@@ -2089,6 +2100,35 @@ The natural key for this order is the pair `(created, rowid)`, but `flow_run`
 has a TEXT primary key, so its `rowid` is implicit and `VACUUM` may renumber it,
 which would silently invalidate a cursor a client holds; and `flow_run.id` is a
 nanoid, not time-sortable. A cursor therefore needs its own stable column.
+
+### How long run history is kept
+
+Finished runs (database rows, effect records and the run-log file under
+`workflow-logs/`) are kept **forever** unless the owner chooses a limit under
+"Keep run history for" in Brief Settings (Forever, 1 year, 90 days, 30 days; the
+setting is `workflow.run_history_keep`). Settings shows how many runs and how
+much space the history takes, and says how many runs a limit would delete before
+it is saved. With a limit set, a clean-up runs a couple of minutes after start,
+then daily, and once when the setting is saved. It deletes in batches of 500
+runs, letting the event loop go between them, and removes the runs' jobs and log
+files with them.
+
+A run is never deleted while it is queued, running or paused, has an unresolved
+waitpoint or a pending or dispatching effect, is named by an open or approved
+approval card (or a kept decision document), is still on Today's list of
+failures to deal with, has a live parent or live child, is pointed to by a
+planned task, has an effect whose cross-run identity is still unresolved (only
+that run's recovery can resolve it), or belongs to a removed workflow (whose
+history only a purge deletes). Approval history and the audit trail are not run history and are
+not deleted. Today's time-saved and outcome figures cover the current week, so
+the shortest limit (30 days) does not change them.
+
+Separately, and whatever the setting, a finished job row keeps the key fields the
+queue reads (run id, execution type, waitpoint) but drops its copy of the input
+that started it (a webhook body, a manual run's input, sample data) after 7 days,
+in batches of 500 rows.
+A job whose run is still live keeps it, because recovery of a run parked by an
+older version reads the original input.
 
 ### Request limits
 
@@ -2198,6 +2238,7 @@ Notable behaviors a contributor should know:
 - The HTTP and GraphQL steps' Headers and Query params are optional (`required: false` in the vendored piece, registered in `scripts/activepieces-expression-patch.ts`); a step with only a method and a URL is ready.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
+- Unsaved edits are never dropped silently. In the Brief editor a copy of them is kept in the browser tab (session storage, never shared storage, since a draft may hold secrets) shortly after each change, and a reload puts them back when the draft has not changed since (same editor revision); a save or a discard clears the copy. Credentials typed into a step (any settings key naming a secret, password, token, API key, Authorization header or the like, such as the webhook signing secret or HTTP auth) are never written into the copy: a restore takes them back from the saved draft, and says to enter again any typed since the last save (`edit-copy.ts`). A copy made from an older revision is dropped on opening, and the editor says it was not restored. If the session ends while edits are unsaved, the page stays on screen with a banner to reload and sign in again instead of the reconnect page; the reconnect page returns once nothing is unsaved. A failed save says why in words and keeps the "Unsaved changes" label: offline, timed out, session ended, or the workflow was deleted elsewhere (the editor then offers to discard and go back to All workflows, and cannot save). The legacy editor asks before the X button discards unsaved edits, as Escape does, and the browser asks before the tab is closed or reloaded.
 - "Add next step" opens the node chooser at once. Choosing Loop, If or Router for a blank placeholder (no piece, action or inputs) turns that placeholder into the control-flow step in place, keeping its name, a display name the person typed, and what follows it; for a step that already has settings the control-flow step lands as a loose node instead, because swapping would drop them. In the legacy editor Enter or Space on a focused node does what a click does: an unconfigured step opens the chooser, any other step opens its settings, and while a run is overlaid it opens that step's run detail. So the whole path works from the keyboard; after a pick, or Escape on the chooser, focus returns to the step.
 - "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.

@@ -10,6 +10,7 @@ import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities"
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
 import { BriefButton, BriefSelect } from "../../components/controls";
 import { AppearanceSelector } from "./AppearanceSelector";
+import { RunHistoryRetention } from "./RunHistoryRetention";
 import { SettingsController, type SettingsState } from "./controller";
 import type { SettingsDestination } from "./model";
 import "./settings.css";
@@ -326,6 +327,7 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
               : "")}
         </p>
       </section>
+      {controller.source === "live" && <RunHistoryRetention />}
       <dialog
         ref={dialog}
         className="brief-settings-dialog"

@@ -92,7 +92,9 @@ export function PendingDecisions({ http, read, enabled, changed, selection, else
   // Held runs are a note under the lists, never selectable.
   const held = rows?.filter(isHeldNote) ?? [], asks = rows?.filter(r => !isHeldNote(r)) ?? [];
   const asking = asks.filter(r => !isInProgress(r)), running = asks.filter(isInProgress);
-  const row = named ? asks.find(r => r.decisionId === named) : asks.find(r => r.decisionId === selected) ?? asking[0] ?? running[0];
+  const row = named ? asks.find(r => r.decisionId === named) : asks.find(r => r.decisionId === selected)
+    // With nothing chosen, the first request a person can answer (G-10), not a row that can only be inspected.
+    ?? asking.find(r => r.supportedActions.some(a => a !== 'inspect')) ?? asking[0] ?? running[0];
   const gone = !!named && !!rows && !row && !elsewhere;
   const release = () => { if (selection) { setChosenFor(selection); navigate?.({ room: 'needs-you', selection: {} }); } };
   const choose = (id: string) => { select(id); release(); };

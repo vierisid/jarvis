@@ -38,21 +38,30 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
-`jarvis stop` never stops a program that is not this Jarvis. It stops the
-daemon holding the lock as before. With no daemon holding the lock, it still
-looks at the port, but it signals a listener only when both are true: its
-command line is this install's `jarvis`, and it holds this data folder's lock
-file open, which the daemon does for its whole life (on Linux, also after the
-lock file, or the whole data folder, was deleted under it). Anything else on
-the port is left running and named (program and PID), with the command to see
-what it is (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr
-:<port>` on Windows). That includes another program, and a Jarvis from this
-install running for a different data folder. Such a listener does not make
-`jarvis stop` fail; it fails, and says the port is still occupied, only when
-this data folder's own daemon is still on the port. A program run by another
-user may not show up at all without root; `sudo lsof -nP -iTCP:<port>
--sTCP:LISTEN` shows it. `--port N` and `--port=N` both work, and a `--port`
-with no usable value is an error rather than the default.
+`jarvis stop` never stops a program that is not this Jarvis. With a daemon
+holding the lock, it signals the PID its lock file names only once that process
+is shown to hold the lock, before SIGTERM and again before SIGKILL. A daemon in
+a Docker container writes its own PID there (1), which is a different process
+outside the container, so from the host it is refused rather than signalled:
+stop it with `docker stop`. Inside the container (`docker exec <c> jarvis
+stop`) it is the daemon, and stopping it stops the container.
+
+With no daemon holding the lock, `jarvis stop` still looks at the port, but it
+signals a listener only when both are true: its command line is this install's
+`jarvis`, and it holds this data folder's lock file open, which the daemon does
+for its whole life. On Linux that is also recognised after the lock file, or
+the whole data folder, was deleted under it, but only when `jarvis stop` can
+read the daemon's open files: as root, or with `daemon.allow_process_inspection`
+set (the daemon otherwise hides them). Anything else on the port is left
+running and named (program and PID), with the command to see what it is (`lsof
+-nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>` on
+Windows). That includes another program, and a Jarvis from this install running
+for a different data folder. Such a listener does not make `jarvis stop` fail;
+it fails, and says the port is still occupied, only when this data folder's own
+daemon is still on the port. A program run by another user may not show up at
+all without root; `sudo lsof -nP -iTCP:<port> -sTCP:LISTEN` shows it. `--port
+N` and `--port=N` both work, and a `--port` with no usable value is an error
+rather than the default.
 
 `jarvis restart` starts the daemon the way the running one was started:
 detached or not, with the same `--port`, `--data-dir`, `--no-open`,
@@ -639,6 +648,27 @@ jarvis stop && launchctl kickstart -k gui/$(id -u)/ai.jarvis.daemon
 nothing else - `jarvis uninstall` is the one that removes JARVIS itself, and it
 removes autostart first so the daemon is not relaunched halfway through.
 
+**Outside a service manager, `jarvis update` and `jarvis restart` restart the
+daemon the way it was started.** Both read `jarvis.launch.json` beside the lock
+(see `jarvis restart` above). `jarvis update` passes on the recorded `--port`,
+`--data-dir`, `--no-local-tools` and `--system-config`, and always restarts the
+daemon detached and without opening the dashboard. `jarvis restart` prints the
+options it took from the record. A daemon that recorded nothing, such as one
+started by an older version, is restarted with the defaults (or, for `restart`,
+the flags given), and the command says so. `jarvis start -d` hands its detached
+child the same options; it used to drop `--data-dir` and `--no-local-tools`.
+
+`--data-dir` and `--system-config` are recorded as absolute paths, resolved
+against the directory `jarvis start` ran in, so a restart or update run from
+another directory reuses the same folders.
+
+The record is written mode 0600 through a temporary file renamed into place, so
+it never follows a symlink. It names the daemon's pid and is removed when that
+daemon exits; a record for another pid, one that is a symlink, belongs to
+another user or is writable by anyone else is ignored. Its values are checked
+again before use (a port in range, absolute paths that cannot be read as a flag)
+and passed as arguments, never through a shell.
+
 ### Running under systemd
 
 When the daemon is the main process of a systemd **user** unit, such as the `jarvis.service` that `jarvis autostart` installs, `jarvis restart` and `jarvis update` hand the work to systemd. Otherwise they stop and start the daemon themselves. They used to do that in every case, and it went wrong in two ways:
@@ -1014,6 +1044,32 @@ remains; unsetting it undoes that and changes no data.
 `GET /health` is unauthenticated and safe to point uptime monitors at. It
 works over the unix socket too, e.g.
 `curl --unix-socket /run/jarvis/jarvis.sock http://localhost/health`.
+
+## A missing, empty or damaged database
+
+Jarvis never quietly replaces its database.
+
+- **At start.** If `jarvis.db` is missing or empty but the data folder, or the
+  folder `daemon.db_path` points into, still has saved state (a non-empty
+  `workspace-id`, `.secrets.enc`, `.secrets.key` or `workflow-encryption.key`, the
+  keys in `sidecar-keys/`, or a leftover `jarvis.db-wal`), `jarvis start` stops and
+  says so, instead of starting empty and locking out every enrolled device. Bring
+  the data back with `jarvis restore <your-backup-file>`. To start over on purpose,
+  run `jarvis start --new-database` (or set `JARVIS_ALLOW_NEW_DATABASE=1` for a
+  service, and remove it again after that start).
+  `jarvis enroll`, `sidecars` and `revoke` apply the same check. A folder with no
+  saved state is a new install and starts normally.
+- **A damaged file.** A file SQLite cannot read is reported as damaged, with the
+  restore command. Jarvis never rewrites it.
+- **While running.** Jarvis watches the file it opened. If it is deleted,
+  emptied or replaced, `/api/health` reports `database.connected: false` with a
+  `problem`, every HTTP API write (anything but GET) is refused with 503 and
+  `code: "database_lost"`, the workflow worker claims no jobs, and Pause and Kill
+  keep working. Chat over the WebSocket and background work that is already
+  running are not stopped. Only a restart clears it; the running process cannot
+  tell which copy is right.
+- **`jarvis doctor`** checks the database file itself (read-only integrity
+  check) and never creates it.
 
 ## Start-up refusals
 
