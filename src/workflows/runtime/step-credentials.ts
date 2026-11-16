@@ -19,7 +19,7 @@
 
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
-import { GRAPHQL_PIECE, HTTP_PIECE, REDACTED, redactCredentials, redactGraphqlInput, redactHttpInput } from './piece-effects';
+import { GRAPHQL_PIECE, HTTP_PIECE, isSchemedCredential, isSecretName, REDACTED, redactCredentials, redactGraphqlInput, redactHttpInput } from './piece-effects';
 
 type Redactor = (input: Record<string, unknown>) => Record<string, unknown>;
 
@@ -170,6 +170,222 @@ export function redactRunSteps<S extends Record<string, unknown> | null | undefi
 }
 
 /**
+ * Header names whose value is withheld, besides every name `isSecretName`
+ * judges a credential's (`Authorization`, `Cookie`, `X-Api-Key`,
+ * `X-Goog-Api-Key`, `X-Auth-Key`, `Stripe-Signature`, ...). Run-together
+ * names it would miss (`X-Shopify-Hmac-Sha256`, `X-Hubsignature`), and the
+ * Jarvis timestamp, which only means something next to its signature.
+ */
+const SECRET_HEADER_NAME = /token|secret|signature|password|hmac/iu;
+const CREDENTIAL_HEADERS = new Set(['x-jarvis-timestamp']);
+/** Names `isSecretName` takes for a credential (`key`) that only name a delivery. */
+const DELIVERY_KEY_HEADERS = new Set(['idempotency-key', 'x-idempotency-key']);
+
+/**
+ * Whether a request header carries a credential: by name, in any case, or by
+ * shape, a `Bearer x` or `Basic x` value under any name. One rule for the
+ * webhook trigger, which withholds such headers from the trigger data it
+ * builds, and for run history, which withholds them from rows stored before it did.
+ */
+export function isCredentialHeader(name: string, value: unknown): boolean {
+  const key = name.toLowerCase();
+  if (DELIVERY_KEY_HEADERS.has(key)) return false;
+  return CREDENTIAL_HEADERS.has(key) || SECRET_HEADER_NAME.test(key) || isSecretName(key)
+    || (typeof value === 'string' && isSchemedCredential(value));
+}
+
+/** Headers with every credential header's value replaced by `[redacted]`, names kept. */
+export function redactHeaderRecord<V>(headers: Record<string, V>): Record<string, V | typeof REDACTED> {
+  const out: Record<string, V | typeof REDACTED> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    out[name] = isCredentialHeader(name, value) ? REDACTED : value;
+  }
+  return out;
+}
+
+/** The Crypto piece's password generator: its output is a credential the workflow made. */
+const PASSWORD_STEPS: ReadonlyMap<string, ReadonlySet<string>> = new Map([['@activepieces/piece-crypto', new Set(['generate-password'])]]);
+/** A shown value is scrubbed of a secret found elsewhere in the run only when it is at least this long, so a short one cannot blank ordinary text. */
+const SCRUB_MIN = 6;
+
+/** Step names whose output is a generated password, at any depth of the graph. */
+function passwordSteps(trigger: FlowTriggerNode | null | undefined): Set<string> {
+  const names = new Set<string>();
+  for (const node of walkFlowNodes(trigger)) {
+    const actions = typeof node.settings?.pieceName === 'string' ? PASSWORD_STEPS.get(node.settings.pieceName) : undefined;
+    if (typeof node.name === 'string' && actions?.has(String(node.settings?.actionName))) names.add(node.name);
+  }
+  return names;
+}
+
+/** Values that are not secrets however they are stored: placeholders a broken sender writes. */
+const PLACEHOLDERS = new Set(['undefined', 'null', 'none', 'false', 'true', 'bearer', 'basic']);
+
+/** Add one form of a secret, if it can be told from ordinary text. */
+function addSecret(text: string, secrets: Set<string>): void {
+  const trimmed = text.trim();
+  if (trimmed.length < SCRUB_MIN || /^\d+$/u.test(trimmed) || PLACEHOLDERS.has(trimmed.toLowerCase()) || trimmed.includes(REDACTED)) return;
+  secrets.add(trimmed);
+  // As a later step may have sent it in a URL or a form body.
+  const encoded = encodeURIComponent(trimmed);
+  if (encoded !== trimmed) secrets.add(encoded);
+}
+
+/**
+ * Note a secret for scrubbing elsewhere in the run: the whole value, the token
+ * of a `Bearer x` value, each value of a `Cookie` header, and a signature
+ * without its `sha256=` prefix. Numbers and placeholders are not noted, so a
+ * timestamp or an `undefined` cannot blank ordinary text.
+ */
+function noteSecret(value: unknown, secrets: Set<string>, header?: string): void {
+  if (typeof value !== 'string' || value === REDACTED) return;
+  addSecret(value, secrets);
+  const token = /^\s*\S+\s+(\S+)\s*$/u.exec(value)?.[1];
+  // A credential header's `<scheme> <token>`, or a value shaped so.
+  if (token && (header !== undefined || isSchemedCredential(value))) addSecret(token, secrets);
+  if (header && /cookie/iu.test(header)) for (const pair of value.split(';')) addSecret(pair.slice(pair.indexOf('=') + 1), secrets);
+  const signed = /^[a-z0-9-]{2,16}=(.+)$/iu.exec(value)?.[1];
+  if (signed && header && /sig|hmac/iu.test(header)) addSecret(signed, secrets);
+}
+
+/** Every `_webhook.headers` in a value (trigger data, or a step that passed it on) with its credential headers withheld. */
+function hideWebhookHeaders(value: unknown, secrets: Set<string>, depth: number): unknown {
+  if (depth > 64) return value;
+  if (Array.isArray(value)) {
+    const out = value.map((item) => hideWebhookHeaders(item, secrets, depth + 1));
+    return out.some((item, i) => item !== value[i]) ? out : value;
+  }
+  if (!object(value)) return value;
+  const entries = Object.entries(value).map(([key, item]): [string, unknown] => {
+    if (key === '_webhook' && object(item) && object(item.headers)) {
+      // A timestamp is withheld by name but, a bare number, not looked for elsewhere (`addSecret`).
+      for (const [name, header] of Object.entries(item.headers)) if (isCredentialHeader(name, header)) noteSecret(header, secrets, name);
+      return [key, { ...item, headers: redactHeaderRecord(item.headers) }];
+    }
+    return [key, hideWebhookHeaders(item, secrets, depth + 1)];
+  });
+  return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
+}
+
+/** A step map (`{ name: StepOutput }` or the worker's `{ name: { output: StepOutput } }`) with generated passwords withheld, in loops too. */
+function hidePasswords(steps: Record<string, unknown>, names: Set<string>, secrets: Set<string>, depth: number): Record<string, unknown> {
+  if (depth > 16) return steps;
+  const hideStep = (name: string, step: Record<string, unknown>): Record<string, unknown> => {
+    let out = step;
+    if (names.has(name) && 'output' in step && step.output !== null && step.output !== undefined && step.output !== REDACTED) {
+      noteSecret(step.output, secrets);
+      out = { ...out, output: REDACTED };
+    }
+    const inner = out.output;
+    if (object(inner) && Array.isArray(inner.iterations)) {
+      out = { ...out, output: { ...inner, iterations: inner.iterations.map((iteration) =>
+        object(iteration) ? hidePasswords(iteration, names, secrets, depth + 1) : iteration) } };
+    }
+    return out;
+  };
+  return Object.fromEntries(Object.entries(steps).map(([name, raw]) => {
+    if (!object(raw)) return [name, raw];
+    const enveloped = Object.keys(raw).length === 1 && object(raw.output) && typeof raw.type !== 'string';
+    return [name, enveloped ? { output: hideStep(name, raw.output as Record<string, unknown>) } : hideStep(name, raw)];
+  }));
+}
+
+/**
+ * Replaces each secret in text with `[redacted]`, in one pass whatever the
+ * number of secrets: candidates are found by their first `SCRUB_MIN`
+ * characters, longest first, so a run with thousands of generated passwords
+ * costs a lookup per character, not a pass per password.
+ */
+export type Scrubber = (text: string) => string;
+function scrubber(secrets: Iterable<string>): Scrubber | null {
+  const byPrefix = new Map<string, string[]>();
+  for (const secret of secrets) {
+    const key = secret.slice(0, SCRUB_MIN);
+    const list = byPrefix.get(key);
+    if (list) list.push(secret); else byPrefix.set(key, [secret]);
+  }
+  if (byPrefix.size === 0) return null;
+  for (const list of byPrefix.values()) list.sort((a, b) => b.length - a.length);
+  return (text) => {
+    if (text.length < SCRUB_MIN) return text;
+    let out = '', from = 0;
+    for (let i = 0; i + SCRUB_MIN <= text.length;) {
+      const hit = byPrefix.get(text.slice(i, i + SCRUB_MIN))?.find((secret) => text.startsWith(secret, i));
+      if (hit) { out += text.slice(from, i) + REDACTED; i += hit.length; from = i; } else i++;
+    }
+    return from === 0 ? text : out + text.slice(from);
+  };
+}
+
+/** Every string in a value scrubbed; a part with nothing to scrub is returned as it is, the same object. */
+export function scrubValue(value: unknown, scrub: Scrubber | null, depth = 0): unknown {
+  if (!scrub || depth > 64) return value;
+  if (typeof value === 'string') return scrub(value);
+  if (Array.isArray(value)) {
+    const out = value.map((item) => scrubValue(item, scrub, depth + 1));
+    return out.some((item, i) => item !== value[i]) ? out : value;
+  }
+  if (!object(value)) return value;
+  const entries = Object.entries(value).map(([key, item]) => [key, scrubValue(item, scrub, depth + 1)] as const);
+  return entries.some(([key, item]) => item !== value[key]) ? Object.fromEntries(entries) : value;
+}
+
+/**
+ * A run's recorded steps (or a version's sample data) as a person or the
+ * model is shown them. Read side only: the stored row keeps what the engine
+ * needs, since a resumed run with no state backup rebuilds the steps the next
+ * one reads from `flow_run.steps`. On top of `redactRunSteps`:
+ *   - credential headers in any `_webhook.headers`, including trigger data
+ *     stored before the webhook trigger withheld them (#1359);
+ *   - the output of a password generator step (Crypto: Generate Password);
+ *   - either value wherever else the run repeats it (a later step's input or
+ *     output, the failed step's message), as written or URL-encoded, at
+ *     least `SCRUB_MIN` long and not a bare number. A shorter generated
+ *     password is withheld as its step's output only.
+ * `failedMessage` is scrubbed of the same values. Idempotent.
+ */
+export function stepsAsShown<S extends Record<string, unknown> | null | undefined>(
+  steps: S, trigger: FlowTriggerNode | null | undefined, failedMessage?: string,
+): { steps: S; failedMessage: string | undefined; scrub: Scrubber | null } {
+  if (!object(steps)) return { steps, failedMessage, scrub: null };
+  const secrets = new Set<string>();
+  const credentialed = redactRunSteps(steps, trigger) as Record<string, unknown>;
+  const passwords = passwordSteps(trigger);
+  const hidden = hideWebhookHeaders(passwords.size > 0 ? hidePasswords(credentialed, passwords, secrets, 0) : credentialed, secrets, 0);
+  const scrub = scrubber(secrets);
+  return { steps: scrubValue(hidden, scrub) as S, failedMessage: failedMessage === undefined || !scrub ? failedMessage : scrub(failedMessage), scrub };
+}
+
+/** A run as a person or the model is shown it: `stepsAsShown` over its steps and its failed step's message. */
+export function runAsShown<R extends { steps: Record<string, unknown> | null; failedStep: { errorMessage?: string } | null }>(
+  run: R, trigger: FlowTriggerNode | null | undefined,
+): R {
+  const shown = stepsAsShown(run.steps, trigger, run.failedStep?.errorMessage);
+  return { ...run, steps: shown.steps,
+    ...(run.failedStep && shown.failedMessage !== undefined ? { failedStep: { ...run.failedStep, errorMessage: shown.failedMessage } } : {}) };
+}
+
+/** What else a run's records must not show of the secrets its steps hold (its effect records): a scrubber, or null when there are none. */
+export function runScrubber(run: { steps: Record<string, unknown> | null }, trigger: FlowTriggerNode | null | undefined): Scrubber | null {
+  return stepsAsShown(run.steps, trigger).scrub;
+}
+
+/**
+ * A sample-data entry the editor saves, with every value it was shown as
+ * `[redacted]` (a generated password, an old webhook credential header) and
+ * sent back unchanged put back from the stored entry, so saving a sample does
+ * not store the marker in place of the captured value. Any other edit stands.
+ */
+export function restoreShownSample(
+  version: { trigger: FlowTriggerNode; sampleData: Record<string, unknown> | null } | null, stepName: string, edited: unknown,
+): unknown {
+  const saved = version?.sampleData?.[stepName];
+  if (!version?.sampleData || saved === undefined || edited === null) return edited;
+  const shown = (stepsAsShown(version.sampleData, version.trigger).steps as Record<string, unknown>)[stepName];
+  return restoreValue(edited, saved, shown, 0);
+}
+
+/**
  * A failed step's error message as the run keeps it: for an HTTP or GraphQL
  * step (or one the graph no longer names), the request body it echoes has its
  * credential fields redacted.
@@ -209,7 +425,7 @@ export function versionAsModelSees<V extends { trigger?: unknown; sampleData?: u
     graph.settings!.input = { ...rest, secret: REDACTED };
   }
   const out: V = { ...version, trigger: graph };
-  if (object(version.sampleData)) (out as { sampleData: unknown }).sampleData = redactStepMap(version.sampleData, redactors, 0);
+  if (object(version.sampleData)) (out as { sampleData: unknown }).sampleData = stepsAsShown(version.sampleData, trigger).steps;
   if (object(version.sampleInput)) {
     (out as { sampleInput: unknown }).sampleInput = Object.fromEntries(Object.entries(version.sampleInput).map(([name, value]) => {
       const redact = redactorFor(name, value, redactors);
