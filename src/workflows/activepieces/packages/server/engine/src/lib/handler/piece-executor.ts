@@ -1,3 +1,4 @@
+import { withAbsentValueFallbacks } from "../../../../../../../runtime/absent-value-fallbacks"
 import { helpScoutEngineProps } from "../../../../../../../runtime/managed-help-scout-inputs"
 import { zoomEngineProps } from "../../../../../../../runtime/managed-zoom-inputs"
 import { gitlabEngineProps } from "../../../../../../../runtime/managed-gitlab-inputs"
@@ -82,7 +83,8 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         })
 
         const { resolvedInput, censoredInput } = await constants.getPropsResolver(piece.getContextInfo?.().version).resolve<StaticPropsValue<PiecePropertyMap>>({
-            unresolvedInput: action.settings.input,
+            // Jarvis (F-08): the default-value step may be given a missing reference.
+            unresolvedInput: withAbsentValueFallbacks(action.settings.pieceName, action.settings.actionName, action.settings.input),
             executionState,
         })
 
