@@ -101,11 +101,37 @@ let lockFd: number | null = null;
 
 // ── Public API ───────────────────────────────────────────────────────
 
+/** Why a lock was not taken: another daemon holds it, or the data folder cannot be written. */
+export type LockResult =
+  | { ok: true }
+  | { ok: false; reason: 'held' }
+  | { ok: false; reason: 'error'; message: string };
+
 /**
- * Acquire an exclusive lock on the lock file and write the PID.
- * Returns true if the lock was acquired, false if another instance holds it.
+ * Plain words for why Jarvis cannot use its data folder, for an fs error.
+ * Anything that is not an operating-system file error keeps its own message.
  */
-export function acquireLock(pid: number): boolean {
+export function describeDataDirError(err: unknown, dir: string = daemonRootDir()): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  const raw = err instanceof Error ? err.message : String(err);
+  if (typeof code !== 'string' || !/^E[A-Z]+$/.test(code)) return raw;
+  const cause =
+    code === 'EACCES' || code === 'EPERM' ? 'this user is not allowed to write there. Check who owns the folder, or choose another one with JARVIS_HOME'
+    : code === 'EROFS' ? 'the folder is on a read-only disk'
+    : code === 'ENOSPC' || code === 'EDQUOT' ? 'the disk is full. Free some space and start Jarvis again'
+    : code === 'ENOTDIR' || code === 'EEXIST' ? 'a file is in the way of the folder'
+    : `${raw.replace(/^[A-Z]+: /, '').split(',')[0]}`;
+  return `Jarvis cannot write to its data folder (${dir}): ${cause}.`;
+}
+
+/**
+ * Acquire an exclusive lock on the lock file and write the PID, saying why
+ * when it could not: another daemon holds it ("held"), or the lock file could
+ * not be opened or written ("error", with a plain message). Callers must tell
+ * the two apart: reporting a full or read-only disk as "already running" sends
+ * the owner to stop a daemon that does not exist.
+ */
+export function tryAcquireLock(pid: number): LockResult {
   try {
     // Resolve the flock helper first so an unsupported platform fails before
     // we create the data dir or open an fd (nothing to leak / clean up).
@@ -120,20 +146,35 @@ export function acquireLock(pid: number): boolean {
     const result = flock.do_flock(fd, LOCK_EX | LOCK_NB);
     if (result !== 0) {
       closeSync(fd);
-      return false;
+      return { ok: false, reason: 'held' };
     }
 
     // Lock acquired — truncate and write PID for display purposes
-    ftruncateSync(fd, 0);
-    writeSync(fd, String(pid));
+    try {
+      ftruncateSync(fd, 0);
+      writeSync(fd, String(pid));
+    } catch (err) {
+      closeSync(fd);
+      throw err;
+    }
 
     // Keep the FD open — closing it would release the lock
     lockFd = fd;
-    return true;
+    return { ok: true };
   } catch (err) {
-    console.error(`[PID] Failed to acquire lock: ${err}`);
-    return false;
+    return { ok: false, reason: 'error', message: describeDataDirError(err) };
   }
+}
+
+/**
+ * Acquire an exclusive lock on the lock file and write the PID.
+ * Returns true if the lock was acquired, false if another instance holds it
+ * or the lock file could not be written (see `tryAcquireLock` to tell which).
+ */
+export function acquireLock(pid: number): boolean {
+  const result = tryAcquireLock(pid);
+  if (!result.ok && result.reason === 'error') console.error(`[PID] Failed to acquire lock: ${result.message}`);
+  return result.ok;
 }
 
 /**
@@ -386,7 +427,12 @@ export function getPidPath(): string {
  */
 export function getLogPath(): string {
   const dir = getLogDir();
-  mkdirSync(dir, { recursive: true });
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    // Plain words, not a raw mkdir failure with a stack, for an unwritable data folder.
+    throw new Error(describeDataDirError(err));
+  }
   return join(dir, 'jarvis.log');
 }
 

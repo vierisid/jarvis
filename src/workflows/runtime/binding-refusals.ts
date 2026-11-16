@@ -20,13 +20,14 @@
  */
 import { getWorkflowDb } from '../db';
 import { ENDED_RUN_STATUSES_SQL } from '../db/schema';
-import { readBindingPins } from '../db/repos/binding-pins';
+import { connectionBindings, currentConnectionIdentity, describeConnectionChange, readBindingPins } from '../db/repos/binding-pins';
 import { getFlowRun, type FlowRun } from '../db/repos/flow-run';
 import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { getFlowVersion } from '../db/repos/flow-version';
 import { boundedApprovalLabel } from '../../authority/approval-delivery';
 import { TOAST_TITLE_MAX } from '../../comms/toast-limits';
 import { failureText } from '../../failures/projection';
+import { forCard } from '../../util/card-text';
 import { WORKFLOW_STEP_LABEL_MAX_CHARS } from './effect-boundary';
 import { runFailure } from './run-failure';
 
@@ -60,7 +61,8 @@ export interface BindingBlock {
   kind: 'readiness' | 'runtime';
   /** The Q-19 headline: what happened, one sentence. */
   message: string;
-  runId: string;
+  /** The run that shows it, or null when none does (a replaced key is known before any run fails). */
+  runId: string | null;
   at: number;
 }
 
@@ -93,6 +95,8 @@ export const LATEST_ENDED_RUN_SQL = `SELECT id, status, failed_step, finish_time
 
 export function flowBindingBlock(flow: { id: string; project_id: string; status: string }): BindingBlock | null {
   if (flow.status !== 'ENABLED') return null;
+  const replaced = replacedConnectionBlock(flow);
+  if (replaced) return replaced;
   const db = getWorkflowDb();
   // Filtered and ordered as idx_flow_run_ended (db/schema.ts), so this reads
   // the index to its first entry, not past every run still waiting. Named:
@@ -110,6 +114,37 @@ export function flowBindingBlock(flow: { id: string; project_id: string; status:
       AND json_valid(record) AND json_extract(record, '$.outcome.code') IN ${CODES} LIMIT 1`).get(row.id)) return null;
   const run = getFlowRun(row.id);
   return run ? blockOf(run) : null;
+}
+
+/**
+ * A saved connection whose key was replaced since this workflow was enabled,
+ * and which its published version still names: every run is refused until a
+ * person enables or publishes the workflow again (Q-05), so it says so now,
+ * not after the next fire fails. It names no run, because none has failed.
+ * Read from the pins and the connection's own row, never decrypting anything.
+ */
+function replacedConnectionBlock(flow: { id: string; project_id: string }): BindingBlock | null {
+  const pins = readBindingPins(flow.id);
+  if (!pins) return null;
+  const db = getWorkflowDb();
+  for (const [externalId, pinned] of Object.entries(pins.connections)) {
+    if (pinned.kind !== 'native') continue;
+    const current = currentConnectionIdentity(flow.project_id, externalId);
+    const change = 'identity' in current ? describeConnectionChange(externalId, pinned, current.identity) : null;
+    if (!change) continue;
+    const published = db.query<{ trigger: string }, [string, string]>(
+      `SELECT v.trigger AS trigger FROM flow f JOIN flow_version v ON v.id = f.published_version_id WHERE f.id = ? AND v.id = ?`,
+    ).get(flow.id, pins.versionId);
+    let named = false;
+    try { named = !!published && connectionBindings(JSON.parse(published.trigger)).has(externalId); } catch { named = false; }
+    if (!named) continue;
+    const updated = db.query<{ updated: number }, [string, string]>(
+      'SELECT updated FROM app_connection WHERE project_id = ? AND external_id = ? LIMIT 1').get(flow.project_id, externalId)?.updated;
+    return { code: 'BINDING_STALE', kind: 'readiness', runId: null,
+      message: forCard(`${change}, so this workflow is paused. Publish it again to accept the change.`, 300),
+      at: updated ?? pins.pinnedAt };
+  }
+  return null;
 }
 
 const MACHINE_CODES = new Set(['WORKFLOW_MACHINE_OFFLINE', 'WORKFLOW_MACHINE_UNAVAILABLE', 'WORKFLOW_MACHINE_REPLACED', 'WORKFLOW_MACHINE_UNPINNED']);
