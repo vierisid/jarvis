@@ -136,6 +136,20 @@ test('permission cards preserve selection and settle only the selected request o
   transport.stop();
 });
 
+test('with nothing chosen, the first request a person can answer is selected, not an inspect-only row before it (G-10)', async () => {
+  const dead = { decisionId: 'effect:dead', revision: 'r1', kind: 'recovery', state: 'dispatching', title: 'Dispatching effect', supportedActions: ['inspect'] };
+  const live = { decisionId: 'approval:live', revision: 'r2', kind: 'permission', state: 'pending', title: 'Send the report', supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [dead as any, live as any]} enabled changed={() => {}} />));
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Send the report');
+  expect(button('Grant permission')).toBeTruthy();
+  // Choosing the inspect-only row still opens it.
+  await React.act(async () => (host.querySelector('[aria-pressed="false"]') as HTMLButtonElement).click());
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Dispatching effect');
+  http.stop();
+});
+
 const permissionRows = () => ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
   title: 'Review ' + id + '. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required' },
   supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
@@ -414,6 +428,60 @@ test('publishing from the existing canvas route reloads authoritative state and 
     expect(publications).toBe(1); expect(reads).toBeGreaterThan(before);
     expect(button('Run workflow').disabled).toBe(false);
     expect(button('Save and turn on')).toBeUndefined(); expect(button('Edit workflow')).toBeTruthy();
+  } finally { rooms.retire(); transport.stop(); }
+});
+
+test('a run id that no run has says the run was not found, not that the version is unavailable', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const fixture = makeCanvasFixture(), flowId = 'meeting', versionId = fixture.versionId;
+  let inspection = 404;
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), version = { ...fixture.snapshot().version, state: 'LOCKED' };
+    if (path === '/api/workflows/meeting') return Response.json({ flow: { id: flowId }, latestDraft: null, published: version, uiMeta: fixture.snapshot().uiMeta });
+    if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+    if (path.includes('/inspection?')) return inspection === 404 ? Response.json({ code: 'not_found' }, { status: 404 }) : Response.json({ code: 'unavailable' }, { status: 503 });
+    return fixture.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId: 'scope', transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => null });
+  const shell = (runId: string) => ({ mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId, runId } },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} }) as any;
+  const Room = rooms.rooms['workflow-runs']!.Body!;
+  try {
+    await React.act(async () => root.render(<Room shell={shell('no-such-run')} />));
+    expect(document.body.textContent).toContain('This run was not found.');
+    expect(document.body.textContent).not.toContain('version is unavailable');
+    inspection = 503;
+    await React.act(async () => root.render(<Room shell={shell('another-run')} />));
+    expect(document.body.textContent).toContain('This workflow version is unavailable.');
+  } finally { rooms.retire(); transport.stop(); }
+});
+
+test('a missing run on a healthy draft says the run was not found and offers no discard', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const fixture = makeCanvasFixture(), flowId = 'meeting', versionId = fixture.versionId;
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), version = fixture.snapshot().version;
+    if (path === '/api/workflows/meeting') return Response.json({ flow: { id: flowId }, latestDraft: version, published: null, uiMeta: fixture.snapshot().uiMeta });
+    if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+    if (path.includes('/inspection?')) return Response.json({ code: 'not_found' }, { status: 404 });
+    return fixture.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId: 'scope', transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => null });
+  const shell = { mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId, runId: 'no-such-run' } },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} } as any;
+  const Room = rooms.rooms['workflow-runs']!.Body!;
+  try {
+    expect(fixture.snapshot().version.state).toBe('DRAFT');
+    await React.act(async () => root.render(<Room shell={shell} />));
+    expect(document.body.textContent).toContain('This run was not found.');
+    expect(document.body.textContent).not.toContain('you can throw it away');
+    expect([...document.querySelectorAll('button')].some(b => b.textContent?.includes('Discard this draft'))).toBe(false);
   } finally { rooms.retire(); transport.stop(); }
 });
 

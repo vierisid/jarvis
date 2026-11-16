@@ -280,7 +280,7 @@ export class SuggestionEngine {
         for (const entity of relevant.slice(0, 3)) {
           if (entity.id === this.lastKnowledgeEntityId) continue;
 
-          const facts = findFacts({ subject_id: entity.id });
+          const facts = findFacts({ subject_id: entity.id, excludePrivate: true });
           if (facts.length === 0) continue;
 
           this.lastKnowledgeEntityId = entity.id;

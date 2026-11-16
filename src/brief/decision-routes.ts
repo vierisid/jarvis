@@ -1,4 +1,5 @@
 import type { BriefCapabilities } from './capabilities';
+import { panelSessionDevice } from '../comms/panel-session-marker';
 import { DecisionError, type DecisionQueue } from './decisions';
 import type { DecisionResolution } from './decision-contracts';
 
@@ -54,6 +55,6 @@ export function createDecisionRoutes(capabilities: BriefCapabilities, json: (bod
       if (Object.keys(data).some(k => !['revision','position'].includes(k)) || typeof data.revision !== 'string' || typeof data.position !== 'number') throw new DecisionError('Supply revision and position');
       return provider!.place(decisionId(req), data.revision, data.position);
     }) },
-    [`${base}/:id/resolve`]: { POST: wrap<Params>(async req => provider!.resolve(decisionId(req), await body(req) as unknown as DecisionResolution)) },
+    [`${base}/:id/resolve`]: { POST: wrap<Params>(async req => provider!.resolve(decisionId(req), await body(req) as unknown as DecisionResolution, panelSessionDevice(req))) },
   };
 }
