@@ -31,6 +31,11 @@ export type CronOccurrence = {
   lateMs: number;
   /** The named minute did not exist because clocks jumped forward; it fires once, right after the jump. */
   shifted?: true;
+  /**
+   * Set on the later times of the startup catch-up: each is owed its own run,
+   * so the one delivered just before it is no reason to skip it as stacked.
+   */
+  afterEarlier?: true;
 };
 
 /** Missed occurrences older than the newest `CRON_MISSED_LISTED`, counted rather than listed. */
@@ -725,7 +730,13 @@ export class CronScheduler {
       if (handledOrder.length > 1_024) handled.delete(handledOrder.shift()!);
     };
 
+    // A schedule resumed from a stored watch (`dueAfter`) owes the times since
+    // then. Its first evaluation, whichever timer or caller runs it, is the
+    // startup catch-up: the later times it delivers are marked `afterEarlier`.
+    let resuming = options.dueAfter !== undefined;
     const tick = (nowMs: number): void => {
+      const catchUp = resuming;
+      resuming = false;
       const current = Math.floor(nowMs / 60_000);
       if (current <= evaluatedThrough) {
         // Same minute again, or a small step back: nothing new is due. A clock
@@ -760,20 +771,19 @@ export class CronScheduler {
           console.error(`[CronScheduler] Job "${id}" missed-occurrence handler threw:`, err);
         }
       }
-      for (const occurrence of due) {
+      let delivered = 0;
+      const deliver = (occurrence: CronOccurrence): void => {
         remember(occurrence.key);
-        run(occurrence);
-      }
+        run(catchUp && delivered++ > 0 ? { ...occurrence, afterEarlier: true } : occurrence);
+      };
+      for (const occurrence of due) deliver(occurrence);
       // A minute that clocks skipped when they jumped forward fires once,
       // right after the jump. Only while ticking normally: a jump during a
       // long stall is part of what was missed.
       if (dstPolicy !== 'skip_missing_first_repeated' && current - from <= 2) {
         for (let minute = from + 1; minute <= current; minute++) {
           const shifted = skippedOccurrence(parsed, minute * 60_000, zone);
-          if (shifted && !handled.has(shifted.key)) {
-            remember(shifted.key);
-            run({ ...shifted, lateMs: nowMs - shifted.at });
-          }
+          if (shifted && !handled.has(shifted.key)) deliver({ ...shifted, lateMs: nowMs - shifted.at });
         }
       }
       // The next run is for display; work it out only when something fired.
@@ -781,15 +791,24 @@ export class CronScheduler {
       if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    this.jobs.set(id, {
+    const job: CronJob = {
       id,
       expression,
       callback,
       lastRun: null,
       nextRun: nextRun.getTime(),
       tick,
-    });
+    };
+    this.jobs.set(id, job);
     this.ticker ??= setInterval(() => this.tickAll(), CRON_TICK_MS);
+
+    // Run the times a resumed schedule owes now, not at the next tick, or
+    // one near the end of its grace window ages out first. Deferred so the
+    // caller finishes registering the job before its callback runs; a job
+    // cancelled or replaced meanwhile does nothing.
+    if (resuming) {
+      setTimeout(() => { if (this.jobs.get(id) === job) tick(this.now()); }, 0);
+    }
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
   }

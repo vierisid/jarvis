@@ -11,6 +11,7 @@ import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
+import { getLatestDraft, updateDraftVersion } from "../db/repos/flow-version";
 import {
   createWorkflowRoutes,
   FLOW_VERSION_REF_ID_MAX_CHARS,
@@ -65,6 +66,19 @@ function plainReq(method: string, url: string, body?: unknown): Request {
     init.headers = { "Content-Type": "application/json" };
   }
   return new Request(url, init);
+}
+
+/**
+ * A trigger plus the smallest step that needs no piece catalog. Turning a
+ * workflow on refuses a graph that is only a trigger, so a test that publishes
+ * or enables a flow gives it this first.
+ */
+const RUNNABLE_TRIGGER = {
+  name: "trigger", type: "EMPTY", displayName: "Manual",
+  nextAction: { name: "step_1", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchType: "FALLBACK", branchName: "Otherwise" }] }, children: [null] },
+};
+function giveSteps(flowId: string): void {
+  updateDraftVersion(getLatestDraft(flowId)!.id, { trigger: RUNNABLE_TRIGGER });
 }
 
 /** `GET /api/workflows/:id/runs`'s body since #652. */
@@ -397,6 +411,7 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
   test("an omitted metadata still leaves the column alone", async () => {
     const { body } = await create({ displayName: "keeps", metadata: { keep: "me" } });
     const id = (body as { flow: { id: string } }).flow.id;
+    giveSteps(id);
     const patched = await patch(id, { status: "ENABLED" });
     expect(patched.status).toBe(200);
     expect((patched.body as { metadata: unknown }).metadata).toEqual({ keep: "me" });
@@ -645,6 +660,7 @@ describe("workflow API: flows", () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
+    giveSteps(flowId);
 
     const patch = routes["/api/workflows/:id"]?.PATCH;
     const { status, body } = await callJson(
@@ -777,6 +793,7 @@ describe("workflow API: versions", () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
+    giveSteps(flowId);
     const versionId = created.body.version.id;
 
     const publish = routes["/api/workflows/:id/publish"]?.POST;
@@ -1070,7 +1087,7 @@ describe("workflow API: waitpoint resume", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "paused flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     setPublishedVersion(flow.id, v.id);
@@ -1150,7 +1167,7 @@ describe("workflow API: waitpoint resume", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "broken flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     const run = createFlowRun({
@@ -1197,7 +1214,7 @@ describe("workflow API: waitpoint resume ingress guards", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "paused flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     setPublishedVersion(flow.id, v.id);
@@ -2132,7 +2149,7 @@ describe("workflow API: waitpoints surface", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "wp-surface",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     const run = createFlowRun({
@@ -3763,6 +3780,7 @@ describe("#649: /run, /publish and /code-steps bound their bodies and keep the e
 
   async function newFlow(): Promise<string> {
     const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    giveSteps(created.body.flow.id);
     return created.body.flow.id;
   }
 
