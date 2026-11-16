@@ -20,6 +20,7 @@ import { initDatabase, getDb } from '../vault/schema.ts';
 import { enrollDevice } from '../sidecar/enrollment.ts';
 import type { SidecarRecord } from '../sidecar/types.ts';
 import { resolveExternalOrigin } from '../util/external-origin.ts';
+import { assertDatabaseUsable } from '../vault/db-guard.ts';
 
 interface CliIo {
   out: (line: string) => void;
@@ -33,6 +34,9 @@ const defaultIo: CliIo = {
 
 async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string }> {
   const config = await loadConfig();
+  // An empty database here would enroll a device against a vault the daemon
+  // is about to refuse (or, worse, accept as new): stop with the restore hint.
+  assertDatabaseUsable(config.daemon.db_path, config.daemon.data_dir);
   initDatabase(config.daemon.db_path, { quiet: true });
   const resolved = resolveExternalOrigin(config);
   for (const warning of resolved.warnings) io.err(`warning: ${warning}`);

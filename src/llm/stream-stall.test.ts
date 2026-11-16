@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import { LLMManager } from './manager';
-import type { LLMOptions, LLMProvider, LLMStreamEvent } from './provider';
+import { LLMProviderError, type LLMOptions, type LLMProvider, type LLMStreamEvent } from './provider';
+import { failureEvidence } from '../failures/evidence';
+import { failureText, projectFailure } from '../failures/projection';
 
 const done: LLMStreamEvent = { type: 'done', response: { content: 'hi', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 }, model: 'm', finish_reason: 'stop' } };
 const messages = [{ role: 'user' as const, content: 'hello' }];
@@ -87,4 +89,42 @@ test('a stream that finishes is not aborted afterwards, one the consumer stops e
   expect(signals[0]!.aborted).toBe(false);
   for await (const event of manager.stream(messages)) { if (event.type === 'text') break; }
   expect(signals[1]!.aborted).toBe(true);
+});
+
+/** A tier map whose high-tier provider stalls the way `primaryStream` says; medium answers. */
+function tierPair(primaryStream: () => AsyncIterable<LLMStreamEvent>) {
+  const manager = new LLMManager({ streamFirstDataMs: 40, streamIdleMs: 40 });
+  const calls = { primary: 0, fallback: 0 };
+  manager.registerProvider({ name: 'primary', async chat() { throw new Error('unused'); },
+    stream() { calls.primary++; return primaryStream(); }, async listModels() { return []; } });
+  manager.registerProvider({ name: 'fallback', async chat() { throw new Error('unused'); },
+    async *stream() { calls.fallback++; yield { type: 'text' as const, text: 'from fallback' }; yield done; },
+    async listModels() { return []; } });
+  manager.setTierMap({ high: { provider: 'primary' }, medium: { provider: 'fallback' } });
+  return { manager, calls };
+}
+
+test('with a tier map, a stream that stalls before showing anything moves on to the next provider', async () => {
+  const { manager, calls } = tierPair(() => (async function* () { await new Promise(() => {}); })());
+  const events = await collect(manager.streamTier('high', 't', messages));
+  expect(events.map(e => e.type)).toEqual(['text', 'done']);
+  expect((events[0] as { text: string }).text).toBe('from fallback');
+  // A stall is not retried on the same provider, it fails over at once.
+  expect(calls).toEqual({ primary: 1, fallback: 1 });
+});
+
+test('with a tier map, a stream that stalls after some text fails the turn as not answering in time', async () => {
+  const { manager, calls } = tierPair(() => (async function* () {
+    yield { type: 'text' as const, text: 'partial' };
+    await new Promise(() => {});
+  })());
+  const events = await collect(manager.streamTier('high', 't', messages));
+  expect(events.map(e => e.type)).toEqual(['text', 'error']);
+  expect((events[0] as { text: string }).text).toBe('partial');
+  expect(calls).toEqual({ primary: 1, fallback: 0 });
+  const error = events[1] as Extract<LLMStreamEvent, { type: 'error' }>;
+  expect(error.code).toBe('network');
+  const text = failureText(projectFailure(failureEvidence(new LLMProviderError(error.error, error.code!)), { label: 'Chat', sideEffects: false }));
+  expect(text).toContain('did not answer in time');
+  expect(text).not.toContain('could not be reached');
 });
