@@ -19,11 +19,11 @@
  */
 
 import { join } from 'node:path';
-import { existsSync, openSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
+import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { describeDashboard, describeLeftAlone, ensurePortReleased, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -45,7 +45,7 @@ ${c.bold('Usage:')}
 ${c.bold('Commands:')}
   ${c.cyan('start')}     Start the JARVIS daemon
   ${c.cyan('stop')}      Stop the running daemon
-  ${c.cyan('restart')}   Restart the daemon (stop + start)
+  ${c.cyan('restart')}   Restart the daemon the way it was started (stop + start)
   ${c.cyan('status')}    Show daemon status
   ${c.cyan('logs')}      Tail the daemon log file
   ${c.cyan('autostart')} Install, refresh or remove the service that keeps JARVIS running
@@ -61,7 +61,7 @@ ${c.bold('Commands:')}
   ${c.cyan('help')}      Show this help message
 
 ${c.bold('Start options:')}
-  --port <N>        Override daemon port (default: 3142)
+  --port <N>        Override daemon port (default: 3142). --port=<N> works too
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
   --data-dir <path> Override data directory (default: ~/.jarvis)
@@ -87,7 +87,7 @@ ${c.bold('Examples:')}
   jarvis start                  Start in foreground
   jarvis start -d               Start as background daemon
   jarvis start --port 8080      Start on custom port
-  jarvis restart                Restart with same settings
+  jarvis restart                Restart with same settings (background, port, options)
   jarvis logs -f                Follow live log output
   jarvis autostart              Keep JARVIS running across logins (and boots)
   jarvis autostart --status     Show what autostart is installed
@@ -114,16 +114,13 @@ async function cmdStart(args: string[]): Promise<void> {
   const noOpen = args.includes('--no-open');
   const noLocalTools = args.includes('--no-local-tools');
 
-  // Parse --port
-  let port: number | undefined;
-  const portIdx = args.indexOf('--port');
-  if (portIdx !== -1 && args[portIdx + 1]) {
-    port = parseInt(args[portIdx + 1]!, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
-      console.error(c.red('Error: --port requires a number between 1 and 65535'));
-      process.exit(1);
-    }
+  // Parse --port (`--port N` or `--port=N`)
+  const parsedPort = parsePortArg(args);
+  if ('error' in parsedPort) {
+    console.error(c.red(`Error: ${parsedPort.error}`));
+    process.exit(1);
   }
+  const port = parsedPort.port;
 
   // Parse --data-dir
   let dataDir: string | undefined;
@@ -162,7 +159,8 @@ async function cmdStart(args: string[]): Promise<void> {
   // prints or opens it: the hint, the detached summary, and openDashboard on
   // both paths. It follows the port startDaemon is about to bind rather than a
   // hardcoded 3142 (#544), and has no URL at all in unix-socket mode.
-  const dashboard = describeDashboard(resolveDashboardTarget({ cliPort: port }));
+  const dashboardTarget = resolveDashboardTarget({ cliPort: port });
+  const dashboard = describeDashboard(dashboardTarget);
 
   // Friendly first-run hint - when no config exists yet, the daemon
   // boots in "setup mode" and the dashboard's onboarding gate handles
@@ -199,7 +197,12 @@ async function cmdStart(args: string[]): Promise<void> {
     // daemon (src/daemon/index.ts) traps them and runs a bounded graceful
     // DRAIN before exiting. A `process.exit(0)` from the CLI would preempt that
     // async teardown mid-flight. The OS auto-releases the flock on exit anyway.
-    process.on('exit', () => releaseLock());
+    process.on('exit', () => { releaseLock(); clearLaunchRecord(); });
+    // A record already under this pid is the one `start -d` wrote for us as its
+    // detached child; keep it, or `restart` would come back in the foreground.
+    if (!readLaunchRecord(process.pid)) {
+      writeLaunchRecord({ pid: process.pid, detached: false, noOpen, noLocalTools, port, dataDir, systemConfigPath });
+    }
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
@@ -216,18 +219,22 @@ async function cmdStart(args: string[]): Promise<void> {
       process.exit(1);
     }
 
+    // A busy port is the one start failure we can name before spawning
+    // anything. The daemon only finds out after it has taken the lock and
+    // booted, and then dies with the user long gone.
+    const wantedPort = dashboardTarget.port;
+    if (wantedPort !== null && !await isPortFree(wantedPort)) {
+      console.error(c.red(`✗ Port ${wantedPort} is already in use by another program, so JARVIS was not started.`));
+      console.error(c.dim('  Free that port, or start JARVIS on another one: jarvis start -d --port <N>'));
+      process.exit(1);
+    }
+
     // Run in background — spawn a detached child process with log file
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));
 
     const logPath = getLogPath();
 
-    const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
-    if (port) daemonArgs.push('--port', String(port));
-    // Forward --system-config into the detached child: without this, a hosted
-    // `jarvis start -d` would re-enter cmdStart in the child with no flag,
-    // and the daemon would (silently) fall back to ~/.jarvis/config.yaml,
-    // defeating the whole point of the flag.
-    if (systemConfigPath) daemonArgs.push('--system-config', systemConfigPath);
+    const daemonArgs = detachedDaemonArgs(join(PACKAGE_ROOT, 'bin/jarvis.ts'), { port, dataDir, noLocalTools, systemConfigPath });
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its
@@ -236,6 +243,7 @@ async function cmdStart(args: string[]): Promise<void> {
     // here because it is the only place that covers every launcher - this one,
     // `jarvis update`'s restart, and the launchd plist - and because comparing
     // inodes catches spellings a string compare cannot.
+    const logStart = existsSync(logPath) ? statSync(logPath).size : 0;
     const logFd = openSync(logPath, 'a');
     const child = spawn('bun', daemonArgs, {
       detached: true,
@@ -243,16 +251,32 @@ async function cmdStart(args: string[]): Promise<void> {
       env: { ...process.env },
     });
     child.unref();
+    // Recorded now, under the child's pid, rather than only once it answers:
+    // a start that is interrupted or outlasts the wait below still leaves a
+    // daemon that `restart` must bring back detached. Any record already there
+    // is a dead daemon's (nothing holds the lock), and the child keeps this one
+    // instead of writing its own foreground record.
+    clearLaunchRecord();
+    const launch = { detached: true, noOpen, noLocalTools, port, dataDir, systemConfigPath };
+    if (child.pid !== undefined) writeLaunchRecord({ pid: child.pid, ...launch });
+    let childExited = false;
+    child.on('exit', () => { childExited = true; });
 
-    // Poll for the daemon to acquire its lock (up to 10s)
+    // Success is the daemon holding its lock AND answering on its port (when
+    // it has one). The lock alone comes seconds before the bind, and a daemon
+    // that cannot bind dies after reporting nothing. Stop waiting as soon as
+    // the child is gone.
     let runningPid: number | null = null;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 120 && !childExited; i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      runningPid = isLocked();
-      if (runningPid) break;
+      const holder = isLocked();
+      if (!holder) continue;
+      const bound = readLockedPort() ?? dashboardTarget.port;
+      if (bound === null || await daemonOwnsPort(holder, bound)) { runningPid = holder; break; }
     }
 
     if (runningPid) {
+      if (runningPid !== child.pid) writeLaunchRecord({ pid: runningPid, ...launch });
       console.log(c.green(`✓ JARVIS daemon started (PID ${runningPid})`));
       console.log(c.dim(`  Dashboard: ${dashboard.label}`));
       console.log(c.dim(`  Logs:      ${logPath}`));
@@ -262,11 +286,26 @@ async function cmdStart(args: string[]): Promise<void> {
         openDashboard(dashboard.openUrl);
       }
     } else {
-      console.log(c.red('✗ Failed to start daemon. Check logs:'));
-      console.log(c.dim(`  ${logPath}`));
+      let thisRun = '';
+      try { thisRun = readFileSync(logPath, 'utf-8').slice(logStart); } catch { /* unreadable log */ }
+      const failedPort = readLockedPort() ?? dashboardTarget.port;
+      if (/EADDRINUSE|address already in use|port \d+ is (already )?in use/i.test(thisRun)) {
+        console.error(c.red(`✗ JARVIS could not start: port ${failedPort ?? 'it needs'} is already in use by another program.`));
+        console.error(c.dim('  Free that port, or start JARVIS on another one: jarvis start -d --port <N>'));
+      } else if (childExited) {
+        console.error(c.red('✗ JARVIS exited while starting. Check logs:'));
+      } else {
+        console.error(c.red(`✗ JARVIS is running but did not open port ${failedPort} within a minute. Check logs:`));
+      }
+      console.error(c.dim(`  ${logPath}`));
       process.exit(1);
     }
   }
+}
+
+// What still holds the port after a stop, and why it was left there.
+function printLeftAlone(port: number, listeners: PortListener[], print: (line: string) => void = console.log): void {
+  for (const line of describeLeftAlone(port, listeners)) print(c.dim(`  ${line}`));
 }
 
 // Returns true when the daemon is stopped and its lock cleared; false when a
@@ -278,16 +317,12 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
 
   // Parse `--port N` for the no-lockfile recovery path. Ignored when the
   // lockfile recorded the daemon's actual port (authoritative).
-  let cliPort: number | undefined;
-  const portIdx = args.indexOf('--port');
-  if (portIdx !== -1 && args[portIdx + 1]) {
-    const parsed = parseInt(args[portIdx + 1]!, 10);
-    if (isNaN(parsed) || parsed < 1 || parsed > 65535) {
-      console.error(c.red('Error: --port requires a number between 1 and 65535'));
-      process.exit(1);
-    }
-    cliPort = parsed;
+  const parsedPort = parsePortArg(args);
+  if ('error' in parsedPort) {
+    console.error(c.red(`Error: ${parsedPort.error}`));
+    process.exit(1);
   }
+  const cliPort = parsedPort.port;
 
   const resolution = resolveStopPort({ cliPort });
   const port = resolution.port;
@@ -310,9 +345,9 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       console.log(c.yellow('JARVIS is not running.'));
       return true;
     }
-    // Signals only a daemon that holds this data folder's lock file open (one
-    // whose lock file was deleted under it, say). Any other listener on the
-    // port is someone else's program and is named, never stopped.
+    // Signals only this install's daemon for this data folder that the lock
+    // no longer shows (its lock file was deleted under it, say). Any other
+    // listener on the port is named, never stopped.
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
       const details = cleanup.forced.length > 0
@@ -326,7 +361,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     } else {
       console.log(c.yellow('JARVIS is not running.'));
     }
-    for (const line of describeLeftAlone(port, cleanup.leftAlone)) console.log(c.dim(`  ${line}`));
+    printLeftAlone(port, [...cleanup.foreign, ...cleanup.stuck]);
     return true;
   }
 
@@ -384,15 +419,17 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     }
 
     if (port === null) {
+      clearLaunchRecord();
       console.log(c.green('✓ JARVIS daemon stopped.'));
       return true;
     }
     const cleanup = await ensurePortReleased(port);
-    if (!cleanup.released) {
+    if (cleanup.stuck.length > 0) {
       console.error(c.red(`✗ JARVIS stopped but port ${port} is still occupied.`));
-      for (const line of describeLeftAlone(port, cleanup.leftAlone)) console.error(c.dim(`  ${line}`));
+      printLeftAlone(port, [...cleanup.foreign, ...cleanup.stuck], console.error);
       return false;
     }
+    clearLaunchRecord();
 
     const details = cleanup.forced.length > 0
       ? ` Force-killed another Jarvis daemon for this data folder on port ${port}: ${cleanup.forced.join(', ')}.`
@@ -400,6 +437,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
         ? ` Stopped another Jarvis daemon for this data folder on port ${port}: ${cleanup.terminated.join(', ')}.`
         : '';
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
+    printLeftAlone(port, cleanup.foreign);
     return true;
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
@@ -517,6 +555,9 @@ async function cmdRestart(args: string[]): Promise<void> {
   if (warning) console.warn(c.yellow(warning));
 
   const pid = isLocked();
+  // Read before the stop clears it: the new daemon starts the way the old one
+  // did (detached or not, same port and options) unless the user says otherwise.
+  const startArgs = restartStartArgs(pid ? readLaunchRecord(pid) : null, args);
   if (pid) {
     if (!await cmdStop()) {
       // A service manager can bring the daemon back under a new pid before the
@@ -537,7 +578,7 @@ async function cmdRestart(args: string[]): Promise<void> {
   // Before the start, not after: with no -d, cmdStart does not return until the
   // daemon exits, and a note printed then would arrive hours late.
   await printLaunchdHandoffNote();
-  await cmdStart(args);
+  await cmdStart(startArgs);
 }
 
 /**

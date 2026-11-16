@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path';
 import { describeLeftAlone, ensurePortReleased, holdsJarvisLock, parsePidList, printableName, windowsListenerScript } from './lifecycle.ts';
 
 /**
- * `jarvis stop` signals only the Jarvis daemon for this data folder.
+ * `jarvis stop` signals only the Jarvis daemon for this data folder: a process
+ * whose command line is this install's bin/jarvis.ts AND that holds this data
+ * folder's lock file open. Either one alone is not enough.
  *
  * With no daemon holding the lock, `jarvis stop` still clears the port it
  * resolves (the lockfile's, else --port, JARVIS_PORT, daemon.port or 3142).
@@ -16,12 +18,14 @@ import { describeLeftAlone, ensurePortReleased, holdsJarvisLock, parsePidList, p
  * Every process signalled here is one this file spawned: a small Bun server on
  * a kernel-chosen loopback port (never a well-known one), optionally holding a
  * lock file inside this file's own temp folder open the way the daemon holds
- * its own. JARVIS_HOME and HOME point into that folder for the CLI case, so the
- * real ~/.jarvis is never read or written.
+ * its own, and optionally carrying this install's bin/jarvis.ts on its command
+ * line the way the daemon does. JARVIS_HOME and HOME point into that folder for
+ * the CLI case, so the real ~/.jarvis is never read or written.
  */
 
 const SANDBOX = mkdtempSync(join(tmpdir(), 'jarvis-stop-owner-'));
 const PACKAGE_ROOT = join(import.meta.dir, '..', '..');
+const JARVIS_ENTRY = join(PACKAGE_ROOT, 'bin', 'jarvis.ts');
 
 type Listener = { pid: number; port: number; exited: Promise<number>; kill: () => Promise<void> };
 const spawned: Listener[] = [];
@@ -40,9 +44,11 @@ afterAll(() => {
  * daemon; with `unlinkLock` it then deletes the file, leaving the descriptor on
  * a deleted inode. `onSigterm` makes it survive SIGTERM: 'ignore' keeps the
  * lock, 'drop-lock' closes it first, 'unbind' closes the lock and leaves the
- * port.
+ * port. `asJarvis` puts this install's bin/jarvis.ts on its command line (as an
+ * argument the script ignores), which is what the command half of the check
+ * looks for.
  */
-async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; onSigterm?: 'ignore' | 'drop-lock' | 'unbind'; prefix?: string[] } = {}): Promise<Listener> {
+async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; onSigterm?: 'ignore' | 'drop-lock' | 'unbind'; prefix?: string[]; asJarvis?: boolean } = {}): Promise<Listener> {
   const script = `
     const { openSync, closeSync, unlinkSync, constants } = require('node:fs');
     const lockPath = process.env.TEST_LOCK_PATH;
@@ -60,7 +66,7 @@ async function spawnListener(opts: { lockPath?: string; unlinkLock?: boolean; on
     setInterval(() => {}, 1 << 30);
   `;
   const env: Record<string, string | undefined> = { ...process.env, TEST_LOCK_PATH: opts.lockPath, TEST_UNLINK_LOCK: opts.unlinkLock ? '1' : undefined, TEST_ON_SIGTERM: opts.onSigterm };
-  const child = Bun.spawn([...(opts.prefix ?? []), process.execPath, '--eval', script], { env, stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
+  const child = Bun.spawn([...(opts.prefix ?? []), process.execPath, '--eval', script, ...(opts.asJarvis ? [JARVIS_ENTRY] : [])], { env, stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
   const kill = async () => {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
     await child.exited;
@@ -108,41 +114,58 @@ describe('ensurePortReleased', () => {
     const result = await ensurePortReleased(other.port, { lockPath });
 
     // Found (so this is not passing because lsof/ss saw nothing) ...
-    expect(result.leftAlone.map((l) => [l.pid, l.reason])).toEqual([[other.pid, 'not-jarvis']]);
+    expect(result.foreign.map((l) => [l.pid, l.reason])).toEqual([[other.pid, 'not-jarvis']]);
     // ... and not touched.
     expect(alive(other.pid)).toBe(true);
     expect(result.terminated).toEqual([]);
     expect(result.forced).toEqual([]);
+    expect(result.stuck).toEqual([]);
     expect(result.released).toBe(false);
-    expect(result.leftAlone[0]!.command).toBeTruthy();
+    expect(result.foreign[0]!.name).toBeTruthy();
   }, 20_000);
 
-  test('leaves alone a Jarvis daemon for a DIFFERENT data folder', async () => {
+  test('leaves alone this install\'s Jarvis daemon for a DIFFERENT data folder (command matches, lock does not)', async () => {
     const mine = dataFolder('mine');
     const theirs = dataFolder('theirs');
-    const other = await spawnListener({ lockPath: theirs.lockPath });
+    const other = await spawnListener({ lockPath: theirs.lockPath, asJarvis: true });
 
     const result = await ensurePortReleased(other.port, { lockPath: mine.lockPath });
 
-    expect(result.leftAlone.map((l) => l.pid)).toEqual([other.pid]);
+    expect(result.foreign.map((l) => [l.pid, l.reason])).toEqual([[other.pid, 'other-data-folder']]);
+    expect(result.stuck).toEqual([]);
+    expect(result.terminated).toEqual([]);
+    expect(alive(other.pid)).toBe(true);
+  }, 20_000);
+
+  test('leaves alone a program that is not Jarvis even when it holds this data folder\'s lock (lock matches, command does not)', async () => {
+    const { lockPath } = dataFolder('lock-only');
+    const other = await spawnListener({ lockPath });
+    expect(await holdsJarvisLock(other.pid, lockPath)).toBe(true);
+
+    const result = await ensurePortReleased(other.port, { lockPath });
+
+    expect(result.foreign.map((l) => [l.pid, l.reason])).toEqual([[other.pid, 'not-jarvis']]);
+    expect(result.stuck).toEqual([]);
+    expect(result.terminated).toEqual([]);
     expect(alive(other.pid)).toBe(true);
   }, 20_000);
 
   test('stops a Jarvis daemon for this data folder that the lock no longer shows', async () => {
     const { lockPath } = dataFolder('stale');
-    const daemon = await spawnListener({ lockPath });
+    const daemon = await spawnListener({ lockPath, asJarvis: true });
 
     const result = await ensurePortReleased(daemon.port, { lockPath });
 
     expect(result.terminated).toEqual([daemon.pid]);
-    expect(result.leftAlone).toEqual([]);
+    expect(result.foreign).toEqual([]);
+    expect(result.stuck).toEqual([]);
     expect(result.released).toBe(true);
     await daemon.exited;
   }, 20_000);
 
   test('SIGKILLs a Jarvis daemon for this data folder that ignores SIGTERM', async () => {
     const { lockPath } = dataFolder('stubborn');
-    const daemon = await spawnListener({ lockPath, onSigterm: 'ignore' });
+    const daemon = await spawnListener({ lockPath, onSigterm: 'ignore', asJarvis: true });
 
     const result = await ensurePortReleased(daemon.port, { lockPath });
 
@@ -155,30 +178,32 @@ describe('ensurePortReleased', () => {
     // What a reused pid would look like by the time SIGKILL is due: alive,
     // still on the port, and no longer holding this data folder's lock.
     const { lockPath } = dataFolder('let-go');
-    const proc = await spawnListener({ lockPath, onSigterm: 'drop-lock' });
+    const proc = await spawnListener({ lockPath, onSigterm: 'drop-lock', asJarvis: true });
 
     const result = await ensurePortReleased(proc.port, { lockPath });
 
     expect(result.forced).toEqual([]);
-    expect(result.leftAlone).toEqual([{ pid: proc.pid, command: expect.anything(), reason: 'let-go-of-lock' }]);
+    expect(result.foreign).toEqual([]);
+    expect(result.stuck).toEqual([{ pid: proc.pid, name: expect.anything(), reason: 'stopped-being-ours' }]);
     expect(alive(proc.pid)).toBe(true);
   }, 20_000);
 
   test('does not name a process that let go of the lock and left the port', async () => {
     const { lockPath } = dataFolder('let-go-unbind');
-    const proc = await spawnListener({ lockPath, onSigterm: 'unbind' });
+    const proc = await spawnListener({ lockPath, onSigterm: 'unbind', asJarvis: true });
 
     const result = await ensurePortReleased(proc.port, { lockPath });
 
     expect(result.forced).toEqual([]);
     expect(result.released).toBe(true);
-    expect(result.leftAlone).toEqual([]);
+    expect(result.foreign).toEqual([]);
+    expect(result.stuck).toEqual([]);
     expect(alive(proc.pid)).toBe(true);
   }, 20_000);
 
   test.if(process.platform === 'linux')('stops it after its whole data folder was deleted under it', async () => {
     const { dir, lockPath } = dataFolder('wiped');
-    const daemon = await spawnListener({ lockPath });
+    const daemon = await spawnListener({ lockPath, asJarvis: true });
     rmSync(dir, { recursive: true, force: true });
 
     const result = await ensurePortReleased(daemon.port, { lockPath });
@@ -192,7 +217,7 @@ describe('ensurePortReleased', () => {
   // the "<path> (deleted)" link this relies on.
   test.if(process.platform === 'linux')('stops it even after its lock file was deleted under it', async () => {
     const { lockPath } = dataFolder('deleted');
-    const daemon = await spawnListener({ lockPath, unlinkLock: true });
+    const daemon = await spawnListener({ lockPath, unlinkLock: true, asJarvis: true });
 
     const result = await ensurePortReleased(daemon.port, { lockPath });
 
@@ -247,7 +272,7 @@ describe('holdsJarvisLock', () => {
     // /proc shows an unlinked file as "<path> (deleted)"; a file whose real
     // name ends that way reads the same and must not pass for one.
     const { lockPath } = dataFolder('spoof');
-    const spoof = await spawnListener({ lockPath: `${lockPath} (deleted)` });
+    const spoof = await spawnListener({ lockPath: `${lockPath} (deleted)`, asJarvis: true });
     expect(await holdsJarvisLock(spoof.pid, lockPath)).toBe(false);
     const result = await ensurePortReleased(spoof.port, { lockPath });
     expect(result.terminated).toEqual([]);
@@ -283,11 +308,11 @@ describe('holdsJarvisLock', () => {
   // safe; what must not happen is a crash or a stop of the wrong process.
   test.if(process.platform === 'darwin')('macOS: a deleted lock is either identified or safely left alone', async () => {
     const { lockPath } = dataFolder('darwin-deleted');
-    const daemon = await spawnListener({ lockPath, unlinkLock: true });
+    const daemon = await spawnListener({ lockPath, unlinkLock: true, asJarvis: true });
     const result = await ensurePortReleased(daemon.port, { lockPath });
-    console.warn(`macOS deleted-lock outcome: terminated=${JSON.stringify(result.terminated)} leftAlone=${JSON.stringify(result.leftAlone)}`);
+    console.warn(`macOS deleted-lock outcome: terminated=${JSON.stringify(result.terminated)} foreign=${JSON.stringify(result.foreign)}`);
     if (result.terminated.length > 0) expect(result.terminated).toEqual([daemon.pid]);
-    else expect(result.leftAlone.map((l) => [l.pid, l.reason])).toEqual([[daemon.pid, 'not-jarvis']]);
+    else expect(result.foreign.map((l) => [l.pid, l.reason])).toEqual([[daemon.pid, 'other-data-folder']]);
   }, 20_000);
 
   test('is false for a pid that does not exist', async () => {
@@ -302,12 +327,13 @@ describe('finding the listeners', () => {
   // The child below runs ensurePortReleased with HOME pointing at a folder
   // whose login profile prints numbers. They must not be read as pids (they
   // used to be: lsof ran through `bash -lc`). One of them is the pid of a
-  // process this file spawned that holds the lock but is NOT on the port: if
+  // process this file spawned that runs as this Jarvis and holds the lock but
+  // is NOT on the port: if
   // the profile's output were read, it would pass the lock check and be
   // stopped, so this fails on a return of the login shell.
   test('does not read a login profile greeting as listeners', async () => {
     const home = dataFolder('noisy-home');
-    const bystander = await spawnListener({ lockPath: home.lockPath });
+    const bystander = await spawnListener({ lockPath: home.lockPath, asJarvis: true });
     // 4194305 is above Linux's largest pid_max, so it can never be a process.
     writeFileSync(join(home.dir, '.bash_profile'), `echo "Agent pid 4194305"\necho ${bystander.pid}\n`);
     writeFileSync(join(home.dir, '.profile'), `echo ${bystander.pid}\n`);
@@ -316,14 +342,14 @@ describe('finding the listeners', () => {
     const script = `
       const { ensurePortReleased } = await import(${JSON.stringify(lifecycle)});
       const r = await ensurePortReleased(${other.port}, { lockPath: ${JSON.stringify(home.lockPath)} });
-      console.log(JSON.stringify({ leftAlone: r.leftAlone.map((l) => l.pid), terminated: r.terminated, forced: r.forced }));
+      console.log(JSON.stringify({ foreign: r.foreign.map((l) => l.pid), terminated: r.terminated, forced: r.forced }));
     `;
     const env: Record<string, string | undefined> = { ...process.env, HOME: home.dir };
     for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
     const proc = Bun.spawn([process.execPath, '--eval', script], { env, cwd: home.dir, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect(stderr).toBe('');
-    expect(JSON.parse(stdout.trim())).toEqual({ leftAlone: [other.pid], terminated: [], forced: [] });
+    expect(JSON.parse(stdout.trim())).toEqual({ foreign: [other.pid], terminated: [], forced: [] });
     expect(alive(other.pid)).toBe(true);
     expect(alive(bystander.pid)).toBe(true);
   }, 30_000);
@@ -350,21 +376,26 @@ describe('printableName', () => {
 });
 
 describe('describeLeftAlone', () => {
-  test('names each listener and how to look it up on this platform', () => {
+  test('names each listener, why it is still there, and how to look it up on this platform', () => {
     expect(describeLeftAlone(4000, [])).toEqual([]);
     const lines = describeLeftAlone(4000, [
-      { pid: 12, command: 'python3', reason: 'not-jarvis' },
-      { pid: 13, command: null, reason: 'not-jarvis' },
-      { pid: 14, command: 'bun', reason: 'let-go-of-lock' },
+      { pid: 12, name: 'python3', reason: 'not-jarvis' },
+      { pid: 13, name: null, reason: 'not-jarvis' },
+      { pid: 15, name: 'bun', reason: 'other-data-folder' },
+      { pid: 14, name: 'bun', reason: 'stopped-being-ours' },
     ], 'darwin');
     expect(lines[0]).toContain('PID 12 (python3), PID 13,');
-    expect(lines[0]).toContain('not the Jarvis daemon');
+    expect(lines[0]).toContain('not JARVIS');
+    expect(lines[0]).toContain('left running');
     expect(lines[0]).not.toContain('PID 14');
+    expect(lines[1]).toContain('PID 15 (bun)');
+    expect(lines[1]).toContain('not the daemon for this data folder');
+    expect(lines[1]).toContain('left running');
     // One that WAS signalled is not described as untouched.
-    expect(lines[1]).toContain('PID 14 (bun)');
-    expect(lines[1]).toContain('was asked to stop');
-    expect(lines[2]).toBe('See what it is: lsof -nP -iTCP:4000 -sTCP:LISTEN');
-    expect(describeLeftAlone(4000, [{ pid: 12, command: null, reason: 'no-permission' }], 'win32'))
+    expect(lines[2]).toContain('PID 14 (bun)');
+    expect(lines[2]).toContain('was asked to stop');
+    expect(lines[3]).toBe('See what it is: lsof -nP -iTCP:4000 -sTCP:LISTEN');
+    expect(describeLeftAlone(4000, [{ pid: 12, name: null, reason: 'no-permission' }], 'win32'))
       .toEqual([expect.stringContaining('may not signal'), 'See what it is: netstat -ano | findstr :4000']);
   });
 });
@@ -400,7 +431,7 @@ describe('`jarvis stop` with no daemon running', () => {
     const jarvisHome = join(home.dir, '.jarvis');
     mkdirSync(jarvisHome, { recursive: true });
     const lockPath = join(jarvisHome, 'jarvis.pid');
-    const daemon = await spawnListener({ lockPath, unlinkLock: process.platform === 'linux' });
+    const daemon = await spawnListener({ lockPath, unlinkLock: process.platform === 'linux', asJarvis: true });
     // On macOS the file stays; it is unlocked (a plain open, no flock), which
     // is what `jarvis stop` sees when the daemon's flock is not visible.
     if (process.platform === 'linux') expect(() => unlinkSync(lockPath)).toThrow();

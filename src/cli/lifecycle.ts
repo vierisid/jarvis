@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import os from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import YAML from 'yaml';
 import { getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
@@ -107,30 +108,52 @@ async function findListeningPids(port: number, currentPid: number): Promise<numb
   )];
 }
 
-/**
- * A process still listening on the port that `jarvis stop` did not kill, what
- * it is called, and why it was left:
- *  - `not-jarvis`: not identified as the Jarvis daemon for this data folder,
- *    so never signalled;
- *  - `no-permission`: identified, but the signal was refused (EPERM);
- *  - `let-go-of-lock`: SIGTERMed as ours, then still running without the lock
- *    when SIGKILL was due, so not killed.
- */
-export type PortListener = { pid: number; command: string | null; reason: 'not-jarvis' | 'no-permission' | 'let-go-of-lock' };
+/** The `bin/jarvis.ts` of THIS install: what its daemons are started from. */
+const OWN_ENTRY = join(import.meta.dir, '..', '..', 'bin', 'jarvis.ts');
 
-export type PortCleanup = {
-  /** Nothing listens on the port any more. */
-  released: boolean;
-  /** Jarvis daemons that exited after SIGTERM. */
-  terminated: number[];
-  /** Jarvis daemons that needed SIGKILL. */
-  forced: number[];
-  /**
-   * Listeners still on the port that were not stopped, each with the reason
-   * (see PortListener). Whoever prints the result names them.
-   */
-  leftAlone: PortListener[];
-};
+function realpathOrNull(path: string): string | null {
+  try { return realpathSync(path); } catch { return null; }
+}
+
+/**
+ * Is this command line (argv of a process) this install's own `jarvis`?
+ *
+ * Compared by real path, so the symlink a global install puts on PATH counts
+ * and a different program that merely mentions "jarvis" does not. This is one
+ * half of what `jarvis stop` needs before it signals a process it did not find
+ * through its own lock; the other is holdsJarvisLock.
+ */
+export function isOwnJarvisCommand(argv: string[], entry: string = OWN_ENTRY, cwd?: string): boolean {
+  const own = realpathOrNull(entry);
+  if (own === null) return false;
+  // A relative path (`bun run bin/jarvis.ts`) means something only from the
+  // process's own directory, not ours.
+  return argv.some((arg) => arg.includes('/') && realpathOrNull(cwd ? resolve(cwd, arg) : arg) === own);
+}
+
+function readProcessCwd(pid: number): string | undefined {
+  try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return undefined; }
+}
+
+/** argv of a process, or null when it cannot be read (gone, or not ours to read). */
+async function readProcessArgv(pid: number): Promise<string[] | null> {
+  if (os.platform() === 'linux') {
+    try {
+      const raw = readFileSync(`/proc/${pid}/cmdline`, 'utf-8');
+      const argv = raw.split('\0').filter((a) => a !== '');
+      if (argv.length > 0) return argv;
+    } catch { /* fall through to ps */ }
+  }
+  if (os.platform() === 'win32') return null;
+  const out = (await captureIfPresent([systemTool('ps'), '-o', 'args=', '-p', String(pid)])).trim();
+  return out === '' ? null : out.split(/\s+/);
+}
+
+/** Is `pid` running this install's `bin/jarvis.ts`? */
+async function runsOwnJarvisCommand(pid: number): Promise<boolean> {
+  const argv = await readProcessArgv(pid);
+  return argv !== null && isOwnJarvisCommand(argv, OWN_ENTRY, readProcessCwd(pid));
+}
 
 /**
  * The spellings under which an open handle on `lockPath` can appear in
@@ -206,8 +229,10 @@ function sameMountNamespace(pid: number): boolean {
  * beyond stdio in the child (measured on both), so the daemon's own children
  * do not inherit it.
  *
- * A pid number, a name or a command line proves much less -- pids are
- * reused, and any program can be called `bun`.
+ * A pid number or a name proves much less -- pids are reused, and any
+ * program can be called `bun`. ensurePortReleased also requires the command
+ * line to be this install's `jarvis` (isOwnJarvisCommand): this check alone
+ * would pass any process that opened the file.
  *
  * "That lock file" means the same file, not the same path: an open file is
  * compared by device and inode with the one at `lockPath`, so a daemon in a
@@ -334,58 +359,112 @@ export function portInspectCommand(port: number, platform: NodeJS.Platform = os.
 }
 
 /**
- * What to tell the user about listeners `jarvis stop` left alone: who they are,
- * and how to look for themselves. Empty when there are none.
+ * A process still listening on the port after `jarvis stop` cleared it, its
+ * short name (null when unknown), and why it is still there.
+ *
+ * Foreign, never signalled:
+ *  - `not-jarvis`: not this install's `jarvis` command;
+ *  - `other-data-folder`: this install's `jarvis`, but not holding this data
+ *    folder's lock (a daemon for another data folder, or one we cannot inspect).
+ * Stuck, the Jarvis daemon for this data folder and still on the port:
+ *  - `no-permission`: the signal was refused (EPERM);
+ *  - `stopped-being-ours`: SIGTERMed as ours, then no longer ours when SIGKILL
+ *    was due, so not killed;
+ *  - `still-listening`: survived SIGKILL, or started listening during cleanup.
  */
-export function describeLeftAlone(port: number, leftAlone: PortListener[], platform: NodeJS.Platform = os.platform()): string[] {
-  if (leftAlone.length === 0) return [];
-  const who = (reason: PortListener['reason']) => leftAlone
+export type PortListener = {
+  pid: number;
+  name: string | null;
+  reason: 'not-jarvis' | 'other-data-folder' | 'no-permission' | 'stopped-being-ours' | 'still-listening';
+};
+
+export type PortCleanup = {
+  /** Nothing listens on the port any more. */
+  released: boolean;
+  /** Jarvis daemons that exited after SIGTERM. */
+  terminated: number[];
+  /** Jarvis daemons that needed SIGKILL. */
+  forced: number[];
+  /** Other programs still on the port, left running (`not-jarvis`, `other-data-folder`). */
+  foreign: PortListener[];
+  /** Listeners still on the port that are not foreign: our daemon would not go. */
+  stuck: PortListener[];
+};
+
+/**
+ * What to tell the user about the listeners `jarvis stop` left on the port
+ * (`foreign` and `stuck` of a PortCleanup): who they are, why they are still
+ * there, and how to look for themselves. Empty when there are none.
+ */
+export function describeLeftAlone(port: number, listeners: PortListener[], platform: NodeJS.Platform = os.platform()): string[] {
+  if (listeners.length === 0) return [];
+  const who = (reason: PortListener['reason']) => listeners
     .filter((l) => l.reason === reason)
-    .map(({ pid, command }) => (command ? `PID ${pid} (${command})` : `PID ${pid}`))
+    .map(({ pid, name }) => (name ? `PID ${pid} (${name})` : `PID ${pid}`))
     .join(', ');
+  const messages: Record<PortListener['reason'], (holders: string) => string> = {
+    'not-jarvis': (h) => `Port ${port} is held by ${h}, which is not JARVIS. It was left running.`,
+    'other-data-folder': (h) => `Port ${port} is held by ${h}, a JARVIS that is not the daemon for this data folder. It was left running.`,
+    'no-permission': (h) => `Port ${port} is held by ${h}, the JARVIS daemon for this data folder, which this user may not signal. Stop it as its owner, or with root.`,
+    'stopped-being-ours': (h) => `Port ${port} is still held by ${h}, which was asked to stop but is no longer the JARVIS daemon for this data folder, so it was not force-killed.`,
+    'still-listening': (h) => `Port ${port} is still held by ${h}, which kept listening after the stop.`,
+  };
   const lines: string[] = [];
-  const notJarvis = who('not-jarvis');
-  if (notJarvis) lines.push(`Port ${port} is held by ${notJarvis}, which is not the Jarvis daemon for this data folder, so it was left running.`);
-  const noPermission = who('no-permission');
-  if (noPermission) lines.push(`Port ${port} is held by ${noPermission}, a Jarvis daemon for this data folder that this user may not signal. Stop it as its owner, or with root.`);
-  const letGo = who('let-go-of-lock');
-  if (letGo) lines.push(`Port ${port} is still held by ${letGo}, which was asked to stop but no longer holds this data folder's lock, so it was not force-killed.`);
+  for (const reason of Object.keys(messages) as PortListener['reason'][]) {
+    const holders = who(reason);
+    if (holders) lines.push(messages[reason](holders));
+  }
   lines.push(`See what it is: ${portInspectCommand(port, platform)}`);
   return lines;
 }
 
 /**
- * Clear `port` of a lingering Jarvis daemon: SIGTERM, then SIGKILL if it has
- * not gone within two seconds.
+ * Clear `port` of a lingering Jarvis daemon for this data folder: SIGTERM, then
+ * SIGKILL if it has not gone within two seconds.
  *
- * Only a listener that holds this data folder's lock file open is signalled
- * (see holdsJarvisLock). Everything else is reported in `leftAlone` and never
- * touched. This used to signal every listener on the port, and with no daemon
- * running `jarvis stop` resolves the port from config or the 3142 default, so
- * a plain `jarvis stop` killed whatever unrelated program was on 3142.
+ * A listener is ours only when BOTH hold: its command line is this install's
+ * `bin/jarvis.ts` (isOwnJarvisCommand), and it holds this data folder's lock
+ * file open (holdsJarvisLock). Everything else -- another program, or this
+ * install's daemon for another data folder -- is reported in `foreign` and
+ * never touched. A port number proves nothing about who is behind it: this used
+ * to signal every listener on the port, and with no daemon running `jarvis stop`
+ * resolves the port from config or the 3142 default, so a plain `jarvis stop`
+ * killed whatever unrelated program was on 3142.
+ *
+ * `isOwnCommand` replaces the command-line half of the check, for tests; the
+ * lock half is always the real one.
  */
 export async function ensurePortReleased(
   port: number,
-  options: { currentPid?: number; lockPath?: string } = {},
+  options: { currentPid?: number; lockPath?: string; isOwnCommand?: (pid: number) => Promise<boolean> } = {},
 ): Promise<PortCleanup> {
   const currentPid = options.currentPid ?? process.pid;
   const lockPath = options.lockPath ?? getPidPath();
+  const isOwnCommand = options.isOwnCommand ?? runsOwnJarvisCommand;
+  // Command first: it is the cheaper look, and it tells "not Jarvis at all"
+  // from "a Jarvis for another data folder".
+  const classify = async (pid: number): Promise<'ours' | 'not-jarvis' | 'other-data-folder'> => {
+    if (!(await isOwnCommand(pid))) return 'not-jarvis';
+    return (await holdsJarvisLock(pid, lockPath)) ? 'ours' : 'other-data-folder';
+  };
+
   const initialPids = await findListeningPids(port, currentPid);
   if (initialPids.length === 0) {
-    return { released: true, terminated: [], forced: [], leftAlone: [] };
+    return { released: true, terminated: [], forced: [], foreign: [], stuck: [] };
   }
 
   const terminated: number[] = [];
   const forced: number[] = [];
   const leftAlone: PortListener[] = [];
   const leaveAlone = async (pid: number, reason: PortListener['reason']) => {
-    leftAlone.push({ pid, command: await processName(pid), reason });
+    leftAlone.push({ pid, name: await processName(pid), reason });
   };
 
   for (const pid of initialPids) {
     if (!isPidAlive(pid)) continue;
-    if (!(await holdsJarvisLock(pid, lockPath))) {
-      await leaveAlone(pid, 'not-jarvis');
+    const owner = await classify(pid);
+    if (owner !== 'ours') {
+      await leaveAlone(pid, owner);
       continue;
     }
 
@@ -393,7 +472,7 @@ export async function ensurePortReleased(
       process.kill(pid, 'SIGTERM');
     } catch (err) {
       // EPERM: we can neither signal it nor wait it out, so skip instead of
-      // burning the 2s + 1s waits below. (Rare once the lock check passed: it
+      // burning the 2s + 1s waits below. (Rare once the checks passed: it
       // takes a process we could inspect but not signal.)
       if ((err as NodeJS.ErrnoException)?.code === 'EPERM') {
         await leaveAlone(pid, 'no-permission');
@@ -407,13 +486,14 @@ export async function ensurePortReleased(
       continue;
     }
 
-    // Ask again before SIGKILL. A process that no longer holds the lock is not
-    // something we may kill: normally it is our daemon in its last instant
-    // (it closes the lock as it exits) or a zombie waiting to be reaped, and in
-    // theory a reused pid. Give it a moment instead of a SIGKILL.
-    if (!(await holdsJarvisLock(pid, lockPath))) {
+    // Ask again before the signal that cannot be caught. Two seconds is long
+    // enough for the pid to have been freed and handed to someone else, and a
+    // process that no longer holds the lock is normally our daemon in its last
+    // instant (it closes the lock as it exits) or a zombie waiting to be
+    // reaped. Give it a moment instead of a SIGKILL.
+    if ((await classify(pid)) !== 'ours') {
       if (await waitForExit(pid, 1000)) terminated.push(pid);
-      else await leaveAlone(pid, 'let-go-of-lock');
+      else await leaveAlone(pid, 'stopped-being-ours');
       continue;
     }
 
@@ -431,12 +511,161 @@ export async function ensurePortReleased(
   // since let go of it (or exited and is a zombie nobody has reaped yet) holds
   // nothing, and "Port N is still held by" would be wrong.
   const remaining = await findListeningPids(port, currentPid);
-  return {
-    released: remaining.length === 0,
-    terminated,
-    forced,
-    leftAlone: leftAlone.filter((listener) => remaining.includes(listener.pid)),
-  };
+  const isForeign = (l: PortListener) => l.reason === 'not-jarvis' || l.reason === 'other-data-folder';
+  const foreign = leftAlone.filter((l) => isForeign(l) && remaining.includes(l.pid));
+  const foreignPids = new Set(foreign.map((l) => l.pid));
+  const stuck: PortListener[] = [];
+  for (const pid of remaining) {
+    if (foreignPids.has(pid)) continue;
+    stuck.push(leftAlone.find((l) => l.pid === pid) ?? { pid, name: await processName(pid), reason: 'still-listening' });
+  }
+  return { released: remaining.length === 0, terminated, forced, foreign, stuck };
+}
+
+/**
+ * True when nothing is bound to `port` (checked by binding it the way the
+ * daemon will: Bun.serve with no hostname takes 0.0.0.0). A plain
+ * `listen({ port })` takes `::` instead, which also collides with a listener on
+ * ::1 only and would refuse a port the daemon could have bound.
+ */
+export function isPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.listen({ port, host: '0.0.0.0' }, () => server.close(() => resolve(true)));
+  });
+}
+
+/**
+ * Is `pid` the one answering on `port`? Used by `start -d` so a stranger that
+ * already held the port cannot pass for the daemon we just started. When the
+ * listener cannot be looked up (no lsof or ss), a connection is all we have.
+ */
+export async function daemonOwnsPort(pid: number, port: number): Promise<boolean> {
+  const accepting = await new Promise<boolean>((resolve) => {
+    const socket = Bun.connect({
+      hostname: '127.0.0.1',
+      port,
+      socket: { open(s) { s.end(); resolve(true); }, data() {}, error() { resolve(false); }, connectError() { resolve(false); } },
+    });
+    socket.catch(() => resolve(false));
+  });
+  if (!accepting) return false;
+  const holders = await findListeningPids(port, process.pid);
+  return holders.length === 0 || holders.includes(pid);
+}
+
+/**
+ * `--port N` or `--port=N` from a command line.
+ *
+ * Neither "missing" nor "unusable" may fall through to the default: a typo'd
+ * `--port=3196` used to be ignored and the daemon came up on 3142 with nothing
+ * said. `port` is undefined only when the flag is absent.
+ */
+export function parsePortArg(args: string[]): { port: number | undefined } | { error: string } {
+  const message = '--port requires a number between 1 and 65535';
+  let raw: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--port') {
+      const next = args[i + 1];
+      if (next === undefined || next.startsWith('-')) return { error: message };
+      raw = next;
+      break;
+    }
+    if (arg.startsWith('--port=')) {
+      raw = arg.slice('--port='.length);
+      break;
+    }
+  }
+  if (raw === undefined) return { port: undefined };
+  const port = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { error: message };
+  return { port };
+}
+
+/**
+ * The command line `jarvis start -d` hands its detached child, which re-enters
+ * `start` in the foreground. Every option that changes what the daemon does
+ * must be forwarded: `--no-local-tools` used to be dropped here, so
+ * `start -d --no-local-tools` ran a daemon WITH local tools, and `--data-dir`
+ * pointed it at the default data dir.
+ */
+export function detachedDaemonArgs(entry: string, opts: {
+  port?: number;
+  dataDir?: string;
+  noLocalTools: boolean;
+  systemConfigPath?: string;
+}): string[] {
+  const args = [entry, 'start', '--no-open'];
+  if (opts.port) args.push('--port', String(opts.port));
+  if (opts.dataDir) args.push('--data-dir', opts.dataDir);
+  if (opts.noLocalTools) args.push('--no-local-tools');
+  // Without this a hosted `jarvis start -d` would re-enter cmdStart in the
+  // child with no flag, and the daemon would (silently) fall back to
+  // ~/.jarvis/config.yaml, defeating the whole point of the flag.
+  if (opts.systemConfigPath) args.push('--system-config', opts.systemConfigPath);
+  return args;
+}
+
+/** How the running daemon was started, so `jarvis restart` can start it the same way. */
+export interface LaunchRecord {
+  pid: number;
+  detached: boolean;
+  noOpen: boolean;
+  noLocalTools: boolean;
+  port?: number;
+  dataDir?: string;
+  systemConfigPath?: string;
+}
+
+function launchRecordPath(): string {
+  return join(dirname(getPidPath()), 'jarvis.launch.json');
+}
+
+export function writeLaunchRecord(record: LaunchRecord): void {
+  try { writeFileSync(launchRecordPath(), JSON.stringify(record), { mode: 0o600 }); } catch { /* restart just falls back to plain args */ }
+}
+
+export function clearLaunchRecord(): void {
+  try { unlinkSync(launchRecordPath()); } catch { /* absent */ }
+}
+
+/** The record for the daemon with this pid. A record left by an earlier daemon is ignored. */
+export function readLaunchRecord(pid: number): LaunchRecord | null {
+  try {
+    const raw = JSON.parse(readFileSync(launchRecordPath(), 'utf-8')) as Partial<LaunchRecord> | null;
+    if (!raw || raw.pid !== pid) return null;
+    const str = (v: unknown) => (typeof v === 'string' && v !== '' ? v : undefined);
+    return {
+      pid,
+      detached: raw.detached === true,
+      noOpen: raw.noOpen === true,
+      noLocalTools: raw.noLocalTools === true,
+      port: validPort(raw.port) ?? undefined,
+      dataDir: str(raw.dataDir),
+      systemConfigPath: str(raw.systemConfigPath),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The arguments `jarvis restart` hands to start: what the daemon was started
+ * with, except for anything the user passes now.
+ */
+export function restartStartArgs(record: LaunchRecord | null, userArgs: string[]): string[] {
+  const out = [...userArgs];
+  if (!record) return out;
+  const given = (...flags: string[]) => userArgs.some((a) => flags.some((f) => a === f || a.startsWith(`${f}=`)));
+  if (record.detached && !given('-d', '--detach')) out.push('--detach');
+  if (record.noOpen && !given('--no-open')) out.push('--no-open');
+  if (record.noLocalTools && !given('--no-local-tools')) out.push('--no-local-tools');
+  if (record.port !== undefined && !given('--port')) out.push('--port', String(record.port));
+  if (record.dataDir !== undefined && !given('--data-dir')) out.push('--data-dir', record.dataDir);
+  if (record.systemConfigPath !== undefined && !given('--system-config')) out.push('--system-config', record.systemConfigPath);
+  return out;
 }
 
 /**
