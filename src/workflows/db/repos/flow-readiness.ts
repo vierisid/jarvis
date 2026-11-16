@@ -150,7 +150,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       const target = db.query<{ id: string; status: string; disabled_at: number | null }, [string, string]>(
         'SELECT id, status, disabled_at FROM flow WHERE id = ? AND project_id = ?',
       ).get(id, flow.project_id);
-      if (!target) return 'Select an existing workflow ID in this project';
+      if (!target) return 'The workflow this step calls no longer exists; choose another workflow';
       // #1242: the call itself is refused at dispatch, so a parent that makes it is not ready.
       if (isTurnedOff(target)) return 'Target workflow is turned off; turn it on again or choose another workflow';
       const version = db.query<{ trigger: string }, [string]>(

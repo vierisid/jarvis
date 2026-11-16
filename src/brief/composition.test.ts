@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BriefCompositionProvider } from './composition';
 import { COMPOSITION_LIMITS } from './composition-contracts';
+import { AI_PROVIDER_NEEDED_CODE, AI_PROVIDER_NEEDED_MESSAGE } from './ai-provider-needed';
 import type { BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../workflows/db/index';
@@ -423,4 +424,21 @@ test('the composition journal and its draft are recorded in the provider project
   const rows = (table: string, id: string) => getWorkflowDb().query<{ project_id: string }, [string]>(`SELECT project_id FROM ${table} WHERE id = ?`).get(id)!.project_id;
   expect(rows('workflow_composition', ready.compositionId!)).toBe('project-a');
   expect(rows('flow', ready.workflow!.flowId)).toBe('project-a');
+});
+
+test('with no AI provider saved, a job is blocked with a plain message and the model is never called', async () => {
+  let calls = 0;
+  const p = new BriefCompositionProvider(getWorkflowDb(), undefined, 1000); providers.push(p);
+  p.configure(() => ({ llm: { async chat() { calls++; return { text: valid }; } }, pieceRegistry: sampleCatalog() }), () => false);
+  const { job } = p.submit(input); await p.idle();
+  expect(calls).toBe(0);
+  expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', blocker: { code: AI_PROVIDER_NEEDED_CODE, message: AI_PROVIDER_NEEDED_MESSAGE } });
+  expect(count('flow')).toBe(0);
+});
+
+test('with an AI provider saved, the same job runs as before', async () => {
+  const p = new BriefCompositionProvider(getWorkflowDb(), undefined, 1000); providers.push(p);
+  p.configure(() => ({ llm: { async chat() { return { text: valid }; } }, pieceRegistry: sampleCatalog(), maxAttempts: 2 }), () => true);
+  const { job } = p.submit(input); await p.idle();
+  expect(p.get(job.jobId).state).toBe('draft_ready');
 });
