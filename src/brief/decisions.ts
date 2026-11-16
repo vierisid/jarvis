@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
 import { approvalIntentFromContext, DASHBOARD_DECIDER, executionState } from '../authority/approval';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage, type ApprovalDecisionDeps } from '../daemon/approval-decision';
-import { decideWorkItem, getWorkItem } from '../goals/work-items';
+import { checkWorkResult, decideWorkItem, getWorkItem, NEEDS_YOU_DONE_REF, NEEDS_YOU_NOT_DOING_REF, WorkItemError } from '../goals/work-items';
 import { DEFAULT_IDS } from '../workflows/db/index';
 import { getFlowInProject } from '../workflows/db/repos/flow';
 import { getFlowVersion } from '../workflows/db/repos/flow-version';
@@ -16,6 +16,7 @@ import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision 
 import { ensureDecisionSchema } from './decision-schema';
 import { HELD_RUN_EFFECT } from '../workflows/runtime/deferred-cards';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
 
 export class DecisionError extends Error {
   constructor(message: string, readonly status = 400, readonly code = 'invalid_request') { super(message); }
@@ -231,6 +232,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         // here too, decided as DASHBOARD_DECIDER through the same executor path.
         item.actions = ['approve', 'reject', 'inspect'];
         item.supportedActions = ['approve_permission', 'reject_permission', 'inspect'];
+        // Raised from the screen, with screen awareness off: approving waits
+        // and says so; rejecting still works (#1314 follow-up).
+        if (approvalHeldByAwareness(approval)) item.awarenessHeld = AWARENESS_HELD_APPROVAL_MESSAGE;
       } else if (approval.execution_mode !== 'workflow' && approval.status === 'approved' &&
         ['unknown', 'not_started'].includes(approval.execution_outcome ?? '') && !linked.rows.length) {
         item.kind = 'recovery';
@@ -249,6 +253,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       linked = this.effects('run_id', runId ?? '');
       if (linked.unresolved) item.state = linked.unresolved;
       if (work.status === 'proposed' && !linked.unresolved) item.supportedActions = ['accept_intent', 'reject_intent', 'inspect'];
+      // An accepted step the founder does themselves ends in their own word: done, or not doing it.
+      // Workflow work finishes through its run, so it is not offered here.
+      else if (work.status === 'ready' && work.mode === 'manual' && !linked.unresolved) item.supportedActions = ['mark_done', 'not_doing', 'inspect'];
     } else {
       linked = this.effects('id', sourceId);
       const effect = linked.rows[0]!;
@@ -379,18 +386,33 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       if (body.action === ('inspect' as DecisionAction) || !current.supportedActions.includes(body.action)) throw new DecisionError('Action is not supported for this revision', 409, 'unsupported_action');
     };
     validate();
-    const intent = body.action === 'accept_intent' || body.action === 'reject_intent';
+    const finish = body.action === 'mark_done' || body.action === 'not_doing';
+    const intent = body.action === 'accept_intent' || body.action === 'reject_intent' || finish;
     if (intent ? !text(body.reason, 10_000) || body.note !== undefined : body.reason !== undefined) throw new DecisionError('Intent decisions require a reason; permission decisions do not accept one');
     if (body.note !== undefined && (body.action !== 'close_without_running' || !text(body.note, 500))) throw new DecisionError('Only closing accepts a note of at most 500 characters');
     // The existing writers commit approval/claims before dispatch. The optional
     // guard checks this projection in that same write transaction, including
     // changes by legacy surfaces or another process. Never wrap tool execution.
     const authority = { ...this.authority, assertCurrent: validate };
-    if (intent) this.db.transaction(() => {
-      validate();
-      decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
-    }).immediate();
-    else if (body.action === 'approve_permission' || body.action === 'reject_permission') {
+    if (intent) {
+      try {
+        this.db.transaction(() => {
+          validate();
+          if (finish) {
+            // The user's own words are the evidence of an explicit result check. Doing it
+            // is a passed check; not doing it is a failed one, which never counts as saved time.
+            // Its ref keeps a choice not to do it apart from a failed attempt (next-action).
+            const done = body.action === 'mark_done';
+            checkWorkResult(item.workItemId!, { verdict: done ? 'passed' : 'failed', summary: body.reason,
+              evidence: [{ ref: done ? NEEDS_YOU_DONE_REF : NEEDS_YOU_NOT_DOING_REF, description: body.reason! }] });
+          } else decideWorkItem(item.workItemId!, { outcome: body.action === 'accept_intent' ? 'accepted' : 'rejected', reason: body.reason });
+        }).immediate();
+      } catch (e) {
+        // A refusal from the work item (such as a reason with no visible text) is the caller's to fix, not an unknown outcome.
+        if (e instanceof WorkItemError) throw new DecisionError(e.message, e.status, e.status === 409 ? 'revision_conflict' : 'invalid_request');
+        throw e;
+      }
+    } else if (body.action === 'approve_permission' || body.action === 'reject_permission') {
       const result = await applyApprovalDecision(body.action === 'approve_permission' ? 'approve' : 'deny', item.approval!.approvalId, DASHBOARD_DECIDER, authority);
       if (result.status === 'already_decided') throw new DecisionError('Decision already changed', 409, 'revision_conflict');
       // Pause holds and Kill stops (Q-08): the card stays pending and says why.

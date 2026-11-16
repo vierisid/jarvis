@@ -9,6 +9,7 @@ import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import * as vault from '../vault/goals.ts';
 import { recordGoalAwarenessActivity } from './awareness-bridge.ts';
 import { buildGoalReviewBundle, validateReviewScores } from './review-evidence.ts';
+import { setScreenCaptureEnabledSource } from '../actions/tools/desktop-guard.ts';
 
 const config: AwarenessConfig = {
   enabled: true, capture_interval_ms: 15000, min_change_threshold: 0.02,
@@ -181,4 +182,16 @@ test('activity throttling survives database reopen and expires after thirty minu
     .run(Date.now() - 31 * 60 * 1000, first.id);
   deliver(transition('Inbox - Mail', 'Phoenix deployment checklist - Editor'));
   expect(activity(target.id)).toHaveLength(2);
+});
+
+test('nothing on screen is matched or noted against a goal while screen awareness is off', () => {
+  const target = goal();
+  const event = transition();
+  setScreenCaptureEnabledSource(() => false);
+  try {
+    expect(deliver(event)).toEqual([]);
+    expect(activity(target.id)).toEqual([]);
+  } finally { setScreenCaptureEnabledSource(null); }
+  // The same event is matched once awareness is back on: the fixture is live.
+  expect(deliver(event).map(match => match.goalId)).toEqual([target.id]);
 });
