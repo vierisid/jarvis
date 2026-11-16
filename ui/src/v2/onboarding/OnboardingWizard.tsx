@@ -193,12 +193,19 @@ export function OnboardingWizard({
   onComplete,
   brief,
   setupOnly = false,
+  onBack,
+  onLeave,
 }: {
   status: OnboardingStatus | null;
   brief?: OnboardingDraft;
   /** Host-owned onboarding resumes immediately after the existing setup writer. */
   setupOnly?: boolean;
   onComplete: (prompt?: string) => void | Promise<void>;
+  /** Back from the first setup step, when the host has a screen before it. */
+  onBack?: () => void | Promise<void>;
+  /** Lets the person into the dashboard. `setupSaved` is true only after the AI step was skipped and
+   * setup was saved without a provider; otherwise nothing was saved and setup stays incomplete. */
+  onLeave?: (outcome: { setupSaved: boolean }) => void | Promise<void>;
 }) {
   const startKey = useMemo<StepKey>(() => {
     if (setupOnly) return "perms";
@@ -580,7 +587,19 @@ export function OnboardingWizard({
   const goKey = (k: StepKey) => { setError(null); setStepKey(k); };
   const go = (n: number) => goKey(steps[Math.min(Math.max(0, n), steps.length - 1)]![0]);
   const next = () => go(step + 1);
-  const back = () => go(step - 1);
+  const back = () => {
+    if (step === 0 && onBack) { void onBack(); return; }
+    go(step - 1);
+  };
+  const [leaving, setLeaving] = useState(false);
+  const leave = async () => {
+    if (!onLeave) return;
+    setLeaving(true);
+    try { await onLeave({ setupSaved: false }); } finally { setLeaving(false); }
+  };
+  // The AI step was skipped: setup is saved without a provider and the person
+  // goes straight to the dashboard, where chat and workflows say what is missing.
+  const [brainSkipped, setBrainSkipped] = useState(false);
 
   /* — brain: test connection — */
   const runTest = useCallback(async () => {
@@ -670,6 +689,8 @@ export function OnboardingWizard({
         : { tts: ttsBlock };
       if (hosted) {
         // nothing further: provider config is the platform's job
+      } else if (brainSkipped) {
+        // No `llm` block: nothing was tested, so nothing is saved.
       } else if (provId === "jarvis") {
         // Hosted needs no provider or default — the daemon's carve-out injects
         // the provider, and the uj-* tier wiring lives in the routing view.
@@ -718,11 +739,12 @@ export function OnboardingWizard({
       // provider config as saved.
       const resBody = await r.json().catch(() => null) as { dropped?: string[] } | null;
       setDroppedSections(resBody?.dropped ?? []);
-      if (setupOnly) await onComplete(); else goKey("connect");
+      if (brainSkipped && !hosted && onLeave) await onLeave({ setupSaved: true });
+      else if (setupOnly) await onComplete(); else goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded, setupOnly, onComplete]);
+  }, [brainSkipped, onLeave, hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType, localSTTLoaded, setupOnly, onComplete]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -941,6 +963,9 @@ export function OnboardingWizard({
       <div className="obw-bar">
         <i /><i /><i />
         <span className="obw-wt">{key === "welcome" || key === "interview" || key === "tour" || key === "allset" ? "Jarvis" : "Jarvis · Setup"}</span>
+        {onLeave && PROGRESS_STEPS.has(key) && (
+          <button type="button" className="obw-skip obw-later" disabled={busy || leaving} onClick={() => void leave()}>Finish later</button>
+        )}
       </div>
       {progress}
 
@@ -1160,7 +1185,7 @@ export function OnboardingWizard({
               </>
             )}
             <div className="obw-btnrow">
-              <button className="obw-btn obw-btn-ghost" disabled={setupOnly} onClick={back}>Back</button>
+              <button className="obw-btn obw-btn-ghost" disabled={setupOnly && !onBack} onClick={back}>Back</button>
               <span className="grow" />
               {/* Hosted skips brain/hearing/speaking, so this is the last
                   setup screen — the setup POST (which normally fires when
@@ -1224,8 +1249,8 @@ export function OnboardingWizard({
             ))}
           </div>
           <div className="obw-provdetail"><ProviderSetupGuideButton kind={provId} />{renderProvDetail()}</div>
-          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>Continue</button></div>
-          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>Test the connection to continue.</div>}
+          <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" />{onLeave && <button className="obw-skip" disabled={busy} onClick={() => { setBrainSkipped(true); next(); }}>Skip for now</button>}<button className="obw-btn obw-btn-pri" style={{ marginLeft: 12 }} disabled={!brainReady} onClick={() => { setBrainSkipped(false); next(); }}>Continue</button></div>
+          {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>{onLeave ? "Test the connection to continue, or skip for now. Without an AI provider, chat and workflows stay off until you add one in Settings." : "Test the connection to continue."}</div>}
         </div></div>
       );
 
@@ -1419,7 +1444,9 @@ export function OnboardingWizard({
               <>
                 {droppedSections.includes("llm")
                   ? <div><span className="ok">✓</span> brain · included with your plan (the {prov.name} config wasn’t needed and wasn’t saved)</div>
-                  : <div><span className="ok">✓</span> brain · {prov.name}</div>}
+                  : brainSkipped
+                    ? <div><span className="ok">✓</span> brain · not set up yet. Add an AI provider in Settings.</div>
+                    : <div><span className="ok">✓</span> brain · {prov.name}</div>}
                 {droppedSections.includes("tts") || droppedSections.includes("stt")
                   ? <div><span className="ok">✓</span> voice · included with your plan (your provider entries weren’t needed and weren’t saved)</div>
                   : <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>}
