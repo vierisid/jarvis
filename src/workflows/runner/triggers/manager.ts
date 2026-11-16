@@ -92,6 +92,16 @@ const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow
  */
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
+/**
+ * Queue priority of a scheduled run. Webhook and manual runs wait at 0, so a
+ * schedule's tick goes ahead of a backlog of them instead of being skipped
+ * behind it (a tick is skipped while the previous one has not started). The
+ * lead is bounded (PRIORITY_HEAD_START_MS): a run that has waited longer than
+ * that still goes first, so schedules cannot starve webhooks. Approval and
+ * timer continuations share this priority.
+ */
+export const SCHEDULE_RUN_PRIORITY = 1;
+
 /** The admission refusal for a flow that is off; a webhook sender is told so. */
 const TURNED_OFF = "The workflow is turned off.";
 
@@ -1032,6 +1042,7 @@ export class TriggerManager {
         flowRunId: run.id,
         flowId,
         flowVersionId: versionId,
+        priority: opts.source === "schedule" ? SCHEDULE_RUN_PRIORITY : 0,
         // No auto-retry: trigger-fired runs often have side effects that
         // would duplicate on retry (e.g. notify, email, downstream API
         // calls). Surface the failure once; the trigger's next fire is

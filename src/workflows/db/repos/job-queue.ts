@@ -104,6 +104,16 @@ const DEFAULT_LEASE_MS = 5 * 60_000; // 5 minutes
 const DEFAULT_BACKOFF_MS = 1_000;
 const DEFAULT_MAX_BACKOFF_MS = 5 * 60_000;
 
+/**
+ * How far ahead one step of priority puts a job: it is claimed as if it had
+ * been queued this much earlier. A scheduled run or a continuation (priority
+ * 1) so goes ahead of webhook and manual runs (priority 0) queued in the last
+ * ten minutes, but never ahead of one that has waited longer. Priority
+ * shortens a wait; it cannot make another job's wait endless, however many
+ * schedules and continuations keep arriving.
+ */
+export const PRIORITY_HEAD_START_MS = 10 * 60_000;
+
 function db(): Database {
   return getWorkflowDb();
 }
@@ -197,12 +207,14 @@ export function queueWait(runId: string): { ahead: number } | null {
     )
     .get(runId, RUN_FLOW);
   if (!own) return null;
+  const ownOrder = own.scheduled_at - own.priority * PRIORITY_HEAD_START_MS;
   const row = db()
-    .query<{ n: number }, [string, string, number, number, number, number, number]>(
+    .query<{ n: number }, [string, string, number, number, number]>(
       `SELECT COUNT(*) AS n FROM workflow_job WHERE job_type = ? AND id != ? AND (status = 'RUNNING'
-         OR (status = 'QUEUED' AND (priority > ? OR (priority = ? AND (scheduled_at < ? OR (scheduled_at = ? AND created <= ?))))))`,
+         OR (status = 'QUEUED' AND (scheduled_at - priority * ${PRIORITY_HEAD_START_MS} < ?
+           OR (scheduled_at - priority * ${PRIORITY_HEAD_START_MS} = ? AND created <= ?))))`,
     )
-    .get(RUN_FLOW, own.id, own.priority, own.priority, own.scheduled_at, own.scheduled_at, own.created);
+    .get(RUN_FLOW, own.id, ownOrder, ownOrder, own.created);
   return { ahead: row?.n ?? 0 };
 }
 
@@ -240,11 +252,29 @@ export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Jo
 }
 
 /**
+ * Runs waiting to start that the owner started in a project: by hand, from
+ * Brief, by the assistant or from linked work. A trigger's run and a
+ * workflow's child run do not count. The manual-run cap reads this, so a
+ * webhook flood filling the shared queue cannot refuse the owner's own starts.
+ */
+export function countQueuedOwnerRuns(projectId: string): number {
+  const row = db()
+    .query<{ n: number }, [string, string]>(
+      `SELECT COUNT(*) AS n FROM workflow_job j JOIN flow_run r ON r.id = j.flow_run_id
+       WHERE j.status = 'QUEUED' AND j.job_type = ? AND r.project_id = ? AND r.parent_run_id IS NULL
+         AND (r.triggered_by IS NULL OR r.triggered_by NOT LIKE 'trigger:%')`,
+    )
+    .get(RUN_FLOW, projectId);
+  return row?.n ?? 0;
+}
+
+/**
  * Atomically claim the next ready job. Returns null if the queue is empty.
  *
  * "Ready" = QUEUED and scheduled, or an expired RUNNING lease for a retryable
  * job type. Workflow jobs must never have been attempted. On claim, status
- * flips to RUNNING, attempt++, locked_until = now + leaseMs.
+ * flips to RUNNING, attempt++, locked_until = now + leaseMs. The oldest goes
+ * first, each step of priority counting as PRIORITY_HEAD_START_MS of age.
  */
 export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {}): Job<P> | null {
   const now = opts.now ?? nowMs();
@@ -266,7 +296,7 @@ export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {
              AND EXISTS (SELECT 1 FROM workflow_job busy WHERE busy.status = 'RUNNING' AND busy.job_type = '${RUN_FLOW}'
                AND busy.id != workflow_job.id AND ${JOB_FLOW("busy")} = ${JOB_FLOW("workflow_job")}))
              AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_VERSION("workflow_job")} IN (SELECT value FROM json_each(?)))` : "AND ? IS NOT NULL"}
-         ORDER BY priority DESC, scheduled_at ASC, created ASC
+         ORDER BY scheduled_at - priority * ${PRIORITY_HEAD_START_MS} ASC, created ASC
          LIMIT 1
        )
        RETURNING *`,
