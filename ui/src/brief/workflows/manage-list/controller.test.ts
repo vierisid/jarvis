@@ -499,3 +499,54 @@ test("pausing says its queued and waiting runs were stopped (Q-06)", async () =>
   expect(f.controller.getRow("meeting")!.message).toBe(PAUSED_MESSAGE);
   expect(PAUSED_MESSAGE).toContain("queued and waiting runs");
 });
+test("a workflow stored with a blank name still loads, under a readable fallback", async () => {
+  const f = makeManagementFixture(),
+    items = [...f.records.values()].map((w, i) =>
+      i === 0 ? { ...w, name: " \u200b\u202e " } : w,
+    );
+  const c = new WorkflowManagementController(MANAGEMENT_SCOPE, "fixture", {
+    read: async () => ({
+      status: "ready",
+      data: { scopeId: MANAGEMENT_SCOPE, items },
+    }),
+  });
+  c.setAccess(true);
+  await c.load();
+  const snap = c.getSnapshot();
+  expect(snap.read.status).toBe("ready");
+  expect(snap.rows).toHaveLength(items.length);
+  expect(snap.rows[0]!.item.name).toBe("Untitled workflow");
+  expect(snap.skipped).toBe(0);
+});
+test("one malformed row is left out and counted, and the others still load", async () => {
+  const f = makeManagementFixture(),
+    all = [...f.records.values()],
+    items = [{ ...all[0]!, name: undefined as unknown as string }, ...all.slice(1)];
+  const c = new WorkflowManagementController(MANAGEMENT_SCOPE, "fixture", {
+    read: async () => ({
+      status: "ready",
+      data: { scopeId: MANAGEMENT_SCOPE, items },
+    }),
+  });
+  c.setAccess(true);
+  await c.load();
+  const snap = c.getSnapshot();
+  expect(snap.read.status).toBe("ready");
+  expect(snap.rows.map((r) => r.item.flowId)).toEqual(
+    all.slice(1).map((w) => w.flowId),
+  );
+  expect(snap.skipped).toBe(1);
+  expect(snap.broken).toEqual([all[0]!.flowId]);
+});
+test("a malformed row without a usable ID is counted but offers no link", async () => {
+  const f = makeManagementFixture(),
+    all = [...f.records.values()],
+    items = [{ ...all[0]!, flowId: "  " }, ...all.slice(1)];
+  const c = new WorkflowManagementController(MANAGEMENT_SCOPE, "fixture", {
+    read: async () => ({ status: "ready", data: { scopeId: MANAGEMENT_SCOPE, items } }),
+  });
+  c.setAccess(true);
+  await c.load();
+  expect(c.getSnapshot().skipped).toBe(1);
+  expect(c.getSnapshot().broken).toEqual([]);
+});
