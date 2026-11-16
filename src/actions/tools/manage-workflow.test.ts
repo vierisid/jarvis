@@ -4,7 +4,7 @@ import { PieceCatalog } from '../../workflows/runtime/piece-catalog';
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
 import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
 import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
 import { createFlow, getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
@@ -166,6 +166,15 @@ describe("manage_workflow tool", () => {
     expect(byId.id).toBe(created.id);
   });
 
+  test("get finds by name a workflow older than the newest 1,000", async () => {
+    const created = (await call("create", { name: "Old Flow", empty: true })) as { id: string };
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    getWorkflowDb().run("UPDATE flow SET updated = 0 WHERE id = ?", [created.id]);
+    getWorkflowDb().transaction(() => { for (let i = 0; i < 1000; i++) createFlow(); })();
+    const byName = (await call("get", { flow: "old flow" })) as { id: string };
+    expect(byName.id).toBe(created.id);
+  });
+
   test("get never shows the model the Webhook trigger's signing secret (#961)", async () => {
     const { updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
     const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
@@ -274,6 +283,13 @@ describe("manage_workflow tool", () => {
     expect(out.status).toBe("QUEUED");
     expect(queueStats().queued).toBe(1);
     expect(findActiveJobForRun(out.run_id)?.maxAttempts).toBe(1);
+  });
+
+  test("run leaves no run behind when its job cannot be written", async () => {
+    await call("create", { name: "nojob", empty: true });
+    getWorkflowDb().run(`CREATE TRIGGER no_jobs BEFORE INSERT ON workflow_job BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    await expect(call("run", { flow: "nojob" })).rejects.toThrow();
+    expect(getWorkflowDb().query<{ n: number }, []>("SELECT count(*) AS n FROM flow_run").get()!.n).toBe(0);
   });
 
   test("chat run never repeats a completed effect after a downstream failure", async () => {
