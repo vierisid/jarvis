@@ -222,7 +222,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     if (++schemaVisits > 20_000 || depth > 64) {
       issue(node, path, 'LIMIT', 'Property schema validation exceeds its traversal budget'); return;
     }
-    if (!object(schema)) { issue(node, path, 'UNRESOLVED_CHECK', 'Expected a resolved property schema'); return; }
+    if (!object(schema)) {
+      issue(node, path, 'UNRESOLVED_CHECK', 'Jarvis could not prepare this field for the current settings. Save the step again after choosing its options (for example the authentication or body type). If it still cannot be published, this field is not supported yet: clear it.');
+      return;
+    }
     const resolved = value === UNKNOWN_INPUT ? { known: false, value } : staticInput(value);
     if (resolved.known && !object(resolved.value)) {
       issue(node, path, 'INPUT_TYPE', 'Expected a property object');
