@@ -1383,6 +1383,36 @@ async function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: strin
   return { id: flow.id, deleted: true };
 }
 
+/**
+ * The same actions for a caller inside the product that is not a model: the
+ * notch's agents (src/daemon/notch-agents.ts), where the owner's own yes on
+ * their own machine is what asks for them. Each answers with what the model
+ * would have been given, unframed. No Authority gate is run here, as none is
+ * when the owner presses the same buttons in the dashboard.
+ */
+export function workflowActions(deps: ManageWorkflowDeps, project: string = DEFAULT_IDS.project) {
+  const flowOf = (flowId: string): FlowRow => {
+    const flow = getFlowInProject(project, flowId);
+    if (!flow) throw new Error(`workflow not found: ${flowId}`);
+    return flow;
+  };
+  return {
+    /** Builds a workflow from a description and saves it switched off. Nothing is installed for it. */
+    compose: (name: string, description: string) => actCompose(name, description, deps, project, undefined, false),
+    publish: (flowId: string) => actPublish(flowOf(flowId), deps),
+    setStatus: (flowId: string, status: 'ENABLED' | 'DISABLED') => actSetStatus(flowOf(flowId), status, deps),
+    run: (flowId: string) => actRun(flowOf(flowId)),
+    remove: (flowId: string) => actDelete(flowOf(flowId), deps, project),
+    /** What a workflow is called and whether it is on. Null when it is gone. */
+    look(flowId: string): { name: string; enabled: boolean } | null {
+      const flow = getFlowInProject(project, flowId);
+      if (!flow) return null;
+      const summary = summarizeFlow(flow);
+      return { name: String(summary.name ?? flowId), enabled: flow.status === 'ENABLED' };
+    },
+  };
+}
+
 const RAW_RESPONSE_CAP = 4096;
 
 async function actCompose(

@@ -172,6 +172,7 @@ import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchJobDeps } from "./notch-jobs.ts";
+import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
@@ -277,6 +278,8 @@ let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let onboardingAssembly: ReturnType<typeof createDaemonOnboardingAssembly> | null = null;
 let onboardingComposer: (() => import('../actions/tools/workflow-composer').ComposeDeps) | null = null;
+/** What the workflow tool was built with, for the notch's agents (pass 11). Null until it has been. */
+let notchWorkflowDeps: import('../actions/tools/manage-workflow.ts').ManageWorkflowDeps | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
@@ -4649,6 +4652,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           modelReady: () => notchMailModelReady(agentService.getLLMManager()),
           waitMinutes: notchDemoState === 'open' ? Number(process.env.JARVIS_NOTCH_MAIL_WAIT_MINUTES) : undefined,
         }),
+        // Agents (pass 11): a sentence becomes a workflow that is switched on
+        // and asks first. The composer is built further down, with the
+        // workflow tool: until then nothing can be made, and it says so.
+        agents: notchAgentDeps({ db: getDb(), workflowDeps: () => notchWorkflowDeps }),
         // Standing things (pass 11): an eye kept on a person's answer, and a
         // chase until it is in. A chase waits a day or more between its two
         // mails; a test brain may shorten that, so that it can be tried.
@@ -5870,7 +5877,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             await onPieceLibraryChanged({ kind: 'installed', piece: result.piece });
           })
         : undefined;
-      const manageWorkflowTool = createManageWorkflowTool({
+      const manageWorkflowDeps: import('../actions/tools/manage-workflow.ts').ManageWorkflowDeps = {
         triggerManager: triggerManager ?? undefined,
         llm: composeLlm,
         ...(workflowPieceCatalog ? { pieceRegistry: workflowPieceCatalog } : {}),
@@ -5898,7 +5905,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // failing on the first run. A thunk: sidecars enroll and report their
         // OS long after this tool is built.
         executionTargets: () => collectExecutionTargets(),
-      });
+      };
+      const manageWorkflowTool = createManageWorkflowTool(manageWorkflowDeps);
+      // The notch's agents are built with the same composer (notch-agents.ts).
+      notchWorkflowDeps = manageWorkflowDeps;
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);
         console.log('[Daemon] Registered manage_workflow tool');
@@ -5997,6 +6007,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         emergencyController,
         approvalManager,
         onWorkflowApproval: request => approvalDelivery.deliver(request),
+        // The rung the owner put one workflow on, on the notch (pass 11,
+        // decision F). With the notch off no workflow has one.
+        agentRung: notchAgentRung(getDb(), notchEnabled()),
         // A card the boundary closed with its blocked effect (#1152).
         onWorkflowCardClosed: (approvalId) => {
           const request = approvalManager.getRequest(approvalId);

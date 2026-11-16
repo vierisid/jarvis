@@ -1578,6 +1578,126 @@ What is not done, or not proven, in pass 10:
 - **Words that start these are matched in English and a little Italian**
   ("watch me", "done", "run it on nine rows", "undo that").
 
+## Standing things
+
+Pass 11. What Jarvis keeps doing after the notch has gone back to rest: an
+eye kept on something, a chase until it is done, and agents with a rung of
+trust each.
+
+Code: `src/notch/standing.ts` (eyes and chases), `src/notch/agents.ts`
+(agents and rungs), `src/notch/mail/mailbox.ts` (`write`),
+`src/notch/mail/watch.ts` (`read`), `src/daemon/notch-agents.ts` (what
+agents need of the product), `src/workflows/runtime/agent-rung.ts` (what a
+rung may let go), `src/workflows/runtime/effect-boundary.ts` (where it is
+applied).
+
+114. **An eye fires once, and is gone.** "Tell me when Sam replies" keeps an
+    eye on mail from one person (`eyeRequest`). When a mail of theirs comes
+    that is newer than the eye, it is told once and the eye leaves the list.
+    While any eye is kept, the notch's left eye is round and citron. The
+    brain keeps that (`NotchSurface.setEye`, sent with `state`), so a page
+    that comes back still shows it; the eye that fired stays citron until
+    its line has been said. One eye per person. The list ("What I keep an
+    eye on") has a Stop for each. An eye is kept in the database and
+    outlives a restart.
+115. **Nothing reads the mailbox a second time.** The mail watcher tells of
+    every thread it reads in full (`MailWatchDeps.read`), and an eye or a
+    chase hears of a person's answer there. A mail counts as an answer when
+    it is from that person and no older than the watch, with two minutes of
+    slack: Gmail tells when a mail came to the minute.
+116. **A chase sends two mails and nothing else, and both are shown before
+    it starts.** "Get Sam's answer on the contract by Friday"
+    (`chaseRequest`) is read back as "I will get Sam's answer by Friday,
+    and only come back if I am stuck. Go?", with the day as a word that can
+    be changed, and under it the mail that goes now, who it goes to, and
+    when the one follow-up goes. One yes is leave for those two mails. The
+    plan: "You give permission once, when you start it." The two mails are
+    fixed and short (`chaseMail`): nothing a model wrote goes out in the
+    owner's name unseen. It never fills in someone who was not named.
+117. **The answer is looked for before every step.** Before the follow-up
+    goes, the mailbox is looked at (`StandingMail.look`): nothing is sent
+    to someone who has just answered. A step is quiet: written in the
+    chase's log, not said. After the second mail it comes back and asks:
+    call them (handed back, and nothing more is written), wait until
+    Monday, or let it go. A follow-up that could not be sent is said, with
+    "Try again". An answer says "Done." once, also while it was stuck.
+118. **Stop ends a chase for good.** A chase that was stopped, dropped or
+    handed back is never taken up again, by the clock or by a late answer
+    (`NotchStandingStore.move` changes a state only from the one it was
+    in). One watcher per person: a chase takes over from an eye, and a
+    second chase of the same person is refused.
+119. **A nudge goes where the talk already is.** In the newest thread with
+    that person when there is one (`Mailbox.reply`), and as a new mail when
+    the thread will not take it or there is none (`Mailbox.write`). A new
+    mail is sent only when Gmail's writing window holds exactly that mail,
+    to exactly that one person (`page/compose-send.js`), and it is called
+    sent only when Gmail says so.
+120. **An agent is a workflow, made by the product's own composer.** "Every
+    Monday send Sam the numbers" (`agentSentence`) is read back with its
+    schedule as a word that can be changed. One yes builds it with the same
+    composer the assistant and the dashboard use (`workflowActions` in
+    `manage-workflow.ts`), saves it, and switches it on. It gets a name and
+    starts on the first rung. What cannot be built, or is built and cannot
+    run yet (a connection that is not set up), is said, is left switched
+    off in the dashboard, and is not called an agent. The same sentence
+    twice is refused before anything is built.
+121. **Trust is per agent, and is the owner's own word** (decision F). The
+    rungs are "asks first", "tells you after" and "acts alone"
+    (`applyAgentRung`). On the first, every step that acts asks, whatever
+    Authority would have let go; reading, and a notice to the owner alone,
+    do not. On the others, a write, a mail or a message that would only
+    have asked goes without asking. A rung never turns a refusal into a
+    yes, never lets money or a deletion go, has no say over a command, an
+    install, a setting or a click whose effect cannot be told, and is
+    applied before the gates that ask for their own reasons, which win.
+122. **The rung is kept where only the notch writes** (`notch_agents`,
+    `NotchAgentStore`), and the product asks for it at every step
+    (`WorkflowAuthorityDependencies.agentRung`). Not in the workflow's own
+    notes: the assistant can write those, and what the assistant can write,
+    a page it read can talk it into writing. A value in that table that is
+    no rung reads as "asks first". With the notch off no workflow has a
+    rung, and nothing about workflows changes.
+123. **The next rung is offered from results, once.** After five runs in a
+    row that went well since the agent came to its rung and since it was
+    last asked, the notch offers the next one. A no leaves it where it is
+    until five more. A run that went badly starts the count again, and one
+    still under way is not counted. The rung is also a word on the agent's
+    row ("Freedom"), which the owner can set by hand, up or down. On "tells
+    you after" each run that went well is told once.
+
+What is not done, or not proven, in pass 11:
+
+- **None of it has run on a real machine or against a real mailbox.** The
+  brain's side is tested end to end against stand-ins for the mailbox and
+  for the product's workflows; the rung is tested at the product's own
+  effect boundary.
+- **An eye is kept on mail from a person, and on nothing else.** The
+  prototype keeps one on a thing that was circled ("tell me when this is
+  paid"). That needs a way to look at a thing again while its window is
+  covered, which is not built. "Tell me when he replies" with nobody named
+  asks who: it does not yet take the person from what was circled.
+- **A chase's mails are fixed and in English**, signed with the owner's
+  first name as their own mail gives it. They are not written in the
+  owner's voice or in the language of the thread.
+- **"Call Sam" hands the call back and writes nothing in the calendar.**
+  The prototype put a reminder there.
+- **Whether a reply can be written in a thread where the owner wrote last
+  has not been tried on the real page.** If Gmail's reply does not go to
+  exactly that one person, the nudge goes as a new mail instead.
+- **Whether a sentence builds into a workflow that can run depends on what
+  is connected.** The owner's Google connection covers the calendar and not
+  mail, so "send Sam the numbers" by mail will be built and then said to
+  need setting up. How long the composer takes is its own: up to three
+  minutes.
+- **The agent's name and Esc as undo are not on the line that announces
+  it.** The prototype made the name a word and let Esc take the agent back.
+  Here the name is given, and "Let go" in the list removes it.
+- **A workflow made in the dashboard is not an agent.** Only one made by a
+  sentence on the notch has a name and a rung.
+- **Community connectors that have no governed adapter never ask**, at any
+  rung, as before this pass: a rung can only be applied where the product
+  judges a step.
+
 ## The keys
 
 | What | Keys | How it is told |

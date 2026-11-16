@@ -1368,3 +1368,44 @@ test('a reused notification receipt sends nothing, even when the message or chan
   expect(f.calls).toHaveLength(1); expect(f.deliveredApprovals).toHaveLength(1);
   expect(listWorkflowEffects(run.id)[0]).toMatchObject({ status: 'succeeded', approvalId: null, arguments: { message: 'Different text' } });
 });
+
+// Notch pass 11, decision F: trust is per workflow. The owner's word about one
+// workflow, given on the notch, changes what that workflow is asked about, and
+// nothing about any other.
+describe("an agent's rung at the effect boundary", () => {
+  test('asks first: a write that Authority would have let go asks', async () => {
+    const f = fixture('tool');
+    expect((await f.invoke()).approval).toBeUndefined();
+    const asked = fixture('tool');
+    asked.options.agentRung = () => 'asks first';
+    const reply = await buildSandboxServiceBackends(asked.options).toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, asked.context);
+    expect(reply.approval?.approvalId).toBeTruthy();
+    expect(asked.calls).toHaveLength(0);
+  });
+
+  test('tells you after: a message that would have asked goes without asking, for that workflow and no other', async () => {
+    const f = fixture('notify'); f.authority.setGovernedCategories(['send_message']);
+    const other = fixture('notify'); other.authority.setGovernedCategories(['send_message']);
+    // The rung is asked for by the workflow of the run, and only one of them is an agent.
+    const asked: string[] = [];
+    const rung = (flowId: string) => { asked.push(flowId); return flowId === f.run.flowId ? 'tells you after' as const : null; };
+    f.options.agentRung = rung; other.options.agentRung = rung;
+    const mine = await buildSandboxServiceBackends(f.options).notify!({ message: 'Synthetic notification', channels: ['telegram'], priority: 'normal' }, f.context);
+    expect(mine.approval).toBeUndefined();
+    expect(f.approvals.getPending()).toHaveLength(0);
+    expect(f.calls.length).toBeGreaterThan(0);
+    const theirs = await buildSandboxServiceBackends(other.options).notify!({ message: 'Synthetic notification', channels: ['telegram'], priority: 'normal' }, other.context);
+    expect(theirs.approval?.approvalId).toBeTruthy();
+    expect(other.calls).toHaveLength(0);
+    expect(asked).toContain(f.run.flowId);
+    expect(asked).toContain(other.run.flowId);
+  });
+
+  test('a rung does not lift a refusal', async () => {
+    const f = fixture('notify');
+    f.authority.addOverride({ action: 'send_message', allowed: false, requires_approval: false } as any);
+    f.options.agentRung = () => 'acts alone';
+    await expect(buildSandboxServiceBackends(f.options).notify!({ message: 'Synthetic notification', channels: ['telegram'], priority: 'normal' }, f.context)).rejects.toThrow();
+    expect(f.calls).toHaveLength(0);
+  });
+});
