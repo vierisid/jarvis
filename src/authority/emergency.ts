@@ -10,8 +10,26 @@ export class EmergencyController {
   /** Everything else that acts on a state change (#987); see `subscribe`. */
   private listeners = new Set<(state: EmergencyState) => void>();
 
+  /** Whether the current state is saved to disk (see `setPersistence`). */
+  private saved = true;
+  private notSavedReason: string | null = null;
+
   getState(): EmergencyState {
     return this.state;
+  }
+
+  /**
+   * Whether the current state will survive a restart. The state itself always
+   * takes effect in memory first (a stop must stop); a failed save leaves it
+   * unsaved until a retry works, and callers must tell the owner so.
+   */
+  persistence(): { saved: boolean; reason: string | null } {
+    return { saved: this.saved, reason: this.notSavedReason };
+  }
+
+  setPersistence(saved: boolean, reason: string | null = null): void {
+    this.saved = saved;
+    this.notSavedReason = saved ? null : reason;
   }
 
   /**

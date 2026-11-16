@@ -68,7 +68,7 @@ import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { getRecentObservations, describeObservationForPrompt } from '../vault/observations.ts';
 import { extractAndStore } from '../vault/extractor.ts';
-import { getKnowledgeForMessage } from '../vault/retrieval.ts';
+import { getKnowledgeForMessage, getKnowledgeParts } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { getUserProfileForPrompt } from '../vault/user-profile.ts';
 import { buildSkillIndex } from '../actions/tools/skills.ts';
@@ -1365,9 +1365,10 @@ export class AgentService implements Service, IAgentService {
     // Retrieve relevant knowledge from vault based on user message
     if (userMessage) {
       try {
-        const knowledge = getKnowledgeForMessage(userMessage);
-        if (knowledge) {
-          context.knowledgeContext = knowledge;
+        const knowledge = getKnowledgeParts(userMessage);
+        if (knowledge.text) {
+          context.knowledgeContext = knowledge.plain;
+          if (knowledge.framed) context.knowledgeOutside = knowledge.framed;
         }
       } catch (err) {
         console.error('[AgentService] Error retrieving knowledge:', err);

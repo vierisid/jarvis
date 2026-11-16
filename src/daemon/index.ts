@@ -186,6 +186,7 @@ import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts"
 import { workflowStepToolRefusal } from "../workflows/runtime/effect-capabilities.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
+import { forCard } from "../util/card-text.ts";
 import { runWithOrigin } from "../llm/origin.ts";
 import { getMachineScope } from "../actions/machine-scope.ts";
 import {
@@ -826,6 +827,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   } catch (err) {
     console.error(`\n[Daemon] ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
+  }
+
+  // A taken port is found now, in a moment, rather than after the whole boot
+  // as a raw EADDRINUSE stack. Unix-socket mode binds no TCP port.
+  if (listen.kind === 'tcp') {
+    const { assertPortFree, PortUnavailableError } = await import('./port-check.ts');
+    try {
+      await assertPortFree(port, localIntegration ? '127.0.0.1' : undefined);
+    } catch (err) {
+      if (err instanceof PortUnavailableError) {
+        console.error(`\n[Daemon] ${err.message}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
   }
 
   // Record the actual bound port in the lockfile so `jarvis stop` knows which
@@ -4504,21 +4520,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (savedEmergencyState === 'paused') emergencyController.pause();
     else if (savedEmergencyState === 'killed') emergencyController.kill();
 
-    // Persist emergency state changes to the DB settings store
-    emergencyController.setStateChangeCallback(async (state) => {
+    // Persist emergency state changes to the DB settings store. The stop takes
+    // effect in memory first; a failed save (a full disk) is retried and the
+    // routes tell the owner it will not survive a restart until it works.
+    const { saveUserSection: saveEmergencySection } = await import('./user-settings.ts');
+    const { createEmergencyPersister } = await import('../authority/emergency-persistence.ts');
+    const { noteStorageFailure, isStorageFullError } = await import('../vault/storage-health.ts');
+    const persistEmergencyState = createEmergencyPersister({
+      controller: emergencyController,
+      save: (state) => {
+        if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
+        jarvisConfig.authority.emergency_state = state;
+        saveEmergencySection('authority', jarvisConfig.authority);
+      },
+      describe: (err) => isStorageFullError(err) ? 'the disk is full' : 'the database could not be written',
+      onFailure: (err) => { noteStorageFailure(err); },
+    });
+    emergencyController.setStateChangeCallback((state) => {
       wsService.broadcastEmergencyState(state);
       // Pause holds, Kill stops (Q-08): stop runs and deny approvals on Kill,
       // release held steps on Resume, keep the engine's copy of the state.
       applyEmergencyState(state, { authorityEngine, approvalManager, auditTrail,
         onApprovalDenied: (request) => wsService.broadcastApprovalUpdate(request) });
-      try {
-        const { saveUserSection } = await import('./user-settings.ts');
-        if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
-        jarvisConfig.authority.emergency_state = state;
-        saveUserSection('authority', jarvisConfig.authority);
-      } catch (err) {
-        console.error('[Daemon] Failed to persist emergency state:', err);
-      }
+      persistEmergencyState();
     });
 
     // 8f. Settings hot reload: per-section appliers. Everything they need
@@ -5420,6 +5444,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sharedPiecesDir: sharedRuntime.piecesDir,
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
         getEventBufferDropped: () => workflowEventBuffer.dropped(),
+        // A rotated key pauses the enabled workflows that run on it until they
+        // are published again: tell the owner now, not at the next failed fire.
+        onConnectionReplaced: ({ connectionId, displayName, message }) => {
+          notifyAll({
+            id: `workflow-connection-replaced:${connectionId}:${Date.now()}`, kind: 'workflow',
+            title: `Workflows paused: ${forCard(displayName, 40)} key changed`, body: message,
+            actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+          });
+        },
         // Lets the editor's publish (version lock) report a step whose
         // command can't run on any machine it could land on -- the one OS
         // check a hand-drawn flow gets, since it never meets the composer.
@@ -6337,10 +6370,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log('');
 
   } catch (error) {
-    // A database problem arrives as plain words with the next step; a stack
-    // trace would only bury it.
+    // A database problem or a taken port arrives as plain words with the next
+    // step; a stack trace would only bury it.
     const { DatabaseProblemError } = await import('../vault/db-guard.ts');
-    if (error instanceof DatabaseProblemError) console.error(`\n[Daemon] ${error.message}\n`);
+    const { PortUnavailableError } = await import('./port-check.ts');
+    if (error instanceof DatabaseProblemError || error instanceof PortUnavailableError) console.error(`\n[Daemon] ${error.message}\n`);
     else console.error('[Daemon] Fatal error during startup:', error);
     process.exit(1);
   }
