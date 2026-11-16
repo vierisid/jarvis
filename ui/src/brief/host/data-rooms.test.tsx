@@ -64,6 +64,42 @@ test('Needs you never shows an all-clear while the independent permission list h
   expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
 });
 
+test('day bars are labelled with the short weekday and carry the full date', () => {
+  expect(Rooms.dayLabels('2026-11-09').label).toBe('Mon'); expect(Rooms.dayLabels('2026-11-09').title).toContain('2026');
+  expect(Rooms.dayLabels('2026-11-15').label).toBe('Sun'); expect(Rooms.dayLabels('nope')).toEqual({ label: 'nope', title: 'nope' });
+});
+test('a link names a document request only while the Needs you document list shows it as actionable', () => {
+  const snap = (state: string, data: unknown) => ({ state, data, refreshing: false, reason: null }) as any;
+  const doc = (approvalId: string, actions: string[]) => ({ actions, paper: { decision: { approval: { approvalId } } } });
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', ['approve'])]), 'a')).toBe(true);
+  // An answered document request stays in the read without actions; the document room hides it, so it is gone.
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', [])]), 'a')).toBe(false);
+  expect(Rooms.namedInDocuments(snap('ready', [doc('b', ['approve'])]), 'a')).toBe(false);
+  expect(Rooms.namedInDocuments(snap('empty', null), 'a')).toBe(false);
+  // Until the document read settles, it may still hold the request.
+  expect(Rooms.namedInDocuments(snap('loading', null), 'a')).toBe(true);
+  expect(Rooms.namedInDocuments(snap('ready', [doc('a', ['approve'])]), undefined)).toBe(false);
+});
+test('Today counts document decisions, other queued decisions and the attention list, and any unread source is unknown', () => {
+  const doc = (n: number) => Array.from({ length: n }, () => ({ actions: [{}] }));
+  expect(Rooms.waitingOnOwner([], 0, 0)).toBe(0);
+  expect(Rooms.waitingOnOwner([...doc(2), { actions: [] }], 3, 4)).toBe(9);
+  expect(Rooms.waitingOnOwner([], 20, 0)).toBe(20);
+  expect(Rooms.waitingOnOwner(doc(1), null, 0)).toBeNull();
+  expect(Rooms.waitingOnOwner(null, 0, 0)).toBeNull();
+  expect(Rooms.waitingOnOwner([], 0, null)).toBeNull();
+});
+test('Today counts document decisions only from a settled read or cached rows', () => {
+  const snap = (state: string, data: unknown, extra: object = {}) => ({ state, data, asOf: 1, refreshing: false, reason: null, ...extra }) as any;
+  expect(Rooms.settledDocuments(snap('empty', null))).toEqual([]);
+  expect(Rooms.settledDocuments(snap('ready', [{ actions: [{}] }]))).toEqual([{ actions: [{}] }]);
+  expect(Rooms.settledDocuments(snap('stale', [{ actions: [{}] }], { reason: 'down' }))).toEqual([{ actions: [{}] }]);
+  expect(Rooms.settledDocuments(snap('stale', null, { refreshing: true }))).toEqual([]);
+  expect(Rooms.settledDocuments(snap('loading', null, { asOf: null }))).toBeNull();
+  expect(Rooms.settledDocuments(snap('unavailable', null, { reason: 'down' }))).toBeNull();
+  expect(Rooms.settledDocuments(snap('stale', null, { reason: 'down' }))).toBeNull();
+});
+
 test('Today recent activity lists real workflow runs with plain statuses and opens the run', async () => {
   const provider = { readiness: () => 'ready' as const };
   const caps = new BriefCapabilities([{ id: 'reconciliation', provider }, { id: 'goalMeasurements', provider }], ['reconciliation', 'goalMeasurements']).snapshot();

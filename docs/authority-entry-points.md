@@ -74,6 +74,56 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   refuses an approval from anywhere else.
 - **One dispatch.** The decision is a compare-and-set and execution takes one
   claim, so two surfaces deciding at once run it once.
+- **Where it came from.** A request raised by a screen-derived background
+  turn (error and struggle research, the event reactor's turns on awareness
+  events) is marked so when it is created. While screen awareness is off it
+  is held: no card is delivered to the dashboard, a chat channel or a
+  notification, and one being sent stops before its next retry; approving it
+  waits, the card stays pending and says it is held while screen awareness is
+  off (denying still works); and the executor refuses to run it, taking no
+  claim. One approved in the instant awareness went off goes back to pending
+  (a chat gate waiting on it is told it is held, not handed a result). When
+  awareness is back on it is approvable again, and the cards held meanwhile,
+  or stopped part way out, are delivered (a card may then arrive twice, as
+  with approval-card retries). Held cards still expire after 24 hours
+  unanswered, like any other. Every other request is unchanged.
+
+## How rules are read
+
+Order of decision, first match wins: a temporary grant; an override that
+denies; a matching context rule that denies; an override that allows (or
+allows with approval); a matching context rule that asks, then one that
+allows; the level; the governed switch. So a matching deny rule wins over any
+allow override or allow rule, whichever was saved first, and an always-allow
+override, global or for one role, skips the level and the governed switch for
+its action but never beats a matching deny rule. Among matching context rules
+the strictest effect wins (deny, then require approval, then allow), not the
+first listed. Two older precedences stand: a temporary grant comes first, and
+a role's own override replaces the global override for that role, so a role
+allow override beats a global deny override (not a deny rule).
+
+A time-range rule runs from `start_hour` up to, not including, `end_hour`, in
+whole hours on the owner's clock: the configured `timezone`, or the machine's
+local time when none is set. A window that ends before it starts crosses
+midnight: start 22, end 6 is 22:00 to 05:59; start 15, end 14 is every hour
+but 14; start 0, end 24 is the whole day. The hour is the wall-clock hour, so
+on a spring-forward night a window over the skipped hour does not apply for
+that hour, and on a fall-back night the repeated hour is in the window both
+times. Start equal to end covers no hour, and the API refuses it.
+
+`POST /api/authority/config` and `quick-override` answer 400 in plain words,
+and change nothing, for: a time-range hour that is not a whole number from 0
+to 23 (an end of 24 means the end of the day), a start equal to the end, a
+`tool_name` rule with no tool name, `background.governed_categories` with an unknown category,
+`background.level_cap` outside 1 to 10, and a `role_id` that is not a role name.
+A context rule or override saved unchanged is not checked again, so one saved
+by an earlier version never blocks another edit. A saved config with such a
+value still loads (a bad hour is read as before: a numeric string as its
+number, a fraction rounded up, anything else matches no hour; unknown
+background categories are ignored) and is reported: in the daemon log at
+start, and as `warnings` on `GET /api/authority/config`. An allow or
+require-approval rule whose window crosses midnight matched no hour before
+this change and now applies; each one is listed in the same warnings.
 
 ## Pause and Kill
 
@@ -92,6 +142,25 @@ Kill stops. On top of the hold, every unfinished workflow run is stopped,
 saying why, pending work approvals are denied, and a tool in flight stops at
 its next dispatch checkpoint. Stop agent cards remain available during Pause
 and Kill. Reset does not revive stopped runs or denied work.
+
+While Kill is active Authority settings are read-only: a config write, an
+Allow quick override and accepting a learning suggestion answer 409 ("Jarvis is
+stopped. Reset it first, then change Authority settings.") and change nothing,
+and the Settings page disables its controls and says so. The state is checked
+again once the request body is read, so a write that races a Kill is refused
+too. A rule loosened during Kill would otherwise go live on Reset without anyone
+looking at it again. A Deny quick override (voice "revoke access") is still
+accepted: an override is checked before every other rule and a Deny is the
+strictest answer, so it can only tighten what Reset brings back. Pause does not
+freeze settings.
+
+When a category in `PIECE_ABOVE_LEVEL_ASKS` (send email, send messages, make
+payments) is Off in Settings and the level is below what it needs, a workflow
+step in it is blocked, never sent without asking (unless an override or rule
+allows it): Settings says so next to the governed switches, and the failure
+names the level and the switch that would let Jarvis ask first, not a status
+code. Asking first also needs the level to clear writing data (3); below that
+both say to raise the level.
 
 The controller is the one source of truth: the engine's copy of the state is
 updated on every change, and accepting a learning suggestion no longer writes

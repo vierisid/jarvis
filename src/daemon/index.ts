@@ -132,6 +132,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService, isChannelGuestThread } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
+import { authorityConfigWarnings } from "../authority/config-validation.ts";
 import { ApprovalManager, approvalNeedsClick, executionState, onApprovalDeadlineExpired, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
@@ -144,6 +145,7 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
+import { approvalHeldByAwareness } from "../authority/approval-provenance.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
 import { bindingRefusalNotifier, workflowRunNotice } from "../workflows/runtime/binding-refusals.ts";
@@ -159,7 +161,7 @@ import {
 import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
-import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
+import { Worker as WorkflowWorker, WORKFLOW_WORKER_CONCURRENCY } from "../workflows/queue/worker.ts";
 import { recoverOrphanedJobs } from "../workflows/db/repos/job-queue.ts";
 import { TimerWaitpointScheduler } from "../workflows/timer-scheduler.ts";
 import { createRunFlowHandler, RUN_FLOW } from "../workflows/runner/handler.ts";
@@ -263,6 +265,12 @@ let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
+// Starts the awareness service when screen awareness is turned on after a boot
+// with it off (owner decision 2026-11-11); a no-op until post-setup is wired.
+let startAwarenessIfNeeded: () => Promise<void> = async () => {};
+// The awareness start in flight, if any: shutdown waits for it, so a start
+// begun from the switch cannot leave a service running after stop.
+let awarenessStarting: Promise<void> | null = null;
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
@@ -522,7 +530,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
       goalService = null;
     }
 
-    // Stop awareness service
+    // Stop awareness service (one still starting first finishes, then stops)
+    await awarenessStarting;
     if (awarenessService) {
       await awarenessService.stop();
       awarenessService = null;
@@ -2151,8 +2160,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // this install to today's capture interval and cooldowns forever.
           // The long-press is the user's own choice, so it is marked as one.
           persistAwarenessChoice(nextEnabled);
-          // Toggle live awareness service if it exists.
+          // Toggle the live awareness service, or start it when it was off at boot.
           if (awarenessService) awarenessService.toggle(nextEnabled);
+          else if (nextEnabled) {
+            await startAwarenessIfNeeded();
+            // Pressed again while it started: that press owns the pushes and
+            // the answer, and this one must not overwrite them with "on".
+            if ((jarvisConfig.awareness?.enabled ?? true) !== nextEnabled) return;
+          }
           if (!nextEnabled) closeSwitchedOffWorkflowCards();
           // Push visual: blinded = !enabled.
           // Awareness drops every capture while desktop.enabled is off (#905),
@@ -4416,6 +4431,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       learning: authorityConfig.learning ?? { enabled: true, suggest_threshold: 5 },
       emergency_state: authorityConfig.emergency_state ?? 'normal',
     });
+    // A saved value the engine has to clamp is reported, never refused.
+    for (const warning of authorityConfigWarnings(authorityConfig)) console.warn(`[Authority] ${warning}`);
     const approvalManager = new ApprovalManager();
     // A workflow card for a tool a switch just turned off (desktop control,
     // or screen awareness for the screenshot tools) is closed, not left
@@ -4602,8 +4619,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // awareness — the service snapshots its sub-config at construction; the
     // enabled flag is the one knob with a live setter today.
     settingsReload.registerApplier('awareness', async (cfg) => {
-      awarenessService?.toggle(cfg.awareness?.enabled !== false);
+      // Off at boot left no service to toggle: turning it on starts one.
+      if (awarenessService) awarenessService.toggle(cfg.awareness?.enabled !== false);
+      else if (cfg.awareness?.enabled !== false) await startAwarenessIfNeeded();
       if (cfg.awareness?.enabled === false) closeSwitchedOffWorkflowCards();
+      // Back on: the screen-derived approval cards held while it was off go out now.
+      else void approvalDelivery.resumeHeld((id) => approvalManager.getRequest(id));
       // The glyph follows the stored choice too, on every pebble (#1157).
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
@@ -4737,6 +4758,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (sidecarManager.getConnectedSidecars().length === 0) return;
         for (const req of approvalManager.getPending()) {
           if (notifiedApprovalIds.has(req.id)) continue;
+          // Held while screen awareness is off (#1314 follow-up): not shown,
+          // and not marked as notified, so it is if awareness comes back soon.
+          if (approvalHeldByAwareness(req)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
           // Approve/Deny only when the toast can show the full request.
@@ -5648,7 +5672,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
         onboardingComposer = compositionDependencies;
-        briefWorkflowComposition?.configure(compositionDependencies);
+        briefWorkflowComposition?.configure(compositionDependencies, () => llmManager.getProviderNames().length > 0);
         if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
           const quality = await loadPreparedQualityGate({ authority: authorityEngine,
             tool: name => toolRegistry.get(name) ?? null,
@@ -5762,7 +5786,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // recipient) tells the owner once per workflow and reason.
           onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)) }) },
       });
-      workflowWorker.start();
+      workflowWorker.start({ concurrency: WORKFLOW_WORKER_CONCURRENCY });
 
       // Resume TIMER waitpoints whose delay has elapsed (incl. during downtime).
       // A card the sweep closes for a run that ended before it parked is
@@ -5879,7 +5903,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Awareness service construction extracted so the post-setup helper
     // can call it conditionally. Closes over the same boot-scope deps as
     // the original inline block.
-    const startAwarenessService = async (): Promise<void> => {
+    // One start at a time: boot, onboarding and a switch turned on can race,
+    // and each start would wire its own sidecar listeners.
+    const startAwarenessService = (): Promise<void> => {
+      if (awarenessService) return Promise.resolve();
+      awarenessStarting ??= startAwarenessServiceNow().finally(() => { awarenessStarting = null; });
+      return awarenessStarting;
+    };
+    const startAwarenessServiceNow = async (): Promise<void> => {
       if (awarenessService) return;
       try {
         const { AwarenessService } = await import('../awareness/service.ts');
@@ -5958,6 +5989,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         await svc.start();
         awarenessService = svc;
         apiContext.awarenessService = svc;
+        // Turned off while it was starting: the applier saw no service then.
+        if (jarvisConfig.awareness?.enabled === false) svc.toggle(false);
         console.log('[Daemon] Awareness service started (event-driven OCR + context tracking)');
 
         // Wire sidecar awareness events to awareness service
@@ -6014,6 +6047,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
     });
     apiContext.startPostSetupServices = postSetupServices.start;
+    startAwarenessIfNeeded = postSetupServices.startAwarenessIfNeeded;
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
     apiContext.onboardingServiceReadiness = postSetupServices.readiness;
 
