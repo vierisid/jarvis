@@ -22,7 +22,7 @@ import type {
 import { FlowExecutionError } from "../handler";
 import { ensureRunExecutionConfig, getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
 import { applyInputOverrides } from "../../db/flow-graph";
-import { assertRunIngredientsReady } from "../../db/repos/flow-readiness";
+import { assertRunCodeStepsAllowed, assertRunIngredientsReady } from "../../db/repos/flow-readiness";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineHandle, EngineRuntime } from "./engine-runtime";
 import { loadExecutionStateFromLog } from "./execution-state-loader";
@@ -224,6 +224,10 @@ export class EngineFlowExecutor implements FlowExecutor {
         flowVersion: flowVersionForEngine,
         runEnvironment: env,
         streamStepProgress,
+        // Writing the CODE sources and installing their packages comes
+        // between the checks below and the send; a revoke in that time
+        // must still stop the run, so the grant is read once more there.
+        beforeSend: () => assertRunCodeStepsAllowed(ctx.run.flowId, ctx.version.trigger),
       };
       // A resumed preview is still exactly one step, with its original sample outputs.
       if (executionConfig.stepNameToTest) {
@@ -250,6 +254,7 @@ export class EngineFlowExecutor implements FlowExecutor {
       ctx.signal?.throwIfAborted();
       // Acquiring a runtime may await a cold start. Pins can change after the
       // worker's check, so recheck immediately before sending the operation.
+      assertRunCodeStepsAllowed(ctx.run.flowId, ctx.version.trigger);
       assertRunIngredientsReady(ctx.run, ctx.version.trigger, executionConfig);
       await abortable(handle.executeFlow(flowOpts), ctx.signal);
     } finally {

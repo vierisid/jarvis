@@ -149,6 +149,14 @@ describe("manage_workflow tool", () => {
     expect(list.truncated).toBe(false);
   });
 
+  test("create refuses a whitespace-only name and trims a padded one", async () => {
+    await expect(call("create", { name: "   ", empty: true })).rejects.toThrow(/non-empty string/);
+    const created = (await call("create", { name: "  Padded  ", empty: true })) as { name: string };
+    expect(created.name).toBe("Padded");
+    await expect(call("create", { name: "\u200b\u202e", empty: true })).rejects.toThrow(/non-empty string/);
+    await expect(call("compose", { name: "  ", description: "x" })).rejects.toThrow(/non-empty string/);
+  });
+
   test("get accepts display name (case-insensitive) and id", async () => {
     const created = (await call("create", { name: "Test Flow", empty: true })) as { id: string };
     const byName = (await call("get", { flow: "test flow" })) as { id: string; latestDraft: { displayName: string } };
@@ -423,6 +431,21 @@ describe("manage_workflow tool", () => {
     expect(published.warnings?.[0]).toContain("notepad.exe");
     // Advisory only: the version still locked and the flow still published.
     expect(getLatestDraft(created.id)).toBeNull();
+  });
+
+  test("publish warns about a key typed into a step without repeating it, and still publishes", async () => {
+    const { getLatestDraft, updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
+    const key = "sk-qa4-canary-SECRET-9911";
+    const created = (await call("create", { name: "keyed", empty: true })) as { id: string };
+    updateDraftVersion(getLatestDraft(created.id)!.id, {
+      trigger: { name: "trigger", type: "EMPTY", nextAction: { name: "notify", type: "PIECE",
+        settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: `token ${key}` } } } },
+    });
+    const published = (await call("publish", { flow: "keyed" })) as { status: string; warnings?: string[] };
+    expect(published.status).toBe("ENABLED");
+    expect(published.warnings).toHaveLength(1);
+    expect(published.warnings![0]).toContain('Step "notify"');
+    expect(JSON.stringify(published)).not.toContain(key);
   });
 
   test("publish stays silent when the flow fits the machines it will run on", async () => {

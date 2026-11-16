@@ -56,3 +56,11 @@ test('without hosted detail nothing extra is added, and the detail is bounded an
   const long = briefChatFailure(new LLMProviderError('x', 'restricted', undefined, undefined, `To appeal, contact ${'a'.repeat(5000)}`), false);
   expect(long.message.length).toBeLessThan(1600);
 });
+
+test('a provider that stopped answering is not described as unreachable', () => {
+  const failure = briefChatFailure(new LLMProviderError("Provider 'p' failed after 1 attempt: LLM stream from p sent no data for 90s (timed out)", 'network'), false);
+  expect(failure.code).toBe('provider_network');
+  expect(failure.message).toContain('did not answer in time');
+  expect(failure.message).not.toContain('could not be reached');
+  expect(briefChatFailure(new LLMProviderError('connect ECONNREFUSED', 'network'), false).message).toContain('could not be reached');
+});
