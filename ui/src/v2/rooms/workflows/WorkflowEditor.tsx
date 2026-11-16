@@ -105,6 +105,7 @@ import type { StepTestResult } from "./step-test";
 import { findStep, flattenSteps, needsPieceChoice, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
+import { askManualRunPayload } from "./manual-run-payload";
 import { describeSchedule, isScheduleSettings } from "./schedule-words";
 import { ScheduleEditor } from "./ScheduleEditor";
 import { splitAdvancedFields } from "./advanced-fields";
@@ -768,7 +769,11 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
       );
       if (!proceed) return;
     }
-    const result = await runs.start();
+    // The fields of the version the server runs (published, else the saved
+    // draft), not of this editor's draft or unsaved edits.
+    const asked = await askManualRunPayload(flowId);
+    if (asked === null) return;
+    const result = await runs.start(asked.payload);
     if (result.ok) {
       setActionMessage({ tone: "ok", text: "Run queued" });
       // Open the panel automatically so the user can watch progress.
