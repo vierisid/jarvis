@@ -315,7 +315,8 @@ describe("manage_workflow tool", () => {
   });
 
   test("a chat run of a published workflow that is turned off always asks, and says it stays off (#1422)", async () => {
-    await call("create", { name: "offflow", empty: true });
+    const created = (await call("create", { name: "offflow", empty: true })) as { id: string };
+    giveSteps(created.id);
     // A draft that was never published is not a turned-off workflow: the plain card.
     expect(tool.authorityGate?.({ action: "run", flow: "offflow" })).toMatchObject({ confirm: "above_level", intent: "Run workflow: offflow" });
     await call("publish", { flow: "offflow" });
