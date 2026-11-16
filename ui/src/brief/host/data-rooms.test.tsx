@@ -64,6 +64,10 @@ test('Needs you never shows an all-clear while the independent permission list h
   expect(Rooms.onlyOtherDecisions(snap('stale', [{ actions: [] }], { reason: 'down' }), 2)).toBe(false);
 });
 
+test('day bars are labelled with the short weekday and carry the full date', () => {
+  expect(Rooms.dayLabels('2026-11-09').label).toBe('Mon'); expect(Rooms.dayLabels('2026-11-09').title).toContain('2026');
+  expect(Rooms.dayLabels('2026-11-15').label).toBe('Sun'); expect(Rooms.dayLabels('nope')).toEqual({ label: 'nope', title: 'nope' });
+});
 test('a link names a document request only while the Needs you document list shows it as actionable', () => {
   const snap = (state: string, data: unknown) => ({ state, data, refreshing: false, reason: null }) as any;
   const doc = (approvalId: string, actions: string[]) => ({ actions, paper: { decision: { approval: { approvalId } } } });
