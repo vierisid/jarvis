@@ -20,9 +20,11 @@ export interface NotchTodayRow {
   at: number;
   text: string;
   /** Where the row comes from, for the small word on its right. */
-  kind: 'approved' | 'promise' | 'mail';
+  kind: 'approved' | 'promise' | 'mail' | 'job';
   /** In place of the small word: what a sent mail cost. */
   small?: string;
+  /** A job done where it could be seen: its id, and whether what it pasted can still be taken back. */
+  job?: { id: string; undoable: boolean };
 }
 
 export interface NotchTodayDeps {
@@ -32,6 +34,8 @@ export interface NotchTodayDeps {
   keptPromises?(): { what: string; completed_at: number | null }[];
   /** Replies Jarvis sent from the notch since a moment, each with what it cost. */
   sentMail?(since: number): { at: number; text: string; small: string }[];
+  /** Jobs Jarvis did where they could be seen (jobs.ts), since a moment. */
+  jobs?(since: number): { id: string; at: number; text: string; undoable: boolean }[];
   now?: () => number;
 }
 
@@ -89,6 +93,11 @@ export function notchDoneBetween(deps: NotchTodayDeps, since: number, now: numbe
     const points = [...sent.text];
     rows.push({ at: sent.at, text: points.length <= ROW_CHARS ? sent.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'mail', small: sent.small });
   }
+  for (const job of deps.jobs?.(since) ?? []) {
+    if (job.at < since || job.at > now) continue;
+    const points = [...job.text];
+    rows.push({ at: job.at, text: points.length <= ROW_CHARS ? job.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'job', job: { id: job.id, undoable: job.undoable } });
+  }
   return rows.sort((a, b) => b.at - a.at);
 }
 
@@ -101,9 +110,15 @@ const clock = (at: number): string => {
 export function notchTodayBlocks(rows: NotchTodayRow[]): NotchBlock[] {
   if (rows.length === 0) return [{ kind: 'note', say: ['Nothing done yet today.'] }];
   const shown = rows.slice(0, NOTCH_TODAY_MAX);
-  const blocks: NotchBlock[] = shown.map((row) => ({
-    kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'mail' ? `sent · ${row.small ?? ''}`.replace(/ · $/, '') : row.kind === 'promise' ? 'promised' : 'approved',
-  }));
+  const blocks: NotchBlock[] = shown.map((row): NotchBlock => (row.kind === 'job'
+    // What Jarvis did where it could be seen. What it pasted can be taken back from here.
+    ? {
+      kind: 'row', lead: clock(row.at), say: [row.text], id: `job:${row.job?.id ?? ''}`,
+      ...(row.job?.undoable ? { buttons: [{ id: 'undo', label: 'Undo', quiet: true }] } : { small: 'done' }),
+    }
+    : {
+      kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'mail' ? `sent · ${row.small ?? ''}`.replace(/ · $/, '') : row.kind === 'promise' ? 'promised' : 'approved',
+    }));
   if (rows.length > shown.length) blocks.push({ kind: 'note', say: [`And ${rows.length - shown.length} more, in the dashboard.`] });
   return blocks;
 }

@@ -40,8 +40,8 @@ export interface NotchAskRow {
   state: NotchAskState;
   /** What was typed, or what the speech was made into. Empty when nothing was caught. */
   heard: string;
-  /** `turn`: it went to the agent. `remember`: it was written to memory. */
-  kind: 'turn' | 'remember' | null;
+  /** `turn`: it went to the agent. `remember`: it was written to memory. `notch`: the notch did it itself ("Watch me", "run it"). */
+  kind: 'turn' | 'remember' | 'notch' | null;
   understood: string | null;
   /** What was done, one sentence each, in order. */
   did: string[];
@@ -78,7 +78,7 @@ function parse(row: Stored): NotchAskRow {
   } catch { /* an unreadable list is an empty one */ }
   return {
     id: row.id, createdAt: row.created_at, source: row.source === 'spoken' ? 'spoken' : 'typed',
-    state: row.state as NotchAskState, heard: row.heard, kind: row.kind === 'turn' || row.kind === 'remember' ? row.kind : null,
+    state: row.state as NotchAskState, heard: row.heard, kind: row.kind === 'turn' || row.kind === 'remember' || row.kind === 'notch' ? row.kind : null,
     understood: row.understood, did, answer: row.answer, note: row.note,
     conversationId: row.conversation_id, turnId: row.turn_id, requestId: row.request_id,
     endedAt: row.ended_at, seenAt: row.seen_at,
@@ -145,7 +145,7 @@ export class NotchLedger {
    * Takes the row to run it. True exactly once, and only for a row that is
    * `heard`: this is the one way anything on the notch starts.
    */
-  claim(id: string, kind: 'turn' | 'remember', turn?: { conversationId: string; turnId: string; requestId: string }): boolean {
+  claim(id: string, kind: 'turn' | 'remember' | 'notch', turn?: { conversationId: string; turnId: string; requestId: string }): boolean {
     return this.move(id, ['heard'], 'running', {
       kind, conversation_id: turn?.conversationId ?? null, turn_id: turn?.turnId ?? null, request_id: turn?.requestId ?? null,
     });

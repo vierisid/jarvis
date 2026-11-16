@@ -65,6 +65,10 @@ function sidecarIdFor(target: string): string {
  * skill with browser and desktop steps reaches each through the sidecar that
  * advertises that capability; an explicit target pins both.
  */
+export function skillLiveDeps(explicitTarget?: string): SkillRuntimeDeps {
+  return liveDeps(explicitTarget);
+}
+
 function liveDeps(explicitTarget?: string): SkillRuntimeDeps {
   const manager = getSidecarManager();
   if (!manager) throw new Error('Sidecar system not initialized');

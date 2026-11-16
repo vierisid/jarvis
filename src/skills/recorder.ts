@@ -31,6 +31,16 @@ export type RawInteraction = {
   surface?: 'desktop' | 'browser';
   /** True when the source field was a password/secure input. */
   secure?: boolean;
+  /**
+   * The window the action was in, as the sidecar names one (a number that
+   * stays the same while the window lives, its process, its size), and for a
+   * click the place in that window it landed on and what was held down with
+   * it. The compiler does not use these: a skill replays by element. They are
+   * how a job shown several times over is told apart (src/notch/rounds.ts).
+   */
+  win?: { id: string; pid: number; w: number; h: number };
+  pt?: { x: number; y: number };
+  mods?: string;
 };
 
 export type RecordingEndReason = 'stop' | 'cap' | 'sidecar' | 'restart';
@@ -91,6 +101,17 @@ export function parseInteractionEvent(payload: unknown, now = Date.now()): RawIn
   const action = p.action as RawInteraction['action'];
   const ref = isRef(p.ref) ? p.ref : undefined;
   if ((action === 'click' || action === 'set_value') && !ref) return null;
+  const whole = (v: unknown, least: number, most: number): number | null =>
+    (typeof v === 'number' && Number.isInteger(v) && v >= least && v <= most ? v : null);
+  const w = (typeof p.win === 'object' && p.win !== null ? p.win : {}) as Record<string, unknown>;
+  const winPid = whole(w.pid, 1, 0xffffffff);
+  const winW = whole(w.w, 1, 100_000);
+  const winH = whole(w.h, 1, 100_000);
+  const win = typeof w.id === 'string' && /^0x[0-9a-f]{1,16}$/.test(w.id) && winPid && winW && winH
+    ? { id: w.id, pid: winPid, w: winW, h: winH } : undefined;
+  const at = (typeof p.pt === 'object' && p.pt !== null ? p.pt : {}) as Record<string, unknown>;
+  const x = whole(at.x, -100_000, 100_000);
+  const y = whole(at.y, -100_000, 100_000);
   return {
     action,
     ref,
@@ -100,12 +121,26 @@ export function parseInteractionEvent(payload: unknown, now = Date.now()): RawIn
     title: typeof p.title === 'string' && p.title ? p.title : undefined,
     surface: p.surface === 'browser' ? 'browser' : 'desktop',
     secure: p.secure === true,
+    ...(win ? { win } : {}),
+    ...(win && action === 'click' && x !== null && y !== null ? { pt: { x, y } } : {}),
+    ...(typeof p.mods === 'string' && /^(?:ctrl|shift|alt)(?:,(?:ctrl|shift|alt))*$/.test(p.mods) ? { mods: p.mods } : {}),
   };
 }
 
 /** In-memory recorder. One session at a time (per the record_skill UX). */
 export class SkillRecorder {
   private session: RecordingSession | null = null;
+  private readonly listeners = new Set<(interaction: RawInteraction, count: number) => void>();
+
+  /**
+   * Hears each interaction as it is kept, already redacted, with how many
+   * the session holds now. For whoever shows the person that they are being
+   * watched (the notch counts the steps). Comes back with how to stop hearing.
+   */
+  onPush(listener: (interaction: RawInteraction, count: number) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   start(id: string, now: number, maxMs: number): RecordingSession {
     this.session = { id, startedAt: now, deadline: now + maxMs, interactions: [] };
@@ -120,7 +155,11 @@ export class SkillRecorder {
   /** Buffer one interaction (redacted at capture time). Ignored once the session ended. */
   push(i: RawInteraction, now = Date.now()): void {
     if (!this.isRecording(now)) return;
-    this.session!.interactions.push(redactInteraction(i));
+    const kept = redactInteraction(i);
+    this.session!.interactions.push(kept);
+    for (const listener of [...this.listeners]) {
+      try { listener(kept, this.session!.interactions.length); } catch { /* a watcher is not part of the recording */ }
+    }
   }
 
   /**

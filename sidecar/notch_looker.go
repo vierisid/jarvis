@@ -72,6 +72,15 @@ type lookHands interface {
 	PointHit()
 	// PointEnd takes ring and words away and sends the pointer home now.
 	PointEnd()
+	// HandTo sends one of Jarvis's pointers (0, 1 or 2) to a place, with no
+	// ring: a job is being done there, and what happens is what is seen. It
+	// comes back with how long the way takes. beside: a pointer that is not
+	// out yet comes up at the place itself instead of out of the notch.
+	HandTo(n int, at lookPoint, beside bool) time.Duration
+	// HandsHome sends every pointer home.
+	HandsHome()
+	// Hover puts a few words beside a place, or takes them away with "".
+	Hover(text string, at lookPoint)
 	// The window a place is in: its rectangle in screen pixels (empty when
 	// it cannot be told), and the names of what stands round that place, from
 	// the nearest outwards (the panel, the list, the page).
@@ -119,6 +128,13 @@ type NotchLook struct {
 	escHeld bool
 	// Something was pointed at and the person's click is waited for.
 	waiting *lookWait
+	// A thing the person showed is held to be put somewhere (notch.hold): the
+	// words that say so, until when, and where the pointer last was while the
+	// talk pair was down. With the pair down those words stand beside the
+	// pointer over a place that can take the thing.
+	held    string
+	heldTil time.Time
+	hoverAt lookPoint
 
 	// Something changed in the line being drawn: the tag is due a reading.
 	changed chan struct{}
@@ -224,8 +240,10 @@ func (l *NotchLook) Forget() {
 	hands := l.hands
 	l.pen.Reset()
 	l.endWait("gone")
+	l.held, l.heldTil = "", time.Time{}
 	if hands != nil {
 		hands.PointEnd()
+		hands.Hover("", lookPoint{})
 	}
 	l.hands, l.send, l.away = nil, nil, nil
 	if l.line != nil {
@@ -263,6 +281,56 @@ func (l *NotchLook) Keys(armed bool) {
 	l.mu.Unlock()
 	if hands != nil && was != now {
 		hands.Watch()
+		if !now {
+			// The keys are up: nothing is being pointed at any more.
+			hands.Hover("", lookPoint{})
+		}
+	}
+}
+
+// Hold is the brain saying that a thing the person showed is held to be put
+// somewhere, in a few words ("3 rows"), and for how long. With no words
+// nothing is held.
+func (l *NotchLook) Hold(what string, stay time.Duration) {
+	l.mu.Lock()
+	hands := l.hands
+	if what == "" || stay <= 0 {
+		l.held, l.heldTil = "", time.Time{}
+	} else {
+		l.held, l.heldTil = "Put "+what+" here", time.Now().Add(stay)
+	}
+	l.mu.Unlock()
+	if hands != nil && what == "" {
+		hands.Hover("", lookPoint{})
+	}
+}
+
+// lookTakes says whether a thing is a place something can be put: a field, a
+// cell of a table, or a page of writing.
+func lookTakes(thing lookThing) bool {
+	if thing.Kind == "field" || thing.Kind == "cell" {
+		return true
+	}
+	return thing.Role == "Document" || thing.Role == "Edit" || thing.Role == "ComboBox" || thing.Role == "DataItem"
+}
+
+// How long a thing may be held, at the most.
+const notchHoldMax = 5 * time.Minute
+
+// makeNotchHoldHandler serves notch.hold: {what, ms}, or {} to hold nothing.
+func makeNotchHoldHandler(l *NotchLook) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		what, _ := params["what"].(string)
+		what = lookClean(what)
+		if utf8.RuneCountInString(what) > 40 {
+			what = string([]rune(what)[:39]) + "…"
+		}
+		ms, _ := params["ms"].(float64)
+		if math.IsNaN(ms) || ms < 0 {
+			ms = 0
+		}
+		l.Hold(what, min(time.Duration(ms)*time.Millisecond, notchHoldMax))
+		return &RPCResult{Result: map[string]any{"held": what != "" && ms > 0}}, nil
 	}
 }
 
@@ -320,6 +388,7 @@ func (l *NotchLook) Down(x, y int) bool {
 	}
 	// A line is begun: whatever was being pointed at is over.
 	l.endWait("replaced")
+	hands.Hover("", lookPoint{})
 	line := &lookLine{id: newNotchLookID(), ready: make(chan struct{})}
 	l.line = line
 	l.last = at
@@ -368,7 +437,20 @@ func (l *NotchLook) Move(x, y int) {
 	if v.Extend {
 		l.last = lookPoint{x, y}
 	}
+	// The talk pair is down, no line is being drawn, and a thing is held: the
+	// place under the pointer is read, to say whether the thing can go there.
+	hover := !v.Extend && hands != nil && l.held != "" && l.pen.Armed() && !l.pen.Busy()
+	if hover {
+		l.hoverAt = lookPoint{x, y}
+	}
 	l.mu.Unlock()
+	if hover {
+		select {
+		case l.changed <- struct{}{}:
+		default:
+		}
+		return
+	}
 	if !v.Extend || hands == nil {
 		return
 	}
@@ -453,7 +535,30 @@ func (l *NotchLook) read() {
 			hands, line := l.hands, l.line
 			drawing := l.pen.Drawing()
 			points := append([]lookPoint(nil), l.pen.points...)
+			held, at := l.held, l.hoverAt
+			pointing := held != "" && l.pen.Armed() && !l.pen.Busy()
+			if held != "" && time.Now().After(l.heldTil) {
+				// Held too long ago: it is forgotten.
+				l.held, held, pointing = "", "", false
+			}
+			away := l.away
 			l.mu.Unlock()
+			if hands != nil && !drawing && pointing {
+				// Nothing is read where this program looks away.
+				words := ""
+				if away == nil || away(hands.Front(at)) == "" {
+					if thing, ok := hands.ThingAt(at, true); ok && lookTakes(thing) {
+						words = held
+					}
+				}
+				lastRead = time.Now()
+				l.mu.Lock()
+				if l.pen.Armed() && !l.pen.Busy() && l.hands != nil {
+					hands.Hover(words, at)
+				}
+				l.mu.Unlock()
+				continue
+			}
 			if hands == nil || line == nil || !drawing || len(points) < 2 || lookIsClick(points) {
 				continue
 			}

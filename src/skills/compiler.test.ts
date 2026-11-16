@@ -83,6 +83,55 @@ describe('parseInteractionEvent', () => {
     expect(r.secure).toBe(true);
     expect(r.value).toBeUndefined();
   });
+
+  it('a named key or a shortcut is a step of its own, with no element', () => {
+    const keys = parseInteractionEvent({ action: 'press_keys', value: 'ctrl,c', app: 'notepad', win: { id: '0x1a', pid: 100, w: 900, h: 700 } })!;
+    expect(keys).toMatchObject({ action: 'press_keys', value: 'ctrl,c', app: 'notepad', win: { id: '0x1a', pid: 100, w: 900, h: 700 } });
+    expect(keys.ref).toBeUndefined();
+    expect(keys.pt).toBeUndefined();
+  });
+
+  it('a click carries the window it was in, the place in it, and what was held down', () => {
+    const win = { id: '0x2b', pid: 200, w: 1200, h: 800 };
+    const click = parseInteractionEvent({ action: 'click', ref: goodRef, win, pt: { x: 300, y: 420 }, mods: 'shift' })!;
+    expect(click).toMatchObject({ win, pt: { x: 300, y: 420 }, mods: 'shift' });
+    // A window that is not named as the sidecar names one is not kept, and neither is a place without it.
+    for (const bad of [{ id: 'excel', pid: 200, w: 1, h: 1 }, { id: '0x2b', pid: 0, w: 1, h: 1 }, { id: '0x2b', pid: 200, w: 0, h: 1 }, 'window', null]) {
+      const got = parseInteractionEvent({ action: 'click', ref: goodRef, win: bad, pt: { x: 3, y: 4 } })!;
+      expect(got.win).toBeUndefined();
+      expect(got.pt).toBeUndefined();
+    }
+    expect(parseInteractionEvent({ action: 'click', ref: goodRef, win, pt: { x: 1.5, y: 4 } })!.pt).toBeUndefined();
+    // What was held down is only the keys that change other keys: never a text.
+    expect(parseInteractionEvent({ action: 'click', ref: goodRef, win, pt: { x: 3, y: 4 }, mods: 'ctrl,c' })!.mods).toBeUndefined();
+    // The click itself is kept either way: the compiler replays by element.
+    expect(parseInteractionEvent({ action: 'click', ref: goodRef, win: 'window' })!.action).toBe('click');
+  });
+});
+
+describe('a recording that is watched as it goes', () => {
+  it('each interaction is heard once it is kept, already redacted, with the count', () => {
+    const rec = new SkillRecorder();
+    const heard: string[] = [];
+    const unhear = rec.onPush((interaction, count) => { heard.push(`${count}: ${interaction.action} ${interaction.value ?? ''}`.trim()); });
+    // Nothing is heard of what arrives while nothing is recording.
+    rec.push({ action: 'press_keys', value: 'enter', ts: 1 }, 1);
+    rec.start('r', 0, 60_000);
+    rec.push({ action: 'press_keys', value: 'ctrl,c', ts: 2 }, 2);
+    rec.push({ action: 'set_value', ref: { role: 'Edit', name: 'Password', path: [], ordinal: 0, sig: 'p' }, value: 'hunter2', ts: 3 }, 3);
+    expect(heard).toEqual(['1: press_keys ctrl,c', '2: set_value {{REDACTED}}']);
+    unhear();
+    rec.push({ action: 'press_keys', value: 'enter', ts: 4 }, 4);
+    expect(heard.length).toBe(2);
+  });
+
+  it('a listener that throws does not lose the step', () => {
+    const rec = new SkillRecorder();
+    rec.onPush(() => { throw new Error('the watcher broke'); });
+    rec.start('r', 0, 60_000);
+    rec.push({ action: 'press_keys', value: 'enter', ts: 1 }, 1);
+    expect(rec.current()!.interactions.length).toBe(1);
+  });
 });
 
 describe('compileSkill', () => {

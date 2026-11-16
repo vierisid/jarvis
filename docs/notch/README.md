@@ -1077,6 +1077,8 @@ machine, is listed under the invariants.
     (`newNotchHand`, the ink thread in `notch_look_windows.go`). It is not
     the system's pointer, which stays in the person's hand and is never
     moved. When the ring's time is up the pointer flies home and is gone.
+    (When Jarvis does a job itself, the press is made with the system's
+    pointer and it is put back: 104.)
 95. **The way to something is shown one click at a time, and the person
     does every click.** When what is asked for is behind a menu, a tab or a
     settings window, the pointer goes to the first thing to click and waits
@@ -1173,6 +1175,171 @@ What is not done, or not proven, in pass 9:
 - **A PDF that is only scanned pages has no text to read** and is refused as
   one: nothing is guessed from its pictures.
 - "Where is" is known by how a question begins, in English.
+
+## Doing it in view
+
+Pass 10. Jarvis does a job on the person's own screen, where it can be
+seen: its own pointers go to each place before anything happens there, the
+notch counts, Esc stops it, and it can go on or take back what it did. A job
+gets there in three ways: the person does it twice by hand and Jarvis offers
+to do the rest; the person shows it once ("Watch me"); or the person shows a
+thing and then a place ("put it there").
+
+Code: `src/notch/rounds.ts` (telling a repeated round from shapes),
+`jobs.ts` (running, stopping, going on, taking back), `catch.ts` (the offer),
+`teach.ts` ("Watch me", "run it", a time of the week), `put.ts`;
+`src/daemon/notch-jobs.ts` (what they need of the product);
+`sidecar/notch_watch.go` and `notch_watch_windows.go` (watching, and
+`notch.act`), the hooks in `recorder_windows.go`, the pointers in
+`notch_look_windows.go`.
+
+96. **The notch watches the shape of what the hands do, and only the
+    shape.** With the notch on, the desktop app keeps its mouse and keyboard
+    hooks in and tells the brain (`notch.watch`): a click, as which window
+    and which place in it; a named key or a shortcut (Enter, the arrows,
+    Ctrl + C), as which window. It never tells a key that types, the text of
+    a field, the name of a control, or the title of a window, and in this
+    mode it asks no program anything about itself. A stretch of typing is
+    told as one word, `typed`. Which keys are steps is one function
+    (`watchKey`), tested over every key: a letter, a digit, a sign, Space and
+    Backspace are typing unless Ctrl, Alt or Win is held, and with the right
+    Alt of a keyboard that types a third sign with it they are typing too.
+    The brain keeps the last eighty shapes in memory and writes none of them
+    down. Decided by the owner on 12 November 2026 (decision H).
+97. **Where it looks away, nothing is told, not even the shape.** A password
+    field, a bank, an app on the person's list, watching switched off, Jarvis
+    asleep: the same answer that stops a look (`notchLookAway`) stops this.
+    The brain hears `gap` once, so that what came before and what comes
+    after are not taken for one job.
+98. **What a program pressed is not what the person did.** Windows marks a
+    click or a key that a program made. Both hooks drop those, for the
+    notch's watching and for a recording alike. Without this Jarvis's own
+    clicks, when it does a job, would be taken for the person's next round.
+99. **A round is the same steps done twice, one place further along.** The
+    brain looks at the end of what it was told for the shortest run of steps
+    that was just done twice running, with the same keys in the same
+    windows, where each click either stayed where it was or moved on by a
+    clear step. The third round is those steps with every place moved on by
+    that much again. It knows nothing of rows or sheets, so it works
+    wherever things stand at even distances. It is a circle: the person who
+    stops after the click in the file and the one who stops after the paste
+    are in the same job at another step of it, and Jarvis takes over from
+    exactly that step. Not a round, on purpose: a stretch with typing in it
+    (Jarvis did not see that part), anything across a `gap`, a round in
+    which nothing moves on, a place that moved a few pixels (neither still
+    nor on), a window that changed size, two rounds more than ninety seconds
+    apart, and clicks alone done only twice (two clicks happen all day; a
+    third makes them a pattern).
+100. **It offers, and does nothing without the yes.** Seeing a round,
+    Jarvis's pointer comes up beside the person's own, goes to where the
+    next round begins, and the notch says "I can take it from here", with
+    "6 left" when that can be counted. The line came by itself, so no yes
+    lands on it in its first 0.7 seconds. Turned down or left, the same job
+    is not offered again for ten minutes. While Jarvis is working, or being
+    shown a job, what the hands do is not looked at.
+101. **How many are left is counted from what the window says, or not said.**
+    From the place the things come from, the desktop app looks one step
+    further each time and counts while there is a thing of the same kind
+    that says something (`watchCountLeft`). Where a window draws its own
+    rows and describes one large thing, it cannot tell, says so, and the
+    sentence carries no number. Then a job that copies runs until a copy
+    comes back empty, and a job that copies nothing asks how many.
+102. **A step is done once.** Each step is one request to the desktop app
+    (`notch.act`). One that was done is never sent again, and neither is one
+    whose answer was lost, because it may have been done. Only a step the
+    desktop app refused before touching anything is tried again. Going on
+    after a stop starts at the first step that did not happen. Esc lands
+    between two rounds: a round in hand is finished if that takes under
+    three seconds, so a row is whole or not begun. The plan's test: "Esc at
+    four. Go on. It finishes, and no row is there twice."
+103. **Every press is checked first, and refused rather than guessed.** The
+    window must still be there and be the same program's, be the size it was
+    when the step was shown (or what stood at that place is somewhere else
+    now), not be put away, not be covered at that place by another window,
+    not be one of Jarvis's own, and not run as administrator. Keys are
+    pressed only when that window is the one in front. A refusal comes back
+    as a word (`gone`, `moved`, `outside`, `covered`, `own`, `elevated`,
+    `front`), the job stops, and the notch says which.
+104. **In a job the press is made with the system's pointer, and it is put
+    back.** This amends 94 for jobs only. A press that every program takes
+    can only be made with the system's pointer, so it is moved to the place,
+    pressed, and put back where the person had it, in about fifty
+    milliseconds. Jarvis's own pointer, which is a picture, has landed there
+    first. A job uses up to three of them, one for each place a round
+    touches, so that none has to cross the screen for every step; they hop
+    between rows in 150 to 420 ms and go home when the job ends.
+105. **What a job pasted is kept as shapes, and taken back only where it
+    still stands.** For each paste the brain keeps where it went, how many
+    cells, and a number that is the same for the same text (`clipShapeOf`).
+    The desktop app reads the clipboard for that and tells the brain the
+    shape, never the text. Undo, from the stop line or from Today, goes to
+    each place newest first, reads it again, and presses Delete only when
+    what is there has the same number as what was pasted. What the person
+    changed since is left and counted in the answer. One cell is cleared
+    only where taking in the cell beside it gives two cells: in a page of
+    writing that gives one letter, and Delete there would eat a letter of
+    the person's. The plan left "undo played backwards" out; this is the
+    typed inverse of one thing, a paste.
+106. **"Watch me" is the permission.** Saying it starts the product's
+    recorder with no card to click (the owner, 13 November 2026: on the
+    notch saying is approval). The notch says it is watching for as long as
+    it does and counts the steps; the pebble's line and the two
+    notifications are left out for a recording started this way. Yes or the
+    word "done" ends it, Esc throws it away with nothing kept, and it ends
+    by itself after ten minutes. What was shown is saved as a skill, signed
+    like any other. The recorder now also records the keys that are steps,
+    which it did not: a job shown with Enter or Ctrl + V in it is done again
+    with them.
+107. **A shown job at a time of the week asks first.** "Do it every Monday
+    at 9:00?" keeps the time, and at that time the notch asks "Shall I do it
+    now?" and does it on a yes. It does not start by itself: a job that
+    drives the person's screen does not begin while nobody is looking, and
+    the product's own rules refuse a recorded job on a schedule at the
+    default permission level. A time that passed more than thirty minutes
+    ago is not done late. Letting it run alone is pass 11's trust rungs.
+108. **A job that pays is never run from the notch, and one that deletes
+    asks once.** The skill's own classification of its steps decides
+    (`resolveSkillEffect`).
+109. **Put it there: what was shown is held for ninety seconds, and goes
+    where the person points.** After a look the brain holds what was read
+    and tells the desktop app a few words for it (`notch.hold`). With the
+    talk keys down, "Put 3 rows here" stands beside the pointer over a place
+    that can take it (a field, a cell, a page of writing), before anything
+    is clicked. A click there is not a new look: the notch asks, and on a
+    yes the thing is pasted at that place. What is put is what was read,
+    cells parted by tabs and rows by line ends, with nothing rewritten by a
+    model. After ninety seconds it has forgotten and says so. The text stays
+    on the clipboard afterwards: putting the person's own back risks a slow
+    program pasting that instead.
+
+What is not done, or not proven, in pass 10:
+
+- **None of it has run on a real machine.** The brain's side is tested end
+  to end against a stand-in for the desktop app. The desktop app's side is
+  tested where it is plain logic (which keys are steps, the shape of a
+  copy, the place in a window, counting what is left, the hover), compiles
+  for Windows, and has never clicked, copied or pasted anything real.
+- **Whether a press lands in a given program is not known.** Clicks are
+  made at places in a window. A program that lays itself out differently
+  from one moment to the next, or scrolls between rounds, will be clicked in
+  the wrong place, and only the window's size is checked. A job stops at the
+  edge of its window: it does not scroll.
+- **How the hooks behave left in all day is not measured.** They do a few
+  table lookups a click and nothing else, but Windows removes a hook that
+  answers slowly, and eight hours of it is pass 13's soak.
+- **A round with typing in it cannot be taken over**, and neither can one
+  the person selects by dragging: a drag is seen as a click where it ended.
+- **Nothing of pass 10 is built for the Mac.** There is no recorder there
+  and no watching.
+- **Undo exists for a paste only.** A draft that was made is taken back
+  inside its send window (pass 7), and nothing on the notch makes a calendar
+  event yet, so there is nothing of that kind to undo.
+- **Three things the prototype showed are not built:** changing a job by
+  voice while it runs ("skip the fees"), choosing the form a thing is put
+  in ("as a sentence"), and making an agent out of a finished job. The last
+  is pass 11.
+- **Words that start these are matched in English and a little Italian**
+  ("watch me", "done", "run it on nine rows", "undo that").
 
 ## The keys
 
@@ -1376,6 +1543,11 @@ What is not done, or not proven, in pass 9:
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
 | brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away What the program has open on top of it (a menu, a dropped-down list) comes first in `elements`, counted in `popups`. |
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
+| desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
+| brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
+| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place, `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. One at a time |
+| brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
+| brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through seven functions on `window`:
