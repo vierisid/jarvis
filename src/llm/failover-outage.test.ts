@@ -192,7 +192,10 @@ test('a stream stopped by the caller does not move on to the next provider', asy
   expect(events.map(e => e.type)).toEqual(['error']);
   // The turn ends on the provider it was stopped on: no second provider's
   // failure is added to what it reports.
-  expect((events[0] as { code?: string }).code).toBe('network');
+  // The manager races the caller's signal, so the stop itself surfaces as
+  // "The operation was aborted." (code unknown) rather than the provider's
+  // network error; either way it must be the primary's own failure only.
+  expect((events[0] as { error: string }).error).toStartWith("Provider 'primary' failed");
   expect((events[0] as { error: string }).error).not.toContain('fallback');
   expect(calls).toEqual({ primary: 2, fallback: 0 });
 });
