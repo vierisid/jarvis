@@ -24,6 +24,10 @@ export interface Flow {
   status: FlowStatus;
   publishedVersionId: string | null;
   metadata: Record<string, unknown> | null;
+  /** Minutes one successful run saves, as set by the owner; null when they have not. Set through `PATCH /api/workflows/:id`. */
+  timeSavedPerRun?: number | null;
+  /** What Today counts per run when the owner has not set minutes: an estimate from the flow's steps. */
+  estimatedTimeSavedPerRun?: number | null;
   /**
    * Per-flow CODE-step permission. A flow containing a CODE step cannot be
    * published, enabled or run until this is on, because a CODE step runs
