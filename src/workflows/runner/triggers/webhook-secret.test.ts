@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../../db/index';
 import { createFlow } from '../../db/repos/flow';
+import { publishFlowVersion } from '../../db/repos/flow-publication';
 import { createDraftVersion, getFlowVersion, updateDraftVersion } from '../../db/repos/flow-version';
 import { FlowVersionRequestError } from '../../db/repos/flow-version-ownership';
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_SECRET_MIN_LENGTH, WEBHOOK_TIMESTAMP_TOLERANCE_S } from './webhook-secret';
@@ -97,4 +98,31 @@ test('#1153 review: a secret removed and set again is timestamped if any version
   const cleared = createDraftVersion({ flowId, displayName: 'cleared', trigger: hook({}) });
   updateDraftVersion(cleared.id, { trigger: hook({ secret: LONG }) });
   expect(inputOf(cleared.id).signature_scheme).toBe('timestamped');
+});
+
+test('a secret that is not text is refused at save, never read as no secret', () => {
+  const flow = createFlow({});
+  for (const secret of [12345678901234567890123456789012, true, ['x'.repeat(40)], { v: 'x'.repeat(40) }]) {
+    expect(() => createDraftVersion({ flowId: flow.id, displayName: 'd', trigger: hook({ secret }) })).toThrow(/must be text/);
+    const v = createDraftVersion({ flowId: flow.id, displayName: 'd' });
+    expect(() => updateDraftVersion(v.id, { trigger: hook({ secret }) })).toThrow(FlowVersionRequestError);
+  }
+});
+
+test('the timestamp setting with no secret to sign with is refused on a webhook that had none; clearing a secret still works', () => {
+  const flow = createFlow({});
+  expect(() => createDraftVersion({ flowId: flow.id, displayName: 'd', trigger: hook({ signature_scheme: 'timestamped' }) })).toThrow(/no signing secret/);
+  // The editor clears a secret by removing the key and leaves the scheme for the save to drop.
+  const v = createDraftVersion({ flowId: createFlow({}).id, displayName: 'd', trigger: hook({ secret: LONG }) });
+  updateDraftVersion(v.id, { trigger: hook({ signature_scheme: 'timestamped' }) });
+  expect(inputOf(v.id)).toEqual({});
+});
+
+test('publishing refuses a webhook whose signing setup is unusable, with a plain message', () => {
+  const flow = createFlow({});
+  const v = createDraftVersion({ flowId: flow.id, displayName: 'd', trigger: hook({}) });
+  // A draft written past the save rules, as an older install holds one.
+  getWorkflowDb().run('UPDATE flow_version SET trigger = ? WHERE id = ?', [JSON.stringify(hook({ secret: ['x'.repeat(40)] })), v.id]);
+  try { publishFlowVersion(flow.id); throw new Error('published'); }
+  catch (error) { expect(error).toBeInstanceOf(FlowVersionRequestError); expect((error as Error).message).toMatch(/must be text/); }
 });

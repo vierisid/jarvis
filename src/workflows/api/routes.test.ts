@@ -791,6 +791,62 @@ describe("workflow API: runs", () => {
     expect(queueStats().queued).toBe(1);
   });
 
+  describe("manual-run cap", () => {
+    const OTHER_PROJECT = "proj_other_1394";
+
+    async function seedFlow(projectId?: string) {
+      const { createFlow } = await import("../db/repos/flow");
+      const { createDraftVersion } = await import("../db/repos/flow-version");
+      const flow = createFlow(projectId ? { projectId } : {});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "v", trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } });
+      return { flowId: flow.id, versionId: version.id };
+    }
+
+    /** `n` waiting runs of the flow, as a start of `triggeredBy` leaves them. */
+    async function queueRuns(flowId: string, versionId: string, n: number, triggeredBy: string) {
+      const { getWorkflowDb } = await import("../db/index");
+      const { enqueue } = await import("../db/repos/job-queue");
+      const { createFlowRun } = await import("../db/repos/flow-run");
+      getWorkflowDb().transaction(() => {
+        for (let i = 0; i < n; i++) {
+          const run = createFlowRun({ flowId, flowVersionId: versionId, environment: "PRODUCTION", triggeredBy });
+          enqueue({ jobType: "RUN_FLOW", payload: { runId: run.id }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+        }
+      })();
+    }
+
+    const start = (map: WorkflowRouteMap, flowId: string) => (map["/api/workflows/:id/run"]?.POST as (r: Request) => Promise<Response>)(
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}) as Request);
+
+    test("refuses with a 429, Retry-After and a plain message once the owner's own runs reach the cap, and queues nothing", async () => {
+      const { MAX_QUEUED_MANUAL_RUNS } = await import("./routes");
+      const { flowId, versionId } = await seedFlow();
+      await queueRuns(flowId, versionId, MAX_QUEUED_MANUAL_RUNS - 1, "dashboard");
+      expect((await start(routes, flowId)).status).toBe(202);
+      const refused = await start(routes, flowId);
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get("Retry-After")).toBe("30");
+      expect((await refused.json()).error).toBe(`${MAX_QUEUED_MANUAL_RUNS} runs you started are still waiting to start. Try again once some of them have run.`);
+      expect(queueStats().queued).toBe(MAX_QUEUED_MANUAL_RUNS);
+    });
+
+    test("a full webhook backlog does not refuse a run started by hand", async () => {
+      const { MAX_QUEUED_WEBHOOK_RUNS } = await import("../runner/triggers/manager");
+      const { flowId, versionId } = await seedFlow();
+      await queueRuns(flowId, versionId, MAX_QUEUED_WEBHOOK_RUNS + 50, "trigger:webhook");
+      expect((await start(routes, flowId)).status).toBe(202);
+    });
+
+    test("another project's waiting runs do not count against this one", async () => {
+      const { MAX_QUEUED_MANUAL_RUNS } = await import("./routes");
+      const mine = await seedFlow();
+      await queueRuns(mine.flowId, mine.versionId, MAX_QUEUED_MANUAL_RUNS, "dashboard");
+      expect((await start(routes, mine.flowId)).status).toBe(429);
+      const theirs = await seedFlow(OTHER_PROJECT);
+      expect((await start(createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT }), theirs.flowId)).status).toBe(202);
+    });
+  });
+
   test("POST /:id/run leaves no run behind when the job cannot be written", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
@@ -892,6 +948,38 @@ describe("workflow API: runs", () => {
     );
     expect(status).toBe(200);
     expect((body as RunsPage).items.length).toBe(2);
+  });
+
+  test("GET /recent-runs answers Recently run in one read: the newest run of each workflow, not a window of workflows", async () => {
+    const post = routes["/api/workflows"]?.POST;
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const created = await callJson(post, plainReq("POST", "http://x", { displayName: `Flow ${i}` }));
+      ids.push(created.body.flow.id);
+    }
+    const runHandler = routes["/api/workflows/:id/run"]?.POST;
+    const run = (id: string) => callJson(runHandler, reqWithParams("POST", `http://x/api/workflows/${id}/run`, { id }, {}));
+    // The oldest workflows ran last: a read of the first few workflows would miss them.
+    for (const id of [ids[5]!, ids[3]!, ids[0]!, ids[0]!]) { await run(id); await new Promise(r => setTimeout(r, 3)); }
+    const recent = routes["/api/workflows/recent-runs"]?.GET;
+    const { status, body } = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs?limit=2"));
+    expect(status).toBe(200);
+    const items = (body as { items: { flowId: string; displayName: string; id: string }[] }).items;
+    expect(items.map(i => i.flowId)).toEqual([ids[0]!, ids[3]!]);
+    expect(items[0]!.displayName).toBe("Flow 0");
+    const all = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect((all.body as { items: unknown[] }).items).toHaveLength(3);
+
+    // A workflow removed in Brief (pending Undo) leaves Recently run, as it leaves the list.
+    const { getWorkflowDb } = await import("../db/index");
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt-test' WHERE flow_id = ?", [ids[0]!]);
+    const afterRemoval = await callJson(recent, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect((afterRemoval.body as { items: { flowId: string }[] }).items.map(i => i.flowId)).toEqual([ids[3]!, ids[5]!]);
+
+    // Another project's caller sees none of these runs.
+    const scoped = createWorkflowRoutes({ callerProjectId: () => "proj_other_recent" });
+    const foreign = await callJson(scoped["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs"));
+    expect(foreign).toEqual({ status: 200, body: { items: [] } });
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
