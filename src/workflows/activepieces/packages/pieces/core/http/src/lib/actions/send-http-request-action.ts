@@ -38,13 +38,14 @@ export const httpSendRequestAction = createAction({
       displayName: 'URL',
       required: true,
     }),
+    // Jarvis: headers and query params are optional. The piece treats a missing one as empty.
     headers: Property.Object({
       displayName: 'Headers',
-      required: true,
+      required: false,
     }),
     queryParams: Property.Object({
       displayName: 'Query params',
-      required: true,
+      required: false,
     }),
     authType: Property.StaticDropdown<AuthType>({
       displayName: 'Authentication',
