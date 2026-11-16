@@ -7,6 +7,7 @@ import { WorkflowCreationController } from '../workflows/create/controller';
 import { createCompositionPort } from '../workflows/create/client';
 import { WorkflowCreationRoom } from '../workflows/create/WorkflowCreationRoom';
 import { readRecentWorkflows } from '../workflows/recent-rows/read';
+import { readWorkflowPages } from '../workflows/manage-list/pages';
 import type { RecentWorkflowBinding } from '../workflows/recent-rows/model';
 import { readIngredientCatalog } from '../workflows/ingredient-picker/read';
 import type { IngredientCatalog } from '../workflows/ingredient-picker/model';
@@ -41,8 +42,8 @@ export function createWorkflowRooms(host: WorkflowHost) {
     { read: () => host.storage.getItem(key), write: value => host.storage.setItem(key, value) }, { source: 'live', scopeId });
   const management = new WorkflowManagementController(scopeId, 'live', {
     read: async signal => {
-      const v = await transport.json('/api/brief/workflows', { signal });
-      if (!['ready', 'empty'].includes(v.state) || v.data?.scopeId !== scopeId) throw new Error('Workflow list unavailable');
+      const v = await readWorkflowPages(path => transport.json(path, { signal }));
+      if (!['ready', 'empty'].includes(v.state ?? '') || v.data?.scopeId !== scopeId) throw new Error('Workflow list unavailable');
       return { status: 'ready', data: v.data };
     },
     change: command => transport.json('/api/brief/workflows/commands', post(command)),
