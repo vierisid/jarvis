@@ -114,3 +114,23 @@ test('#1118: a name is matched by the daemon over names only, with the shared ma
   expect((await routes()['/api/vault/entity-match'].GET(new Request(`http://localhost/api/vault/entity-match?name=${'a'.repeat(501)}`))).status).toBe(400);
   expect((await match('a'.repeat(500))).entity).toBeNull();
 });
+
+test('D-12: forgetting a corrected fact leaves no earlier version in facts or search', async () => {
+  process.env.JARVIS_BRIEF_MEMORY_FORGET = '1';
+  const subject = createEntity('person', 'Ada').id;
+  const first = createFact(subject, 'pricing_note', 'Discount ZEBRAONE', { confirmed: true });
+  const second = correctFact(first.id, 'Discount ZEBRATWO', 'Changed once');
+  const third = correctFact(second.id, 'Discount ZEBRATHREE', 'Changed twice');
+  const service = new MemoryForget(getDb()), read = service.get(third.id);
+  if (read.state !== 'ready') throw new Error('fixture fact is not live');
+  service.forget(third.id, { requestId: crypto.randomUUID(), expectedRevision: read.revision, confirmed: true });
+
+  const facts = await routes()['/api/vault/facts'].GET(new Request('http://localhost/api/vault/facts?predicate=pricing_note&include_superseded=true'));
+  expect(JSON.stringify(await facts.json())).not.toContain('ZEBRA');
+  for (const word of ['ZEBRAONE', 'ZEBRATWO', 'ZEBRATHREE', 'Discount']) {
+    const found = await routes()['/api/vault/search'].GET(new Request(`http://localhost/api/vault/search?q=${word}`));
+    expect(JSON.stringify(await found.json())).not.toContain('ZEBRA');
+  }
+  expect(factCount()).toBe(0);
+  expect(evidenceCount()).toBe(0);
+});

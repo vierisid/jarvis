@@ -220,6 +220,7 @@ function BoundRuns({
                 <strong>{run.label}</strong>
                 <time>{date(run.startedAt)}</time>
                 <Status status={run.status} />
+                {run.note && <span className="brief-runs-row-note">{run.note}</span>}
               </button>
             ))}
             {state.history.status !== "ready" && (
