@@ -134,3 +134,65 @@ describe('one reply through the tab', () => {
     expect(await browserMailbox(gone.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW))).toBeNull();
   });
 });
+
+// A chase's first mail to someone there is no thread with (pass 11): one new
+// mail, to one person, sent only when the writing window holds exactly it.
+describe('writing a new mail to one person', () => {
+  /** A tab whose writing window says what it holds, and whose Send answers as told. */
+  function writing(options: { window?: Record<string, unknown>; sent?: Record<string, unknown> | Error } = {}) {
+    const calls: { name: string; args?: unknown }[] = [];
+    const page: Required<GooglePage> = {
+      go: async (site, path) => { calls.push({ name: `go ${site}`, args: path }); },
+      run: async <T>(name: string, args?: unknown) => {
+        calls.push({ name, args });
+        if (name === 'shape-compose') return (options.window ?? { subject: 12, body: 40, send: true }) as T;
+        if (name === 'compose-send') {
+          if (options.sent instanceof Error) throw options.sent;
+          return (options.sent ?? { sent: true, why: '' }) as T;
+        }
+        throw new Error(`no such script: ${name}`);
+      },
+    };
+    return { page, calls, names: () => calls.map((call) => call.name) };
+  }
+  const plan = { to: 'leo@lumen.example', subject: 'The contract', text: 'Hi Leo,\n\nA quick nudge on this: could you get back to me by Friday?\n\nThanks,\nSam' };
+
+  test('the writing window is opened with the mail in it, checked, and Send is pressed once', async () => {
+    const { page, calls, names } = writing();
+    expect(await browserMailbox(page, new MailTabTurn()).write(plan)).toEqual({ ok: true });
+    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail']);
+    // Who it goes to, what it is called and what it says travel in the address that opens the window.
+    const opened = String(calls[0]!.args);
+    expect(opened.startsWith('/mail/u/0/?view=cm&fs=1&tf=1&to=leo%40lumen.example&su=The%20contract&body=Hi%20Leo')).toBe(true);
+    // Send is told exactly which mail it may send, and to whom.
+    expect(calls[2]!.args).toEqual({ subject: 'The contract', to: 'leo@lumen.example' });
+    // The tab is left on the list again for whoever reads next.
+    expect(calls[3]!.args).toBe('/mail/u/0/#inbox');
+  });
+
+  test('a writing window that does not hold the mail is not sent from', async () => {
+    for (const window of [{ subject: 3, body: 40, send: true }, { subject: 12, body: 0, send: true }, { subject: 12, body: 40, send: false }, { subject: null, body: null, send: false }]) {
+      const { page, names } = writing({ window });
+      expect(await browserMailbox(page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the writing window did not open as expected' });
+      expect(names()).not.toContain('compose-send');
+    }
+  });
+
+  test('when Gmail does not say it went, it is not called sent, and the reason is given', async () => {
+    const refused = writing({ sent: { sent: false, why: 'it does not go to the one expected person' } });
+    expect(await browserMailbox(refused.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'it does not go to the one expected person' });
+    const silent = writing({ sent: { sent: false, why: '' } });
+    expect(await browserMailbox(silent.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'Gmail did not say it was sent' });
+    // A page that went away is a mail that was not sent, with no address in the reason.
+    const gone = writing({ sent: new Error('the tab left https://mail.google.com/mail/u/0/?view=cm for elsewhere') });
+    expect(await browserMailbox(gone.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the tab left (an address) for elsewhere' });
+  });
+
+  test('what is not one mail to one person is refused before the tab is touched', async () => {
+    for (const bad of [{ ...plan, to: 'leo@lumen.example, anna@lumen.example' }, { ...plan, to: 'Leo' }, { ...plan, subject: ' ' }, { ...plan, text: '' }, { ...plan, text: 'x'.repeat(901) }]) {
+      const { page, names } = writing();
+      expect((await browserMailbox(page, new MailTabTurn()).write(bad)).ok).toBe(false);
+      expect(names()).toEqual([]);
+    }
+  });
+});

@@ -33,6 +33,7 @@ export class NotchSurface {
   private count = 0;
   private face: NotchMood = 'idle';
   private where: NotchWhereApp | null = null;
+  private eye = false;
   /** Desktop apps whose page has said hello on its present connection. */
   private readonly pages = new Set<string>();
   /** Desktop apps whose page has been seen at all since the brain started. */
@@ -89,6 +90,17 @@ export class NotchSurface {
     if (JSON.stringify(next) === JSON.stringify(this.where)) return;
     this.where = next;
     this.push({ type: 'where', app: next });
+  }
+
+  /**
+   * Whether an eye is being kept on something: the notch's left eye is round
+   * and citron while it is. It is kept, like the face, so a page that comes
+   * back still shows it (pass 11).
+   */
+  setEye(on: boolean): void {
+    if (on === this.eye) return;
+    this.eye = on;
+    this.push({ type: 'act', eye: on });
   }
 
   /** Changes the line on the notch. Ignored unless `id` is that line. */
@@ -161,6 +173,7 @@ export class NotchSurface {
       const state: NotchToPage = { type: 'state', line: this.line, count: this.count };
       if (this.face !== 'idle') state.face = this.face;
       if (this.where) state.where = this.where;
+      if (this.eye) state.eye = true;
       // The first time a page appears with nothing to say, the notch is born.
       // A page that comes back, or comes up in the middle of a line, just is.
       if (!this.met.has(sidecarId) && !this.line) {
