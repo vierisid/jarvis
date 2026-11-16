@@ -314,7 +314,16 @@ function latestTrigger(flowId: string): unknown {
   return row ? JSON.parse(row.trigger) : null;
 }
 
+/** A trigger is the root step object; a string, number, array or null is not a graph. */
+function assertTriggerShape(trigger: unknown): void {
+  if (trigger === undefined) return;
+  if (trigger === null || typeof trigger !== 'object' || Array.isArray(trigger)) {
+    throw new FlowVersionRequestError('trigger must be an object describing the first step of the workflow', 400);
+  }
+}
+
 export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion {
+  assertTriggerShape(input.trigger);
   const id = apId();
   const ts = now();
   const trigger = resolvedSchemas(webhookSecretRules(input.flowId, latestTrigger(input.flowId), input.trigger ?? {}));
@@ -387,6 +396,7 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     throw new FlowVersionRequestError(
       `version ${id} is LOCKED and cannot be edited; create a new draft to change it`, 409);
   }
+  assertTriggerShape(patch.trigger);
   if (patch.trigger !== undefined) patch = { ...patch, trigger: resolvedSchemas(webhookSecretRules(existing.flow_id, JSON.parse(existing.trigger), patch.trigger)) };
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.

@@ -781,6 +781,26 @@ not part of the invocation fingerprint: it changes how the parent treats the
 receipt, never what is sent to the child. `require_success` still works after a
 `call`, but a default `call` already fails first.
 
+### Deleting what other workflows use
+
+Deleting a workflow or a connection is never blocked because published
+workflows use it. The delete answers with `usedBy` (the published workflows
+that call the workflow or bind the connection) and a plain `warning` sentence,
+and `GET /api/workflows/:id/dependents` and
+`GET /api/workflows/connections/:id/dependents` give the same list
+beforehand, so the Workflows room can name them in its confirmation. Afterwards an enabled
+workflow that calls a deleted workflow, or binds a deleted connection (a
+`{{connections...}}` binding or a Jarvis step's account field, the same rule a
+run's connection scope reads), lists `blocked` with code `DEPENDENCY_MISSING`
+and a sentence naming the step and what is missing; it has no run, so `runId`
+is null. Only published graphs count: a draft nobody runs is not a dependent,
+and only workflows of the caller's project are read or named. A connection is
+looked up without decrypting it, so one whose secret cannot be read any more
+still deletes; when another connection of the project keeps the same external
+id, nobody is named. A parent already waiting on a child that was deleted
+fails with a sentence saying the child was deleted, not the engine's status
+word.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
@@ -1012,6 +1032,20 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **File shapes.** One rule in `processors/file.ts` decides what a file field
+  accepts, for every piece: the bare step-file path (`/v1/step-files/<id>`, what
+  zip, PDF, image and QR code steps return), the `{ fileName, url }` object
+  Create file returns (so `{{step_1}}` works as well as `{{step_1.url}}`), an
+  `http(s)` URL (held to the read list above), a base64 `data:` URL of any
+  media type (decoded in place, never fetched), and a `{ filename, base64 }`
+  object (`fileName` or `name` also count; the base64 may carry a `data:`
+  prefix). Base64 is held to the same 7.3 MiB cap as a download. The refusal
+  messages never repeat the value or its name.
+  Only an exact step-file path earns the engine credential; a padded or
+  query-carrying path does not. Any other value (plain text, a number, a list,
+  an object with no file) fails the step with "This field needs a file from an
+  earlier step, such as the output of Create file. It got text instead.", not
+  "required input is missing". An empty value is still no value.
 - **What the card says, and what is refused before it.** An HTTP or GraphQL
   request's card (and its Needs you entry) says what will happen in words,
   naming the method, the host and the path ("Jarvis wants to send a POST
