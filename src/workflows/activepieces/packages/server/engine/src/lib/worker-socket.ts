@@ -13,6 +13,8 @@ import {
 } from '@activepieces/shared'
 import { io, type ManagerOptions, type Socket, type SocketOptions } from 'socket.io-client'
 import { runProgressService } from './handler/run-progress'
+// Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.
+import { installEngineOutputRedaction, redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'
 import { execute } from './operations'
 
 let socket: Socket | undefined
@@ -28,19 +30,22 @@ export const workerSocket = {
         notifyClient = createNotifyClient<WorkerNotifyContract>(socket)
 
         const originalLog = console.log
-        console.log = function (...args): void {
+        console.log = function (...raw): void {
+            const args = redactEngineLogArgs(raw)
             notifyClient?.stdout({ message: args.join(' ') + '\n' })
             originalLog.apply(console, args)
         }
 
         const originalWarn = console.warn
-        console.warn = function (...args): void {
+        console.warn = function (...raw): void {
+            const args = redactEngineLogArgs(raw)
             notifyClient?.stdout({ message: args.join(' ') + '\n' })
             originalWarn.apply(console, args)
         }
 
         const originalError = console.error
-        console.error = function (...args): void {
+        console.error = function (...raw): void {
+            const args = redactEngineLogArgs(raw)
             let sanitizedArgs = [...args]
             if (typeof args[0] === 'string' && ERROR_MESSAGES_TO_REDACT.some(m => args[0].includes(m))) {
                 sanitizedArgs = [sanitizedArgs[0], 'REDACTED']
@@ -48,6 +53,7 @@ export const workerSocket = {
             notifyClient?.stderr({ message: sanitizedArgs.join(' ') + '\n' })
             originalError.apply(console, sanitizedArgs)
         }
+        installEngineOutputRedaction()
 
         createRpcServer<EngineContract>(socket, {
             executeOperation: async ({ operationType, operation }): Promise<EngineResponse<unknown>> => {
@@ -79,7 +85,7 @@ export const workerSocket = {
     },
 
     sendError: (error: unknown): void => {
-        notifyClient?.stderr({ message: inspect(error) })
+        notifyClient?.stderr({ message: inspect(redactEngineLogArgs([error])[0]) })
     },
 
     disconnect: (): void => {
