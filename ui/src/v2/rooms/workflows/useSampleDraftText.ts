@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { WorkflowEditorEnvironment } from "./WorkflowEditorEnvironment";
 
 /** Unfinished sample JSON is scoped to the current owner, flow and version. */
@@ -14,6 +14,13 @@ export function useSampleDraftText(key: string, incoming: string) {
   // editor must acknowledge the confirmed server value without replacing newer
   // typing. The explicit markSaved callback still records the submitted text.
   useEffect(() => { markSaved(incoming); }, [incoming]);
+  // A value that arrives while the box is untouched (a test run filled the sample
+  // output) shows at once. A box with newer typing in it keeps that typing.
+  const shown = useRef(incoming);
+  useEffect(() => {
+    const was = shown.current; shown.current = incoming;
+    if (was !== incoming) setText((current) => (current === was ? incoming : current));
+  }, [incoming]);
   return { text, setText, hasUnsavedEdits: !sameSampleValue(text, savedText), markSaved };
 }
 
