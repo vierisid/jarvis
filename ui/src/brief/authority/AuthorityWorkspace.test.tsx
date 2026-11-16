@@ -141,6 +141,9 @@ test("all thirteen current categories are readable with distinct on/off semantic
   expect(host.textContent).toContain(
     "Off uses the authority level and other rules: overrides, context rules and the approval asked after Jarvis reads outside content still apply.",
   );
+  expect(host.textContent).toContain(
+    "a matching Deny rule always wins over any Allow, whatever order they were added in.",
+  );
   expect(host.querySelector('[role="tablist"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Add a rule|Oct 12|always require/i);
 });
