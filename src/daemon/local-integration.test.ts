@@ -24,3 +24,9 @@ test('bun run dev stays the hot-reload daemon; only dev:local starts the local i
   expect(Object.values(scripts).filter(command => String(command).includes('scripts/integration/dev.ts'))).toHaveLength(1);
   expect(await Bun.file(new URL('README.md', root)).text()).toContain('bun run dev             # Hot-reload daemon');
 });
+test('the local integration page declares the same icon as the normal entry, so the browser never asks for /favicon.ico', async () => {
+  const icon = (html: string) => html.match(/<link rel="icon"[^>]*>/)?.[0];
+  const normal = icon(await Bun.file('ui/index.html').text());
+  expect(normal).toBeDefined();
+  expect(icon(await Bun.file('ui/local-integration.html').text())).toBe(normal);
+});
