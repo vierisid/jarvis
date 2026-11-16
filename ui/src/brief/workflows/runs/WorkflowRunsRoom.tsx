@@ -25,6 +25,9 @@ export interface WorkflowRunsBinding {
   title: string;
   capabilities: unknown;
   controller: WorkflowRunsController;
+  /** Set when this locked version is no longer the published one: the published version's
+   * ID. The room is read only then and offers the current version instead of Run. */
+  supersededBy?: string;
 }
 export function runsAvailable(
   shell: BriefShellPort,
@@ -112,11 +115,13 @@ function BoundRuns({
     if (detail.current && inspected?.runId === state.selectedId)
       detail.current.scrollTop = store.position(`detail:${state.selectedId}`);
   }, [store, state.selectedId, inspected?.runId]);
-  function select(id: string) {
+  /** A run opens with the version it ran on: the inspection answers a run only for its own
+   * version, so after an edit the runs of earlier versions would otherwise not open. */
+  function select(id: string, versionId: string = b.versionId) {
     store.select(id);
     shell.navigate({
       room: "workflow-runs",
-      selection: { flowId: b.flowId, versionId: b.versionId, runId: id },
+      selection: { flowId: b.flowId, versionId, runId: id },
     });
   }
   async function start() {
@@ -151,15 +156,35 @@ function BoundRuns({
         active="runs"
         title={<h1>{b.title}</h1>}
         runAction={
-          <BriefButton
-            variant="primary"
-            onClick={() => void start()}
-            disabled={!store.canRun}
-          >
-            {state.submission === "pending" ? "Requesting…" : "Run workflow"}
-          </BriefButton>
+          b.supersededBy ? (
+            <BriefButton
+              variant="primary"
+              onClick={() =>
+                shell.navigate({
+                  room: "workflow-runs",
+                  selection: { flowId: b.flowId, versionId: b.supersededBy },
+                })
+              }
+            >
+              Open current version
+            </BriefButton>
+          ) : (
+            <BriefButton
+              variant="primary"
+              onClick={() => void start()}
+              disabled={!store.canRun}
+            >
+              {state.submission === "pending" ? "Requesting…" : "Run workflow"}
+            </BriefButton>
+          )
         }
       />
+      {b.supersededBy && (
+        <p className="brief-runs-superseded" role="note">
+          This is an earlier version of this workflow, shown read only. Runs
+          start from the current version.
+        </p>
+      )}
       <div className="brief-runs-feedback" role="status">
         {state.message}
       </div>
@@ -215,7 +240,7 @@ function BoundRuns({
                 }
                 aria-label={`Open ${run.label}`}
                 title={run.runId}
-                onClick={() => select(run.runId)}
+                onClick={() => select(run.runId, run.versionId)}
               >
                 <strong>{run.label}</strong>
                 <time>{date(run.startedAt)}</time>

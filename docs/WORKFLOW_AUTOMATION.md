@@ -544,11 +544,13 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters, or
+  `displayName` that is not a string with a visible character (it is trimmed)
+  or exceeds 512 characters, or
   that holds a control character, a line or paragraph separator or a lone
   surrogate (a name the flow already stores is let through, so a workflow
   named before that rule can still be saved; every writer stores a name on one
-  line without the bidi controls, `storedDisplayName`). All of
+  line without the bidi controls and never blank, `storedDisplayName`; the
+  blank rule is `workflows/display-name.ts`). All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -899,7 +901,7 @@ third-party dependencies are part of the engine's committed staging install
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
 | `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
-| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). |
+| `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
 
@@ -1398,6 +1400,20 @@ ternaries, and `flattenNestedKeys(data, path)`.
 
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+A written property name (`a.constructor`, `a['constructor']`, or one built only
+from literals such as `a['con' + 'structor']`) is refused when the flow is saved.
+A property name taken from run data (`a[b.key]`) is checked when the flow runs.
+
+A step after a router that reads a step inside one of its branches gets a
+readiness notice, because that step ran only if its branch was taken, unless the
+reference has a fallback (`{{a.out ?? 'none'}}`) or is the single value of a
+Default value step. It is a notice, not a refusal: readiness is checked again
+whenever a trigger fires, and a workflow that always takes that branch works.
+A child call inside a loop whose payload changes per item is refused unless its
+invocation key also uses something that changes per item (`{{loop.item.id}}`,
+`{{loop.index}}`), because the second pass would reuse the first pass's key with
+different data. A fixed key with a fixed payload is one call, reused by every pass.
+A reused key that reaches run time is recorded as not started.
 
 A step may have any name the readiness check allows, including `toString`,
 `valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
@@ -1998,18 +2014,20 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
+| GET | `/api/workflows/recent-runs` | "Recently run": the newest run of each workflow in the caller's project, most recent first, with the workflow's `displayName`. `?limit` (default 6, 1 to 20). Workflows removed in Brief are left out; no step output. Answers `{ items }` |
 | GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
 | GET | `/api/workflow-runs/:runId` | One run, including its machine binding, cancellation and `continuedFailures` |
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
-| GET | `/api/workflows/pieces` | Engine-extracted catalog |
+| GET | `/api/workflows/pieces` | Engine-extracted catalog, without the engine's test fixtures (`piece-jarvis-test`, `piece-jarvis-validate`): they are built and loaded for the engine's own tests and by any workflow that already names one, but are not offered in the piece picker, the Brief ingredient list, the connected-workspace list or the composer. The Validate plumbing step reports the connection's token only as `[redacted]` plus a short `accessTokenFingerprint`, never the token, since step output is kept in run history |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
 | POST | `/api/workflows/connections` | Create a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }`. An existing `(pieceName, externalId)` is a 409 that points to Rotate: adding never replaces a saved key |
-| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
+| GET | `/api/workflows/connections/:id/rotation-impact` | The enabled workflows that run on the connection and a sentence saying they stop until published again if a new key is saved: `{ workflows, message }` (`message` null when none do) |
+| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. A different key answers with `pausedWorkflows` and `notice` naming the enabled workflows it pauses until they are published again. 404 for an id outside the default project, the same as for an id that does not exist |
 | DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
@@ -2053,8 +2071,8 @@ empty or whitespace-only body reads as `{}`.
 
 | Route | Body cap | Other limits |
 |---|---|---|
-| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
-| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
+| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, trimmed, never empty or without a visible character (400), at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
+| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` trimmed, never empty or without a visible character (400), at most 512 characters (413); a blank name the flow already stores (an install from before the rule) is saved as `Untitled workflow` instead of refused. `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
 | `POST /api/workflows/:id/code-steps` | 262,144 bytes | `enabled` must be a boolean (400) |
@@ -2141,6 +2159,7 @@ Notable behaviors a contributor should know:
 - The HTTP and GraphQL steps' Headers and Query params are optional (`required: false` in the vendored piece, registered in `scripts/activepieces-expression-patch.ts`); a step with only a method and a URL is ready.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
+- "Add next step" opens the node chooser at once. Choosing Loop, If or Router for a blank placeholder (no piece, action or inputs) turns that placeholder into the control-flow step in place, keeping its name, a display name the person typed, and what follows it; for a step that already has settings the control-flow step lands as a loose node instead, because swapping would drop them. In the legacy editor Enter or Space on a focused node does what a click does: an unconfigured step opens the chooser, any other step opens its settings, and while a run is overlaid it opens that step's run detail. So the whole path works from the keyboard; after a pick, or Escape on the chooser, focus returns to the step.
 - "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
