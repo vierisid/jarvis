@@ -128,7 +128,7 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
     case 'build': props = { ...props, model: { ...model, actions: { ...(base.actions as Record<string, unknown>), openResult: !state.busy && (base.actions as Record<string, unknown>)?.openResult === true } }, onIntent: intent }; break;
     case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value), onRefresh: (value: unknown) => action('refresh', value), onOpenWorkflow: (value: unknown) => action('open_workflow', value), onBack: (value: unknown) => action('back', value) }; break;
-    case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
+    case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back'), onLeave: (outcome: unknown) => action('leave', outcome) }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
   return <div className={`on-host${state.view === 'result' ? ' brief-root' : ''}`} data-theme={theme} data-brief-theme={theme} data-onboarding-step={state.view} ref={headingHost}>

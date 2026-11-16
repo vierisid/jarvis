@@ -15,3 +15,5 @@
 @container brief-decision (max-width:580px) {
   .brief-root .brief-setup-hero .brief-today-paper-stage { min-height:280px; }
 }
+.brief-root .brief-setup-done { display:flex; align-items:center; flex-wrap:wrap; gap:4px 16px; padding:8px 0; min-height:44px; }
+.brief-root .brief-setup-done > p { margin:0; margin-right:auto; }
