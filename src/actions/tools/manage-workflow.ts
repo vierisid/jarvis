@@ -60,6 +60,7 @@ import {
   getFlow,
   getFlowInProject,
   listFlows,
+  listAllFlows,
   parseFlowMetadata,
   updateFlowStatus,
   type FlowRow,
@@ -913,7 +914,7 @@ function resolveFlow(project: string, ref: string): FlowRow {
   if (direct) return direct;
   const target = ref.trim().toLowerCase();
   // Match against the display name on the latest published or draft version.
-  for (const flow of listFlows(project, { limit: 1000 })) {
+  for (const flow of listAllFlows(project)) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
@@ -1250,20 +1251,25 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   if (held) throw new Error(held);
   assertCodeStepsAllowed(flow.id, versionId, "run");
   assertVersionReady(flow.id, versionId);
-  const run = createFlowRun({
-    flowId: flow.id,
-    flowVersionId: versionId,
-    triggeredBy: "assistant:manage_workflow",
-    startTime: Date.now(),
-  });
-  // The queue's shared RUN_FLOW policy enforces one attempt for chat too.
-  enqueue({
-    jobType: RUN_FLOW,
-    payload: { runId: run.id, payload: payload ?? {} },
-    flowRunId: run.id,
-    flowId: flow.id,
-    flowVersionId: versionId,
-  });
+  // One transaction: a crash between the run row and its job must not leave a
+  // run QUEUED forever with nothing to start it.
+  const run = getWorkflowDb().transaction(() => {
+    const created = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: versionId,
+      triggeredBy: "assistant:manage_workflow",
+      startTime: Date.now(),
+    });
+    // The queue's shared RUN_FLOW policy enforces one attempt for chat too.
+    enqueue({
+      jobType: RUN_FLOW,
+      payload: { runId: created.id, payload: payload ?? {} },
+      flowRunId: created.id,
+      flowId: flow.id,
+      flowVersionId: versionId,
+    });
+    return created;
+  })();
   return { run_id: run.id, status: "QUEUED", flow_id: flow.id };
 }
 
@@ -1290,7 +1296,7 @@ function actSetStatus(
   deps: ManageWorkflowDeps,
 ): Record<string, unknown> {
   // Turning a workflow off stops its queued and waiting runs (Q-06).
-  const stoppedRuns = updateFlowStatus(flow.id, status).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
+  const stoppedRuns = updateFlowStatus(flow.id, status, { requireSteps: true }).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
   if (!updated) return { error: "flow vanished after update" };
@@ -1669,7 +1675,7 @@ async function actContinueSetup(compositionId: string, givenAnswers: unknown, in
 function findFlowByDisplayName(project: string, name: string): FlowRow | null {
   const target = name.trim().toLowerCase();
   if (!target) return null;
-  for (const flow of listFlows(project, { limit: 1000 })) {
+  for (const flow of listAllFlows(project)) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
