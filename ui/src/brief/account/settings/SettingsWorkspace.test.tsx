@@ -94,26 +94,42 @@ async function select(value: string) {
   });
   await React.act(settle);
 }
-test("approved groups expose only canonical voice choices and honest unavailable preferences", async () => {
+test("approved groups expose only canonical voice choices and no controls that cannot work", async () => {
   await render();
   expect(
     [...host.querySelectorAll("h2")].slice(0, 4).map((n) => n.textContent),
-  ).toEqual(["AI provider", "Conversation", "Check-ins", "Workspace controls"]);
+  ).toEqual([
+    "AI provider",
+    "Permissions and approvals",
+    "Conversation",
+    "Workspace controls",
+  ]);
   expect([...host.querySelectorAll("option")].map((n) => n.value)).toEqual(
     f.current().voice.choices.map((c) => c.id),
   );
-  for (const label of ["Less often", "Balanced", "More often"]) {
-    const input = [
-      ...host.querySelectorAll<HTMLInputElement>("input[type=radio]"),
-    ].find((n) => n.closest("label")?.textContent === label)!;
-    expect(input.disabled).toBe(true);
-    expect(input.checked).toBe(false);
-  }
-  expect(host.textContent).toContain(
-    "Check-in preferences are not supported yet",
-  );
   expect(host.textContent).not.toContain("Marin");
   expect(f.writes).toHaveLength(0);
+});
+test("check-in and active-hours controls are not rendered while no provider supports them", async () => {
+  await render();
+  expect(host.textContent).not.toMatch(/check-in|active hours|unavailable|not supported/i);
+  expect(
+    [...host.querySelectorAll("input[type=radio]")].some((n) =>
+      /often|balanced/i.test(n.closest("label")?.textContent ?? ""),
+    ),
+  ).toBe(false);
+});
+test("the Authority entry comes right after AI provider, above Conversation", async () => {
+  await render();
+  const h2s = [...host.querySelectorAll("h2")] as HTMLHeadingElement[];
+  expect(h2s[0]!.textContent).toBe("AI provider");
+  expect(h2s[1]!.textContent).toBe("Permissions and approvals");
+  expect(h2s[2]!.textContent).toBe("Conversation");
+  const entry = h2s[1]!.closest("section")!.querySelector("button")!;
+  expect(entry.textContent).toContain("Authority");
+  expect(
+    h2s[1]!.compareDocumentPosition(h2s[2]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
 });
 test("AI provider row shows the current provider and model and opens the LLM settings route", async () => {
   await render();
