@@ -14,6 +14,12 @@ export interface ChildRun {
   outcome?: ActionOutcome;
 }
 
+/** A deleted child is named plainly; any other ending keeps the run id to inspect. */
+function childOutcomeMessage(childRunId: string, status: ChildRun['status'], uncertain: boolean): string {
+  if (status === 'MISSING') return 'The workflow this step started was deleted before it finished, so Jarvis cannot tell whether it did its work.';
+  return `Child run ${childRunId} ended ${status}${uncertain ? ' with an uncertain effect' : ''}; inspect its run and effect receipts`;
+}
+
 export function getChildRun(effectId: string): ChildRun | null {
   const row = getWorkflowDb().query('SELECT child_run_id, waitpoint_id FROM workflow_child_run WHERE effect_id=?')
     .get(effectId) as { child_run_id: string; waitpoint_id: string | null } | null;
@@ -34,7 +40,7 @@ export function getChildRun(effectId: string): ChildRun | null {
   const outcome: ActionOutcome | undefined = active ? undefined : status === 'SUCCEEDED' && !uncertain
     ? { status: 'succeeded' }
     : { status: uncertain ? 'unknown' : 'error', code: uncertain ? 'CHILD_RUN_UNCERTAIN' : 'CHILD_RUN_FAILED',
-        message: `Child run ${row.child_run_id} ended ${status}${uncertain ? ' with an uncertain effect' : ''}; inspect its run and effect receipts`,
+        message: childOutcomeMessage(row.child_run_id, status, uncertain),
         effect: 'may_have_occurred' };
   return { effectId, parentRunId: effect.runId, stepName: effect.stepName, executionPath: effect.executionPath,
     childRunId: row.child_run_id, waitpointId: row.waitpoint_id, status, ...(outcome ? { outcome } : {}) };

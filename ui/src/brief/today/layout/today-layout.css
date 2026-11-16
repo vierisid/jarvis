@@ -10,3 +10,6 @@
 .brief-root .brief-today-layout[data-compact="true"], .brief-root .brief-today-layout[data-goal="false"] { grid-template-columns: minmax(0, 1fr); }
 .brief-root .brief-today-layout[data-compact="true"] .brief-today-opportunities, .brief-root .brief-today-layout[data-goal="false"] .brief-today-opportunities { grid-column: 1; grid-row: 5; margin-top: 0; }
 .brief-root .brief-today-layout[data-single="true"][data-chat="false"][data-goal="true"] .brief-today-primary { margin-top: calc(var(--pebble-companion-height, 152px) + 24px); }
+/* The tall opportunities column spans rows 1-4. Without a flexible row it spreads its extra height over every row,
+   which leaves the one-line finished-setup state floating in empty space. Let the last row absorb it instead. */
+.brief-root .brief-today-layout:has(.brief-setup-done):not([data-compact="true"]):not([data-goal="false"]) { grid-template-rows: auto auto auto 1fr; }

@@ -3,7 +3,10 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
-import { editorVersion } from './editor-version';
+import { editorVersion, versionAsShown } from './editor-version';
+import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
+import type { FlowRun } from '../db/repos/flow-run';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -102,6 +105,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
+import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
@@ -1333,12 +1337,29 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // id from another project was reachable here while invisible to the list.
     // A mismatch is a 404, not a 403: to this caller the row does not exist,
     // and a distinct answer would confirm the id to someone guessing them.
+    // Who would be affected by deleting it, for the confirmation before DELETE.
+    "/api/workflows/connections/:id/dependents": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const usedBy = connectionDependents(callerProject(req), id);
+          if (!usedBy) return err("connection not found", 404);
+          const warning = dependentsSentence("connection", usedBy);
+          return ok({ usedBy, ...(warning ? { warning } : {}) });
+        }),
+    },
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          if (!deleteConnectionInProject(callerProject(req), id)) return err("connection not found", 404);
-          return ok({ id, deleted: true });
+          const project = callerProject(req);
+          // Read before the row goes: the published workflows bound to it
+          // are told to the caller, since their steps keep naming it. Read
+          // without decrypting it, so an unreadable connection still deletes.
+          const usedBy = connectionDependents(project, id) ?? [];
+          if (!deleteConnectionInProject(project, id)) return err("connection not found", 404);
+          const warning = dependentsSentence("connection", usedBy);
+          return ok({ id, deleted: true, usedBy, ...(warning ? { warning } : {}) });
         }),
       // Update an existing connection in place. Used to rotate OAuth tokens
       // / API keys without the delete-then-recreate gap (during which any
@@ -1608,9 +1629,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // #1080: why an enabled workflow is not doing its work, from its
           // latest finished run, so the list can say so. One unreadable run
           // costs its flow the badge, never the whole list.
-          const blockedOf = (flow: Parameters<typeof flowBindingBlock>[0]) => {
-            try { return flowBindingBlock(flow); }
-            catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
+          const blockedOf = (flow: Parameters<typeof missingDependency>[0] & { updated: number }) => {
+            try {
+              // A published workflow whose called workflow or connection was
+              // deleted cannot run, whatever its last run said.
+              const missing = missingDependency(flow);
+              if (missing) return { code: "DEPENDENCY_MISSING", kind: "readiness" as const, message: missing, runId: null, at: flow.updated };
+              return flowBindingBlock(flow);
+            } catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
           };
           return ok(flows.map((flow) => ({ ...serializeFlow(flow), blocked: blockedOf(flow) })));
         }),
@@ -1701,7 +1727,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
           // Turning a workflow off stops its queued and waiting runs (Q-06).
-          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
+          if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
@@ -1733,7 +1759,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             }, 409);
           }
           refreshTrigger(id);
-          return ok({ ok: true });
+          // Read once the delete went through, after its wait for in-flight
+          // effects, and only in the caller's project.
+          const usedBy = workflowsCalling(project, id);
+          const warning = dependentsSentence("workflow", usedBy);
+          return ok({ ok: true, usedBy, ...(warning ? { warning } : {}) });
+        }),
+    },
+    // Who would be affected by deleting it, for the confirmation before DELETE.
+    "/api/workflows/:id/dependents": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const usedBy = workflowsCalling(callerProject(req), id);
+          const warning = dependentsSentence("workflow", usedBy);
+          return ok({ usedBy, ...(warning ? { warning } : {}) });
         }),
     },
 
@@ -1743,7 +1784,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!scopedFlow(req, id)) return err("flow not found", 404);
-          return ok(listVersions(id));
+          return ok(listVersions(id).map(versionAsShown));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -1928,7 +1969,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
+          return ok(osWarnings.length > 0 ? { ...versionAsShown(locked), osWarnings } : versionAsShown(locked));
         }),
     },
 
@@ -1984,8 +2025,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          // A value the editor was shown as `[redacted]` and sent back unchanged keeps the stored one.
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, restoreShownSample(getFlowVersion(versionId), stepName, output)));
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
       DELETE: (req) =>
         trapErrors(() => {
@@ -1999,7 +2041,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
           const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
     },
 
@@ -2144,7 +2186,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version });
+          return ok({ flow: serializeFlow(flow), version: versionAsShown(version) });
         }),
     },
 
@@ -2349,7 +2391,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run), continuedFailures: continuedFailures(run) }));
+          const graphs = new Map<string, FlowTriggerNode | undefined>();
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2450,9 +2493,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const run = scopedRun(req, runId);
+        if (!run) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
+        // A generated password or an old webhook credential a step sent on is not shown here either.
+        const scrub = runScrubber(run, getFlowVersion(run.flowVersionId)?.trigger);
+        return ok({ runId, effects: scrubValue(listWorkflowEffects(runId), scrub), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2462,7 +2508,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run), continuedFailures: continuedFailures(run) }) : err("run not found", 404);
+          const shown = run ? shownRun(run) : null;
+          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 
@@ -2704,4 +2751,15 @@ function validateConnectionValueShape(
     default:
       return null;
   }
+}
+
+/**
+ * A run as the dashboard is shown it: no generated password and no webhook
+ * credential header, also in rows stored before the trigger withheld them
+ * (`runAsShown`). Read side only; the stored row is not rewritten. `graphs`
+ * caches each version's graph across a page of runs.
+ */
+function shownRun(run: FlowRun, graphs = new Map<string, FlowTriggerNode | undefined>()): FlowRun {
+  if (!graphs.has(run.flowVersionId)) graphs.set(run.flowVersionId, getFlowVersion(run.flowVersionId)?.trigger);
+  return runAsShown(run, graphs.get(run.flowVersionId));
 }
