@@ -104,6 +104,10 @@ import {
 import { flattenSteps, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
+import { describeSchedule, isScheduleSettings } from "./schedule-words";
+import { ScheduleEditor } from "./ScheduleEditor";
+import { splitAdvancedFields } from "./advanced-fields";
+import { humanizePieceName } from "./workflow-summary";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
 import { useListNav } from "./use-list-nav";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
@@ -3178,7 +3182,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
   const notApprovalGated = stepNotApprovalGated(step, catalog);
 
   const routerKind = step.settings?.routerKind;
-  let kindLabel: string;
+  let kindLabel: string | null;
   let kindTone: "accent" | "neutral" | "warn" | "ok" = "neutral";
   if (step.type === "EMPTY") { kindLabel = "Manual"; kindTone = "accent"; }
   else if (isTrigger) { kindLabel = "Trigger"; kindTone = "accent"; }
@@ -3192,7 +3196,9 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
     kindTone = "warn";
   }
   else if (workspace && step.settings?.pieceName === '@jarvispieces/piece-jarvis-agent') { kindLabel = 'AI judgment'; kindTone = 'accent'; }
-  else { kindLabel = workspace ? 'Programmed' : 'Action'; }
+  // A plain piece step needs no label in the workspace: "Programmed" only meant
+  // "not an AI step", which is not something a person is choosing between.
+  else { kindLabel = workspace ? null : 'Action'; }
 
   // ROUTER branches feed the right-edge source handles. The handle id
   // encodes the branch name so onConnect can route a connection straight
@@ -3308,7 +3314,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
       {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
         {workspace && <NodeIdentityIcon step={step}/>}
-        <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
+        {kindLabel ? <Chip tone={kindTone} dot={false}>{kindLabel}</Chip> : null}
         <span className="wf-node__name">{step.displayName ?? step.name}</span>
         {runPipTitle ? (
           <span
@@ -3337,9 +3343,11 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
           </span>
         ) : step.type === "CODE" ? (
           <span className="wf-node__piece">Custom JavaScript</span>
+        ) : isTrigger && (detectTriggerKind(step) === "schedule" || isScheduleSettings(step.settings)) ? (
+          <span className="wf-node__piece">{describeSchedule(step.settings)}</span>
         ) : step.settings?.pieceName ? (
           <>
-            <span className="wf-node__piece">{piece?.displayName ?? step.settings.pieceName}</span>
+            <span className="wf-node__piece">{piece?.displayName ?? humanizePieceName(step.settings.pieceName)}</span>
             {subDisplayName ? <span className="wf-node__sep">·</span> : null}
             {subDisplayName ? <span className="wf-node__action">{subDisplayName}</span> : null}
           </>
@@ -3412,7 +3420,7 @@ interface PropertiesPanelProps {
   onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
 }
 
-function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
+export function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const {
     step,
     isTriggerStep,
@@ -3527,8 +3535,6 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const requestWebhook = detectedTriggerKind === 'webhook' && 'request_id_field' in formInput;
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
-    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
-    {name:'timezone',label:'Timezone',type:'string' as const,required:false,description:'IANA timezone. Empty uses the timezone configured for Jarvis.'},
     {name:'dst_policy',label:'Daylight-saving policy',type:'string' as const,required:false,description:'skip_missing_first_repeated skips nonexistent local times and uses only the first repeated time, including after restart. Omitted or shift_missing_once retains legacy spring shifting.'},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
@@ -3685,11 +3691,18 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
                 input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
             </>
           ) : schema ? (
-            <SchemaInputs
-              schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
-              input={(step.settings?.input ?? {}) as Record<string, unknown>}
-              onSetInput={onSetInput}
-            />
+            <>
+              {isTriggerStep && detectedTriggerKind === "schedule" && step.settings?.pieceName === "schedule" ? (
+                <ScheduleEditor input={(step.settings?.input ?? {}) as Record<string, unknown>} chosenTimezone={step.settings?.chosenTimezone} onSetInput={onSetInput} />
+              ) : null}
+              <SchemaInputsWithAdvanced
+                pieceName={step.settings?.pieceName}
+                subName={subName}
+                schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
+                input={(step.settings?.input ?? {}) as Record<string, unknown>}
+                onSetInput={onSetInput}
+              />
+            </>
           ) : (
             <FreeformInputs
               inputEntries={inputEntries}
@@ -3765,7 +3778,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onCommit={onSetDisplayName}
         />}
         <p>
-          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : step.type === "CODE" ? "Code" : "Action"}
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Trigger") : isLoop ? "Loop" : isRouter ? "Router" : step.type === "CODE" ? "Code" : "Action"}
         </p>
       </header>
 
@@ -4528,6 +4541,35 @@ function SchemaInputs({
         </li>
       ))}
     </ul>
+  );
+}
+
+/** SchemaInputs with the step's rarely-needed fields folded under a collapsed "Advanced". */
+function SchemaInputsWithAdvanced({
+  pieceName,
+  subName,
+  schema,
+  input,
+  onSetInput,
+}: {
+  pieceName: string | undefined;
+  subName: string | undefined;
+  schema: { fields: PieceInputField[] };
+  input: Record<string, unknown>;
+  onSetInput: (key: string, value: unknown) => void;
+}): React.ReactElement {
+  const { primary, advanced } = splitAdvancedFields(pieceName, subName, schema.fields);
+  const set = advanced.filter((f) => input[f.name] !== undefined && input[f.name] !== "").length;
+  return (
+    <>
+      {primary.length ? <SchemaInputs schema={{ fields: primary }} input={input} onSetInput={onSetInput} /> : null}
+      {advanced.length ? (
+        <details className="wf-props__advanced-fields">
+          <summary>{set ? `Advanced (${set} set)` : "Advanced"}</summary>
+          <SchemaInputs schema={{ fields: advanced }} input={input} onSetInput={onSetInput} />
+        </details>
+      ) : null}
+    </>
   );
 }
 
