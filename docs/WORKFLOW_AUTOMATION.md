@@ -545,12 +545,21 @@ Three things about #598 are load bearing beyond the frame itself:
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
   `displayName` that is not a string with a visible character (it is trimmed)
-  or exceeds 512 characters, or
-  that holds a control character, a line or paragraph separator or a lone
-  surrogate (a name the flow already stores is let through, so a workflow
-  named before that rule can still be saved; every writer stores a name on one
-  line without the bidi controls and never blank, `storedDisplayName`; the
-  blank rule is `workflows/display-name.ts`). All of
+  or exceeds 512 characters, or that holds a control character, a line or
+  paragraph separator or a lone surrogate (a name the flow already stores is
+  let through, so a workflow named before that rule can still be saved; every
+  writer stores a name on one line without the bidi controls and never blank,
+  `storedDisplayName`). The blank rule and the 512 cap are one rule in
+  `workflows/display-name.ts` (`workflowNameProblem`,
+  `FLOW_DISPLAY_NAME_MAX_CHARS`), shared by every name write: these routes,
+  the assistant's `manage_workflow` `create`, `compose`, `continue_setup` and
+  `update`, and the chat draft-update tool. `manage_workflow` also holds the
+  step `name` / `displayName` a compose saves or an update writes to the same
+  512. A composer-chosen workflow name that is blank or over it falls back to
+  the caller's name; a composed step name over it refuses the compose. An
+  over-long step value the draft already carries stays where it is without
+  blocking other edits, but cannot be copied to another step or field. The
+  dashboard's version routes do not check step names. All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A

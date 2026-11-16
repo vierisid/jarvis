@@ -648,6 +648,27 @@ jarvis stop && launchctl kickstart -k gui/$(id -u)/ai.jarvis.daemon
 nothing else - `jarvis uninstall` is the one that removes JARVIS itself, and it
 removes autostart first so the daemon is not relaunched halfway through.
 
+**Outside a service manager, `jarvis update` and `jarvis restart` restart the
+daemon the way it was started.** Both read `jarvis.launch.json` beside the lock
+(see `jarvis restart` above). `jarvis update` passes on the recorded `--port`,
+`--data-dir`, `--no-local-tools` and `--system-config`, and always restarts the
+daemon detached and without opening the dashboard. `jarvis restart` prints the
+options it took from the record. A daemon that recorded nothing, such as one
+started by an older version, is restarted with the defaults (or, for `restart`,
+the flags given), and the command says so. `jarvis start -d` hands its detached
+child the same options; it used to drop `--data-dir` and `--no-local-tools`.
+
+`--data-dir` and `--system-config` are recorded as absolute paths, resolved
+against the directory `jarvis start` ran in, so a restart or update run from
+another directory reuses the same folders.
+
+The record is written mode 0600 through a temporary file renamed into place, so
+it never follows a symlink. It names the daemon's pid and is removed when that
+daemon exits; a record for another pid, one that is a symlink, belongs to
+another user or is writable by anyone else is ignored. Its values are checked
+again before use (a port in range, absolute paths that cannot be read as a flag)
+and passed as arguments, never through a shell.
+
 ### Running under systemd
 
 When the daemon is the main process of a systemd **user** unit, such as the `jarvis.service` that `jarvis autostart` installs, `jarvis restart` and `jarvis update` hand the work to systemd. Otherwise they stop and start the daemon themselves. They used to do that in every case, and it went wrong in two ways:
