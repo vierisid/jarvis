@@ -33,7 +33,16 @@ export interface ConnectionMeta {
    * OAuth2 rows only (#954): whether Jarvis refreshes the token and when it
    * expires (ms, null when the saved value does not say). No secret.
    */
-  oauth2?: { expiresAt: number | null; refreshable: boolean };
+  oauth2?: {
+    expiresAt: number | null;
+    refreshable: boolean;
+    /**
+     * Set when the row has refresh details but a refresh cannot work: the
+     * provider refused it, did not answer, or the token URL is an address
+     * this install never connects to.
+     */
+    refreshProblem?: { kind: "refused" | "unreachable" | "blocked"; message: string };
+  };
 }
 
 export interface JarvisSourceMeta {
@@ -70,7 +79,8 @@ export interface ConnectionsState {
       status?: "ACTIVE" | "MISSING" | "ERROR";
     },
   ) => Promise<{ ok: boolean; message: string }>;
-  remove: (id: string) => Promise<{ ok: boolean; message: string }>;
+  /** `warning` names the published workflows that used the deleted connection. */
+  remove: (id: string) => Promise<{ ok: boolean; message: string; warning?: string }>;
 }
 
 export function useConnections(): ConnectionsState {
@@ -157,8 +167,9 @@ export function useConnections(): ConnectionsState {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
           return { ok: false, message: body.error ?? `HTTP ${r.status}` };
         }
+        const deleted = (await r.json().catch(() => ({}))) as { warning?: string };
         await refresh();
-        return { ok: true, message: "deleted" };
+        return { ok: true, message: "deleted", ...(typeof deleted.warning === "string" ? { warning: deleted.warning } : {}) };
       } catch (e) {
         return { ok: false, message: (e as Error).message };
       }
