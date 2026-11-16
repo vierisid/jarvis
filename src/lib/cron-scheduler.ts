@@ -64,6 +64,15 @@ export type CronScheduleOptions = {
   dueAfter?: number;
 };
 
+/**
+ * How often cron jobs check whether a minute has come due. A tick costs one
+ * integer compare per job unless the minute changed, so a time fires within
+ * this long of its minute, not within a coarse poll's worth of it. One timer
+ * per scheduler serves all its cron jobs, so many schedules do not mean many
+ * wakeups a second.
+ */
+export const CRON_TICK_MS = 1_000;
+
 /** A tick this late after its minute still fires; later than this, the occurrence was missed. */
 export const CRON_GRACE_MS = 2 * 60_000;
 /** Missed occurrences are looked for this far back. */
@@ -77,8 +86,9 @@ export type CronJob = {
   callback: (occurrence: CronOccurrence) => void;
   lastRun: number | null;
   nextRun: number;
-  handle: ReturnType<typeof setInterval>;
-  /** Evaluate the job as of `nowMs`. The interval calls it; tests drive time with `runDue`. */
+  /** The job's own interval: `@every` jobs only. Cron jobs share the scheduler's one ticker. */
+  handle?: ReturnType<typeof setInterval>;
+  /** Evaluate the job as of `nowMs`. The ticker calls it; tests drive time with `runDue`. */
   tick?: (nowMs: number) => void;
 };
 
@@ -410,6 +420,27 @@ function startOfNextLocalDay(ts: number, zone: string | null): number {
 export class CronScheduler {
   constructor(private readonly now: () => number = () => Date.now()) {}
   private jobs: Map<string, CronJob> = new Map();
+  /** The one interval that ticks every cron job; running only while one is scheduled. */
+  private ticker: ReturnType<typeof setInterval> | null = null;
+
+  private tickAll(): void {
+    for (const job of Array.from(this.jobs.values())) {
+      // A job cancelled by an earlier job's callback in this pass is not ticked.
+      if (!job.tick || this.jobs.get(job.id) !== job) continue;
+      try {
+        job.tick(this.now());
+      } catch (err) {
+        console.error(`[CronScheduler] Job "${job.id}" tick threw:`, err);
+      }
+    }
+  }
+
+  private stopTickerIfIdle(): void {
+    if (this.ticker && !Array.from(this.jobs.values()).some((job) => job.tick)) {
+      clearInterval(this.ticker);
+      this.ticker = null;
+    }
+  }
 
   /**
    * Check if a cron expression matches a given date.
@@ -588,7 +619,7 @@ export class CronScheduler {
 
   /**
    * Schedule a recurring callback based on a cron expression.
-   * Uses setInterval to check every 30 seconds which occurrences have come due.
+   * The scheduler's one ticker checks every `CRON_TICK_MS` which occurrences have come due.
    *
    * Each occurrence fires once: a tick up to `CRON_GRACE_MS` late still fires
    * it (with its lateness); older ones are reported to `onMissed` and never
@@ -723,17 +754,15 @@ export class CronScheduler {
       if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    const handle = setInterval(() => tick(this.now()), 30_000);
-
     this.jobs.set(id, {
       id,
       expression,
       callback,
       lastRun: null,
       nextRun: nextRun.getTime(),
-      handle,
       tick,
     });
+    this.ticker ??= setInterval(() => this.tickAll(), CRON_TICK_MS);
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
   }
@@ -749,8 +778,9 @@ export class CronScheduler {
   cancel(id: string): void {
     const job = this.jobs.get(id);
     if (job) {
-      clearInterval(job.handle);
+      if (job.handle) clearInterval(job.handle);
       this.jobs.delete(id);
+      this.stopTickerIfIdle();
       console.log(`[CronScheduler] Cancelled job "${id}"`);
     }
   }
@@ -760,9 +790,10 @@ export class CronScheduler {
    */
   cancelAll(): void {
     for (const job of this.jobs.values()) {
-      clearInterval(job.handle);
+      if (job.handle) clearInterval(job.handle);
     }
     this.jobs.clear();
+    this.stopTickerIfIdle();
     console.log('[CronScheduler] All jobs cancelled');
   }
 

@@ -9,7 +9,7 @@ import { createFlow, deleteFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { cancelFlowRun } from '../workflows/db/repos/run-cancellation';
-import { updateRun } from '../workflows/db/repos/flow-run';
+import { createFlowRun, updateRun } from '../workflows/db/repos/flow-run';
 import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
 import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
 import { WorkflowContext } from './workflow-context';
@@ -69,4 +69,28 @@ test('the mixed-source context cap holds at the D-20 bound', () => {
     if (count === 200) expect(() => provider.selection(flowId, v.id)).toThrow('context_capacity');
     else contexts.validateContext(provider.selection(flowId, v.id).context, scope, { basis: 'configured' });
   }
+});
+
+test('a succeeded run that went on past a failed step says so in history and detail, and a clean run does not', () => {
+  const scope = { scopeId: DEFAULT_IDS.project, flowId, versionId };
+  const withStep = createFlow().id;
+  const version = lockVersion(createDraftVersion({ flowId: withStep, displayName: 'Lookup', trigger: { name: 'trigger', type: 'EMPTY', settings: {},
+    nextAction: { name: 'bad', type: 'PIECE', displayName: 'Look up the customer', settings: { pieceName: 'p', actionName: 'a', input: {} } } } }).id);
+  const make = (steps: Record<string, unknown>) => {
+    const run = createFlowRun({ flowId: withStep, flowVersionId: version.id, environment: 'PRODUCTION' });
+    updateRun(run.id, { status: 'SUCCEEDED', steps });
+    return run.id;
+  };
+  const continued = make({ trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED' } }, bad: { output: { type: 'PIECE', status: 'FAILED', errorMessage: 'boom' } } });
+  const clean = make({ trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED' } }, bad: { output: { type: 'PIECE', status: 'SUCCEEDED' } } });
+  const page = provider.list(withStep);
+  if (page.status !== 'ready') throw Error('history not ready');
+  const byId = new Map(page.data.items.map(r => [r.runId, r]));
+  expect(byId.get(continued)!.status).toBe('succeeded');
+  expect(byId.get(continued)!.note).toBe('Finished with a failed step: Look up the customer');
+  expect(byId.get(clean)!.note).toBeUndefined();
+  const detail = provider.detail(withStep, continued);
+  expect(detail.summary).toContain('Finished with a failed step: Look up the customer');
+  expect(JSON.stringify(detail)).not.toContain('boom');
+  runs.validatePage(page.data, { ...scope, flowId: withStep, versionId: version.id });
 });
