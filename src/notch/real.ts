@@ -157,6 +157,8 @@ export interface NotchRealDeps {
     watchPort: NotchCatchPort;
     count?: NotchCatchDeps['count'];
     hold: NotchPutDeps['hold'];
+    /** Copies a circle off its picture, where a model that sees pictures can be asked. */
+    read?: NotchPutDeps['read'];
     /** Asks the desktop apps to tell what the hands do, now and as they connect. */
     watch?: () => void;
     teach: Pick<NotchTeachDeps, 'recorder' | 'save' | 'describe' | 'forget' | 'effect' | 'runSkill' | 'byPlace'>;
@@ -299,7 +301,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, jobs, hands: given.hands, db: given.db, ...given.teach, count: given.count,
       catcher: () => catcher, paused, log,
     });
-    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, paused, log });
+    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, read: given.read, paused, log });
     given.watch?.();
     if (!given.noClock) {
       const learned = teach;

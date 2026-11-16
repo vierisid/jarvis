@@ -88,7 +88,11 @@ type lookThing struct {
 	Value string `json:"value,omitempty"`
 	// The texts inside it in reading order: the cells of a row.
 	Parts []string `json:"parts,omitempty"`
-	Rect  lookRect `json:"-"`
+	// The line was drawn inside it, round a part of it: it is where the
+	// circle is, not what was circled. A page a program says nothing more
+	// about is this, whatever was circled on it (lookOver).
+	Over bool     `json:"over,omitempty"`
+	Rect lookRect `json:"-"`
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +238,23 @@ func lookBounds(points []lookPoint) lookRect {
 		x1, y1 = max(x1, p.X), max(y1, p.Y)
 	}
 	return lookRect{x0, y0, x1 - x0, y1 - y0}
+}
+
+// lookOver reports whether a line was drawn inside a thing, round a part of
+// it, and not round the thing. A thing that is higher than the line by half
+// and more, and wider than it too, holds the circle; the circle does not hold
+// it. Rows that run on past a circle drawn round their left end are not
+// that: they are no higher than the circle, and they are what was meant.
+//
+// It matters because a program that says nothing about what is on its page
+// (a browser showing a drawing of a sheet, a dashboard) still has the page
+// itself at every place on it, and the page's name is not what was circled.
+func lookOver(line []lookPoint, r lookRect) bool {
+	if lookIsClick(line) || r.empty() {
+		return false
+	}
+	b := lookBounds(line)
+	return r.H > b.H*3/2+40 && r.W > b.W
 }
 
 // lookIsClick: the line never left the place where it began.

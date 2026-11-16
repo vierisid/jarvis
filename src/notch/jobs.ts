@@ -409,7 +409,8 @@ export async function runPlaced(run: PlacedRun, hands: NotchJobHands, options: N
     try {
       if (!win) {
         // Finding a window touches nothing: asking again after a lost answer is safe.
-        const found = await hands.act({ do: 'find', app: step.app, win: winRequest(step.win) });
+        // Brought forward too: a key or words to type go to whichever window is in front.
+        const found = await hands.act({ do: 'find', app: step.app, win: winRequest(step.win), front: true });
         if (!found) return { how: 'failed', why: 'Your computer is not connected.' };
         if (!found.done || !found.win) {
           return { how: 'failed', why: `I cannot find the window as it was when you showed me${step.app ? `: ${step.app}, at the same size` : ''}.` };

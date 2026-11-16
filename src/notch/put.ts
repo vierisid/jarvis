@@ -22,7 +22,16 @@
  * It can also be said without pointing: with a thing held, "put it here as a
  * table" puts it where the caret is in the window in front.
  *
- * What is put is what was read. Nothing is rewritten by a model on the way.
+ * What is put is what was read. Where the program describes what was
+ * circled (a row of a list, a cell, a field), its own words are taken,
+ * exactly. Where it does not, the circle is read off its picture by a model
+ * (`read`): a browser showing a sheet or a dashboard says nothing about what
+ * is on the page, and the page's name is not what was circled. The owner's
+ * first test, 16 November 2026: he circled five numbers on a dashboard and
+ * the name of the browser's window was put. A model that reads can misread,
+ * so it is told to copy and nothing else, and what was circled is never
+ * replaced by a guess: when it cannot be read, the notch says so and puts
+ * nothing. Nothing is reworded on the way.
  *
  * What was put into a cell can be taken back from Today, on the same terms
  * as any paste of Jarvis's (./jobs.ts): only while the place still holds
@@ -62,11 +71,21 @@ export interface NotchHeld {
   at: number;
 }
 
-const cellsOf = (thing: NotchThing): string[] => (thing.parts.length ? thing.parts : [thing.value || thing.name].filter(Boolean));
+/** What a page, a pane or a window is called is where a thing is, never the thing: only what such a place holds is carried. */
+const PLACES: ReadonlySet<string> = new Set(['Document', 'Pane', 'Window', 'Group', 'TitleBar']);
 
-/** What a look read, as a thing that can be put somewhere. Null when there is nothing to carry, or it was cut short when read. */
+const cellsOf = (thing: NotchThing): string[] =>
+  (thing.parts.length ? thing.parts : [thing.value || (PLACES.has(thing.role ?? '') ? '' : thing.name)].filter(Boolean));
+
+/**
+ * What a look read, as a thing that can be put somewhere. Null when there is
+ * nothing to carry, when it was cut short when read, or when the program did
+ * not read what was circled: the line was drawn inside something larger
+ * (`over`), and that thing's words are not the circle's.
+ */
 export function heldFrom(looked: NotchLooked, now: number): NotchHeld | null {
   if (looked.refused || looked.things.length === 0) return null;
+  if (looked.things.some((thing) => thing.over)) return null;
   const rows = looked.things.map(cellsOf).filter((cells) => cells.length > 0);
   if (rows.length === 0) return null;
   // A text that was cut where it was read ends in a mark: half a text is not put anywhere.
@@ -76,6 +95,58 @@ export function heldFrom(looked: NotchLooked, now: number): NotchHeld | null {
   const one = text.replace(/\s+/g, ' ').trim();
   const what = looked.things.length > 1 ? lookCount(looked.things) : ([...one].length <= 24 ? one : `this ${looked.things[0]!.kind}`);
   return { what, text, rows, app: looked.app, at: now };
+}
+
+/** The most rows and cells that are taken from a picture, and the longest a cell may be. */
+export const NOTCH_READ_MAX_ROWS = 200;
+export const NOTCH_READ_MAX_CELLS = 40;
+export const NOTCH_READ_MAX_CELL = 2000;
+/** How long a picture may take to read before it is given up. */
+export const NOTCH_READ_MS = 25_000;
+/** The heaviest picture that is read. */
+export const NOTCH_READ_MAX_BYTES = 3_500_000;
+/** What stands beside the pointer while a picture is still being read. */
+export const NOTCH_READ_WHAT = 'what you circled';
+
+/**
+ * What a model answered when it was asked to copy a picture: rows of cells.
+ * Null when the answer is not that. It is asked for `{"rows": [["a", "b"]]}`
+ * and nothing else; what else it says is not looked at.
+ */
+export function parseRead(said: string): string[][] | null {
+  const from = said.indexOf('{');
+  const to = said.lastIndexOf('}');
+  if (from < 0 || to <= from) return null;
+  let raw: unknown;
+  try { raw = JSON.parse(said.slice(from, to + 1)); } catch { return null; }
+  const rows = (raw as { rows?: unknown } | null)?.rows;
+  if (!Array.isArray(rows)) return null;
+  const out: string[][] = [];
+  for (const row of rows.slice(0, NOTCH_READ_MAX_ROWS)) {
+    if (!Array.isArray(row)) return null;
+    const cells: string[] = [];
+    for (const cell of row.slice(0, NOTCH_READ_MAX_CELLS)) {
+      if (typeof cell !== 'string' && typeof cell !== 'number') return null;
+      // One line, no tabs: a cell is one cell wherever it is put.
+      cells.push(String(cell).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, NOTCH_READ_MAX_CELL));
+    }
+    out.push(cells);
+  }
+  return out;
+}
+
+/** Rows read off a picture, as a thing that can be put somewhere. Null when nothing was read. */
+export function heldFromRows(read: string[][], app: string, at: number): NotchHeld | null {
+  const kept = read.filter((cells) => cells.some((cell) => cell !== ''));
+  if (kept.length === 0) return null;
+  // Every row as wide as the widest: a row with nothing in a column still has that column.
+  const wide = Math.max(...kept.map((cells) => cells.length));
+  const rows = kept.map((cells) => [...cells, ...Array<string>(wide - cells.length).fill('')]);
+  const text = rows.map((cells) => cells.join('\t')).join('\n');
+  if (text.length > NOTCH_PUT_MAX_CHARS) return null;
+  const one = rows.length === 1 && wide === 1 ? rows[0]![0]! : '';
+  const what = one ? ([...one].length <= 24 ? one : 'this text') : (rows.length === 1 ? '1 row' : `${rows.length} rows`);
+  return { what, text, rows, app, at };
 }
 
 /** Whether what is held has a form to choose: several rows, or one row of several cells. One value is just put. */
@@ -120,6 +191,13 @@ export interface NotchPutDeps {
   hands: NotchJobHands;
   /** Tells the desktop app what is held, in a few words, and for how long: it shows "Put ... here" beside the pointer. */
   hold(sidecarId: string, what: string, ms: number): void;
+  /**
+   * Copies what a picture of part of the screen says, as rows of cells. Null
+   * when it cannot (no model that sees pictures, or one that did not answer
+   * as asked). Without it, a circle the program says nothing about is not
+   * held at all.
+   */
+  read?: (picture: Uint8Array) => Promise<string[][] | null>;
   paused?: () => boolean;
   now?: () => number;
   log?: (line: string) => void;
@@ -154,6 +232,11 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
   let held: NotchHeld | null = null;
   /** "Put it here?" is up, or was a moment ago: a few words may still answer it. */
   let pending: { id: string; sidecarId: string; thing: NotchHeld; at: { x: number; y: number }; cell: boolean; app: string; form: () => NotchPutForm; madeAt: number } | null = null;
+  /**
+   * A circle that is being read off its picture, or was. While it is, what
+   * is held is not known yet; a place pointed at meanwhile waits for it.
+   */
+  let reading: { at: number; sidecarId: string; settled: boolean; done: Promise<NotchHeld | null> } | null = null;
   let stopped = false;
   let n = 0;
 
@@ -237,10 +320,57 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
     });
   }
 
+  const NOT_READ: NotchPart[] = ['I could not read what you circled. Nothing was put there.'];
+
+  /** Reads a circle off its picture, and holds what it says once it is read. */
+  function read(sidecarId: string, looked: NotchLooked, picture: Uint8Array): void {
+    const at = now();
+    const mine: NonNullable<typeof reading> = { at, sidecarId, settled: false, done: Promise.resolve(null) };
+    reading = mine;
+    // Beside the pointer at once, before it is known how much there is.
+    deps.hold(sidecarId, NOTCH_READ_WHAT, NOTCH_HOLD_MS);
+    const late = new Promise<null>((resolve) => { const timer = setTimeout(() => resolve(null), NOTCH_READ_MS); (timer as { unref?: () => void }).unref?.(); });
+    mine.done = Promise.race([deps.read!(picture).catch(() => null), late]).then((rows) => {
+      mine.settled = true;
+      const thing = rows ? heldFromRows(rows, looked.app, at) : null;
+      // Something else was shown meanwhile: this one is no longer what is held.
+      if (stopped || reading !== mine) return thing;
+      log(`[notch] a circle was read off its picture: ${thing ? `${thing.rows.length} row(s), ${thing.rows[0]?.length ?? 0} cell(s) wide` : 'nothing could be read'}`);
+      if (thing) {
+        // Read: from here on it is a thing that is held like any other.
+        held = thing;
+        reading = null;
+        deps.hold(sidecarId, thing.what, Math.max(1000, NOTCH_HOLD_MS - (now() - at)));
+      } else {
+        // Kept, so that a place pointed at next is told why nothing is put there.
+        deps.hold(sidecarId, '', 0);
+      }
+      return thing;
+    });
+  }
+
   return {
     shown(sidecarId, looked) {
       if (stopped || looked.refused) return false;
       const target = looked.how === 'click' && looked.at && takesAThing(looked.things[0]) ? looked.at : null;
+      const circle = reading && now() - reading.at < NOTCH_HOLD_MS ? reading : null;
+      if (reading && !circle) reading = null;
+      if (target && circle && !held) {
+        if (circle.settled) {
+          // It was read, and nothing was there to read.
+          reading = null;
+          say(NOT_READ, 4200, 'sorry');
+          return true;
+        }
+        // Still being read: the place waits for it.
+        void circle.done.then((thing) => {
+          if (stopped) return;
+          if (thing && held === thing) offer(sidecarId, thing, looked, target);
+          else if (!thing && reading === circle) { reading = null; say(NOT_READ, 4200, 'sorry'); }
+          // Otherwise something else was shown meanwhile, and this place was for the old thing.
+        });
+        return true;
+      }
       if (target && held) {
         const age = now() - held.at;
         if (age < NOTCH_HOLD_MS) { offer(sidecarId, held, looked, target); return true; }
@@ -256,7 +386,15 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       const thing = heldFrom(looked, now());
       if (thing) {
         held = thing;
+        reading = null;
         deps.hold(sidecarId, thing.what, NOTCH_HOLD_MS);
+        return false;
+      }
+      // A circle the program said nothing about: it is read off its picture.
+      // A click has no edge to read up to, so it is never read that way.
+      if (looked.how !== 'click' && looked.picture && looked.picture.length <= NOTCH_READ_MAX_BYTES && deps.read) {
+        held = null;
+        read(sidecarId, looked, looked.picture);
       }
       return false;
     },
@@ -264,6 +402,22 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       if (stopped) return null;
       const asked = pending && now() - pending.madeAt < NOTCH_PUT_SAID_MS && held === pending.thing ? pending : null;
       const thing = asked?.thing ?? (held && now() - held.at < NOTCH_HOLD_MS ? held : null);
+      const circle = !thing && reading && !reading.settled && now() - reading.at < NOTCH_HOLD_MS ? reading : null;
+      if (circle && putRequest(text)) {
+        // Said while the circle is still being read: it is put when it has been.
+        const form = putForm(text) ?? 'a table';
+        return {
+          did: 'Put what you showed me where you pointed.',
+          run: () => {
+            void circle.done.then((read) => {
+              if (stopped) return;
+              if (read && held === read) {
+                void put(circle.sidecarId, read, form, 'caret', false, '').then((said) => say(said.parts, said.ms, said.mood, said.mark));
+              } else if (!read && reading === circle) { reading = null; say(NOT_READ, 4200, 'sorry'); }
+            });
+          },
+        };
+      }
       // Only while something is held: otherwise "put the kettle on" is an instruction like any other.
       if (!thing || !(putRequest(text) || (asked && putAnswer(text)))) return null;
       const form = putForm(text) ?? asked?.form() ?? 'a table';
@@ -286,6 +440,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       stopped = true;
       held = null;
       pending = null;
+      reading = null;
     },
   };
 }

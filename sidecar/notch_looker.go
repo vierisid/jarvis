@@ -508,6 +508,9 @@ func lookHolds(hands lookHands, points []lookPoint, light bool) []lookThing {
 	if len(things) > notchLookMaxThings {
 		things = things[:notchLookMaxThings]
 	}
+	for i := range things {
+		things[i].Over = lookOver(points, things[i].Rect)
+	}
 	return things
 }
 

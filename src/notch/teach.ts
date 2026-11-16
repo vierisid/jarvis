@@ -334,9 +334,10 @@ export interface NotchTeachDeps {
   runSkill(skill: string, from: number, options: NotchRunOptions & { target(at: { x: number; y: number }): Promise<void> }):
     Promise<{ end: NotchJobEnd; next: number }>;
   /**
-   * Whether a shown job is done again by place on the person's machine, and
-   * not by finding its buttons by what they are called. True where the
-   * product cannot find them that way (a Mac, today).
+   * Whether a shown job can only be done again by place on the person's
+   * machine. True where the product cannot find a thing again by what it is
+   * called (a Mac, today). Elsewhere a job is done by place when its window
+   * is there as it was, and by name when it is not.
    */
   byPlace?(): boolean;
   /** How many more there are of a round (catch.ts). */
@@ -462,18 +463,40 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
   }
 
   /** Does a saved job once. A job that pays is refused; one that deletes asks first. */
+  /** Whether the window a job was shown in is there now, the same program at the same size. Asking touches nothing. */
+  async function windowThere(placed: PlacedStep[]): Promise<boolean> {
+    const first = placed.find((step): step is Exclude<PlacedStep, { kind: 'secret' }> => step.kind !== 'secret');
+    if (!first) return false;
+    try {
+      const found = await deps.hands.act({ do: 'find', app: first.app, win: { id: first.win.id, pid: first.win.pid, w: first.win.w, h: first.win.h } });
+      return found?.done === true && !!found.win;
+    } catch {
+      return false;
+    }
+  }
+
   function startSkill(learned: NotchLearned): void {
     const effect = deps.effect(learned.skill);
     if (effect.missing) { tell(['I no longer have that job. Show me again.'], 'sorry'); return; }
     if (effect.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
-    const byPlace = deps.byPlace?.() === true;
-    if (byPlace && !learned.placed) {
+    // Where nothing can be found again by its name (the Mac), a job is only ever done by place.
+    const onlyPlace = deps.byPlace?.() === true;
+    if (onlyPlace && !learned.placed) {
       tell(['I cannot do that one again here: one of its steps has no place I can go back to. Show me again, with clicks and keys only.'], 'sorry', 6000);
       return;
     }
     const begin = (): void => {
-      const plan = byPlace ? placedPlan(learned, learned.placed!) : skillPlan(learned);
-      if (!deps.jobs.start(plan)) tell(['I am in the middle of something else.']);
+      void (async () => {
+        // Done where it was done, when the window is there as it was: that
+        // works in any program, a page in a browser too, where a field has
+        // no name to be found by (the owner's first "run it", 16 November
+        // 2026, stopped at "I could not find the next thing to click").
+        // With the window gone or another size, each thing is looked for by
+        // its name instead, where that can be done at all.
+        const placed = learned.placed && (onlyPlace || await windowThere(learned.placed)) ? learned.placed : null;
+        const plan = placed ? placedPlan(learned, placed) : skillPlan(learned);
+        if (!deps.jobs.start(plan)) tell(['I am in the middle of something else.']);
+      })();
     };
     if (!effect.deletes) { begin(); return; }
     const id = `teach-delete-${++tells}`;

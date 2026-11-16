@@ -234,6 +234,9 @@ var (
 	// through comThread.call touch these.
 	recPendingElem *ole.IDispatch
 	recPendingInfo *recordedElement
+	// The window that was in front when the typing began: what was typed is
+	// told with it, so that the step has a place to be done again.
+	recPendingFront uintptr
 
 	// What the hooks are wanted for, under hookMu: a recording, the notch's
 	// own watching, or both. They are in while either is wanted.
@@ -436,7 +439,7 @@ func installInputHooks() error {
 					// character itself is not recorded; the committed value is
 					// read from UIA at flush time.
 					if rec && isPrintableVk(ks.VkCode) && !h.typed.Swap(true) {
-						enqueue(recorderEvent{kind: "typing_started"})
+						enqueue(recorderEvent{kind: "typing_started", front: win32GetForegroundWindow()})
 					}
 					if watch && !rec && !h.watchTyped.Swap(true) {
 						enqueue(recorderEvent{kind: "typed", front: win32GetForegroundWindow(), watch: true})
@@ -544,7 +547,7 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 			h.reportSlowSamples()
 			switch e.kind {
 			case "typing_started":
-				captureTypingField()
+				captureTypingField(e.front)
 			case "commit", "flush":
 				flushTypingField()
 			case "click":
@@ -590,12 +593,13 @@ func releasePendingField() {
 	}
 	recPendingElem = nil
 	recPendingInfo = nil
+	recPendingFront = 0
 }
 
 // captureTypingField remembers the keyboard-focused element at the first
 // keystroke, so its committed value can be read later even if focus has
 // moved on by then (Tab, click-away).
-func captureTypingField() {
+func captureTypingField(front uintptr) {
 	_, err := comThread.call(func(state *uiaState) (any, error) {
 		releasePendingField()
 		rec, err := uiaRecordedElement(state, "focus", 0, 0, clickSite{})
@@ -613,6 +617,7 @@ func captureTypingField() {
 		}
 		recPendingElem = elem
 		recPendingInfo = rec
+		recPendingFront = win32RootWindow(front)
 		return nil, nil
 	})
 	if errors.Is(err, errOwnWindow) {
@@ -630,6 +635,7 @@ func captureTypingField() {
 // flushTypingField emits the pending field as a set_value carrying its
 // current Value-pattern text (none for a secure field).
 func flushTypingField() {
+	var front uintptr
 	val, err := comThread.call(func(state *uiaState) (any, error) {
 		if recPendingElem == nil || recPendingInfo == nil {
 			return nil, nil
@@ -641,6 +647,7 @@ func flushTypingField() {
 				rec.HasVal = true
 			}
 		}
+		front = recPendingFront
 		releasePendingField()
 		return &rec, nil
 	})
@@ -659,6 +666,13 @@ func flushTypingField() {
 	payload["action"] = "set_value"
 	if rec.HasVal {
 		payload["value"] = rec.Value
+	}
+	// Which window it was typed in: a step that is done again by place
+	// needs one (notch_watch.go). Never one of Jarvis's own.
+	if front != 0 && !ownWindow(front) {
+		if win, ok := watchWindowOf(front); ok {
+			payload["win"] = win.payload()
+		}
 	}
 	// The value itself is never logged.
 	log.Printf("[recorder] set_value: %s %q (secure=%v, app=%s)", rec.Role, rec.Name, rec.Secure, rec.App)

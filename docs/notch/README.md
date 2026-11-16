@@ -1336,7 +1336,28 @@ says of itself, the clipboard, a click or a key made as if by hand),
     is no form to choose, and one value is just put. With a thing held and
     no place pointed at, "put it here as a table" puts it at the caret of
     the window in front. Every cell is escaped: what was read off a screen
-    is words in the table, never markup. Nothing is rewritten by a model.
+    is words in the table, never markup. Nothing is reworded on the way.
+    What is put is what was circled, and where the program does not say
+    what that is, it is read off the picture: a browser showing a sheet or
+    a dashboard says nothing about what is on its page, and all the look
+    has at such a place is the page itself. The owner's first test, 16
+    November 2026: he circled five numbers on a dashboard and the name of
+    the browser's window was put. So the desktop app marks a thing the line
+    was drawn inside (`over`, `lookOver`: higher than the circle by half and
+    more, and wider than it; rows that run on past a circle round their
+    left end are not that), the name of a page, a pane or a window is never
+    carried, and a circle with nothing else in it is copied off its picture
+    by a model that sees pictures (`read` in `src/notch/put.ts`,
+    `NOTCH_PUT_READ_SYSTEM`: rows of cells, every character as shown,
+    nothing rounded, added or corrected). "Put what you circled here"
+    stands beside the pointer at once and becomes "Put 5 rows here" when it
+    has been read; a place pointed at meanwhile waits for it. When it cannot
+    be read (no such model, or nothing legible) the notch says "I could not
+    read what you circled. Nothing was put there." and puts nothing: never
+    a guess, never the window's name. Where the program does read what was
+    circled (a row of a list, a cell, a field) its own words are taken,
+    exactly, and no model is asked. A click is never read off a picture: it
+    has no edge to read up to.
     After ninety seconds it has forgotten and says so. The text stays on the
     clipboard afterwards: putting the person's own back risks a slow program
     pasting that instead. A click to put something, with nothing said in the
@@ -1385,25 +1406,36 @@ says of itself, the clipboard, a click or a key made as if by hand),
     is said ("Cmd + C"), and in what the hands press for a copy and a paste
     whatever system the job was shown on. The tap is in only while the notch
     watches or a recording runs, and is out when neither does.
-113. **A job shown on a Mac is done again by place.** The product's replay
-    finds a button again by its name through the element reading, which the
-    Mac build does not have. So what "Watch me" saw on a Mac is also kept as
+113. **A shown job is done again where it was done, when its window is
+    there as it was.** The product's replay finds each thing again by its
+    name through the element reading. A field on a page in a browser has no
+    name to be found by (the owner's first "run it", 16 November 2026, on a
+    job shown in a sheet in a browser: "I stopped at 0 of 12. I could not
+    find the next thing to click on the screen."), and the Mac build has no
+    element reading at all. So what "Watch me" saw is also kept as
     places (`teachPlaced`: a click in a window, a named key or shortcut,
-    what a field held), and "run it" there does those (`runPlaced`), each
+    what a field held), and "run it" does those (`runPlaced`), each
     step one request to the desktop app, done once, with the same stop, go
     on and lost-answer rules as a round. The window is found again first
     (`notch.act` `find`): the very window if it is still there, or the
-    program's topmost window of the same size; with none, nothing is
-    touched and the notch says so. A step that typed into a password field
+    program's topmost window of the same size. A step that typed into a password field
     was never kept, so the job stops there and says that step is the
     person's; going on continues after it. A job with a step that has no
     place (told with no window, outside its window, a key that types), or
     with a field that held more than 2,000 signs (it is read whole or not
     kept, never a part passed off as the whole), is not kept as places at
-    all, and "run it" says to show it again: half a
-    job is worse than none. On Windows nothing changes: the product's
-    replay is used (`byPlace` in `src/daemon/notch-jobs.ts` asks which
-    system the desktop app is on).
+    all: half a job is worse than none. On Windows a job is done by place
+    when it has places and its window is there as it was (asked first,
+    which touches nothing), and through the product's replay by name when
+    the window is gone or another size, or when a step has no place
+    (`startSkill`). On a Mac by place is the only way (`byPlace` in
+    `src/daemon/notch-jobs.ts`): with no places "run it" says to show the
+    job again, and with the window gone it says it cannot find it and
+    touches nothing. What is typed is told with the window it was typed in from now
+    on, so a job with typing in it has a place for every step. The window
+    is brought forward before the first step (`find` with `front`): a key
+    or words to type go to whichever window is in front. Windows may refuse
+    that, and then the step says another window is in front.
 
 What is not done, or not proven, in pass 10:
 
@@ -1470,6 +1502,26 @@ What is not done, or not proven, in pass 10:
   finished job. The last is pass 11. The prototype's "as a sentence" is not
   one of the forms a thing can be put in: that would have a model rewrite
   what was read.
+- **Three things failed or were found in the owner's tests of 16 November
+  and were rebuilt the same day:** the rows could not be measured on a real
+  sheet (invariant 110); "run it" could not find a field on a page by its
+  name (113); and "put it there" put the name of the browser's window
+  instead of the numbers that were circled (109). After the first of these
+  was fixed the catch itself worked on two Google Sheets: fifteen rows, then
+  eighteen, with no step refused.
+- **Reading a circle off its picture is a model reading a picture.** It can
+  misread a digit, and nothing checks it against the screen. It is told to
+  copy and nothing else, at temperature 0, and what it read is on the page
+  the moment it is put, where the person sees it. Whether the model the
+  owner has set up sees pictures at all is not known until it is tried:
+  when it does not, the notch says it could not read the circle. What the
+  picture shows goes to that model, as a circle the person asks about
+  already does.
+- **Doing a job by place does not check what is at the place.** Only that
+  the window is the same program at the same size. A page that has scrolled
+  or changed since is pressed in the wrong place.
+- **A job that was shown before these changes has no places** and is still
+  done by name. It has to be shown again.
 - **Whether a given program takes the table is not known.** Word, Google
   Docs, mail composers and sheets read a table off the clipboard; a chat box
   or a plain field takes the plain words. Which one a program picks is its
@@ -1681,7 +1733,7 @@ What is not done, or not proven, in pass 10:
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
 | brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
-| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `type`: `win`, `text` (up to 4000 signs), typed where the keyboard is when that window is the one in front. `find`: `win`, `app?`: the window a step named as it is now, or the topmost window of that program at the same size; adds `{win, app}`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
+| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `type`: `win`, `text` (up to 4000 signs), typed where the keyboard is when that window is the one in front. `find`: `win`, `app?`, `front?`: the window a step named as it is now, or the topmost window of that program at the same size, brought forward with `front`; adds `{win, app}`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
 | brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
 | brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |

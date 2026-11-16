@@ -417,9 +417,22 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		same := func(win watchWin) bool {
 			return absInt(win.W-act.Win.W) <= 2 && absInt(win.H-act.Win.H) <= 2
 		}
+		// front: it is also brought forward, for a job whose first step is a
+		// key or words to type: those go to whichever window is in front.
+		// Windows may refuse, and then the step that needs it says so.
+		found := func(hwnd uintptr, win watchWin) (*RPCResult, error) {
+			if act.Front && win32GetForegroundWindow() != hwnd {
+				procSetForegroundWindow.Call(hwnd)
+				for try := 0; try < 15 && win32RootWindow(win32GetForegroundWindow()) != hwnd; try++ {
+					time.Sleep(20 * time.Millisecond)
+				}
+				log.Printf("[notch] act: the window of a job was brought forward: %v", win32RootWindow(win32GetForegroundWindow()) == hwnd)
+			}
+			return done(map[string]any{"win": win.payload(), "app": win.App})
+		}
 		if hwnd, _, refusal := notchActWindowNow(act); refusal == nil {
 			if win, ok := watchWindowOf(hwnd); ok && same(win) {
-				return done(map[string]any{"win": win.payload(), "app": win.App})
+				return found(hwnd, win)
 			}
 		}
 		if act.App != "" {
@@ -431,7 +444,7 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 					continue
 				}
 				if win, ok := watchWindowOf(top.Hwnd); ok && strings.EqualFold(win.App, act.App) && same(win) {
-					return done(map[string]any{"win": win.payload(), "app": win.App})
+					return found(top.Hwnd, win)
 				}
 			}
 		}
