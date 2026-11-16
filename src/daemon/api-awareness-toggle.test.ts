@@ -88,6 +88,40 @@ describe('POST /api/awareness/toggle', () => {
     expect(calls).toEqual([false, true]);
   });
 
+  // Owner decision 2026-11-11: after a boot with awareness off there is no
+  // service; turning it on here must reach the applier, which starts it.
+  test('on after a boot with awareness off reaches the applier, which starts the service', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.awareness!.enabled = false;
+    bindScreenCaptureSwitch(config);
+    const started: boolean[] = [];
+    const ctx = { config, awarenessService: null as unknown, settingsReload: {
+      // Stands in for the daemon's applier: no service, awareness on -> start one.
+      applyNow: async () => {
+        if (!ctx.awarenessService && config.awareness?.enabled !== false) { started.push(true); ctx.awarenessService = { toggle: () => {} }; }
+        return null;
+      } } };
+    const routes = createApiRoutes(ctx as unknown as ApiContext) as Record<string, any>;
+    const res = await (routes['/api/awareness/toggle'].POST as Handler)(
+      new Request('http://local/api/awareness/toggle', { method: 'POST', body: '{"enabled":true}' }));
+    expect(res.status).toBe(200);
+    expect(started).toEqual([true]);
+    expect(isScreenCaptureEnabled()).toBe(true);
+    expect(stored()).toMatchObject({ enabled: true });
+  });
+
+  test('with neither a settings coordinator nor a service it answers 503 and changes nothing', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.awareness!.enabled = false;
+    bindScreenCaptureSwitch(config);
+    const routes = createApiRoutes({ config } as unknown as ApiContext) as Record<string, any>;
+    const res = await (routes['/api/awareness/toggle'].POST as Handler)(
+      new Request('http://local/api/awareness/toggle', { method: 'POST', body: '{"enabled":true}' }));
+    expect(res.status).toBe(503);
+    expect(isScreenCaptureEnabled()).toBe(false);
+    expect(stored()).toBeNull();
+  });
+
   test('without a settings coordinator the service itself is still switched', async () => {
     const { calls, config, post } = setup({ reload: false });
     expect((await post('{"enabled":false}')).status).toBe(200);

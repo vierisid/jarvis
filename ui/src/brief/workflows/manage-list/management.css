@@ -310,3 +310,37 @@
   font: 400 12px/1.5 var(--brief-sans);
   color: var(--brief-secondary);
 }
+.brief-root .brief-management-find {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(104px, 180px);
+  gap: 0 8px;
+  margin: 0 0 8px;
+}
+.brief-root .brief-management-find .brief-field__feedback {
+  min-block-size: 0;
+}
+.brief-root .brief-management-more {
+  padding: 16px 0;
+}
+@container (max-width:480px) {
+  .brief-root .brief-management-find {
+    grid-template-columns: minmax(0, 1fr) 96px;
+  }
+  /* Labels stay for screen readers; the placeholder and value name the
+   * controls on screen, which keeps the list visible on a phone. */
+  .brief-root .brief-management-find .brief-field__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .brief-root .brief-management-meta {
+    margin: 16px 0 8px;
+  }
+  .brief-root .brief-management-hint {
+    margin: 0 0 8px;
+  }
+}
