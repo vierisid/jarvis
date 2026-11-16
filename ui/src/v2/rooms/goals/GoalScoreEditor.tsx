@@ -124,7 +124,7 @@ export function GoalScoreEditor({ goal, scope, onSave }: {
 
   if (goal.measurement) return <section className="v2-goals__side-section" aria-label="Goal score">
     <div className="v2-goals__side-label">Score · {percent(goal.score)}</div>
-    <p className="v2-goals__side-text">This score comes from the goal's measurements. Record a new measurement to update it.</p>
+    <p className="v2-goals__side-text">This score comes from the goal's measurements. Log progress from the Brief Goals room to update it.</p>
   </section>;
 
   const value = draft ?? { score: latest.score, reason: "" };
