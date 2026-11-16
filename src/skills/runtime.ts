@@ -17,6 +17,11 @@
  * actions through the same sidecar path ui_act uses. It takes those two
  * capabilities as injected functions so it stays unit-testable without a live
  * sidecar.
+ *
+ * A run can be watched, stopped and gone on with (SkillRunOptions). Stopping
+ * happens between steps, never inside one: a step is either not started or
+ * dispatched once. Going on starts at the first step that was not dispatched,
+ * so nothing a stopped run did is done a second time.
  */
 
 import { isDesktopDisabledError } from '../actions/tools/desktop-guard.ts';
@@ -66,6 +71,55 @@ export type SkillRunResult = {
   ok: boolean;
   steps: StepResult[];
   failedAt?: number;
+  /**
+   * The run was asked to stop, and did so before this step (0-based): nothing
+   * of it, or of any step after it, was dispatched. `ok` is false, and
+   * `failedAt` is absent: a stop is not a failure. Going on means running
+   * again with `from` set to this.
+   */
+  stoppedAt?: number;
+  /**
+   * After a failure: the step a later run may go on from without doing
+   * anything twice. It is the failed step when nothing of it was dispatched
+   * (its target could not be found, the surface could not be read), and the
+   * one after it when it was dispatched, or may have been (the action threw,
+   * or its postcondition did not hold). Absent for a validation failure.
+   */
+  resumeAt?: number;
+};
+
+/** What a run tells whoever is watching it, once before a step is dispatched and once when it has ended. */
+export type SkillStepEvent = {
+  /** 0-based position of the step in the skill. */
+  index: number;
+  total: number;
+  phase: 'start' | 'end';
+  step: SkillStep;
+  /**
+   * `start` of an element step only: the element the step is about to act on,
+   * as it is on the surface now. Lets a watcher show where the action lands.
+   */
+  target?: SemanticNode;
+  /** `end` only. */
+  ok?: boolean;
+  detail?: string;
+};
+
+export type SkillRunOptions = {
+  /** Looked at before every step. Once aborted, no further step is dispatched. */
+  signal?: AbortSignal;
+  /**
+   * Told about every step. It is awaited, so a watcher may take a moment
+   * before a step is dispatched (to show where it will land). A watcher that
+   * throws does not stop the run.
+   */
+  onStep?: (event: SkillStepEvent) => void | Promise<void>;
+  /**
+   * The step to start at, 0-based: the ones before it were dispatched by an
+   * earlier run of the same skill with the same arguments. Their results are
+   * not in this run's result.
+   */
+  from?: number;
 };
 
 const CONFIDENCE_FLOOR = 0.55;
@@ -104,6 +158,7 @@ export async function runSkill(
   skill: Skill,
   callerArgs: Record<string, string>,
   deps: SkillRuntimeDeps,
+  options: SkillRunOptions = {},
 ): Promise<SkillRunResult> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const args = resolveArgs(skill.params, callerArgs);
@@ -116,10 +171,23 @@ export async function runSkill(
     return { ok: false, steps: [{ index: -1, action: 'validate', ok: false, detail: stepErr }], failedAt: -1 };
   }
 
+  const total = skill.steps.length;
+  const from = options.from ?? 0;
+  if (!Number.isInteger(from) || from < 0 || from > total) {
+    return { ok: false, steps: [{ index: -1, action: 'validate', ok: false, detail: `cannot go on from step ${from + 1} of ${total}` }], failedAt: -1 };
+  }
+  const tell = async (event: SkillStepEvent): Promise<void> => {
+    if (!options.onStep) return;
+    try { await options.onStep(event); } catch { /* a watcher is not part of the run */ }
+  };
   const results: StepResult[] = [];
-  const fail = (i: number, action: string, detail: string): SkillRunResult => {
-    results.push({ index: i, action, ok: false, detail });
-    return { ok: false, steps: results, failedAt: i };
+  const ended = async (i: number, step: SkillStep, ok: boolean, detail: string, healed?: boolean): Promise<void> => {
+    results.push({ index: i, action: step.action, ok, detail, ...(healed ? { healed } : {}) });
+    await tell({ index: i, total, phase: 'end', step, ok, detail });
+  };
+  const fail = async (i: number, step: SkillStep, detail: string, dispatched: boolean): Promise<SkillRunResult> => {
+    await ended(i, step, false, detail);
+    return { ok: false, steps: results, failedAt: i, resumeAt: dispatched ? i + 1 : i };
   };
   const snapshotSafe = async (kind: SurfaceKind): Promise<SkillSurface> => {
     try { return await deps.snapshot(kind); } catch (err) {
@@ -130,15 +198,19 @@ export async function runSkill(
     }
   };
 
-  for (let i = 0; i < skill.steps.length; i++) {
+  for (let i = from; i < total; i++) {
     const step = skill.steps[i]!;
     const kind = stepSurface(step);
     const value = step.value !== undefined ? fillParams(step.value, args) : undefined;
     let before: SkillSurface = EMPTY;
 
+    // Asked to stop: this step and the ones after it are not started.
+    if (options.signal?.aborted) return { ok: false, steps: results, stoppedAt: i };
+
     if (step.action === 'wait') {
+      await tell({ index: i, total, phase: 'start', step });
       await sleep(step.ms ?? 500);
-      results.push({ index: i, action: 'wait', ok: true, detail: `waited ${step.ms ?? 500}ms` });
+      await ended(i, step, true, `waited ${step.ms ?? 500}ms`);
       continue;
     }
 
@@ -146,35 +218,42 @@ export async function runSkill(
       // The baseline for the postcondition is whatever is on screen before
       // the action; there may be no window at all yet (launch_app).
       if (step.postcondition) before = await snapshotSafe(kind);
+      await tell({ index: i, total, phase: 'start', step });
+      // The watcher took its moment: a stop asked for in it still lands before the step.
+      if (options.signal?.aborted) return { ok: false, steps: results, stoppedAt: i };
       try {
         await deps.raw(kind, step.action, value);
       } catch (err) {
-        return fail(i, step.action, msg(err));
+        // It threw from inside the dispatch: it may have happened.
+        return fail(i, step, msg(err), true);
       }
     } else {
       // Element action: resolve the ref against a fresh surface, then act.
       try {
         before = await deps.snapshot(kind);
       } catch (err) {
-        return fail(i, step.action, `could not capture the ${kind} surface: ${msg(err)}`);
+        return fail(i, step, `could not capture the ${kind} surface: ${msg(err)}`, false);
       }
       const resolved = resolveRef(step.ref!, before.nodes, CONFIDENCE_FLOOR);
       if (!resolved.node) {
-        return fail(i, step.action, `could not locate target "${step.ref!.name || step.ref!.role}" on the current surface (best match ${Math.round(resolved.confidence * 100)}%)`);
+        return fail(i, step, `could not locate target "${step.ref!.name || step.ref!.role}" on the current surface (best match ${Math.round(resolved.confidence * 100)}%)`, false);
       }
+      await tell({ index: i, total, phase: 'start', step, target: resolved.node });
+      if (options.signal?.aborted) return { ok: false, steps: results, stoppedAt: i };
       try {
         await deps.act(kind, resolved.node.sessionId, step.action, value);
       } catch (err) {
-        return fail(i, step.action, msg(err));
+        return fail(i, step, msg(err), true);
       }
     }
 
     if (step.postcondition) {
       const stepRes = await verifyStep(step, args, kind, before, snapshotSafe, sleep);
-      results.push({ index: i, action: step.action, ...stepRes });
-      if (!stepRes.ok) return { ok: false, steps: results, failedAt: i };
+      await ended(i, step, stepRes.ok, stepRes.detail, stepRes.healed);
+      // Dispatched once and not verified: it is never dispatched again.
+      if (!stepRes.ok) return { ok: false, steps: results, failedAt: i, resumeAt: i + 1 };
     } else {
-      results.push({ index: i, action: step.action, ok: true, detail: 'done (no postcondition)' });
+      await ended(i, step, true, 'done (no postcondition)');
     }
   }
 

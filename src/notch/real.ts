@@ -45,6 +45,10 @@ import type { NotchSurface } from './surface.ts';
 import { attachNotchSuggestions } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
 import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
+import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatchPort } from './catch.ts';
+import { attachNotchJobs, type NotchJobHands, type NotchJobs } from './jobs.ts';
+import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
+import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -139,6 +143,26 @@ export interface NotchRealDeps {
    * desktop app says that a call is on and whether the machine is online.
    */
   day?: { db: Database; around?: NotchAroundPort; now?: () => number; noClock?: boolean };
+  /**
+   * Doing it in view (pass 10): jobs done where they can be seen, with
+   * Jarvis's own pointers; a job caught by itself when it is done twice by
+   * hand; a job shown with "Watch me"; and a thing put where the person
+   * points. `hands` does one step on the person's machine. `watchPort` is how
+   * the desktop app tells the shape of what the hands do. Needs `asks`: all
+   * of it is started by what is said or answered on the notch.
+   */
+  jobs?: {
+    db: Database;
+    hands: NotchJobHands;
+    watchPort: NotchCatchPort;
+    count?: NotchCatchDeps['count'];
+    hold: NotchPutDeps['hold'];
+    /** Asks the desktop apps to tell what the hands do, now and as they connect. */
+    watch?: () => void;
+    teach: Pick<NotchTeachDeps, 'recorder' | 'save' | 'describe' | 'forget' | 'effect' | 'runSkill'>;
+    /** Without the clock that offers a shown job at its time of the week. */
+    noClock?: boolean;
+  };
   /** The clock the lines on the notch run on. Tests give one they can wind forward. */
   clock?: NotchClock;
   log?: (line: string) => void;
@@ -171,6 +195,11 @@ export interface NotchReal {
   look: NotchLook | null;
   /** A file dropped on the notch, when the brain takes instructions. */
   drop: NotchDrop | null;
+  /** Doing it in view (pass 10), when the brain was given what it needs. */
+  jobs: NotchJobs | null;
+  catcher: NotchCatch | null;
+  teach: NotchTeach | null;
+  put: NotchPutter | null;
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
   /** Stops looking. */
@@ -181,10 +210,16 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const log = deps.log ?? ((line: string) => console.log(line));
   // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
   let mail: NotchMailLayer | null = null;
+  // Made after the inbox they play on; Today lists what they did.
+  let jobs: NotchJobs | null = null;
+  let catcher: NotchCatch | null = null;
+  let teach: NotchTeach | null = null;
+  let put: NotchPutter | null = null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
     sentMail: (since: number) => mail?.sentSince(since) ?? [],
+    jobs: (since: number) => jobs?.done(since) ?? [],
   };
   // Made after the inbox, which opens it: yes at rest with nothing waiting.
   let asks: NotchAsks | null = null;
@@ -243,6 +278,36 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let talk: NotchTalk | null = null;
   let lookAt: NotchLook | null = null;
   let drop: NotchDrop | null = null;
+  const jobTimers: ReturnType<typeof setInterval>[] = [];
+  if (deps.asks && deps.jobs) {
+    // Doing it in view (pass 10). Before asking, which sends "Watch me" and "run it" here.
+    const given = deps.jobs;
+    const emergency = deps.emergency;
+    const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
+    jobs = attachNotchJobs(inbox, {
+      db: given.db, hands: given.hands, paused,
+      // What the person does while Jarvis works is not a job to take over, and what came before it is over.
+      running: () => catcher?.reset(),
+      log,
+    });
+    catcher = attachNotchCatch(given.watchPort, {
+      inbox, jobs, hands: given.hands, paused, count: given.count,
+      teaching: () => teach?.watching() ?? false,
+      log,
+    });
+    teach = attachNotchTeach({
+      inbox, jobs, hands: given.hands, db: given.db, ...given.teach, count: given.count,
+      catcher: () => catcher, paused, log,
+    });
+    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, paused, log });
+    given.watch?.();
+    if (!given.noClock) {
+      const learned = teach;
+      const every = setInterval(() => learned.tick(), 30_000);
+      every.unref?.();
+      jobTimers.push(every);
+    }
+  }
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -252,6 +317,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       remember: deps.asks.remember,
       understand: deps.asks.understand,
       point: deps.asks.point,
+      // "Watch me", "done", "run it on nine rows", "undo that": the notch does these itself (pass 10).
+      side: teach ? (text) => teach!.route(text) : undefined,
+      learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
+      undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
       // The instruction is over: what it was still asking for is asked no more.
@@ -276,6 +345,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         talking: (sidecarId) => talk?.open(sidecarId) ?? false,
         modelReady: deps.asks.look.modelReady ?? deps.asks.modelReady,
         paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+        // What was shown is held for a while, and a place pointed at meanwhile is where it goes (pass 10).
+        shown: put ? (sidecarId, looked) => put!.shown(sidecarId, looked) : undefined,
         log,
       });
     }
@@ -405,6 +476,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
 
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
+    jobs, catcher, teach, put,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -418,6 +490,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       mail?.stop();
       presence?.stop();
       around?.stop();
+      jobs?.stop();
+      catcher?.stop();
+      teach?.stop();
+      put?.stop();
+      for (const timer of jobTimers) clearInterval(timer);
       for (const timer of dayTimers) clearInterval(timer);
     },
   };

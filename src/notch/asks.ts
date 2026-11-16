@@ -120,6 +120,17 @@ export interface NotchAsksDeps {
    * instruction.
    */
   point?: (question: string, during?: NotchPointDuring) => Promise<NotchPointed | null>;
+  /**
+   * Words the notch acts on itself, with no model and no turn (./teach.ts):
+   * "Watch me", "done" while it watches, "run it on nine rows", "undo that".
+   * Null when they are an instruction like any other. `did` is what the
+   * ledger says was done; `run` does it, and shows what it shows by itself.
+   */
+  side?: (text: string) => { did: string; run(): void } | null;
+  /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
+  learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
+  /** Takes back what a job of today pasted: the Undo on its row in Home. */
+  undoJob?: (jobId: string) => void;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
@@ -448,6 +459,24 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   async function run(ask: Live, stage?: NotchStage): Promise<void> {
     if (ask.phase !== 'heard') return;
     if (deps.paused?.()) { refuse(ask, 'Everything is stopped. Wake me first.'); return; }
+    // Words the notch acts on itself. No model is asked, so none is needed,
+    // and what is running does not stand in their way: "done" is said while
+    // a showing runs, "undo that" after a job. They are claimed like anything
+    // else, so they too happen once.
+    const side = !ask.files?.length ? deps.side?.(ask.heard) ?? null : null;
+    if (side) {
+      if (!ledger.claim(ask.id, 'notch')) { sync(ask); return; }
+      ledger.did(ask.id, side.did);
+      ledger.finish(ask.id, 'done', { answer: side.did });
+      ledger.seen(ask.id);
+      ask.phase = 'done';
+      // What it set off shows itself: this instruction has no line of its own.
+      ask.silent = true;
+      try { side.run(); } catch (error) {
+        log(`[notch] something the notch does itself failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
     if (!deps.modelReady()) { refuse(ask, 'no_model'); return; }
     const running = [...live.values()].find((other) => other !== ask && other.phase === 'running');
     if (running) { refuse(ask, `I am still on the last thing: ${shortened(running.heard, 60)}`); return; }
@@ -706,6 +735,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     let workId: string | null = null;
     for (;;) {
       if (ask.source === 'typed' && ask.phase === 'heard') {
+        // Words the notch acts on itself show what they set off, not a line of work.
+        if (!ask.files?.length && !deps.paused?.() && deps.side?.(ask.heard)) {
+          await run(ask, stage);
+          continue;
+        }
         // Typed words need not be shown back. The work shows at once, and it starts under it.
         workId = stage.id();
         stage.put({ id: workId, kind: 'work', say: workSay(ask), steps: 0, done: 0, mood: 'work' });
@@ -789,6 +823,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           continue;
         }
         case 'done': {
+          // The notch did it itself, and what it set off has its own line.
+          if (ask.silent) { forget(ask); return 'settled'; }
           const shape = answerShape(ask.answer ?? '');
           if (shape.kind === 'line' && /\?\s*$/.test(shape.text)) {
             // Jarvis asked something back. A question is not a result that
@@ -904,12 +940,14 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       const last = ledger.asked(1)[0];
       const recent = last && last.answer && last.endedAt !== null && Date.now() - last.endedAt < NOTCH_LAST_ANSWER_MS ? last : null;
       const mailRow = deps.mail?.row() ?? null;
+      const learnedRow = deps.learned?.row() ?? null;
       stage.put({
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
           ...(recent ? [{ kind: 'row' as const, id: 'last', lead: 'Last answer', say: [shortened(recent.answer ?? '', 90)], go: true }] : []),
           ...(mailRow ? [mailRow] : []),
           ...(deps.see ? [deps.see.row()] : []),
+          ...(learnedRow ? [learnedRow] : []),
           ...today,
           ...(deps.quiet ? [deps.quiet.note()] : []),
           { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }, ...(deps.quiet ? [deps.quiet.button()] : [])] },
@@ -933,6 +971,15 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (answer.act === 'go' && answer.row === 'mail' && deps.mail) {
         await deps.mail.open(stage);
         continue;
+      }
+      if (answer.act === 'go' && answer.row === 'learned' && deps.learned) {
+        await deps.learned.open(stage);
+        continue;
+      }
+      // Undo on a row of today: the taking back takes the notch from here.
+      if (answer.act === 'button' && answer.button === 'undo' && answer.row?.startsWith('job:') && deps.undoJob) {
+        deps.undoJob(answer.row.slice(4));
+        return;
       }
       if (answer.act === 'ask') {
         const text = (answer.text ?? '').trim();

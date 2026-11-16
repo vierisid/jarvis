@@ -1,0 +1,508 @@
+import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import type { RawInteraction } from '../skills/recorder.ts';
+import { NotchInbox } from './inbox.ts';
+import { attachNotchJobs, type NotchActResult, type NotchJobEnd, type NotchJobHands } from './jobs.ts';
+import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
+import type { WatchWin } from './rounds.ts';
+import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
+import type { NotchSurfacePort } from './surface.ts';
+import {
+  NOTCH_SCHEDULE_LATE_MS, advanceRounds, attachNotchTeach, keysSaid, nextScheduled, parseSchedule, runItRequest, teachDoneWord, teachShapes,
+  teachStepSaid, undoRequest, watchMeRequest, type NotchSaved, type NotchSkillEffect,
+} from './teach.ts';
+import { findRounds } from './rounds.ts';
+
+const settle = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); };
+const text = (parts: NotchPart[] | undefined): string =>
+  (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : 'word' in part ? part.word.value : '')).join('');
+
+const FILE: WatchWin = { id: '0x1a', pid: 100, w: 900, h: 700 };
+const SHEET: WatchWin = { id: '0x2b', pid: 200, w: 1200, h: 800 };
+const ref = (name: string) => ({ role: 'Button', name, path: [], ordinal: 0, sig: name });
+
+describe('what is said to start, to end and to run a showing', () => {
+  test('"Watch me" and its kin begin one', () => {
+    for (const said of ['Watch me', 'watch me.', 'Okay, watch me', 'Jarvis, watch me do this', 'Watch me paste these rows', 'watch this', 'Let me show you', "I'll show you how", 'learn this', 'Guardami', 'ti faccio vedere']) {
+      expect(watchMeRequest(said)).toBe(true);
+    }
+    for (const said of ['Watch this video and summarise it for me', 'What should I watch tonight', 'Can you watch my inbox', 'show me the numbers', '',
+      'Watch me and then tell me what you think about the way I write these very long emails to investors please']) {
+      expect(watchMeRequest(said)).toBe(false);
+    }
+  });
+
+  test('"done" and its kin end one, and nothing longer does', () => {
+    for (const said of ['Done', 'done.', "I'm done", 'Okay, done', "That's it", 'that is all', 'Finished', 'fatto', 'stop watching']) expect(teachDoneWord(said)).toBe(true);
+    for (const said of ['Are you done', 'Done with the deck, send it to Anna', 'that is it for the budget', '']) expect(teachDoneWord(said)).toBe(false);
+  });
+
+  // The plan's test, step 2: "Run it on nine rows."
+  test('"run it" with a number, as digits or as a word', () => {
+    expect(runItRequest('Run it on nine rows')).toEqual({ count: 9 });
+    expect(runItRequest('run it on 9 rows.')).toEqual({ count: 9 });
+    expect(runItRequest('Do it again')).toEqual({ count: null });
+    expect(runItRequest('do the rest')).toEqual({ count: null });
+    expect(runItRequest('Do the next twenty')).toEqual({ count: 20 });
+    expect(runItRequest('take it from here')).toEqual({ count: null });
+    expect(runItRequest('Go on for five more')).toEqual({ count: 5 });
+    expect(runItRequest('Jarvis, do that for the other 12')).toEqual({ count: 12 });
+    expect(runItRequest('do it twice')).toEqual({ count: 2 });
+    expect(runItRequest('do three more')).toEqual({ count: 3 });
+    expect(runItRequest('Do 5 more')).toEqual({ count: 5 });
+    expect(runItRequest('finisci il resto')).toEqual({ count: null });
+    for (const said of ['Run the numbers for October', 'Do it in a way that Anna will understand, and keep it short, and send it to her today', 'What is it', 'do', 'continue the email to Marco', 'go on holiday']) {
+      expect(runItRequest(said)).toBeNull();
+    }
+  });
+
+  test('"undo that" is taking a paste back, and not undoing anything else', () => {
+    for (const said of ['Undo', 'undo that', 'Undo the paste.', 'take it back', 'Jarvis, undo that', 'annulla']) expect(undoRequest(said)).toBe(true);
+    for (const said of ['Undo the last commit', 'undo my changes to the deck', 'take it back to the shop', '']) expect(undoRequest(said)).toBe(false);
+  });
+});
+
+describe('a time of the week', () => {
+  test('it is read as the lit word writes it, and nothing else is', () => {
+    expect(parseSchedule('Monday at 9:00')).toEqual({ day: 1, hour: 9, minute: 0 });
+    expect(parseSchedule('Friday at 16:30')).toEqual({ day: 5, hour: 16, minute: 30 });
+    expect(parseSchedule('day at 7:05')).toEqual({ day: null, hour: 7, minute: 5 });
+    for (const bad of ['', 'Monday', 'at 9:00', 'Funday at 9:00', 'Monday at 25:00', 'Monday at 9:75', 'every Monday at 9:00']) expect(parseSchedule(bad)).toBeNull();
+  });
+
+  test('the next time is the next one after now, on that day', () => {
+    // Wednesday 18 November 2026, 10:00.
+    const wed = new Date(2026, 10, 18, 10, 0, 0).getTime();
+    expect(new Date(nextScheduled({ day: 1, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 23, 9, 0, 0));
+    expect(new Date(nextScheduled({ day: 3, hour: 16, minute: 0 }, wed))).toEqual(new Date(2026, 10, 18, 16, 0, 0));
+    // The same day, an hour that has passed: next week.
+    expect(new Date(nextScheduled({ day: 3, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 25, 9, 0, 0));
+    expect(new Date(nextScheduled({ day: null, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 19, 9, 0, 0));
+    expect(new Date(nextScheduled({ day: null, hour: 11, minute: 30 }, wed))).toEqual(new Date(2026, 10, 18, 11, 30, 0));
+  });
+});
+
+describe('what a showing is made of', () => {
+  test('each step is said in a few plain words', () => {
+    expect(teachStepSaid({ action: 'click', ref: ref('Add Source'), ts: 1 })).toBe('clicked Add Source');
+    expect(teachStepSaid({ action: 'click', ref: ref(''), ts: 1 })).toBe('a click');
+    expect(teachStepSaid({ action: 'set_value', ref: ref('Name'), value: 'Lumen', ts: 1 })).toBe('typed into Name');
+    expect(teachStepSaid({ action: 'press_keys', value: 'ctrl,shift,v', ts: 1 })).toBe('pressed Ctrl + Shift + V');
+    expect(keysSaid('enter')).toBe('Enter');
+    expect(keysSaid('alt,f4')).toBe('Alt + F4');
+  });
+
+  test('as shapes, a click is a place and typing is only "typed"', () => {
+    const shapes = teachShapes([
+      { action: 'click', ref: ref('row'), ts: 1, app: 'notepad', win: FILE, pt: { x: 120, y: 200 } },
+      { action: 'press_keys', value: 'ctrl,c', ts: 2, app: 'notepad', win: FILE },
+      { action: 'set_value', ref: ref('Name'), value: 'what was typed', ts: 3, app: 'excel', win: SHEET },
+      { action: 'click', ref: ref('no place'), ts: 4 },
+      { action: 'press_keys', value: 'a', ts: 5, win: SHEET },
+    ]);
+    expect(shapes).toEqual([
+      { kind: 'click', app: 'notepad', win: FILE, x: 120, y: 200, at: 1 },
+      { kind: 'keys', app: 'notepad', win: FILE, keys: 'ctrl,c', at: 2 },
+      { kind: 'typed', at: 3 },
+      { kind: 'gap', at: 4 },
+      { kind: 'gap', at: 5 },
+    ]);
+    expect(JSON.stringify(shapes)).not.toContain('what was typed');
+  });
+});
+
+/** One row of the file copied into the sheet, as the recorder tells it. */
+const rowShown = (n: number, at: number): RawInteraction[] => [
+  { action: 'click', ref: ref(`line ${n}`), ts: at, app: 'notepad', win: FILE, pt: { x: 120, y: 200 + 22 * n } },
+  { action: 'press_keys', value: 'ctrl,c', ts: at + 1, app: 'notepad', win: FILE },
+  { action: 'click', ref: ref(`cell ${n}`), ts: at + 2, app: 'excel', win: SHEET, pt: { x: 300, y: 400 + 20 * n } },
+  { action: 'press_keys', value: 'ctrl,v', ts: at + 3, app: 'excel', win: SHEET },
+];
+
+function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved } = {}) {
+  let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+  const pushed: NotchToPage[] = [];
+  const port: NotchSurfacePort = {
+    dispatchRPC(_sidecarId, _method, params) { pushed.push((params as { message: NotchToPage }).message); return Promise.resolve({}); },
+    onEvent(listener) { toSurface = listener; },
+    onSidecarDisconnected() {},
+  };
+  const timers: { fn: () => void; at: number }[] = [];
+  // Wednesday 18 November 2026, 10:00.
+  let now = new Date(2026, 10, 18, 10, 0, 0).getTime();
+  const clock = {
+    setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; },
+    clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+  };
+  const surface = new NotchSurface(port, () => {});
+  const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+  fromPage({ type: 'hello', v: 1 });
+  const inbox = new NotchInbox(surface, { clock, log: () => {} });
+  const sent: Record<string, unknown>[] = [];
+  const hands: NotchJobHands = {
+    act(request) {
+      sent.push(request);
+      const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
+      return Promise.resolve(answer);
+    },
+  };
+  const db = new Database(':memory:');
+  const jobs = attachNotchJobs(inbox, { db, hands, sleep: async () => {}, log: () => {} });
+  let recording = false;
+  const shownSoFar: RawInteraction[] = [];
+  const hearers = new Set<(interaction: RawInteraction, count: number) => void>();
+  const calls: string[] = [];
+  const ran: { skill: string; from: number }[] = [];
+  let runEnd: { end: NotchJobEnd; next: number } = { end: { how: 'done' }, next: 3 };
+  const teach = attachNotchTeach({
+    inbox, jobs, hands, db, now: () => now, log: () => {},
+    recorder: {
+      async start() { calls.push('start'); if (options.start) return options.start; recording = true; return { ok: true }; },
+      async stop() { calls.push('stop'); recording = false; return shownSoFar.splice(0); },
+      onStep(listener) { hearers.add(listener); return () => { hearers.delete(listener); }; },
+    },
+    save(interactions) {
+      calls.push(`save ${interactions.length}`);
+      return options.save ?? { ok: true, skill: 'shown-notepad', steps: interactions.length, notes: interactions.map((it) => it.action), apps: ['Notepad', 'Excel'] };
+    },
+    describe: async () => (options.describe === undefined ? 'renames the file and saves it' : options.describe),
+    forget(skill) { calls.push(`forget ${skill}`); },
+    effect: () => ({ pays: false, deletes: false, missing: false, ...options.effect }),
+    async runSkill(skill, from, run) { ran.push({ skill, from }); run.onProgress(runEnd.next); return runEnd; },
+    count: options.left === undefined ? undefined : async () => options.left ?? null,
+  });
+  const line = (): NotchLine | null => surface.current().line;
+  const said = (): string => text(line()?.say);
+  const reply = async (act: string, more: Record<string, unknown> = {}): Promise<void> => {
+    fromPage({ type: 'answer', id: line()!.id, act, ...more });
+    await settle();
+  };
+  const pass = async (ms: number): Promise<void> => {
+    now += ms;
+    for (const timer of [...timers]) if (timer.at <= now) { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); timer.fn(); }
+    await settle();
+  };
+  /** The person does a step while being watched. */
+  const does = async (interaction: RawInteraction): Promise<void> => {
+    if (!recording) return;
+    shownSoFar.push(interaction);
+    for (const hear of [...hearers]) hear(interaction, shownSoFar.length);
+    await settle();
+  };
+  /** Says something on the notch, as asking does: the words are routed, and what they set off is run. */
+  const say = async (words: string): Promise<string | null> => {
+    const route = teach.route(words);
+    route?.run();
+    await settle();
+    return route?.did ?? null;
+  };
+  return {
+    teach, jobs, sent, calls, ran, line, said, reply, pass, does, say, db, inbox,
+    setRunEnd: (end: { end: NotchJobEnd; next: number }) => { runEnd = end; },
+    advance: (ms: number) => { now += ms; },
+    now: () => now,
+    acts: () => pushed.filter((message) => message.type === 'act'),
+  };
+}
+
+describe('showing Jarvis a job', () => {
+  // The plan's test, step 1.
+  test('"Watch me": it says it is watching, counts the steps, and "done" ends it', async () => {
+    const h = harness();
+    expect(await h.say('Watch me')).toBe('Began watching what you show me.');
+    expect(h.calls).toEqual(['start']);
+    expect(h.said()).toBe('Watching. Do it once by hand, then press done.');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'done', fold: 0 });
+    expect(h.teach.watching()).toBe(true);
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    expect(h.said()).toBe('Watching. Step 1: clicked File.');
+    await h.does({ action: 'press_keys', value: 'ctrl,s', ts: 2, app: 'notepad' });
+    expect(h.said()).toBe('Watching. Step 2: pressed Ctrl + S.');
+    // A nod for each step it saw.
+    expect(h.acts().length).toBe(2);
+    await h.does({ action: 'set_value', ref: ref('File name'), value: 'notes', ts: 3, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+    expect(h.calls).toEqual(['start', 'stop', 'save 3']);
+    expect(h.teach.watching()).toBe(false);
+    expect(h.said()).toBe('Learned it in 3 steps: renames the file and saves it. Do it every Monday at 9:00?');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'yes', mood: 'proud' });
+  });
+
+  test('saying "done" ends it as the key does', async () => {
+    const h = harness();
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    expect(await h.say('Done')).toBe('Ended the showing.');
+    expect(h.calls).toEqual(['start', 'stop', 'save 1']);
+    expect(h.said()).toContain('Learned it in 1 step');
+    // With no showing under way, "done" is not the notch's word.
+    await h.reply('no');
+    await h.pass(4000);
+    expect(h.teach.route('Done')).toBeNull();
+  });
+
+  test('Esc throws it away: nothing is saved', async () => {
+    const h = harness();
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.reply('no');
+    expect(h.calls).toEqual(['start', 'stop']);
+    expect(h.line()).toBeNull();
+    expect(h.teach.row()).toBeNull();
+  });
+
+  test('nothing shown, nothing learned', async () => {
+    const h = harness();
+    await h.say('Watch me');
+    await h.reply('yes');
+    expect(h.said()).toBe('I saw nothing to learn. Show me any time.');
+    expect(h.calls).toEqual(['start', 'stop']);
+  });
+
+  test('when it cannot watch, it says why and is not watching', async () => {
+    const h = harness({ start: { ok: false, why: 'Desktop control is switched off in settings, so I cannot watch.' } });
+    await h.say('Watch me');
+    expect(h.said()).toBe('Desktop control is switched off in settings, so I cannot watch.');
+    expect(h.teach.watching()).toBe(false);
+  });
+
+  test('when it cannot be saved it says so, and is not left watching', async () => {
+    const h = harness({ save: { ok: false, why: 'I could not make steps out of that. Nothing was saved.' } });
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+    expect(h.said()).toBe('I could not make steps out of that. Nothing was saved.');
+    expect(h.teach.row()).toBeNull();
+    expect(h.teach.watching()).toBe(false);
+  });
+
+  test('with no model to name it, it is named by its steps and where they were', async () => {
+    const h = harness({ describe: null });
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+    expect(h.said()).toBe('Learned it in 1 step. Do it every Monday at 9:00?');
+    expect(h.teach.row()).toMatchObject({ kind: 'row', id: 'learned' });
+  });
+});
+
+describe('a job to do again at a time of the week', () => {
+  async function learned(h: ReturnType<typeof harness>): Promise<void> {
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.does({ action: 'press_keys', value: 'ctrl,s', ts: 2, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+  }
+
+  test('the time can be changed where it is said, and a yes keeps it', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('word', { word: 'when', value: 'Friday at 16:00' });
+    expect(h.said()).toBe('Learned it in 2 steps: renames the file and saves it. Do it every Friday at 16:00?');
+    // A value that is not a time of the week changes nothing.
+    await h.reply('word', { word: 'when', value: 'whenever' });
+    expect(h.said()).toContain('every Friday at 16:00?');
+    await h.reply('yes');
+    // It asks first: a job that drives the screen does not start while nobody is looking.
+    expect(h.said()).toBe('Every Friday at 16:00, I will ask you here and do it on your yes.');
+    const row = h.db.query<{ schedule: string; next_at: number }, []>('SELECT schedule, next_at FROM notch_learned').get()!;
+    expect(row.schedule).toBe('Friday at 16:00');
+    expect(new Date(row.next_at)).toEqual(new Date(2026, 10, 20, 16, 0, 0));
+  });
+
+  test('at its time it asks, and does it on a yes', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('word', { word: 'when', value: 'day at 11:00' });
+    await h.reply('yes');
+    await h.pass(7000);
+    // Not yet.
+    h.teach.tick();
+    await settle();
+    expect(h.line()).toBeNull();
+    h.advance(61 * 60_000);
+    h.teach.tick();
+    await settle();
+    expect(h.said()).toBe('It is 11:00. Shall I do it now: renames the file and saves it?');
+    // Its next time is tomorrow: it is not offered again a minute later.
+    expect(new Date(h.db.query<{ next_at: number }, []>('SELECT next_at FROM notch_learned').get()!.next_at)).toEqual(new Date(2026, 10, 19, 11, 0, 0));
+    await h.reply('yes');
+    await settle();
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+    expect(h.said()).toBe('Done. 3 steps.');
+  });
+
+  test('a time that passed while nobody could be asked is not done late', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('word', { word: 'when', value: 'day at 11:00' });
+    await h.reply('yes');
+    await h.pass(7000);
+    h.advance(60 * 60_000 + NOTCH_SCHEDULE_LATE_MS + 60_000);
+    h.teach.tick();
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.ran).toEqual([]);
+  });
+
+  test('"no" keeps the job for when it is asked for', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('no');
+    expect(h.said()).toBe('Kept. Say "run it" when you want it done.');
+    await h.pass(4000);
+    expect(await h.say('Run it')).toBe('Did the job again.');
+    await settle();
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+  });
+
+  test('a job that stopped half way goes on from the step it stopped at', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('no');
+    await h.pass(4000);
+    h.setRunEnd({ end: { how: 'failed', why: 'I could not find the next thing to click on the screen.' }, next: 1 });
+    await h.say('run it');
+    await settle();
+    expect(h.said()).toBe('I stopped at 1 of 2. I could not find the next thing to click on the screen. What now?');
+    h.setRunEnd({ end: { how: 'done' }, next: 2 });
+    await h.reply('pick', { option: 'Go on', index: 0 });
+    await settle();
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }, { skill: 'shown-notepad', from: 1 }]);
+  });
+
+  // A payment is never on a key.
+  test('a job that pays is not run from the notch, and one that deletes asks first', async () => {
+    const pays = harness({ effect: { pays: true } });
+    await learned(pays);
+    await pays.reply('no');
+    await pays.pass(4000);
+    await pays.say('run it');
+    expect(pays.said()).toBe('That job pays for something. I do not do that from here.');
+    expect(pays.ran).toEqual([]);
+
+    const deletes = harness({ effect: { deletes: true } });
+    await learned(deletes);
+    await deletes.reply('no');
+    await deletes.pass(4000);
+    await deletes.say('run it');
+    expect(deletes.said()).toBe('That job deletes something. Do it?');
+    expect(deletes.ran).toEqual([]);
+    await deletes.reply('yes');
+    await settle();
+    expect(deletes.ran.length).toBe(1);
+  });
+
+  test('"run it" with nothing ever shown is an instruction like any other', () => {
+    const h = harness();
+    expect(h.teach.route('Run it on nine rows')).toBeNull();
+    expect(h.teach.route('What is on my calendar')).toBeNull();
+  });
+});
+
+describe('the same thing shown twice', () => {
+  async function twoRows(h: ReturnType<typeof harness>): Promise<void> {
+    await h.say('Watch me');
+    for (const step of [...rowShown(0, h.now()), ...rowShown(1, h.now() + 10)]) await h.does(step);
+    await h.reply('yes');
+    await settle();
+  }
+
+  test('it says so, and offers to go on from there', async () => {
+    const h = harness({ left: 7 });
+    await twoRows(h);
+    expect(h.said()).toBe('Learned it in 4 steps, done twice. I can take it from here: 7 left.');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'take over' });
+    await h.reply('yes');
+    await settle();
+    // The third row: one on from the last one shown.
+    expect(h.sent.find((request) => request.do === 'click')).toEqual({ do: 'click', win: FILE, x: 120, y: 244, hand: 0 });
+    expect(h.said()).toBe('Done. 7 pasted.');
+  });
+
+  // The plan's test, step 2.
+  test('"Run it on nine rows" does nine, from where the showing ended', async () => {
+    const h = harness({ left: null });
+    await twoRows(h);
+    expect(h.said()).toBe('Learned it in 4 steps, done twice. I can take it from here.');
+    await h.reply('no');
+    expect(await h.say('Run it on nine rows')).toBe('Did the job again.');
+    await settle();
+    expect(h.sent.filter((request) => request.do === 'keys' && request.keys === 'ctrl,v').length).toBe(9);
+    expect(h.said()).toBe('Done. 9 pasted.');
+    // Asked again, it goes on after the nine, not from the beginning.
+    h.sent.length = 0;
+    await h.pass(5000);
+    await h.say('do three more');
+    await settle();
+    expect(h.sent.find((request) => request.do === 'click')).toMatchObject({ win: FILE, y: 200 + 22 * 11 });
+  });
+
+  test('too long after, it does not guess where the rows are now', async () => {
+    const h = harness({ left: null });
+    await twoRows(h);
+    await h.reply('no');
+    h.advance(4 * 60_000);
+    await h.say('Run it on nine rows');
+    expect(h.said()).toBe('Do one by hand first, then say it again. I go on from where you are.');
+    expect(h.sent.filter((request) => request.do === 'click').length).toBe(0);
+  });
+});
+
+describe('where a round has got to', () => {
+  test('after Jarvis did some, the next one begins that much further on', () => {
+    const shapes = teachShapes([...rowShown(0, 1000), ...rowShown(1, 2000)]);
+    const rounds = findRounds(shapes)!;
+    const on = advanceRounds(rounds, 5, 9000);
+    expect(on.at).toBe(9000);
+    expect(on.steps[0]).toMatchObject({ kind: 'click', x: 120, y: 222 + 5 * 22, dy: 22 });
+    expect(on.steps[2]).toMatchObject({ kind: 'click', x: 300, y: 420 + 5 * 20, dy: 20 });
+  });
+});
+
+describe('the jobs it was shown, in Home', () => {
+  test('there is a row for them once there is one', async () => {
+    const h = harness();
+    expect(h.teach.row()).toBeNull();
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+    expect(text((h.teach.row() as { say: NotchPart[] }).say)).toBe('1 job you showed me.');
+  });
+
+  test('the sheet lists them; one can be taken off its time, and forgetting one asks first', async () => {
+    const h = harness();
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'notepad' });
+    await h.reply('yes');
+    await settle();
+    await h.reply('yes');
+    await h.pass(7000);
+    h.inbox.present('home', (stage) => h.teach.open(stage));
+    await settle();
+    const rows = (): { id?: string; small?: string; buttons?: { id: string }[] }[] => {
+      const now = h.line();
+      return now && 'blocks' in now ? (now.blocks as { id?: string; small?: string; buttons?: { id: string }[] }[]) : [];
+    };
+    expect(h.said()).toBe('Jobs you showed me: 1');
+    expect(rows()[0]).toMatchObject({ small: 'every Monday at 9:00' });
+    expect(rows()[0]!.buttons!.map((button) => button.id)).toEqual(['run', 'unschedule', 'forget']);
+    const id = rows()[0]!.id!;
+    await h.reply('button', { button: 'unschedule', row: id });
+    expect(rows()[0]).toMatchObject({ small: 'on request' });
+    expect(rows()[0]!.buttons!.map((button) => button.id)).toEqual(['run', 'forget']);
+    // A delete asks.
+    await h.reply('button', { button: 'forget', row: id });
+    expect(h.said()).toBe('Forget renames the file and saves it?');
+    expect(h.calls).not.toContain('forget shown-notepad');
+    await h.reply('yes');
+    expect(h.calls).toContain('forget shown-notepad');
+    expect(h.teach.row()).toBeNull();
+    expect(h.said()).toBe('Jobs you showed me: 0');
+  });
+});

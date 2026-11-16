@@ -698,6 +698,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			notchWhere.Forget()
 			notchAround.Forget()
 			notchLooker.Forget()
+			notchWatchOff()
 			return
 		}
 		// Looking at a thing on the screen (notch_looker.go): what a line held
@@ -748,6 +749,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		notchWhere.Forget()
 		notchAround.Forget()
 		notchLooker.Forget()
+		notchWatchOff()
 	}()
 
 	// What the notch's page says to the brain goes out on this connection, as

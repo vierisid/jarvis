@@ -46,7 +46,8 @@ describe('what travels beside a look', () => {
     expect(got.app).toBe('excel');
     expect(got.title).toBe('Payouts - Excel');
     expect(got.things).toEqual([
-      { kind: 'row', name: 'Acme', value: '', parts: ['Acme', '120'] },
+      // What the system calls it travels too: it says whether a thing is a place something can be put (put.ts).
+      { kind: 'row', name: 'Acme', value: '', parts: ['Acme', '120'], role: 'ListItem' },
       { kind: 'button', name: 'Send', value: '', parts: [] },
     ]);
     expect([...got.picture!]).toEqual([...PNG]);
@@ -250,7 +251,7 @@ describe('why nothing was looked at', () => {
   });
 });
 
-function harness(options: { modelReady?: NotchLookDeps['modelReady']; talking?: () => boolean; paused?: () => boolean } = {}) {
+function harness(options: { modelReady?: NotchLookDeps['modelReady']; talking?: () => boolean; paused?: () => boolean; shown?: NotchLookDeps['shown'] } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -275,7 +276,7 @@ function harness(options: { modelReady?: NotchLookDeps['modelReady']; talking?: 
     { onEvent: (listener) => { fromApp = listener; }, onSidecarDisconnected: (listener) => { gone = listener; } },
     {
       inbox, ask: (words, files) => { asked.push({ text: words, files }); }, talking: () => options.talking?.() ?? false,
-      modelReady: options.modelReady, paused: options.paused, graceMs: 20, takeMs: 60, log: (line) => logs.push(line),
+      modelReady: options.modelReady, paused: options.paused, shown: options.shown, graceMs: 20, takeMs: 60, log: (line) => logs.push(line),
     });
   const line = (): NotchLine | null => surface.current().line;
   const send = (payload: Record<string, unknown>, bytes?: Uint8Array, sidecarId = 'pc'): void =>
@@ -539,5 +540,50 @@ describe('a look and what is said with the keys held', () => {
     expect(h.look.during('pc', 0)).toBe(false);
     h.send({ phase: 'sideways', look_id: 'L1' });
     expect(h.look.during('pc', 0)).toBe(false);
+  });
+});
+
+describe('a look that is told is shown to whoever holds things (pass 10)', () => {
+  test('every look is shown, with where on the screen it was', async () => {
+    const seen: { how: string; at?: { x: number; y: number }; things: number; role?: string }[] = [];
+    const h = harness({ shown: (_sidecarId, looked) => { seen.push({ how: looked.how, at: looked.at, things: looked.things.length, role: looked.things[0]?.role }); return false; } });
+    h.begun();
+    h.taken([{ kind: 'field', role: 'Edit' }], { how: 'click', rect: { x: 890, y: 495, w: 20, h: 10 } });
+    await h.wait(40);
+    expect(seen).toEqual([{ how: 'click', at: { x: 900, y: 500 }, things: 1, role: 'Edit' }]);
+    // Not taken: the look goes on to answer as it always does.
+    expect(h.asked.length).toBe(1);
+  });
+
+  test('a look taken as a place to put something says nothing itself, and goes with no words', async () => {
+    const h = harness({ shown: () => true, talking: () => true });
+    h.begun();
+    h.taken(threeRows, { how: 'click', rect: { x: 1, y: 1, w: 0, h: 0 } });
+    await h.wait(40);
+    expect(h.line()).toBeNull();
+    expect(h.asked).toEqual([]);
+    // Words said in the same hold find no look to carry.
+    expect(await h.look.files('pc')).toBeNull();
+  });
+
+  test('a look that was refused is shown too, so that it is not held; one that breaks the holder still answers', async () => {
+    const refused: string[] = [];
+    const h = harness({ shown: (_sidecarId, looked) => { refused.push(looked.refused); throw new Error('the holder broke'); } });
+    h.begun();
+    h.send({ phase: 'taken', look_id: 'L1', how: 'click', refused: 'bank' });
+    await h.wait(40);
+    expect(refused).toEqual(['bank']);
+    expect(h.said()).toBe('Your bank. I look away in here.');
+  });
+
+  test('a place that is not a place is not passed on', async () => {
+    const seen: (object | undefined)[] = [];
+    const h = harness({ shown: (_sidecarId, looked) => { seen.push(looked.at); return false; } });
+    h.begun();
+    h.taken(threeRows, { rect: { x: 'left', y: 1, w: 2, h: 3 } });
+    h.begun('L2');
+    h.taken(threeRows, { rect: { x: 9e9, y: 1, w: 2, h: 3 } }, 'L2');
+    await h.wait(40);
+    expect(seen).toEqual([undefined, undefined]);
   });
 });

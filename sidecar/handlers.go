@@ -142,6 +142,11 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		// "Where is...?": a ring round something on the screen (notch_looker.go).
 		registry["notch.point"] = makeNotchPointHandler(notchLooker)
 		registry["notch.window"] = makeNotchWindowHandler()
+		// Pass 10: a thing held to be put somewhere, the notch watching what
+		// the hands do, and doing a step again where it can be seen.
+		registry["notch.hold"] = makeNotchHoldHandler(notchLooker)
+		registry["notch.watch"] = makeNotchWatchHandler()
+		registry["notch.act"] = makeNotchActHandler()
 	}
 
 	if caps[CapSubPebble] && subPebble != nil {

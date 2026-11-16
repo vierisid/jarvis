@@ -62,6 +62,12 @@ var (
 	// recorderPebble is the overlay used as the indicator; nil when the
 	// pebble capability is off, in which case only the notification shows.
 	recorderPebble PebbleService
+
+	// recorderQuiet: this recording was started from the notch ("Watch me"),
+	// which shows that it is watching on its own line for as long as it does.
+	// The pebble's line and the two notifications are left out: they would
+	// say the same thing twice, in two places. Under recorderOpMu.
+	recorderQuiet bool
 )
 
 // setRecorderSender wires the observer event channel to the recorder. Called
@@ -472,6 +478,9 @@ func emitInteraction(payload map[string]any) {
 // recorderIndicator shows or clears the visible recording state. Runs under
 // recorderOpMu; the pebble calls are cheap and the notification is async.
 func recorderIndicator(on bool, capDur time.Duration) {
+	if recorderQuiet {
+		return
+	}
 	if on {
 		if recorderPebble != nil {
 			_ = recorderPebble.SetText("Recording a skill")
@@ -534,6 +543,7 @@ func handleRecorderStart(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("could not install the input hook: %w", err)
 	}
 	recorderActive = true
+	recorderQuiet, _ = params["quiet"].(bool)
 	recorderTimer = time.AfterFunc(capDur, func() { stopRecording("cap") })
 	recorderIndicator(true, capDur)
 	log.Printf("[recorder] recording started (cap %s)", capDur)
@@ -562,6 +572,7 @@ func stopRecording(reason string) {
 		inputHookStop()
 	}
 	recorderIndicator(false, 0)
+	recorderQuiet = false
 	log.Printf("[recorder] recording stopped (%s)", reason)
 	recorderEmit("ui_recording", map[string]any{"state": "stopped", "reason": reason, "ts": time.Now().UnixMilli()})
 }
