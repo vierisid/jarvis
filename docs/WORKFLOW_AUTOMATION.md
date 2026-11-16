@@ -31,7 +31,7 @@ The runtime guarantees:
 What it deliberately is NOT:
 
 - Not multi-tenant. One daemon, one user. No projects table: every row carries the constant `DEFAULT_IDS.project` (`jrv_proj_default`).
-- Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
+- Not distributed. The job queue is SQLite-backed. The daemon runs up to 3 workflow runs at once (`JARVIS_WORKFLOW_CONCURRENCY`, 1 to 8), each in its own engine process. Runs of one workflow never overlap and keep their queue order, and so do runs of workflows whose graph may use the project-wide store (a store step with `COLLECTION` scope, or a scope chosen from data), because append, add_to_list and remove_from_list read, change and write back as separate calls. A long loop therefore holds up only its own workflow and such store users. A continuation (an approval, an answer, a due timer) is claimed ahead of runs that have not started. A run still waiting for a worker says so in its Runs detail: "Waiting for another workflow run to finish (N ahead)."
 - Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
 ## Upgrade notes
@@ -59,6 +59,13 @@ Practical consequences:
   context rule on `read_data` with the condition `tool_name` set to
   `workflow_notify` and the effect `require_approval`. A repeated
   `idempotencyKey` is deduplicated before any approval is asked.
+  A card for such a notice that an earlier version created (when every notify
+  was a governed send) and parked is not retired and not approved for the owner:
+  it stays a waiting card until answered. Approved, the step delivers once and
+  the run continues; denied, it ends as denied. The recorded effect is moved to
+  the new category only when the request, the workflow version and the tool are
+  unchanged and its frozen channels are still only the owner's own, so any
+  other change after the card was made is still refused as a changed effect.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
@@ -781,6 +788,26 @@ not part of the invocation fingerprint: it changes how the parent treats the
 receipt, never what is sent to the child. `require_success` still works after a
 `call`, but a default `call` already fails first.
 
+### Deleting what other workflows use
+
+Deleting a workflow or a connection is never blocked because published
+workflows use it. The delete answers with `usedBy` (the published workflows
+that call the workflow or bind the connection) and a plain `warning` sentence,
+and `GET /api/workflows/:id/dependents` and
+`GET /api/workflows/connections/:id/dependents` give the same list
+beforehand, so the Workflows room can name them in its confirmation. Afterwards an enabled
+workflow that calls a deleted workflow, or binds a deleted connection (a
+`{{connections...}}` binding or a Jarvis step's account field, the same rule a
+run's connection scope reads), lists `blocked` with code `DEPENDENCY_MISSING`
+and a sentence naming the step and what is missing; it has no run, so `runId`
+is null. Only published graphs count: a draft nobody runs is not a dependent,
+and only workflows of the caller's project are read or named. A connection is
+looked up without decrypting it, so one whose secret cannot be read any more
+still deletes; when another connection of the project keeps the same external
+id, nobody is named. A parent already waiting on a child that was deleted
+fails with a sentence saying the child was deleted, not the engine's status
+word.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
@@ -924,7 +951,9 @@ HTTP request specifics:
   Found.` plus `It said:` and the first 300 characters of the reply in quotes,
   redacted by the same credential rules as the card and the receipt, with frame
   delimiters defanged (the reply is the server's text, never Jarvis's own
-  words); `The request timed out after 2 seconds.` for the step's own timeout
+  words). A reply that is a web page is never quoted as markup: the sentence
+  says `It sent a web page titled "..."`, or quotes the text a reader would see
+  when it has no title; `The request timed out after 2 seconds.` for the step's own timeout
   (never shown as a server 500); `Could not reach api.example.com.` only when
   no connection was made (the name did not resolve, or the address refused or
   could not be routed to). Any other failure with no answer (a reset, a TLS or
@@ -1012,6 +1041,20 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **File shapes.** One rule in `processors/file.ts` decides what a file field
+  accepts, for every piece: the bare step-file path (`/v1/step-files/<id>`, what
+  zip, PDF, image and QR code steps return), the `{ fileName, url }` object
+  Create file returns (so `{{step_1}}` works as well as `{{step_1.url}}`), an
+  `http(s)` URL (held to the read list above), a base64 `data:` URL of any
+  media type (decoded in place, never fetched), and a `{ filename, base64 }`
+  object (`fileName` or `name` also count; the base64 may carry a `data:`
+  prefix). Base64 is held to the same 7.3 MiB cap as a download. The refusal
+  messages never repeat the value or its name.
+  Only an exact step-file path earns the engine credential; a padded or
+  query-carrying path does not. Any other value (plain text, a number, a list,
+  an object with no file) fails the step with "This field needs a file from an
+  earlier step, such as the output of Create file. It got text instead.", not
+  "required input is missing". An empty value is still no value.
 - **What the card says, and what is refused before it.** An HTTP or GraphQL
   request's card (and its Needs you entry) says what will happen in words,
   naming the method, the host and the path ("Jarvis wants to send a POST
@@ -1332,6 +1375,11 @@ ternaries, and `flattenNestedKeys(data, path)`.
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
 
+A step may have any name the readiness check allows, including `toString`,
+`valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
+recorded (`ownStep`), never among `Object.prototype`'s members; only
+`__proto__`, `prototype`, `constructor` and `connections` stay reserved.
+
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.
 Flows that relied on a JavaScript method in an input need the value reshaped
@@ -1382,7 +1430,15 @@ threshold); without one, including rows saved before #954, on first use.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
-  "Expired".
+  "Expired". Having the refresh details is not proof that a refresh works, so a
+  row that carries them but whose refresh is known to fail says so instead
+  (`oauth2.refreshProblem` on the connections list): "Refresh failed:
+  reconnect" when the provider or the network policy refused it; "Refresh
+  blocked: reconnect" when the token URL is an IP address this install never
+  connects to, known without trying; "Refresh failing:
+  provider not answering" when the provider did not answer. The refusal is
+  remembered in memory until the value changes or a refresh succeeds, so a
+  restart forgets it until the next use. A named host is not guessed at.
 - `jarvis:*` connections are not refreshed here: their own source does that
   (`GoogleAuth`, through the control plane on hosted).
 - Bun 1.3.8-1.3.10 cannot verify the token endpoint's certificate for its host
@@ -1804,6 +1860,13 @@ What that means in practice:
   unfinished run goes `FAILED` too, in one transaction, keeping whatever step
   outputs were recorded. It is NOT resumed -- the effects of the interrupted
   step are unknown.
+- A run row and its job are always written in one transaction (manual run
+  route, chat `run`, Brief manual run, triggers, goals, nested runs). A QUEUED
+  run that has no job at all, left by an older crash between the two writes,
+  is closed at boot as `STOPPED` ("did not start and nothing ran"). It is not
+  queued again: the client never got an answer and may have asked a second
+  time. Only runs from before this boot are closed; the prepared dry runner's
+  in-process run has no job and is left alone.
 - A run that had durably PAUSED is the exception: if it still has an open
   waitpoint, or a fresh single-attempt `RESUME` job already queued for it,
   boot recovery leaves it `PAUSED` so the planned continuation still fires.
@@ -1882,6 +1945,8 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret", at least 32 characters when set) makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of `<X-Jarvis-Timestamp>.<raw body>` with a timestamp within 5 minutes; a legacy webhook (saved before #1153, no `signature_scheme: "timestamped"`) also takes a body-only signature. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
+At startup `TriggerManager.start()` registers every ENABLED flow of the project, however many there are (`listAllFlows`, one query); a flow that cannot be read is logged and skipped, and the rest still register. A code path that means "all flows" must use `listAllFlows`: `listFlows` is a page and stops at 100 unless told otherwise.
+
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.
 
 ## API surface
@@ -1919,7 +1984,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
-| POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
+| POST | `/api/workflows/connections` | Create a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }`. An existing `(pieceName, externalId)` is a 409 that points to Rotate: adding never replaces a saved key |
 | PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
 | DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
@@ -2050,6 +2115,7 @@ Notable behaviors a contributor should know:
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
+- "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
 - The editor's runs panel (`useFlowRuns.ts`) polls adaptively: every 2s while any run is QUEUED, RUNNING or PAUSED, every 8s otherwise, and not at all while the tab is hidden. The room-level list (`useWorkflowsData.ts`) polls every 8s.
