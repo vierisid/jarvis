@@ -136,6 +136,20 @@ test('permission cards preserve selection and settle only the selected request o
   transport.stop();
 });
 
+test('with nothing chosen, the first request a person can answer is selected, not an inspect-only row before it (G-10)', async () => {
+  const dead = { decisionId: 'effect:dead', revision: 'r1', kind: 'recovery', state: 'dispatching', title: 'Dispatching effect', supportedActions: ['inspect'] };
+  const live = { decisionId: 'approval:live', revision: 'r2', kind: 'permission', state: 'pending', title: 'Send the report', supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [dead as any, live as any]} enabled changed={() => {}} />));
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Send the report');
+  expect(button('Grant permission')).toBeTruthy();
+  // Choosing the inspect-only row still opens it.
+  await React.act(async () => (host.querySelector('[aria-pressed="false"]') as HTMLButtonElement).click());
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Dispatching effect');
+  http.stop();
+});
+
 const permissionRows = () => ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
   title: 'Review ' + id + '. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required' },
   supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
