@@ -636,3 +636,36 @@ func TestLookShotMakesALargePartSmaller(t *testing.T) {
 		t.Fatalf("%v", b)
 	}
 }
+
+// The owner's first "put it there", 16 November 2026: he circled five numbers
+// on a dashboard in a browser, and what was put was the name of the browser's
+// window. A browser says nothing about what is on its page, so all there was
+// at that place was the page.
+func TestAThingTheCircleWasDrawnInsideIsNotWhatWasCircled(t *testing.T) {
+	// A circle about 300 wide and 120 high, drawn at (400, 300).
+	circle := []lookPoint{{400, 300}, {550, 290}, {700, 300}, {705, 360}, {700, 420}, {550, 425}, {400, 420}, {395, 360}}
+	// The page it was drawn on.
+	if !lookOver(circle, lookRect{0, 80, 2560, 1300}) {
+		t.Fatal("a page many times the size of the circle was taken for what was circled")
+	}
+	// A tile of the dashboard that holds the circle and more.
+	if !lookOver(circle, lookRect{350, 150, 500, 420}) {
+		t.Fatal("a tile the circle was drawn inside was taken for what was circled")
+	}
+	// What a circle does hold: a number inside it, a thing about its own size.
+	for _, held := range []lookRect{{450, 330, 120, 40}, {390, 285, 320, 150}} {
+		if lookOver(circle, held) {
+			t.Fatalf("%+v is inside the circle and was called larger than it", held)
+		}
+	}
+	// Rows that run on past a circle drawn round their left end are what was meant.
+	for row := 0; row < 4; row++ {
+		if lookOver(circle, lookRect{380, 300 + row*30, 1400, 30}) {
+			t.Fatalf("row %d runs on past the circle and was not taken as circled", row)
+		}
+	}
+	// A click has no inside: the thing clicked is the thing.
+	if lookOver([]lookPoint{{400, 300}, {401, 301}}, lookRect{0, 80, 2560, 1300}) {
+		t.Fatal("a click was treated as a circle")
+	}
+}

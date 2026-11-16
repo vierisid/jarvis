@@ -756,3 +756,32 @@ func TestLookAwayWhileWatchingIsSwitchedOff(t *testing.T) {
 		t.Fatalf("with watching off: %q", got)
 	}
 }
+
+// What a look tells of a circle drawn on a page nothing is said about: the
+// page, marked as holding the circle and not held by it. The brain then reads
+// the circle off its picture instead of taking the page's name for it.
+func TestALookSaysWhenTheCircleWasDrawnInsideTheThing(t *testing.T) {
+	circle := []lookPoint{{400, 300}, {700, 300}, {700, 420}, {400, 420}}
+	hands := &fakeHands{things: []lookThing{
+		{Kind: "thing", Role: "Document", Name: "A page", Rect: lookRect{0, 80, 1900, 1000}},
+	}}
+	things := lookHolds(hands, circle, false)
+	if len(things) != 1 || !things[0].Over {
+		t.Fatalf("the page was told as what was circled: %+v", things)
+	}
+	told, _ := json.Marshal(things[0])
+	if !strings.Contains(string(told), `"over":true`) {
+		t.Fatalf("the brain is not told: %s", told)
+	}
+	// Rows inside the circle are told as they always were.
+	hands.things = []lookThing{
+		{Kind: "row", Role: "ListItem", Name: "Acme", Rect: lookRect{410, 310, 280, 24}},
+		{Kind: "row", Role: "ListItem", Name: "Lumen", Rect: lookRect{410, 340, 280, 24}},
+	}
+	for _, thing := range lookHolds(hands, circle, false) {
+		told, _ := json.Marshal(thing)
+		if thing.Over || strings.Contains(string(told), "over") {
+			t.Fatalf("a row inside the circle was marked: %s", told)
+		}
+	}
+}

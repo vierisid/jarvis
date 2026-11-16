@@ -4,7 +4,10 @@ import { NotchInbox } from './inbox.ts';
 import { attachNotchJobs, type NotchActResult, type NotchJobHands } from './jobs.ts';
 import type { NotchLooked, NotchThing } from './look.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
-import { NOTCH_HOLD_MS, NOTCH_PUT_SAID_MS, attachNotchPut, heldFrom, heldIsTable, putAnswer, putForm, putRequest, takesAThing } from './put.ts';
+import {
+  NOTCH_HOLD_MS, NOTCH_PUT_SAID_MS, NOTCH_READ_MAX_BYTES, NOTCH_READ_WHAT, attachNotchPut, heldFrom, heldFromRows, heldIsTable, parseRead, putAnswer,
+  putForm, putRequest, takesAThing,
+} from './put.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 
@@ -56,7 +59,7 @@ describe('what is held, and what takes it', () => {
   });
 });
 
-function harness(options: { result?: NotchActResult | null | 'lost'; paused?: () => boolean } = {}) {
+function harness(options: { result?: NotchActResult | null | 'lost'; paused?: () => boolean; read?: (picture: Uint8Array) => Promise<string[][] | null> } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -88,7 +91,7 @@ function harness(options: { result?: NotchActResult | null | 'lost'; paused?: ()
   const jobs = attachNotchJobs(inbox, { db: new Database(':memory:'), hands, sleep: async () => {}, now: () => now, log: () => {} });
   const holds: { what: string; ms: number }[] = [];
   const put = attachNotchPut({
-    inbox, jobs, hands, paused: options.paused, now: () => now, log: () => {},
+    inbox, jobs, hands, paused: options.paused, read: options.read, now: () => now, log: () => {},
     hold: (_sidecarId, what, ms) => { holds.push({ what, ms }); },
   });
   const line = (): NotchLine | null => surface.current().line;
@@ -332,5 +335,171 @@ describe('the form a thing is put in', () => {
     h.advance(NOTCH_PUT_SAID_MS + 1);
     // "as a list" alone no longer answers it. "Put it here" still means what it says, while the thing is held.
     expect(h.put.route('as a list')).toBeNull();
+  });
+});
+
+// The owner's first test, 16 November 2026: he circled five numbers on a
+// dashboard in a browser, pointed at Notepad, and the name of the browser's
+// window was put there. The browser says nothing about what is on its page,
+// so all the look had was the page itself.
+describe('a circle the program says nothing about is read off its picture', () => {
+  const PICTURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  // What the desktop app tells of a circle drawn on such a page: the page, which the line was drawn inside.
+  const PAGE = looked([thing('thing', { role: 'Document', name: 'Telemetry - Dashboard - Browser', over: true })], { app: 'Browser', picture: PICTURE });
+  const READ = [['total installs', '12.0 K'], ['online now', '177'], ['DAU', '685'], ['WAU', '2.96 K'], ['MAU', '5.41 K']];
+  /** A reading that answers when the test says so. */
+  function reader() {
+    const asked: Uint8Array[] = [];
+    let answer: (rows: string[][] | null) => void = () => {};
+    const read = (picture: Uint8Array): Promise<string[][] | null> => {
+      asked.push(picture);
+      return new Promise((resolve) => { answer = resolve; });
+    };
+    return { read, asked, answer: async (rows: string[][] | null) => { answer(rows); await settle(); } };
+  }
+
+  test('what a page, a pane or a window is called is never what was circled', () => {
+    // The thing the line was drawn inside is where the circle is, not what it holds.
+    expect(heldFrom(PAGE, 5)).toBeNull();
+    expect(heldFrom(looked([thing('row', { parts: ['Acme', '91.00'] }), thing('thing', { role: 'Pane', name: 'Sheet', over: true })]), 5)).toBeNull();
+    // A click on a page: its name is not carried either. What it holds is.
+    expect(heldFrom(looked([thing('thing', { role: 'Document', name: 'Telemetry - Dashboard - Browser' })], { how: 'click' }), 5)).toBeNull();
+    expect(heldFrom(looked([thing('thing', { role: 'Window', name: 'Browser' })], { how: 'click' }), 5)).toBeNull();
+    expect(heldFrom(looked([thing('thing', { role: 'Document', name: 'notes.txt', value: 'Call Sam at four' })], { how: 'click' }), 5)).toMatchObject({ text: 'Call Sam at four' });
+    // A button is still called what it is called.
+    expect(heldFrom(looked([thing('button', { role: 'Button', name: 'Send' })], { how: 'click' }), 5)).toMatchObject({ text: 'Send' });
+  });
+
+  test('the answer of the model that copies is rows of cells, and nothing else is taken from it', () => {
+    expect(parseRead('{"rows":[["DAU","685"],["WAU","2.96 K"]]}')).toEqual([['DAU', '685'], ['WAU', '2.96 K']]);
+    // With words round it, or a fence: only the rows.
+    expect(parseRead('Here it is:\n```json\n{"rows":[["DAU",685]]}\n```')).toEqual([['DAU', '685']]);
+    // A cell is one cell wherever it is put: one line, no tabs.
+    expect(parseRead(JSON.stringify({ rows: [['a\tb', 'two\nlines', '  spaced   out ']] }))).toEqual([['a b', 'two lines', 'spaced out']]);
+    expect(parseRead('{"rows":[]}')).toEqual([]);
+    for (const not of ['', 'I cannot read this.', '{"rows":"DAU 685"}', '{"rows":[["a"],"b"]}', '{"rows":[[{"x":1}]]}', '{"cells":[["a"]]}', '{"rows":[["a"]']) {
+      expect(parseRead(not)).toBeNull();
+    }
+  });
+
+  test('rows read off a picture are held like rows read from a program', () => {
+    expect(heldFromRows(READ, 'Browser', 7)).toEqual({
+      what: '5 rows', text: 'total installs\t12.0 K\nonline now\t177\nDAU\t685\nWAU\t2.96 K\nMAU\t5.41 K', rows: READ, app: 'Browser', at: 7,
+    });
+    // A row with nothing in a column still has that column; a row with nothing at all is no row.
+    expect(heldFromRows([['a', 'b', 'c'], ['d'], ['', '']], 'Sheet', 7)).toMatchObject({ what: '2 rows', rows: [['a', 'b', 'c'], ['d', '', '']] });
+    expect(heldFromRows([['177']], 'Browser', 7)).toMatchObject({ what: '177', text: '177' });
+    expect(heldFromRows([['DAU', '685']], 'Browser', 7)).toMatchObject({ what: '1 row' });
+    expect(heldFromRows([], 'Browser', 7)).toBeNull();
+    expect(heldFromRows([[''], []], 'Browser', 7)).toBeNull();
+  });
+
+  test('the numbers are put, never the name of the window', async () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    // The look goes on to answer as it always does.
+    expect(h.put.shown('pc', PAGE)).toBe(false);
+    expect(r.asked).toEqual([PICTURE]);
+    // Beside the pointer at once, before it is known how much there is.
+    expect(h.holds).toEqual([{ what: NOTCH_READ_WHAT, ms: NOTCH_HOLD_MS }]);
+    expect(h.put.held()).toBeNull();
+    h.advance(3000);
+    await r.answer(READ);
+    expect(h.put.held()).toMatchObject({ what: '5 rows', rows: READ });
+    // Still ninety seconds from when it was shown, not from when it was read.
+    expect(h.holds.at(-1)).toEqual({ what: '5 rows', ms: NOTCH_HOLD_MS - 3000 });
+    expect(h.put.shown('pc', FIELD)).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Put 5 rows here as a table?');
+    await h.reply('yes');
+    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, as: 'table', hand: 0, rows: READ });
+    expect(JSON.stringify(h.sent)).not.toContain('Telemetry');
+    expect(h.said()).toBe('There. It is in Notepad.');
+    // Put once. A click on the field after that is a look like any other.
+    expect(h.put.shown('pc', FIELD)).toBe(false);
+  });
+
+  test('a place pointed at while it is still being read waits for it', async () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    h.put.shown('pc', PAGE);
+    // Taken: the click is for what was circled, not a new look.
+    expect(h.put.shown('pc', FIELD)).toBe(true);
+    await settle();
+    expect(h.line()).toBeNull();
+    await r.answer(READ);
+    expect(h.said()).toBe('Put 5 rows here as a table?');
+  });
+
+  test('when it cannot be read it says so, and puts nothing', async () => {
+    for (const answer of [null, [], [['', '']]] as (string[][] | null)[]) {
+      const r = reader();
+      const h = harness({ read: r.read });
+      h.put.shown('pc', PAGE);
+      await r.answer(answer);
+      expect(h.put.held()).toBeNull();
+      // Nothing stands beside the pointer any more.
+      expect(h.holds.at(-1)).toEqual({ what: '', ms: 0 });
+      expect(h.put.shown('pc', FIELD)).toBe(true);
+      await settle();
+      expect(h.said()).toBe('I could not read what you circled. Nothing was put there.');
+      expect(h.sent).toEqual([]);
+      // Said once. After that a click there is a look like any other.
+      expect(h.put.shown('pc', FIELD)).toBe(false);
+    }
+    // A reading that fails outright is the same.
+    const h = harness({ read: () => Promise.reject(new Error('no model')) });
+    h.put.shown('pc', PAGE);
+    await settle();
+    expect(h.put.shown('pc', FIELD)).toBe(true);
+    await settle();
+    expect(h.said()).toBe('I could not read what you circled. Nothing was put there.');
+  });
+
+  test('with no model that sees pictures, nothing is held and nothing is promised', async () => {
+    const h = harness();
+    expect(h.put.shown('pc', PAGE)).toBe(false);
+    expect(h.holds).toEqual([]);
+    // A click on the field is a look like any other.
+    expect(h.put.shown('pc', FIELD)).toBe(false);
+  });
+
+  test('a click is never read off a picture, nor a circle with no picture or one too heavy', () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    h.put.shown('pc', looked([thing('thing', { role: 'Document', name: 'Browser' })], { how: 'click', picture: PICTURE }));
+    h.put.shown('pc', looked([thing('thing', { role: 'Document', name: 'Browser', over: true })]));
+    h.put.shown('pc', looked([thing('thing', { role: 'Document', name: 'Browser', over: true })], { picture: new Uint8Array(NOTCH_READ_MAX_BYTES + 1) }));
+    expect(r.asked).toEqual([]);
+    expect(h.holds).toEqual([]);
+  });
+
+  test('what a program reads itself is still taken from the program, exactly', () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    h.put.shown('pc', looked(ROWS, { picture: PICTURE }));
+    expect(r.asked).toEqual([]);
+    expect(h.put.held()).toMatchObject({ what: '3 rows' });
+  });
+
+  test('something shown meanwhile is what is held: the reading that comes late is dropped', async () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    h.put.shown('pc', PAGE);
+    h.put.shown('pc', looked(ROWS));
+    await r.answer(READ);
+    expect(h.put.held()).toMatchObject({ what: '3 rows' });
+    expect(h.holds.at(-1)).toEqual({ what: '3 rows', ms: NOTCH_HOLD_MS });
+  });
+
+  test('"put it here as a table" said while it is being read puts it at the caret once it is read', async () => {
+    const r = reader();
+    const h = harness({ read: r.read });
+    h.put.shown('pc', PAGE);
+    expect(await h.speak('Put it here as a list')).toBe('Put what you showed me where you pointed.');
+    expect(h.sent).toEqual([]);
+    await r.answer(READ);
+    expect(h.sent[0]).toEqual({ do: 'paste', front: true, as: 'list', hand: 0, rows: READ });
+    expect(h.said()).toBe('There. It is in Notepad.');
   });
 });

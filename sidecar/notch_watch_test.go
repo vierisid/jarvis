@@ -1056,6 +1056,8 @@ func TestTypingAndFindingAWindowAreAskedForInFull(t *testing.T) {
 		actParams("find", map[string]any{"app": "TextEdit"}),
 		// With no name it can still be the very window, if that is still there.
 		actParams("find", nil),
+		// And brought forward, for a job that begins with a key.
+		actParams("find", map[string]any{"app": "TextEdit", "front": true}),
 	}
 	for _, params := range good {
 		if _, err := parseNotchAct(params); err != nil {

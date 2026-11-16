@@ -174,6 +174,16 @@ static int jarvis_mac_win_front(JarvisMacWin *out) {
 	return found;
 }
 
+// Brings a program forward: its windows come to the front, and what is
+// typed goes to it.
+static void jarvis_mac_activate(int pid) {
+	void (^work)(void) = ^{
+		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+		if (app != nil) [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+	};
+	if ([NSThread isMainThread]) work(); else dispatch_sync(dispatch_get_main_queue(), work);
+}
+
 // 1 when the topmost thing at a place is one of this program's windows that
 // takes clicks (the notch itself). Its overlays let clicks through and do not
 // count.
@@ -787,6 +797,9 @@ func macWinFront() (macWin, bool) {
 	}
 	return macWinFrom(&w), true
 }
+
+// macActivate brings a program forward.
+func macActivate(pid int) { C.jarvis_mac_activate(C.int(pid)) }
 
 func macOwnAt(at lookPoint) bool { return C.jarvis_mac_own_at(C.double(at.X), C.double(at.Y)) == 1 }
 

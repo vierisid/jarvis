@@ -69,6 +69,12 @@ export interface NotchThing {
   parts: string[];
   /** What the system calls it ("Edit", "Document"), when it said. */
   role?: string;
+  /**
+   * The line was drawn inside it, round a part of it: it is where the circle
+   * is, not what was circled. A page whose program says nothing more about
+   * it is this, whatever was circled on it.
+   */
+  over?: boolean;
 }
 
 export interface NotchLooked {
@@ -115,13 +121,14 @@ export function parseNotchLookBody(bytes: Uint8Array): Pick<NotchLooked, 'app' |
   const things: NotchThing[] = [];
   for (const entry of Array.isArray(told.things) ? told.things.slice(0, NOTCH_LOOK_MAX_THINGS) : []) {
     if (typeof entry !== 'object' || entry === null) continue;
-    const thing = entry as { kind?: unknown; name?: unknown; value?: unknown; parts?: unknown; role?: unknown };
+    const thing = entry as { kind?: unknown; name?: unknown; value?: unknown; parts?: unknown; role?: unknown; over?: unknown };
     things.push({
       kind: /^[a-z][a-z ]{0,19}$/.test(typeof thing.kind === 'string' ? thing.kind : '') ? (thing.kind as string) : 'thing',
       name: clean(thing.name),
       value: clean(thing.value),
       parts: (Array.isArray(thing.parts) ? thing.parts.slice(0, NOTCH_LOOK_MAX_PARTS) : []).map((part) => clean(part)).filter(Boolean),
       ...(typeof thing.role === 'string' && /^[A-Za-z]{1,24}$/.test(thing.role) ? { role: thing.role } : {}),
+      ...(thing.over === true ? { over: true } : {}),
     });
   }
   const around = (Array.isArray(told.around) ? told.around.slice(0, 40) : []).map((name) => clean(name, 80)).filter(Boolean).slice(0, NOTCH_LOOK_MAX_AROUND);
