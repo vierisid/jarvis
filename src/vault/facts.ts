@@ -153,18 +153,19 @@ export function setFactPrivate(id: string, isPrivate: boolean): Fact {
     return getFact(id)!;
   }).immediate();
 }
-export function findFacts(query: { subject_id?: string; predicate?: string; object?: string; includeSuperseded?: boolean; scope?: string;
+export function findFacts(query: { subject_id?: string; predicate?: string; object?: string; includeSuperseded?: boolean; scope?: string; limit?: number; offset?: number;
   /** Leave out facts the owner kept private: set by every caller that feeds a prompt or a notification. */
   excludePrivate?: boolean }): Fact[] {
-  const conditions: string[] = [], params: string[] = [];
+  const conditions: string[] = [], params: (string | number)[] = [];
   if (query.excludePrivate) conditions.push('is_private = 0');
   if (!query.includeSuperseded) conditions.push("status != 'superseded'");
   if (query.subject_id) { conditions.push('subject_id = ?'); params.push(query.subject_id); }
   if (query.predicate) { conditions.push('predicate_key = ?'); params.push(predicateKey(query.predicate)); }
   if (query.object) { conditions.push('object = ?'); params.push(query.object); }
   if (query.scope !== undefined) { conditions.push('scope = ?'); params.push(query.scope.trim()); }
-  const rows = getDb().query<FactRow, string[]>(`SELECT * FROM facts ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
-    ORDER BY (verified_at IS NOT NULL) DESC, created_at DESC, id`).all(...params);
+  const rows = getDb().query<FactRow, (string | number)[]>(`SELECT * FROM facts ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+    ORDER BY (verified_at IS NOT NULL) DESC, created_at DESC, id${query.limit === undefined ? '' : ' LIMIT ? OFFSET ?'}`)
+    .all(...params, ...(query.limit === undefined ? [] : [query.limit, query.offset ?? 0]));
   return rows.map(decorate);
 }
 
