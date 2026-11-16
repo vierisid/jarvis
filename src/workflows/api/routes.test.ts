@@ -7,7 +7,7 @@ import { setCronTimezone } from '../../lib/cron-scheduler';
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeWorkflowDb, initWorkflowDb } from "../db/index";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db/index";
 import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
@@ -612,6 +612,26 @@ describe("workflow API: flows", () => {
     expect(body).toMatchObject({ status: "ENABLED", metadata: { tag: "morning" } });
   });
 
+  test("PATCH /api/workflows/:id sets, clears and validates the minutes each run saves", async () => {
+    const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    const patch = (body: unknown) => callJson(routes["/api/workflows/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${flowId}`, { id: flowId }, body));
+    expect(created.body.flow.timeSavedPerRun ?? null).toBeNull();
+    const set = await patch({ timeSavedPerRun: 12 });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ timeSavedPerRun: 12, estimatedTimeSavedPerRun: 1 });
+    for (const bad of [-1, 1441, 1.5, "12"]) {
+      const refused = await patch({ timeSavedPerRun: bad, metadata: { tag: "no" } });
+      expect(refused.status).toBe(400);
+    }
+    // A refused request wrote nothing, not even the valid metadata beside it.
+    const kept = await patch({ metadata: { tag: "ok" } });
+    expect(kept.body).toMatchObject({ timeSavedPerRun: 12, metadata: { tag: "ok" } });
+    expect((await patch({ timeSavedPerRun: 0 })).body).toMatchObject({ timeSavedPerRun: 0 });
+    expect((await patch({ timeSavedPerRun: null })).body).toMatchObject({ timeSavedPerRun: null });
+  });
+
   test("DELETE /api/workflows/:id removes the flow and cascades versions", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
@@ -769,6 +789,20 @@ describe("workflow API: runs", () => {
     expect(body.status).toBe("QUEUED");
     expect(body.triggeredBy).toBe("test");
     expect(queueStats().queued).toBe(1);
+  });
+
+  test("POST /:id/run leaves no run behind when the job cannot be written", async () => {
+    const post = routes["/api/workflows"]?.POST;
+    const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    // A failure between the run row and its job (a crash, a full disk) must
+    // leave neither behind, or the run sits QUEUED forever with nothing to start it.
+    getWorkflowDb().run(`CREATE TRIGGER no_jobs BEFORE INSERT ON workflow_job BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    const run = routes["/api/workflows/:id/run"]?.POST;
+    const { status } = await callJson(run, reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}));
+    expect(status).toBeGreaterThanOrEqual(500);
+    const rows = getWorkflowDb().query<{ n: number }, [string]>("SELECT count(*) AS n FROM flow_run WHERE flow_id = ?").get(flowId)!;
+    expect(rows.n).toBe(0);
   });
 
   test("POST /:id/run with stepNameToTest prefers DRAFT over PUBLISHED", async () => {

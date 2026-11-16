@@ -43,6 +43,11 @@ function time(w: ReturnType<typeof work>, revision = 0, requestId = 'time1') {
     baseline: { minutes: 30, evidence: { id: 'manual-report-stopwatch', revision: 'v1' } },
     intervention: { intervals: [{ start: w.created, end: w.created + 5 * 60_000 }], evidence: { id: 'review-stopwatch', revision: 'v1' } } };
 }
+/** With sources readable, no counted work is a known zero, not an unknown. */
+async function nothing() {
+  const view = ready<OutcomeSummary>(await provider.summary({ timezone: 'UTC' }));
+  expect(view.outcomes).toEqual([]); expect(view.week).toMatchObject({ value: 0, qualification: 'estimated' }); expect(view.today?.value).toBe(0);
+}
 const query = () => ({ start: Date.UTC(2026, 9, 5), end: Date.UTC(2026, 9, 12), timezone: 'UTC' });
 const ready = <T>(r: BriefReadResult<T>): T => { expect(r.state).toBe('ready'); return (r as { data: T }).data; };
 const read = async () => ready<BriefOutcome[]>(await provider.read(query()));
@@ -52,14 +57,93 @@ function effect(runId: string, status: string, extra: object = {}) {
   getDb().run('INSERT OR REPLACE INTO workflow_effect(id,run_id,status,record) VALUES(?,?,?,?)', ['effect-1', runId, status, JSON.stringify(record)]);
 }
 
-test('no evidence is empty; scores, run duration and flow defaults never invent time or goal counts', async () => {
+test('no evidence is empty; goal titles and unrun workflows never invent time or goal counts', async () => {
   getGoalApplication().createGoal('90 minutes saved and six of ten', 'objective');
   expect((await provider.read(query())).state).toBe('empty');
-  expect((await provider.summary({ timezone: 'UTC' })).state).toBe('empty');
+  await nothing();
   const w = work(); getDb().run('UPDATE flow SET time_saved_per_run=90 WHERE id=?', [w.flow.id]);
+  getDb().run("UPDATE flow_run SET status='FAILED' WHERE id=?", [w.run!.id]);
+  await nothing();
+});
+
+// Founder decision (reverses #805): enabling a workflow is enough. Every successful
+// production root run counts, with the owner's minutes or an estimate from its steps.
+const step = (name: string, pieceName: string, extra: object = {}) => ({ name, type: 'PIECE', settings: { pieceName, actionName: 'a', input: {} }, ...extra });
+function runFlow(opts: { minutes?: number; steps?: object | null; runs?: number; projectId?: string } = {}) {
+  const flow = createFlow(opts.projectId ? { projectId: opts.projectId } : {});
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Daily', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
+  setPublishedVersion(flow.id, version.id);
+  if (opts.minutes !== undefined) getDb().run('UPDATE flow SET time_saved_per_run=? WHERE id=?', [opts.minutes, flow.id]);
+  const runs = Array.from({ length: opts.runs ?? 1 }, () => {
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    return updateRun(run.id, { status: 'SUCCEEDED', finishTime: now - 60_000 });
+  });
+  // Written after the runs exist: the steps shape the estimate, and this test is not about piece readiness.
+  const graph = { name: 'trigger', type: 'EMPTY', ...(opts.steps === null ? {} : { nextAction: opts.steps ?? step('step_1', '@jarvispieces/piece-jarvis-report') }) };
+  getDb().run('UPDATE flow_version SET trigger=? WHERE id=?', [JSON.stringify(graph), version.id]);
+  return { flow, version, runs };
+}
+test('an enabled workflow successful production run counts as estimated time, with no check or time record', async () => {
+  runFlow({ runs: 3 });
   const view = await summary();
-  expect(view.week).toBeNull(); expect(view.today).toBeNull(); expect(view.goalDeltas).toEqual([]);
-  expect(view.completedWork?.value).toBe(1); expect(view.coverage).toMatchObject({ timed: 0, untimed: 1, complete: false });
+  expect(view.today).toMatchObject({ value: 30, unit: 'minutes', qualification: 'estimated' });
+  expect(view.week?.value).toBe(30); expect(view.days.find(d => d.current)?.time?.value).toBe(30);
+  expect(view.todayBasis).toBe("3 runs x about 10 min. Estimated from the workflow's steps.");
+  expect(view.days.find(d => d.current)?.basis).toBe(view.todayBasis);
+  expect(view.outcomes).toEqual([]); expect(view.completedWork).toBeNull();
+});
+test('the estimate follows the steps and has a floor of one minute', async () => {
+  runFlow({ steps: step('s1', '@jarvispieces/piece-jarvis-notify') });
+  expect((await summary()).week?.value).toBe(1);
+  runFlow({ steps: null });
+  expect((await summary()).week?.value).toBe(2);
+  runFlow({ steps: step('s1', '@activepieces/piece-gmail', { nextAction: step('s2', '@jarvispieces/piece-jarvis-ask', { nextAction: step('s3', '@activepieces/piece-json') }) }) });
+  expect((await summary()).week?.value).toBe(2 + 8);
+});
+test('owner-set minutes per run replace the estimate, and zero is a real answer', async () => {
+  const a = runFlow({ minutes: 12, runs: 2 });
+  const view = await summary();
+  expect(view.week?.value).toBe(24); expect(view.week?.qualification).toBe('estimated');
+  expect(view.weekBasis).toBe('2 runs x 12 min. You set the minutes per run.');
+  getDb().run('UPDATE flow SET time_saved_per_run=0 WHERE id=?', [a.flow.id]);
+  expect((await summary()).week?.value).toBe(0);
+});
+for (const [name, patch] of [['failed', "status='FAILED'"], ['test-environment', "environment='TESTING'"], ['single-step test', "step_name_to_test='trigger'"],
+  ['sample-data', "execution_config='{\"sampleData\":{}}'"], ['stepNameToTest in config', "execution_config='{\"stepNameToTest\":\"trigger\"}'"], ['sample-input', "execution_config='{\"sampleInputOverride\":{}}'"]] as const)
+  test(`a ${name} run never counts as time saved`, async () => {
+    const f = runFlow(); getDb().run(`UPDATE flow_run SET ${patch} WHERE id=?`, [f.runs[0]!.id]);
+    await nothing();
+  });
+test('child runs never count separately from their root run', async () => {
+  const f = runFlow();
+  const child = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, parentRunId: f.runs[0]!.id });
+  updateRun(child.id, { status: 'SUCCEEDED', finishTime: now - 1000 });
+  expect((await summary()).week?.value).toBe(10);
+});
+test('a checked work item with a time record wins for its run and is not counted twice', async () => {
+  const w = work(); getDb().run('UPDATE flow SET time_saved_per_run=50 WHERE id=?', [w.flow.id]);
+  provider.recordTime(w.item.id, time(w));
+  let view = await summary();
+  expect(view.week).toMatchObject({ value: 25, qualification: 'user_reported' }); expect(view.weekBasis).toBe('1 checked work item with minutes you reported.');
+  // A second, ordinary run of the same workflow still counts its own estimate.
+  const extra = createFlowRun({ flowId: w.flow.id, flowVersionId: w.version.id });
+  updateRun(extra.id, { status: 'SUCCEEDED', finishTime: now - 1000 });
+  view = await summary();
+  expect(view.week).toMatchObject({ value: 75, qualification: 'estimated' });
+  expect(view.weekBasis).toBe('1 run x 50 min. You set the minutes per run. 1 checked work item with minutes you reported.');
+});
+test('a checked work item without a time record counts its run as an estimate', async () => {
+  const w = work(); expect((await summary()).week).toMatchObject({ value: 1, qualification: 'estimated' }); expect(w.run).not.toBeNull();
+});
+test('estimated time lands in the local day of the run finish, by timezone', async () => {
+  // 23:30 UTC on 6 Oct is already 7 Oct in Rome, so it counts for Tuesday there and Monday in UTC.
+  const f = runFlow({ minutes: 7 });
+  updateRun(f.runs[0]!.id, { finishTime: Date.UTC(2026, 9, 6, 23, 30) });
+  const dayOf = (view: OutcomeSummary) => view.days.filter(d => d.time?.value).map(d => [d.id, d.time!.value]);
+  expect(dayOf(await summary())).toEqual([['2026-10-06', 7]]);
+  expect(dayOf(ready<OutcomeSummary>(await provider.summary({ timezone: 'Europe/Rome' })))).toEqual([['2026-10-07', 7]]);
+  updateRun(f.runs[0]!.id, { finishTime: Date.UTC(2026, 9, 4, 23, 59) });
+  await nothing();
 });
 test('manual checked work counts once but cannot manufacture an automation time claim', async () => {
   const w = work(true); expect((await read())[0]).toMatchObject({ workItemId: w.item.id, runId: null, timeBack: null });
@@ -70,7 +154,7 @@ test('explicit baseline minus observed intervention, without double subtracting 
   const receipt = provider.recordTime(w.item.id, c); expect(receipt.revision).toBe(1);
   const view = await summary(); expect(view.week).toMatchObject({ value: 20, baseline: 30, unit: 'minutes', qualification: 'user_reported' });
   expect(view.coverage).toMatchObject({ complete: true, timed: 1 }); expect(view.today?.value).toBe(20);
-  expect(view.days.filter(d => d.time !== null)).toHaveLength(1); expect(view.days.reduce((n, d) => n + (d.time?.value ?? 0), 0)).toBe(20);
+  expect(view.days.filter(d => d.time?.value)).toHaveLength(1); expect(view.days.reduce((n, d) => n + (d.time?.value ?? 0), 0)).toBe(20);
 });
 test('time corrections replace benefit in the original completion window; exact recovery survives restart', async () => {
   const w = work(), first = time(w), original = provider.recordTime(w.item.id, first);
@@ -80,7 +164,7 @@ test('time corrections replace benefit in the original completion window; exact 
   closeDb(); initDatabase(file, { quiet: true }); ensureWorkflowSchema(); provider = new Outcomes(getDb());
   expect(provider.currentTime(w.item.id)).toMatchObject({ revision: 2, baseline: { minutes: 10 }, intervention: correction.intervention });
   expect(provider.recordTime(w.item.id, first)).toEqual(original); expect(provider.timeReceipt(w.item.id, first.requestId)).toEqual(original);
-  const view = await summary(); expect(view.week?.value).toBe(5); expect(view.today).toBeNull();
+  const view = await summary(); expect(view.week?.value).toBe(5); expect(view.today?.value).toBe(0);
   expect(view.days.find(d => d.id === '2026-10-07')?.time?.value).toBe(5);
   expect(getDb().query('SELECT * FROM outcome_time_record').all()).toHaveLength(2);
 });
@@ -170,7 +254,7 @@ test('goal deltas are actual signed observations, independent of work and parent
   const start = query().start;
   measurement(parent.id, 5, start - 1, 0); measurement(parent.id, 6, start + 1, 1); measurement(parent.id, 3, start + 2, 2);
   measurement(child.id, 1, start - 1, 0); measurement(child.id, 2, start + 1, 1);
-  const view = await summary(); expect(view.completedWork).toBeNull(); expect(view.week).toBeNull();
+  const view = await summary(); expect(view.completedWork).toBeNull(); expect(view.week?.value).toBe(0);
   expect(view.goalDeltas.find(g => g.goalId === parent.id)).toMatchObject({ change: { value: -2 }, attribution: 'observed_change_only', rollup: 'independent' });
   expect(view.goalDeltas.find(g => g.goalId === child.id)?.change?.value).toBe(1);
 });
@@ -232,7 +316,7 @@ test('missing F15 sources fail readiness rather than falling back to scores', as
 });
 test('time evidence alone cannot hide a later invalidated run or a failed work result', async () => {
   const w = work(); provider.recordTime(w.item.id, time(w));
-  updateRun(w.run!.id, { status: 'FAILED' }); expect((await provider.summary({ timezone: 'UTC' })).state).toBe('empty');
+  updateRun(w.run!.id, { status: 'FAILED' }); await nothing();
   expect(provider.timeReceipt(w.item.id, 'time1')).not.toBeNull();
 });
 
@@ -316,7 +400,10 @@ for (const status of ['FAILED', 'QUEUED', 'SUCCEEDED'] as const) test(`F16 revie
   deleteFlow(child.flow.id);
   expect(getFlowRun(child.run.id)).toBeNull(); expect(getFlowRun(w.run.id)).not.toBeNull();
   expect(await provider.read(query())).toMatchObject({ state: 'unavailable', coverage: { eligible: 0, excluded: { run_coverage_incomplete: 1 } } });
-  expect((await provider.summary({ timezone: 'UTC' })).state).toBe('unavailable');
+  // The checked evidence is invalid, so none of it counts. The root run itself still
+  // succeeded, so it counts as an estimate and never as the owner's reported time.
+  const after = ready<OutcomeSummary>(await provider.summary({ timezone: 'UTC' }));
+  expect(after.completedWork).toBeNull(); expect(after.week).toMatchObject({ qualification: 'estimated' });
   expect(() => provider.recordTime(w.item.id, { ...command, revision: status === 'SUCCEEDED' ? 1 : 0, requestId: 'after-delete' })).toThrow('eligible checked workflow');
   closeDb(); initDatabase(file, { quiet: true }); ensureWorkflowSchema(); provider = new Outcomes(getDb());
   expect((await provider.read(query())).state).toBe('unavailable');
@@ -348,3 +435,72 @@ for (const invalid of ['missing-result', 'wrong-parent', 'wrong-flow', 'wrong-ve
     saveWorkflowEffect(receipt);
     expect((await provider.read(query())).state).toBe('unavailable');
   });
+
+test('estimates stop at 60 minutes per workflow per day; owner-set minutes are never capped', async () => {
+  const f = runFlow({ steps: null, runs: 100 });
+  let view = await summary();
+  expect(view.week?.value).toBe(60); expect(view.today?.value).toBe(60);
+  expect(view.todayBasis).toBe("100 runs x about 1 min. Estimated from the workflow's steps. Estimates are capped at 60 min per workflow per day.");
+  const other = runFlow({ steps: null, runs: 5 });
+  expect((await summary()).week?.value).toBe(65); expect(other.runs).toHaveLength(5);
+  getDb().run('UPDATE flow SET time_saved_per_run=3 WHERE id=?', [f.flow.id]);
+  view = await summary(); expect(view.week?.value).toBe(300 + 5); expect(view.todayBasis).not.toContain('capped');
+});
+test('a day with no successful runs is a known zero, a future day stays unknown', async () => {
+  runFlow({ minutes: 4 });
+  const view = await summary();
+  expect(view.days.map(d => [d.id, d.future, d.time?.value ?? null])).toEqual([
+    ['2026-10-05', false, 0], ['2026-10-06', false, 0], ['2026-10-07', false, 4], ['2026-10-08', true, null],
+    ['2026-10-09', true, null], ['2026-10-10', true, null], ['2026-10-11', true, null]]);
+  expect(view.days[0]!.basis).toBe('No time saved.');
+});
+
+test('runs of a workflow in another project never count here', async () => {
+  runFlow({ minutes: 9, projectId: 'jrv_proj_other' });
+  await nothing();
+  runFlow({ minutes: 4 });
+  expect((await summary()).week?.value).toBe(4);
+  expect(ready<OutcomeSummary>(await new Outcomes(getDb(), 'jrv_proj_other').summary({ timezone: 'UTC' })).week?.value).toBe(9);
+});
+// The engine keeps each step as `{ output: envelope }` and a loop's rounds under the envelope's `output.iterations`.
+const recorded = (status: string, extra: object = {}) => ({ output: { type: 'PIECE', status, ...extra } });
+const loopRounds = (...statuses: string[]) => ({ output: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', output: { index: statuses.length,
+  iterations: statuses.map(status => ({ step_2: { type: 'PIECE', status } })) } } });
+test('a run that succeeded only by continuing past a failed step is not counted, and the basis says so', async () => {
+  const f = runFlow({ minutes: 5, runs: 4 });
+  updateRun(f.runs[0]!.id, { steps: { step_1: recorded('FAILED', { errorMessage: 'boom' }), step_2: recorded('SUCCEEDED') } });
+  updateRun(f.runs[1]!.id, { steps: { loop: loopRounds('SUCCEEDED', 'FAILED') } });
+  // Output that only quotes a failure is not one: the run did its work.
+  updateRun(f.runs[2]!.id, { steps: { step_1: recorded('SUCCEEDED', { output: { build: { status: 'FAILED' } } }) } });
+  updateRun(f.runs[3]!.id, { steps: { loop: loopRounds('SUCCEEDED', 'SUCCEEDED'), step_3: recorded('SUCCEEDED', { output: { note: '"status":"FAILED"' } }) } });
+  const view = await summary();
+  expect(view.week?.value).toBe(10);
+  expect(view.weekBasis).toBe('2 runs x 5 min. You set the minutes per run. 2 runs that continued past a failure are not counted.');
+  expect(view.todayBasis).toBe(view.weekBasis);
+  updateRun(f.runs[2]!.id, { steps: { step_1: recorded('FAILED') } });
+  updateRun(f.runs[3]!.id, { steps: { loop: loopRounds('FAILED') } });
+  const none = await summary();
+  expect(none.week?.value).toBe(0); expect(none.weekBasis).toBe('No time saved. 4 runs that continued past a failure are not counted.');
+});
+test('a root run whose child run did not succeed is not counted until it does', async () => {
+  const f = runFlow({ minutes: 6 });
+  const child = createFlowRun({ flowId: f.flow.id, flowVersionId: f.version.id, parentRunId: f.runs[0]!.id });
+  updateRun(child.id, { status: 'FAILED', finishTime: now - 1000 });
+  expect((await summary()).week?.value).toBe(0);
+  updateRun(child.id, { status: 'SUCCEEDED' });
+  expect((await summary()).week?.value).toBe(6);
+});
+test('an every-minute schedule for the whole week is read as groups, not a run at a time', async () => {
+  const flows = [runFlow({ steps: null }), runFlow({ steps: null }), runFlow({ minutes: 1 })];
+  // 3 x 9,000 runs, one every 20 s back to Monday 07:00: more than a read of single runs could take.
+  for (const f of flows) getDb().run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 9000)
+    INSERT INTO flow_run (id, flow_id, flow_version_id, project_id, status, environment, execution_config, finish_time, created, updated)
+    SELECT ?1 || i, ?2, ?3, f.project_id, 'SUCCEEDED', 'PRODUCTION', '{}', ?4 - i * 20000, 0, 0 FROM n, flow f WHERE f.id = ?2`,
+    [`bulk-${f.flow.id}-`, f.flow.id, f.version.id, now]);
+  const view = await summary();
+  // Two estimated workflows capped at 60 min on each of Monday to Wednesday; the owner-set minute is never capped.
+  expect(view.week?.value).toBe(2 * 3 * 60 + 9001);
+  expect(view.today?.value).toBe(2 * 60 + 9 * HOUR / 20000 + 1);
+  const plan = getDb().query("EXPLAIN QUERY PLAN SELECT 1 FROM flow_run INDEXED BY idx_flow_run_finished WHERE project_id='p' AND status='SUCCEEDED' AND parent_run_id IS NULL AND finish_time >= 0 AND finish_time < 1").all() as { detail: string }[];
+  expect(plan.map(p => p.detail).join()).toContain('USING INDEX idx_flow_run_finished (project_id=? AND finish_time>? AND finish_time<?)');
+});
