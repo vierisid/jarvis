@@ -73,8 +73,9 @@ export const NOTCH_ROUND_MAX_MS = 90_000;
 /** How many steps of what was watched are kept. */
 export const NOTCH_WATCH_KEPT = 80;
 
-const KEYS = /^(?:(?:ctrl|alt|shift|win),)*(?:[a-z0-9]|enter|tab|delete|insert|pageup|pagedown|end|home|left|up|right|down|backspace|space|f(?:[1-9]|1[0-2]))$/;
-const MODS = /^(?:ctrl|shift|alt)(?:,(?:ctrl|shift|alt))*$/;
+// `cmd` is the Mac's Cmd, which is to its shortcuts what Ctrl is on Windows.
+const KEYS = /^(?:(?:ctrl|alt|shift|win|cmd),)*(?:[a-z0-9]|enter|tab|delete|insert|pageup|pagedown|end|home|left|up|right|down|backspace|space|f(?:[1-9]|1[0-2]))$/;
+const MODS = /^(?:ctrl|shift|alt|cmd)(?:,(?:ctrl|shift|alt|cmd))*$/;
 
 /**
  * Whether a text names a key that is a step: a named key, alone or with
@@ -86,7 +87,7 @@ export function watchKeysOk(spec: string): boolean {
   if (spec.length > 40 || !KEYS.test(spec)) return false;
   const parts = spec.split(',');
   const types = /^(?:[a-z0-9]|backspace|space)$/.test(parts.at(-1)!);
-  return !types || parts.some((part) => part === 'ctrl' || part === 'alt' || part === 'win');
+  return !types || parts.some((part) => part === 'ctrl' || part === 'alt' || part === 'win' || part === 'cmd');
 }
 
 function winOf(raw: unknown): WatchWin | null {
@@ -150,8 +151,8 @@ function between(a: WatchStep, b: WatchStep): { dx: number; dy: number } | 'same
   return null;
 }
 
-const COPY = new Set(['ctrl,c', 'ctrl,x', 'ctrl,insert']);
-const PASTE = new Set(['ctrl,v', 'shift,insert', 'ctrl,shift,v']);
+const COPY = new Set(['ctrl,c', 'ctrl,x', 'ctrl,insert', 'cmd,c', 'cmd,x']);
+const PASTE = new Set(['ctrl,v', 'shift,insert', 'ctrl,shift,v', 'cmd,v', 'cmd,shift,v', 'alt,cmd,shift,v']);
 
 /**
  * The round the person has just done twice (or more), if there is one: the

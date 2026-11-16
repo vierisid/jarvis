@@ -159,7 +159,7 @@ export interface NotchRealDeps {
     hold: NotchPutDeps['hold'];
     /** Asks the desktop apps to tell what the hands do, now and as they connect. */
     watch?: () => void;
-    teach: Pick<NotchTeachDeps, 'recorder' | 'save' | 'describe' | 'forget' | 'effect' | 'runSkill'>;
+    teach: Pick<NotchTeachDeps, 'recorder' | 'save' | 'describe' | 'forget' | 'effect' | 'runSkill' | 'byPlace'>;
     /** Without the clock that offers a shown job at its time of the week. */
     noClock?: boolean;
   };

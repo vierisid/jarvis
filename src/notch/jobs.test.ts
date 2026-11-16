@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { NotchInbox } from './inbox.ts';
 import {
-  NOTCH_ROUND_FINISH_MS, NotchJobStore, attachNotchJobs, newRoundsRun, roundsPlan, roundsWords, runRounds, sureRounds, undoPuts,
+  NOTCH_ROUND_FINISH_MS, NOTCH_SECRET_STEP, NotchJobStore, attachNotchJobs, newPlacedRun, newRoundsRun, roundsPlan, roundsWords, runPlaced, runRounds, sureRounds, undoPuts,
+  type PlacedStep,
   type NotchActResult, type NotchJobHands, type NotchPut, type RoundsRun,
 } from './jobs.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
@@ -322,6 +323,96 @@ describe('stopping, and going on', () => {
     w.next.push('offline');
     expect(await runRounds(run, w.hands, { signal: never(), onProgress: () => {}, ...noSleep })).toEqual({ how: 'failed', why: 'Your computer is not connected.' });
     expect(run.step).toBe(0);
+  });
+});
+
+describe('a shown job done again by place', () => {
+  const EDIT: WatchWin = { id: '0x51', pid: 900, w: 800, h: 600 };
+  const NOW: WatchWin = { id: '0x9c', pid: 1200, w: 800, h: 600 };
+  const steps: PlacedStep[] = [
+    { kind: 'click', app: 'TextEdit', win: EDIT, x: 40, y: 12 },
+    { kind: 'keys', app: 'TextEdit', win: EDIT, keys: 'cmd,s' },
+    { kind: 'type', app: 'TextEdit', win: EDIT, text: 'notes for Thursday' },
+    { kind: 'keys', app: 'TextEdit', win: EDIT, keys: 'enter' },
+  ];
+  /** A desktop app whose windows have other numbers than when the job was shown. */
+  function mac(fates: Record<number, 'refuse' | 'lost' | 'offline'> = {}, found: WatchWin | null = NOW) {
+    const sent: Record<string, unknown>[] = [];
+    let n = 0;
+    const hands: NotchJobHands = {
+      act: async (request) => {
+        sent.push(request);
+        if (request.do === 'find') return found ? { done: true, win: found } : { done: false, why: 'gone' };
+        const fate = fates[n++];
+        if (fate === 'lost') throw new Error('no answer');
+        if (fate === 'offline') return null;
+        return fate === 'refuse' ? { done: false, why: 'covered' } : { done: true };
+      },
+    };
+    return { hands, sent };
+  }
+
+  test('each step is done where it was made, in the window as it is found again today', async () => {
+    const m = mac();
+    const run = newPlacedRun(steps);
+    const progress: number[] = [];
+    expect(await runPlaced(run, m.hands, { signal: never(), onProgress: (done) => progress.push(done), ...noSleep })).toEqual({ how: 'done' });
+    expect(progress).toEqual([1, 2, 3, 4]);
+    expect(m.sent).toEqual([
+      // The window is looked for once: the same program, the same size.
+      { do: 'find', app: 'TextEdit', win: EDIT },
+      { do: 'click', win: NOW, x: 40, y: 12, hand: 0 },
+      { do: 'keys', win: NOW, keys: 'cmd,s' },
+      { do: 'type', win: NOW, text: 'notes for Thursday' },
+      { do: 'keys', win: NOW, keys: 'enter' },
+    ]);
+  });
+
+  test('with no such window it stops before anything is touched', async () => {
+    const m = mac({}, null);
+    const run = newPlacedRun(steps);
+    expect(await runPlaced(run, m.hands, { signal: never(), onProgress: () => {}, ...noSleep }))
+      .toEqual({ how: 'failed', why: 'I cannot find the window as it was when you showed me: TextEdit, at the same size.' });
+    expect(run.next).toBe(0);
+    expect(m.sent.length).toBe(1);
+  });
+
+  test('stopped, refused or cut off, going on does no step twice', async () => {
+    // Asked to stop after the first step.
+    const stopped = mac();
+    const run = newPlacedRun(steps);
+    const stop = new AbortController();
+    expect(await runPlaced(run, stopped.hands, { signal: stop.signal, onProgress: () => stop.abort(), ...noSleep })).toEqual({ how: 'stopped' });
+    expect(run.next).toBe(1);
+    expect(await runPlaced(run, stopped.hands, { signal: never(), onProgress: () => {}, ...noSleep })).toEqual({ how: 'done' });
+    expect(stopped.sent.filter((request) => request.do === 'click').length).toBe(1);
+    expect(stopped.sent.filter((request) => request.do === 'find').length).toBe(1);
+
+    // The second step is refused: it did not happen, and is the one tried again.
+    const refused = mac({ 1: 'refuse' });
+    const second = newPlacedRun(steps);
+    expect(await runPlaced(second, refused.hands, { signal: never(), onProgress: () => {}, ...noSleep })).toEqual({ how: 'failed', why: 'Another window is in the way.' });
+    expect(second.next).toBe(1);
+
+    // The typing's answer is lost: it may have been typed, and is never typed again.
+    const lost = mac({ 2: 'lost' });
+    const third = newPlacedRun(steps);
+    expect(await runPlaced(third, lost.hands, { signal: never(), onProgress: () => {}, ...noSleep }))
+      .toEqual({ how: 'failed', why: 'I lost touch with your computer in the middle of a step.', unsure: true });
+    expect(third.next).toBe(3);
+    await runPlaced(third, lost.hands, { signal: never(), onProgress: () => {}, ...noSleep });
+    expect(lost.sent.filter((request) => request.do === 'type').length).toBe(1);
+  });
+
+  // What was typed into a password field was never kept.
+  test('a step that typed a password is the person\'s to do: it stops there, and going on continues after it', async () => {
+    const m = mac();
+    const run = newPlacedRun([steps[0]!, { kind: 'secret' }, steps[3]!]);
+    expect(await runPlaced(run, m.hands, { signal: never(), onProgress: () => {}, ...noSleep })).toEqual({ how: 'failed', why: NOTCH_SECRET_STEP });
+    expect(run.next).toBe(2);
+    expect(m.sent.some((request) => request.do === 'type')).toBe(false);
+    expect(await runPlaced(run, m.hands, { signal: never(), onProgress: () => {}, ...noSleep })).toEqual({ how: 'done' });
+    expect(m.sent.at(-1)).toEqual({ do: 'keys', win: NOW, keys: 'enter' });
   });
 });
 

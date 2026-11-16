@@ -702,3 +702,194 @@ func TestOnlyAColumnOfNumbersIsSetToTheRight(t *testing.T) {
 		t.Fatalf("one row: %v", only)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The Mac
+// ---------------------------------------------------------------------------
+
+func TestOnAMacTheLetterOfAKeyIsOnlyLookedAtForAShortcut(t *testing.T) {
+	cases := []struct {
+		code   int
+		letter byte
+		mods   watchMods
+		want   string
+	}{
+		{36, 0, watchMods{}, "enter"},
+		{48, 0, watchMods{Shift: true}, "shift,tab"},
+		{125, 0, watchMods{}, "down"},
+		{124, 0, watchMods{Shift: true}, "shift,right"},
+		{117, 0, watchMods{}, "delete"},
+		{8, 'c', watchMods{Cmd: true}, "cmd,c"},
+		{9, 'v', watchMods{Cmd: true, Shift: true}, "cmd,shift,v"},
+		{48, 0, watchMods{Cmd: true}, "cmd,tab"},
+		{0, 'a', watchMods{Ctrl: true}, "ctrl,a"},
+		{96, 0, watchMods{}, "f5"},
+		{51, 0, watchMods{Cmd: true}, "cmd,backspace"},
+	}
+	for _, c := range cases {
+		kind, spec := watchKeyMac(c.code, c.letter, c.mods)
+		if kind != watchKeyStep || spec != c.want {
+			t.Errorf("key %d with %+v: got %v %q, want a step named %q", c.code, c.mods, kind, spec, c.want)
+		}
+		// What is named can be pressed again, here and through the door of notch.act.
+		if !notchKeysSpec(spec, false) {
+			t.Errorf("%q is named by the Mac's watch but refused by notch.act", spec)
+		}
+		if _, err := parseMacKeys(spec); err != nil {
+			t.Errorf("%q cannot be pressed again on a Mac: %v", spec, err)
+		}
+	}
+	// A key that types is typing, whatever is held that is not Cmd or Ctrl. Option with a letter is an accent.
+	for _, mods := range []watchMods{{}, {Shift: true}, {Alt: true}, {Alt: true, Shift: true}} {
+		for _, code := range []int{0, 8, 9, 18, 29, 49, 51, 27, 41} {
+			if kind, spec := watchKeyMac(code, 'x', mods); kind != watchKeyTyped || spec != "" {
+				t.Errorf("key %d with %+v was named %q", code, mods, spec)
+			}
+		}
+	}
+	// A shortcut on a key that is neither a letter nor a digit is not named.
+	if kind, spec := watchKeyMac(41, ';', watchMods{Cmd: true}); kind != watchKeyTyped || spec != "" {
+		t.Errorf("Cmd with a sign key: %v %q", kind, spec)
+	}
+	if kind, _ := watchKeyMac(53, 0, watchMods{}); kind != watchKeyNone {
+		t.Error("Esc was told")
+	}
+}
+
+func TestAMacKeySpecIsTakenApartForPressing(t *testing.T) {
+	keys, err := parseMacKeys("cmd,shift,v")
+	if err != nil || !keys.Cmd || !keys.Shift || keys.Ctrl || keys.Alt || keys.Name != "v" {
+		t.Fatalf("got %+v, %v", keys, err)
+	}
+	// A job shown on Windows that names the Windows key presses Cmd on a Mac.
+	if keys, err := parseMacKeys("win,d"); err != nil || !keys.Cmd || keys.Name != "d" {
+		t.Fatalf("got %+v, %v", keys, err)
+	}
+	if keys, err := parseMacKeys("shift,down"); err != nil || !keys.Shift || keys.Name != "down" {
+		t.Fatalf("got %+v, %v", keys, err)
+	}
+	for _, bad := range []string{"", "cmd", "cmd,c,v", "cmd,,c", "escape", "cmd,;", "hello"} {
+		if _, err := parseMacKeys(bad); err == nil {
+			t.Errorf("%q was taken", bad)
+		}
+	}
+	// Every named key has a code to press, and every letter and digit a place on the keyboard to fall back on.
+	for _, name := range watchMacNamedKeys {
+		if _, ok := watchMacKeyCodes[name]; !ok {
+			t.Errorf("%q is named and cannot be pressed", name)
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		if _, ok := watchMacAnsiKeys[c]; !ok {
+			t.Errorf("no key for %q", c)
+		}
+	}
+	for c := byte('0'); c <= '9'; c++ {
+		if _, ok := watchMacAnsiKeys[c]; !ok {
+			t.Errorf("no key for %q", c)
+		}
+	}
+}
+
+func TestAMacControlIsCalledWhatTheLookAlreadyCallsIt(t *testing.T) {
+	cases := []struct{ role, subrole, kind, local string }{
+		{"AXButton", "", "Button", ""},
+		{"AXRadioButton", "AXTabButton", "TabItem", ""},
+		{"AXRow", "", "ListItem", "row"},
+		{"AXOutlineRow", "", "TreeItem", "row"},
+		{"AXCell", "", "DataItem", "cell"},
+		{"AXTextField", "", "Edit", ""},
+		{"AXTextArea", "", "Document", ""},
+		{"AXWebArea", "", "Document", ""},
+		{"AXLink", "", "Hyperlink", "link"},
+		{"AXHeading", "", "Text", "heading"},
+		{"AXSomethingNew", "", "Custom", ""},
+	}
+	for _, c := range cases {
+		if kind, local := macRole(c.role, c.subrole); kind != c.kind || local != c.local {
+			t.Errorf("%s (%s): got %q %q, want %q %q", c.role, c.subrole, kind, local, c.kind, c.local)
+		}
+	}
+	// What the look makes of them: the same words a person is told on Windows.
+	row, local := macRole("AXRow", "")
+	if got := lookKindOf(row, local, lookRect{0, 0, 600, 22}); got != "row" {
+		t.Errorf("a row of a Mac table is a %q", got)
+	}
+	cell, local := macRole("AXCell", "")
+	if got := lookKindOf(cell, local, lookRect{0, 0, 90, 22}); got != "cell" {
+		t.Errorf("a cell of a Mac table is a %q", got)
+	}
+	// A field, a cell and a page of writing take a thing that is put; a button does not.
+	for _, role := range []string{"AXTextField", "AXTextArea", "AXWebArea", "AXCell", "AXComboBox"} {
+		kind, local := macRole(role, "")
+		if !lookTakes(lookThing{Kind: lookKindOf(kind, local, lookRect{0, 0, 90, 22}), Role: kind}) {
+			t.Errorf("%s does not take a thing", role)
+		}
+	}
+	if kind, local := macRole("AXButton", ""); lookTakes(lookThing{Kind: lookKindOf(kind, local, lookRect{0, 0, 90, 22}), Role: kind}) {
+		t.Error("a button takes a thing")
+	}
+	// A climb stops at a window, a list and a table, and a button is a thing by itself.
+	for _, role := range []string{"AXWindow", "AXList", "AXTable", "AXOutline", "AXWebArea", "AXToolbar"} {
+		if kind, _ := macRole(role, ""); !lookEdgeRoles[kind] {
+			t.Errorf("a climb goes past %s (%s)", role, kind)
+		}
+	}
+	for _, role := range []string{"AXButton", "AXLink", "AXCheckBox", "AXTextField", "AXMenuItem", "AXRow", "AXCell"} {
+		if kind, _ := macRole(role, ""); !lookItemRoles[kind] || !macActsOn(kind) {
+			t.Errorf("%s (%s) is not a thing by itself", role, kind)
+		}
+	}
+}
+
+func TestTypingAndFindingAWindowAreAskedForInFull(t *testing.T) {
+	good := []map[string]any{
+		actParams("type", map[string]any{"text": "notes for Thursday"}),
+		actParams("find", map[string]any{"app": "TextEdit"}),
+		// With no name it can still be the very window, if that is still there.
+		actParams("find", nil),
+	}
+	for _, params := range good {
+		if _, err := parseNotchAct(params); err != nil {
+			t.Errorf("%v was refused: %v", params, err)
+		}
+	}
+	bad := []map[string]any{
+		{"do": "type", "text": "typed into no window"},
+		actParams("type", nil),
+		actParams("type", map[string]any{"text": strings.Repeat("x", notchActTypeMax+1)}),
+		{"do": "find", "app": "TextEdit"},
+		{"do": "find", "app": "TextEdit", "win": map[string]any{"id": "0x1a", "pid": float64(7)}}, // no size to know it by
+	}
+	for _, params := range bad {
+		if _, err := parseNotchAct(params); err == nil {
+			t.Errorf("%v was taken", params)
+		}
+	}
+	// The name of a program is words from outside: one line, and not long.
+	act, err := parseNotchAct(actParams("find", map[string]any{"app": "Text\nEdit " + strings.Repeat("x", 200)}))
+	if err != nil || strings.ContainsAny(act.App, "\n\r") || len([]rune(act.App)) > 80 {
+		t.Fatalf("got %q, %v", act.App, err)
+	}
+}
+
+func TestWhatIsHeldWithAClickIsNamedOnBothSystems(t *testing.T) {
+	if got := watchClickMods(watchMods{Shift: true}); got != "shift" {
+		t.Errorf("Shift: %q", got)
+	}
+	if got := watchClickMods(watchMods{Cmd: true}); got != "cmd" {
+		t.Errorf("Cmd: %q", got)
+	}
+	if got := watchClickMods(watchMods{Ctrl: true, Shift: true, Cmd: true}); got != "ctrl,shift,cmd" {
+		t.Errorf("three keys: %q", got)
+	}
+	// The right Alt that types a third sign is not a key held with a click.
+	if got := watchClickMods(watchMods{Ctrl: true, Alt: true, AltGr: true}); got != "" {
+		t.Errorf("AltGr: %q", got)
+	}
+	for _, mods := range []string{"shift", "cmd", "ctrl,shift,cmd"} {
+		if !notchKeysSpec(mods, true) {
+			t.Errorf("%q is named and refused", mods)
+		}
+	}
+}

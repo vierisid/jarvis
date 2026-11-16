@@ -40,6 +40,8 @@ import (
 // watchMods is which of the keys that change other keys are down.
 type watchMods struct {
 	Ctrl, Alt, Shift, Win bool
+	// The Mac's Cmd, which is to its shortcuts what Ctrl is on Windows.
+	Cmd bool
 	// The right Alt on keyboards where it types the third sign on a key
 	// (Italian, German, French): Windows reports it as Ctrl + Alt, and what is
 	// pressed with it is typing, not a shortcut.
@@ -202,6 +204,9 @@ func watchClickMods(m watchMods) string {
 	if m.Alt && !m.AltGr {
 		parts = append(parts, "alt")
 	}
+	if m.Cmd {
+		parts = append(parts, "cmd")
+	}
 	return strings.Join(parts, ",")
 }
 
@@ -253,8 +258,10 @@ func (s clipShape) payload() map[string]any {
 
 // notchAct is one request to do something where it can be seen.
 type notchAct struct {
-	// click, keys, copy, paste, hand, home, front, count, pitch
+	// click, keys, type, copy, paste, hand, home, front, find, count, pitch
 	Do string
+	// find: the program whose window is looked for, by its name.
+	App string
 	// The window it is done in, as a step named it. Empty for a place given
 	// in the screen's own pixels (Screen).
 	Win watchWindow
@@ -289,6 +296,9 @@ type notchAct struct {
 // The most a paste may hold: a few hundred rows.
 const notchActTextMax = 64 * 1024
 
+// The most that is typed in one go.
+const notchActTypeMax = 4000
+
 // The most rows and cells a paste may hold.
 const (
 	notchActRowsMax  = 500
@@ -302,9 +312,9 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 	var act notchAct
 	act.Do, _ = params["do"].(string)
 	switch act.Do {
-	case "click", "keys", "copy", "paste", "hand", "home", "front", "count", "pitch":
+	case "click", "keys", "type", "copy", "paste", "hand", "home", "front", "find", "count", "pitch":
 	default:
-		return act, fmt.Errorf("notch.act: do must be click, keys, copy, paste, hand, home, front, count or pitch")
+		return act, fmt.Errorf("notch.act: do must be click, keys, type, copy, paste, hand, home, front, find, count or pitch")
 	}
 	whole := func(key string, most float64) (int, bool, error) {
 		raw, present := params[key]
@@ -365,6 +375,12 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 	act.Beside, _ = params["beside"].(bool)
 	act.Text, _ = params["text"].(string)
 	act.Front, _ = params["front"].(bool)
+	if app, ok := params["app"].(string); ok {
+		act.App = lookClean(app)
+		if utf8.RuneCountInString(act.App) > 80 {
+			act.App = string([]rune(act.App)[:80])
+		}
+	}
 	if raw, ok := params["rows"].([]any); ok {
 		size := 0
 		for _, rawRow := range raw {
@@ -410,6 +426,18 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 		}
 		if len(act.Rows) == 0 && (act.Text == "" || len(act.Text) > notchActTextMax) {
 			return act, fmt.Errorf("notch.act: a paste needs words or rows, and no more than %d bytes of them", notchActTextMax)
+		}
+	case "find":
+		// The window a step named, found again: its program may have been
+		// started again since, and then its window has another number.
+		if act.Win.ID == "" || act.Win.W == 0 || act.Win.H == 0 {
+			return act, fmt.Errorf("notch.act: finding a window needs the window a step named, with its size")
+		}
+	case "type":
+		// Words typed again as they were typed when a job was shown. Only in
+		// the window they were typed in, and not more than a field holds.
+		if act.Win.ID == "" || act.Text == "" || len(act.Text) > notchActTypeMax {
+			return act, fmt.Errorf("notch.act: typing needs a window that a step named, and words of at most %d bytes", notchActTypeMax)
 		}
 	case "keys", "copy":
 		if act.Win.ID == "" {
@@ -506,7 +534,7 @@ func notchKeysSpec(spec string, onlyMods bool) bool {
 	mains, chord, types := 0, false, false
 	for _, part := range parts {
 		switch part {
-		case "ctrl", "alt", "win":
+		case "ctrl", "alt", "win", "cmd":
 			chord = true
 			continue
 		case "shift":
@@ -993,4 +1021,13 @@ func clipHTML(fragment string) []byte {
 	fragmentEnd := fragmentStart + len(fragment)
 	end := fragmentEnd + len(after)
 	return []byte(fmt.Sprintf(head, start, end, fragmentStart, fragmentEnd) + before + fragment + after)
+}
+
+// notchActHands is the look's hands, which also move Jarvis's pointers for a
+// job. Nil where the look has none.
+func notchActHands() lookHands {
+	if notchLookHands == nil {
+		return nil
+	}
+	return notchLookHands
 }

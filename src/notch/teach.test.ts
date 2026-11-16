@@ -8,8 +8,8 @@ import type { WatchWin } from './rounds.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import {
-  NOTCH_SCHEDULE_LATE_MS, advanceRounds, attachNotchTeach, keysSaid, nextScheduled, parseSchedule, runItRequest, teachDoneWord, teachShapes,
-  teachStepSaid, undoRequest, watchMeRequest, type NotchSaved, type NotchSkillEffect,
+  NOTCH_PLACED_TEXT_MAX, NOTCH_SCHEDULE_LATE_MS, advanceRounds, attachNotchTeach, keysSaid, nextScheduled, parseSchedule, runItRequest, teachDoneWord, teachPlaced,
+  teachShapes, teachStepSaid, undoRequest, watchMeRequest, type NotchSaved, type NotchSkillEffect,
 } from './teach.ts';
 import { findRounds } from './rounds.ts';
 
@@ -119,7 +119,7 @@ const rowShown = (n: number, at: number): RawInteraction[] => [
   { action: 'press_keys', value: 'ctrl,v', ts: at + 3, app: 'excel', win: SHEET },
 ];
 
-function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen' } = {}) {
+function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -143,6 +143,7 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
     act(request) {
       sent.push(request);
       if (request.do === 'pitch') return Promise.resolve(options.rows === 'unseen' ? { done: true, known: false } : { done: true, known: true, dy: request.dy as number });
+      if (request.do === 'find') return Promise.resolve({ done: true, win: request.win as WatchWin });
       const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
       return Promise.resolve(answer);
     },
@@ -171,6 +172,7 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
     effect: () => ({ pays: false, deletes: false, missing: false, ...options.effect }),
     async runSkill(skill, from, run) { ran.push({ skill, from }); run.onProgress(runEnd.next); return runEnd; },
     count: options.left === undefined ? undefined : async () => options.left ?? null,
+    byPlace: options.byPlace === undefined ? undefined : () => options.byPlace!,
   });
   const line = (): NotchLine | null => surface.current().line;
   const said = (): string => text(line()?.say);
@@ -461,6 +463,88 @@ describe('the same thing shown twice', () => {
     await h.say('Run it on nine rows');
     expect(h.said()).toBe('Do one by hand first, then say it again. I go on from where you are.');
     expect(h.sent.filter((request) => request.do === 'click').length).toBe(0);
+  });
+});
+
+describe('a job shown on a Mac, done again by place', () => {
+  test('what was shown is kept as places: clicks, keys, and what a field held', () => {
+    expect(teachPlaced([
+      { action: 'click', ref: ref('File'), ts: 1, app: 'TextEdit', win: FILE, pt: { x: 40, y: 12 }, mods: 'cmd' },
+      { action: 'press_keys', value: 'cmd,s', ts: 2, app: 'TextEdit', win: FILE },
+      { action: 'set_value', ref: ref('Save As'), value: 'notes', ts: 3, app: 'TextEdit', win: FILE },
+      { action: 'set_value', ref: ref('Tags'), value: '', ts: 4, app: 'TextEdit', win: FILE },
+      { action: 'set_value', ref: ref('Password'), value: '{{REDACTED}}', secure: true, ts: 5, app: 'TextEdit', win: FILE },
+    ])).toEqual([
+      { kind: 'click', app: 'TextEdit', win: FILE, x: 40, y: 12, mods: 'cmd' },
+      { kind: 'keys', app: 'TextEdit', win: FILE, keys: 'cmd,s' },
+      { kind: 'type', app: 'TextEdit', win: FILE, text: 'notes' },
+      // A field left empty typed nothing. A password was never kept: the step is the person's.
+      { kind: 'secret' },
+    ]);
+  });
+
+  test('a job with a step that has no place is not kept as places at all: half a job is worse than none', () => {
+    const click: RawInteraction = { action: 'click', ref: ref('File'), ts: 1, app: 'TextEdit', win: FILE, pt: { x: 40, y: 12 } };
+    for (const odd of [
+      { action: 'click', ref: ref('File'), ts: 2 } as RawInteraction,                                  // told with no window
+      { action: 'click', ref: ref('File'), ts: 2, win: FILE, pt: { x: 4000, y: 12 } } as RawInteraction, // outside its window
+      { action: 'launch_app', value: 'TextEdit', ts: 2 } as RawInteraction,
+      { action: 'press_keys', value: 'a', ts: 2, win: FILE } as RawInteraction,                        // a key that types
+      { action: 'set_value', ref: ref('Body'), value: 'x'.repeat(NOTCH_PLACED_TEXT_MAX + 1), ts: 2, win: FILE } as RawInteraction,
+    ]) expect(teachPlaced([click, odd])).toBeNull();
+    expect(teachPlaced([])).toBeNull();
+  });
+
+  async function shown(h: ReturnType<typeof harness>): Promise<void> {
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'TextEdit', win: FILE, pt: { x: 40, y: 12 } });
+    await h.does({ action: 'press_keys', value: 'cmd,s', ts: 2, app: 'TextEdit', win: FILE });
+    await h.reply('yes');
+    await settle();
+    await h.reply('no');
+    await h.pass(4000);
+  }
+
+  test('"run it" does the steps at their places, and not through the product\'s own replay', async () => {
+    const h = harness({ byPlace: true });
+    await shown(h);
+    await h.say('run it');
+    await settle();
+    expect(h.ran).toEqual([]);
+    expect(h.sent).toEqual([
+      { do: 'find', app: 'TextEdit', win: FILE },
+      { do: 'click', win: FILE, x: 40, y: 12, hand: 0 },
+      { do: 'keys', win: FILE, keys: 'cmd,s' },
+      { do: 'home' },
+    ]);
+    expect(h.said()).toBe('Done. 2 steps.');
+  });
+
+  test('where buttons can be found again by name, the product\'s own replay is used', async () => {
+    const h = harness({ byPlace: false });
+    await shown(h);
+    await h.say('run it');
+    await settle();
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+    expect(h.sent.some((request) => request.do === 'click')).toBe(false);
+  });
+
+  test('a job with a step that has no place says so, and does nothing', async () => {
+    const h = harness({ byPlace: true });
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'TextEdit' });
+    await h.reply('yes');
+    await settle();
+    await h.reply('no');
+    await h.pass(4000);
+    await h.say('run it');
+    expect(h.said()).toBe('I cannot do that one again here: one of its steps has no place I can go back to. Show me again, with clicks and keys only.');
+    expect(h.sent.filter((request) => request.do !== 'pitch')).toEqual([]);
+  });
+
+  test('how a Mac shortcut is said', () => {
+    expect(keysSaid('cmd,shift,v')).toBe('Cmd + Shift + V');
+    expect(teachStepSaid({ action: 'press_keys', value: 'cmd,c', ts: 1 })).toBe('pressed Cmd + C');
   });
 });
 

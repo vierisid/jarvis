@@ -25,7 +25,8 @@ import type { NotchCatch } from './catch.ts';
 import { countRequest } from './catch.ts';
 import type { NotchInbox } from './inbox.ts';
 import {
-  NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds,
+  NOTCH_ROWS_NOT_SEEN, newPlacedRun, newRoundsRun, roundsPlan, roundsWords, runPlaced, sureRounds,
+  type PlacedStep,
   type NotchJobEnd, type NotchJobHands, type NotchJobPlan, type NotchJobs, type NotchRunOptions,
 } from './jobs.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -131,7 +132,7 @@ export function nextScheduled(schedule: NotchSchedule, after: number): number {
 /** How a shortcut is said: "Ctrl + C", "Enter". */
 export function keysSaid(keys: string): string {
   const names: Record<string, string> = {
-    ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', enter: 'Enter', tab: 'Tab', delete: 'Delete', insert: 'Insert',
+    ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', win: 'Win', cmd: 'Cmd', enter: 'Enter', tab: 'Tab', delete: 'Delete', insert: 'Insert',
     pageup: 'Page Up', pagedown: 'Page Down', end: 'End', home: 'Home', left: 'Left', up: 'Up', right: 'Right', down: 'Down',
     backspace: 'Backspace', space: 'Space',
   };
@@ -169,6 +170,41 @@ export function teachShapes(interactions: RawInteraction[]): WatchStep[] {
   });
 }
 
+/** The most a step that types may hold. A longer one is not kept for doing again by place. */
+export const NOTCH_PLACED_TEXT_MAX = 2000;
+
+/**
+ * What was shown, as steps that can be done again by place: each click with
+ * the place in its window where it was made, each named key, each field's
+ * words. Null when one of the steps has no place to be done at (an app that
+ * was opened, a click the desktop app told with no window), or types more
+ * than is kept: then the job cannot be done again this way at all, and
+ * doing half of it would be worse.
+ */
+export function teachPlaced(interactions: RawInteraction[]): PlacedStep[] | null {
+  const steps: PlacedStep[] = [];
+  for (const it of interactions) {
+    if (!it.win) return null;
+    const app = it.app ?? '';
+    if (it.action === 'click') {
+      if (!it.pt || it.pt.x < 0 || it.pt.y < 0 || it.pt.x >= it.win.w || it.pt.y >= it.win.h) return null;
+      steps.push({ kind: 'click', app, win: it.win, x: it.pt.x, y: it.pt.y, ...(it.mods ? { mods: it.mods } : {}) });
+    } else if (it.action === 'press_keys') {
+      if (!watchKeysOk(it.value ?? '')) return null;
+      steps.push({ kind: 'keys', app, win: it.win, keys: it.value! });
+    } else if (it.action === 'set_value') {
+      // What was typed into a password field was never kept, and is not typed again.
+      if (it.secure || it.value === undefined || it.value === '{{REDACTED}}') { steps.push({ kind: 'secret' }); continue; }
+      if (it.value.length > NOTCH_PLACED_TEXT_MAX) return null;
+      // A field left empty is a step that typed nothing.
+      if (it.value !== '') steps.push({ kind: 'type', app, win: it.win, text: it.value });
+    } else {
+      return null;
+    }
+  }
+  return steps.length > 0 ? steps : null;
+}
+
 /** Rounds moved on by `n`: after Jarvis did that many, the next one starts further along. */
 export function advanceRounds(rounds: Rounds, n: number, at: number): Rounds {
   return {
@@ -189,9 +225,21 @@ export interface NotchLearned {
   /** "Monday at 9:00", or null when it is done on request only. */
   schedule: string | null;
   nextAt: number | null;
+  /** Its steps as they are done again by place, when every one of them has a place. */
+  placed: PlacedStep[] | null;
 }
 
-interface StoredLearned { id: string; created_at: number; skill: string; what: string; steps: number; schedule: string | null; next_at: number | null }
+interface StoredLearned { id: string; created_at: number; skill: string; what: string; steps: number; schedule: string | null; next_at: number | null; placed: string | null }
+
+function placedOf(stored: string | null): PlacedStep[] | null {
+  if (!stored) return null;
+  try {
+    const raw: unknown = JSON.parse(stored);
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    const kinds = new Set(['click', 'keys', 'type', 'secret']);
+    return raw.every((step) => typeof step === 'object' && step !== null && kinds.has((step as { kind?: unknown }).kind as string)) ? (raw as PlacedStep[]) : null;
+  } catch { return null; }
+}
 
 export class NotchLearnedStore {
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
@@ -202,13 +250,18 @@ export class NotchLearnedStore {
       what TEXT NOT NULL,
       steps INTEGER NOT NULL,
       schedule TEXT,
-      next_at INTEGER
+      next_at INTEGER,
+      placed TEXT
     )`);
+    // A table made before jobs could be done again by place has no such column.
+    const columns = db.query<{ name: string }, []>('PRAGMA table_info(notch_learned)').all();
+    if (!columns.some((column) => column.name === 'placed')) db.run('ALTER TABLE notch_learned ADD COLUMN placed TEXT');
   }
 
-  add(skill: string, what: string, steps: number): NotchLearned {
+  add(skill: string, what: string, steps: number, placed: PlacedStep[] | null = null): NotchLearned {
     const id = crypto.randomUUID();
-    this.db.run('INSERT INTO notch_learned (id, created_at, skill, what, steps) VALUES (?, ?, ?, ?, ?)', [id, this.now(), skill, what.slice(0, 200), steps]);
+    this.db.run('INSERT INTO notch_learned (id, created_at, skill, what, steps, placed) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, this.now(), skill, what.slice(0, 200), steps, placed ? JSON.stringify(placed) : null]);
     return this.get(id)!;
   }
 
@@ -237,7 +290,10 @@ export class NotchLearnedStore {
   }
 
   private parse(row: StoredLearned): NotchLearned {
-    return { id: row.id, createdAt: row.created_at, skill: row.skill, what: row.what, steps: row.steps, schedule: row.schedule, nextAt: row.next_at };
+    return {
+      id: row.id, createdAt: row.created_at, skill: row.skill, what: row.what, steps: row.steps, schedule: row.schedule, nextAt: row.next_at,
+      placed: placedOf(row.placed),
+    };
   }
 }
 
@@ -277,6 +333,12 @@ export interface NotchTeachDeps {
    */
   runSkill(skill: string, from: number, options: NotchRunOptions & { target(at: { x: number; y: number }): Promise<void> }):
     Promise<{ end: NotchJobEnd; next: number }>;
+  /**
+   * Whether a shown job is done again by place on the person's machine, and
+   * not by finding its buttons by what they are called. True where the
+   * product cannot find them that way (a Mac, today).
+   */
+  byPlace?(): boolean;
   /** How many more there are of a round (catch.ts). */
   count?(request: Record<string, unknown>): Promise<number | null>;
   /** The jobs caught by themselves: "do the rest" may mean one of those. */
@@ -385,13 +447,33 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     };
   }
 
+  /** A saved job done again by place: each step where it was made, in the window it was made in. */
+  function placedPlan(learned: NotchLearned, placed: PlacedStep[]): NotchJobPlan {
+    const run = newPlacedRun(placed);
+    const steps = (n: number): string => (n === 1 ? '1 step' : `${n} steps`);
+    return {
+      kind: 'skill', total: placed.length,
+      words: { doing: 'Doing it as you showed me', said: steps, title: (done) => `Did what you showed me: ${learned.what} (${done} of ${steps(placed.length)})` },
+      done: () => run.next,
+      puts: () => [],
+      canGoOn: () => run.next < placed.length,
+      run: (options) => runPlaced(run, deps.hands, options),
+    };
+  }
+
   /** Does a saved job once. A job that pays is refused; one that deletes asks first. */
   function startSkill(learned: NotchLearned): void {
     const effect = deps.effect(learned.skill);
     if (effect.missing) { tell(['I no longer have that job. Show me again.'], 'sorry'); return; }
     if (effect.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
+    const byPlace = deps.byPlace?.() === true;
+    if (byPlace && !learned.placed) {
+      tell(['I cannot do that one again here: one of its steps has no place I can go back to. Show me again, with clicks and keys only.'], 'sorry', 6000);
+      return;
+    }
     const begin = (): void => {
-      if (!deps.jobs.start(skillPlan(learned))) tell(['I am in the middle of something else.']);
+      const plan = byPlace ? placedPlan(learned, learned.placed!) : skillPlan(learned);
+      if (!deps.jobs.start(plan)) tell(['I am in the middle of something else.']);
     };
     if (!effect.deletes) { begin(); return; }
     const id = `teach-delete-${++tells}`;
@@ -426,7 +508,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       if (error instanceof NotchStageEnded) throw error;
     }
     const where = saved.apps.length ? `in ${saved.apps.slice(0, 2).join(' and ')}` : 'on your screen';
-    const row = store.add(saved.skill, what ?? `${saved.steps} steps ${where}`, saved.steps);
+    const row = store.add(saved.skill, what ?? `${saved.steps} steps ${where}`, saved.steps, teachPlaced(interactions));
     log(`[notch] a job was shown and saved: ${saved.steps} step(s)`);
     const shown = findRounds(teachShapes(interactions));
     if (shown && now() - shown.at < NOTCH_TEACH_FRESH_MS) {

@@ -353,6 +353,89 @@ export async function runRounds(run: RoundsRun, hands: NotchJobHands, options: N
   return { how: 'done' };
 }
 
+// ---------------------------------------------------------------------------
+// A job shown once, done again by place
+// ---------------------------------------------------------------------------
+
+/**
+ * One step of a job that was shown, as it is done again where a program's
+ * buttons cannot be found again by what they are called (a Mac, today): a
+ * click at the place in its window where it was made, the keys that were
+ * pressed, the words that were typed. `secret` is a step that typed a
+ * password: what was typed was never kept, so it cannot be typed again.
+ */
+export type PlacedStep =
+  | { kind: 'click'; app: string; win: WatchWin; x: number; y: number; mods?: string }
+  | { kind: 'keys'; app: string; win: WatchWin; keys: string }
+  | { kind: 'type'; app: string; win: WatchWin; text: string }
+  | { kind: 'secret' };
+
+/** A run of placed steps, as far as it has come. Changed in place, so that going on continues from it. */
+export interface PlacedRun {
+  steps: PlacedStep[];
+  /** The step that is next. */
+  next: number;
+  /** The windows of the showing, as they were found again for this run: a window's number changes whenever its program is started. */
+  found: Map<string, WatchWin>;
+}
+
+export const newPlacedRun = (steps: PlacedStep[]): PlacedRun => ({ steps, next: 0, found: new Map() });
+
+export const NOTCH_SECRET_STEP = 'The next step types something secret, which I never keep. Do that step yourself, then tell me to go on.';
+
+/**
+ * Does the steps of a shown job again, each at its place, from where the run
+ * stands. A step is done once: one that was done, or whose answer was lost,
+ * is never sent again; only one the desktop app refused is tried again.
+ *
+ * Each window of the showing is found again first (`find`): the same
+ * program, with a window of the same size. Where there is none the job
+ * stops before anything is touched: what was at a place in a window of
+ * another size is somewhere else now.
+ */
+export async function runPlaced(run: PlacedRun, hands: NotchJobHands, options: NotchRunOptions): Promise<NotchJobEnd> {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  while (run.next < run.steps.length) {
+    if (options.signal.aborted) return { how: 'stopped' };
+    const i = run.next;
+    const step = run.steps[i]!;
+    if (step.kind === 'secret') {
+      // Going on continues after it: the person has done it by then.
+      run.next = i + 1;
+      return { how: 'failed', why: NOTCH_SECRET_STEP };
+    }
+    let win = run.found.get(step.win.id);
+    let result: NotchActResult | null;
+    try {
+      if (!win) {
+        // Finding a window touches nothing: asking again after a lost answer is safe.
+        const found = await hands.act({ do: 'find', app: step.app, win: winRequest(step.win) });
+        if (!found) return { how: 'failed', why: 'Your computer is not connected.' };
+        if (!found.done || !found.win) {
+          return { how: 'failed', why: `I cannot find the window as it was when you showed me${step.app ? `: ${step.app}, at the same size` : ''}.` };
+        }
+        win = found.win;
+        run.found.set(step.win.id, win);
+      }
+      const where = winRequest(win);
+      result = await hands.act(step.kind === 'click'
+        ? { do: 'click', win: where, x: step.x, y: step.y, hand: 0, ...(step.mods ? { mods: step.mods } : {}) }
+        : step.kind === 'keys' ? { do: 'keys', win: where, keys: step.keys } : { do: 'type', win: where, text: step.text });
+    } catch {
+      if (!win) return { how: 'failed', why: 'I lost touch with your computer.' };
+      // Sent, and no answer: it may have happened. It is not sent again.
+      run.next = i + 1;
+      return { how: 'failed', why: 'I lost touch with your computer in the middle of a step.', unsure: true };
+    }
+    if (!result) return { how: 'failed', why: 'Your computer is not connected.' };
+    if (!result.done) return { how: 'failed', why: actRefusal(result.why) };
+    run.next = i + 1;
+    options.onProgress(run.next);
+    await sleep(step.kind === 'click' ? AFTER_CLICK_MS : step.kind === 'type' ? AFTER_PASTE_MS : AFTER_KEYS_MS);
+  }
+  return { how: 'done' };
+}
+
 /** What taking pastes back came to. */
 export interface NotchUndone { taken: number; kept: number; why?: string }
 

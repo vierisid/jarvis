@@ -123,7 +123,7 @@ export function parseInteractionEvent(payload: unknown, now = Date.now()): RawIn
     secure: p.secure === true,
     ...(win ? { win } : {}),
     ...(win && action === 'click' && x !== null && y !== null ? { pt: { x, y } } : {}),
-    ...(typeof p.mods === 'string' && /^(?:ctrl|shift|alt)(?:,(?:ctrl|shift|alt))*$/.test(p.mods) ? { mods: p.mods } : {}),
+    ...(typeof p.mods === 'string' && /^(?:ctrl|shift|alt|cmd)(?:,(?:ctrl|shift|alt|cmd))*$/.test(p.mods) ? { mods: p.mods } : {}),
   };
 }
 
