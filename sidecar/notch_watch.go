@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -679,7 +680,7 @@ func makeNotchActHandler() RPCHandler {
 // apart the rows really are, from the screen itself.
 //
 // Rows that stand at even distances make the screen repeat itself down the
-// page: the lines of a grid, or line after line of writing. watchPitch finds
+// page: the lines of a grid, or line after line of writing. watchRepeat finds
 // the distance at which a strip of the screen is most like itself, to a
 // fraction of a pixel. That works in any program, because it asks the
 // program nothing.
@@ -692,21 +693,74 @@ const (
 	notchPitchRows = 5
 )
 
-// watchPitch measures how far apart rows stand. profile is how bright the
-// screen is at each pixel down a strip (one number a pixel row), and about is
-// roughly how far apart two of the person's clicks were. It gives the
-// distance the person moved, made exact: a whole number of rows times the
-// distance between two rows. False when no rows can be seen there, or when
-// what the person did does not fit them.
-func watchPitch(profile []float64, about float64) (float64, bool) {
+// watchRepeat measures how far apart rows stand. profile is one number a
+// pixel row down a strip (how much of it changes there), and about is roughly
+// how far apart two of the person's clicks were. It gives the distance
+// between two rows and how like itself the strip is that far down (1 is
+// exactly alike). False when nothing repeats there clearly enough.
+func watchRepeat(profile []float64, about float64) (float64, float64, bool) {
 	about = math.Abs(about)
 	n := len(profile)
 	if about < 6 || n < int(about)*notchPitchRows {
-		return 0, false
+		return 0, 0, false
 	}
-	// A line one pixel thin is smoothed to three: rows are seldom a whole
-	// number of pixels apart (at 125% and 150% they are not), and a thin line
-	// laid over itself half a pixel off would look unlike itself.
+	smooth, ok := watchSmooth(profile)
+	if !ok {
+		// A blank strip: nothing repeats because nothing is there.
+		return 0, 0, false
+	}
+	// The person may have gone one, two or three rows on, and their hand may
+	// have been most of a row out. So one row is between a third of their
+	// distance and that distance with a hand's error added. No row on a
+	// screen is lower than notchPitchLeast: below that, anything is like
+	// itself a few pixels down, because nothing on a screen is that fine.
+	const least = notchPitchLeast
+	from, to := math.Max(least, about/3-2), math.Min(about+10, float64(n)/notchPitchRows)
+	pitch, pitchLike := 0.0, 0.0
+	for lag := from; lag <= to; lag += 0.25 {
+		if l := watchLike(smooth, lag); l > pitchLike {
+			pitch, pitchLike = lag, l
+		}
+	}
+	if pitch == 0 || pitchLike < notchPitchLikeness {
+		return 0, pitchLike, false
+	}
+	// A strip that is like itself one row down is like itself two rows down
+	// too. If half or a third of the distance found fits nearly as well, that
+	// is the row, and what was found was two or three of them.
+	for _, parts := range []float64{3, 2} {
+		if pitch/parts < least {
+			continue
+		}
+		if shorter, shorterLike := watchLikeNear(smooth, pitch/parts, 0.75); shorterLike >= 0.8*pitchLike {
+			pitch, pitchLike = shorter, shorterLike
+			break
+		}
+	}
+	pitch, pitchLike = watchLikeNear(smooth, pitch, 0.5)
+	// Made exact over many rows: where the strip is most like itself m rows
+	// down, divided by m. An error of a twentieth of a pixel there is a
+	// fraction of that a row.
+	for m := 2.0; m*pitch < float64(n)/2; m++ {
+		far, farLike := watchLikeNear(smooth, pitch*m, 1)
+		if farLike < notchPitchLikeness {
+			break
+		}
+		pitch = far / m
+	}
+	return pitch, pitchLike, true
+}
+
+// watchSmooth makes a profile ready to be laid over itself: a line one pixel
+// thin is spread to three (rows are seldom a whole number of pixels apart, at
+// 125% and 150% they are not, and a thin line laid over itself half a pixel
+// off would look unlike itself), and its middle is taken away. False when
+// there is nothing in it.
+func watchSmooth(profile []float64) ([]float64, bool) {
+	n := len(profile)
+	if n < 3 {
+		return nil, false
+	}
 	smooth := append([]float64(nil), profile...)
 	for pass := 0; pass < 2; pass++ {
 		prev := smooth[0]
@@ -726,111 +780,282 @@ func watchPitch(profile []float64, about float64) (float64, bool) {
 		smooth[i] -= mean
 		power += smooth[i] * smooth[i]
 	}
-	if power < 1e-6 {
-		// A blank strip: nothing repeats because nothing is there.
-		return 0, false
-	}
-	// How like itself the strip is when laid over itself `lag` pixels down.
-	// The lag need not be a whole number: between two pixels it is read as
-	// the part of each that it covers.
-	like := func(lag float64) float64 {
-		whole := int(math.Floor(lag))
-		part := lag - float64(whole)
-		if whole < 1 || whole+2 >= n {
-			return 0
-		}
-		sum, a, b := 0.0, 0.0, 0.0
-		for i := 0; i+whole+1 < n; i++ {
-			moved := smooth[i+whole]*(1-part) + smooth[i+whole+1]*part
-			sum += smooth[i] * moved
-			a += smooth[i] * smooth[i]
-			b += moved * moved
-		}
-		if a < 1e-9 || b < 1e-9 {
-			return 0
-		}
-		return sum / math.Sqrt(a*b)
-	}
-	// The best lag near a guess, looked for in steps of a twentieth of a pixel.
-	near := func(guess, reach float64) (float64, float64) {
-		best, bestLike := guess, -2.0
-		for lag := guess - reach; lag <= guess+reach; lag += 0.05 {
-			if l := like(lag); l > bestLike {
-				best, bestLike = lag, l
-			}
-		}
-		return best, bestLike
-	}
-	// The person may have gone one, two or three rows on, and their hand may
-	// have been most of a row out. So one row is between a third of their
-	// distance and that distance with a hand's error added.
-	const least = 5.0
-	from, to := math.Max(least, about/3-2), math.Min(about+10, float64(n)/notchPitchRows)
-	pitch, pitchLike := 0.0, 0.0
-	for lag := from; lag <= to; lag += 0.25 {
-		if l := like(lag); l > pitchLike {
-			pitch, pitchLike = lag, l
-		}
-	}
-	if pitch == 0 || pitchLike < notchPitchLikeness {
-		return 0, false
-	}
-	// A strip that is like itself one row down is like itself two rows down
-	// too. If half or a third of the distance found fits nearly as well, that
-	// is the row, and what was found was two or three of them.
-	for _, parts := range []float64{3, 2} {
-		if pitch/parts < least {
-			continue
-		}
-		if shorter, shorterLike := near(pitch/parts, 0.75); shorterLike >= 0.8*pitchLike {
-			pitch, pitchLike = shorter, shorterLike
-			break
-		}
-	}
-	pitch, _ = near(pitch, 0.5)
-	// Made exact over many rows: where the strip is most like itself m rows
-	// down, divided by m. An error of a twentieth of a pixel there is a
-	// fraction of that a row.
-	for m := 2.0; m*pitch < float64(n)/2; m++ {
-		far, farLike := near(pitch*m, 1)
-		if farLike < notchPitchLikeness {
-			break
-		}
-		pitch = far / m
-	}
-	rows := math.Round(about / pitch)
-	if rows < 1 || math.Abs(about-rows*pitch) > 0.45*pitch {
-		// What the person did is not a whole number of these rows.
-		return 0, false
-	}
-	return rows * pitch, true
+	return smooth, power >= 1e-6
 }
 
-// watchProfile turns a strip of the screen into how bright each pixel row
-// is. pixels are the strip's own, row after row, each 0x00RRGGBB.
-func watchProfile(pixels []uint32, width, height int) []float64 {
-	if width <= 0 || height <= 0 || len(pixels) < width*height {
+// watchLike is how like itself a strip is when laid over itself `lag` pixels
+// down. The lag need not be a whole number: between two pixels it is read as
+// the part of each that it covers.
+func watchLike(smooth []float64, lag float64) float64 {
+	n := len(smooth)
+	whole := int(math.Floor(lag))
+	part := lag - float64(whole)
+	if whole < 1 || whole+2 >= n {
+		return 0
+	}
+	sum, a, b := 0.0, 0.0, 0.0
+	for i := 0; i+whole+1 < n; i++ {
+		moved := smooth[i+whole]*(1-part) + smooth[i+whole+1]*part
+		sum += smooth[i] * moved
+		a += smooth[i] * smooth[i]
+		b += moved * moved
+	}
+	if a < 1e-9 || b < 1e-9 {
+		return 0
+	}
+	return sum / math.Sqrt(a*b)
+}
+
+// watchLikeNear is the lag near a guess at which a strip is most like itself,
+// looked for in steps of a twentieth of a pixel, and how alike it is there.
+func watchLikeNear(smooth []float64, guess, reach float64) (float64, float64) {
+	best, bestLike := guess, -2.0
+	for lag := guess - reach; lag <= guess+reach; lag += 0.05 {
+		if l := watchLike(smooth, lag); l > bestLike {
+			best, bestLike = lag, l
+		}
+	}
+	return best, bestLike
+}
+
+// What a strip is read as is where it changes, not how bright it is. The
+// first version read how bright each pixel row was, and the owner tried it on
+// two Google Sheets on 16 November 2026: it saw no rows. What is in the rows
+// decides how bright they are: a row with a fill, a row that is selected, a
+// long name beside a short one all change the brightness far more than a
+// thin grey grid line does, and none of them repeats. On a copy of his screen
+// it found no rows beside the row numbers, and elsewhere rows 15.6, 20.0 and
+// 23.3 pixels apart in a sheet whose rows are 21. Read as where it changes,
+// the same strips all say 21.
+
+const (
+	// How unlike the pixel above it a pixel must be to count as changed: the
+	// largest difference among its three colours, of 255. A grid line on white
+	// is about 30, the faintest stripe of a striped list about 5.
+	notchPitchChange = 4
+	// No row is lower than this many pixels.
+	notchPitchLeast = 10.0
+	// How much of a strip's width must change at a place for it to count as
+	// one where a row may begin or end.
+	notchPitchPeak = 0.06
+	// How far from where it should be a line may stand and still be one of
+	// the evenly spaced ones. Rows are seldom a whole number of pixels apart,
+	// so a line is drawn up to half a pixel off.
+	notchPitchSlack = 1.25
+)
+
+func watchUnlike(a, b uint32) bool {
+	for shift := 0; shift <= 16; shift += 8 {
+		d := int((a>>shift)&0xff) - int((b>>shift)&0xff)
+		if d >= notchPitchChange || d <= -notchPitchChange {
+			return true
+		}
+	}
+	return false
+}
+
+// watchEdges reads a strip of the screen as where it changes going down: for
+// each pixel row, how much of the strip's width is unlike the row above. A
+// line between two rows is a row of pixels that is unlike the one above
+// nearly all the way across; a line of writing is a band of them. A fill, a
+// selected row, a dark theme change nothing but their own edges, and those
+// are where the rows are. pixels are the strip's own, row after row, each
+// 0x00RRGGBB.
+func watchEdges(pixels []uint32, width, height int) []float64 {
+	if width <= 0 || height <= 1 || len(pixels) < width*height {
 		return nil
 	}
-	profile := make([]float64, height)
-	for y := 0; y < height; y++ {
-		sum := 0.0
-		for _, p := range pixels[y*width : (y+1)*width] {
-			sum += 0.299*float64((p>>16)&0xff) + 0.587*float64((p>>8)&0xff) + 0.114*float64(p&0xff)
+	edges := make([]float64, height)
+	for y := 1; y < height; y++ {
+		above, here := pixels[(y-1)*width:y*width], pixels[y*width:(y+1)*width]
+		changed := 0
+		for x := 0; x < width; x++ {
+			if watchUnlike(above[x], here[x]) {
+				changed++
+			}
 		}
-		profile[y] = sum / float64(width)
+		edges[y] = float64(changed) / float64(width)
 	}
-	return profile
+	return edges
+}
+
+// watchPeak is a place down a strip where it changes more than just above
+// and just below: a line between two rows, or the foot of a line of writing.
+type watchPeak struct {
+	at     float64 // in pixels from the top of the strip, to a fraction
+	weight float64 // how much of the strip's width changes there
+}
+
+// watchPeaks finds them. Each is placed at the middle of its own weight, so
+// that a line two pixels thick, or one drawn half on one pixel row and half
+// on the next, is where it looks to be.
+func watchPeaks(edges []float64) []watchPeak {
+	n := len(edges)
+	if n < 5 {
+		return nil
+	}
+	soft := make([]float64, n)
+	for y := 1; y+1 < n; y++ {
+		soft[y] = (edges[y-1] + 2*edges[y] + edges[y+1]) / 4
+	}
+	var peaks []watchPeak
+	for y := 2; y+2 < n; y++ {
+		if soft[y] < notchPitchPeak || soft[y] < soft[y-1] || soft[y] <= soft[y+1] {
+			continue
+		}
+		sum, moment := 0.0, 0.0
+		for d := -2; d <= 2; d++ {
+			sum += edges[y+d]
+			moment += edges[y+d] * float64(y+d)
+		}
+		if sum > 0 {
+			peaks = append(peaks, watchPeak{at: moment / sum, weight: soft[y]})
+		}
+	}
+	return peaks
+}
+
+// watchOnComb lays evenly spaced places down a strip, `pitch` apart with one
+// at `start`, and gives the peaks that stand on one (within slack): for each
+// place the heaviest, with the number of its place.
+func watchOnComb(peaks []watchPeak, start, pitch, slack float64) (on []watchPeak, places []int) {
+	best := map[int]int{}
+	for i, peak := range peaks {
+		k := int(math.Round((peak.at - start) / pitch))
+		if math.Abs(peak.at-start-float64(k)*pitch) > slack {
+			continue
+		}
+		if j, taken := best[k]; !taken || peak.weight > peaks[j].weight {
+			best[k] = i
+		}
+	}
+	for k := range best {
+		places = append(places, k)
+	}
+	sort.Ints(places)
+	for _, k := range places {
+		on = append(on, peaks[best[k]])
+	}
+	return on, places
+}
+
+// watchExact makes a distance between rows exact, and makes sure the rows it
+// is the distance of are the ones that were clicked. pitch is the distance
+// the strip as a whole repeats at, which a heading over a list, or anything
+// else that stands in the strip once, pulls a little to one side. So the
+// places where the strip changes are taken one by one: the evenly spaced set
+// of them that carries the most weight is found, whatever does not stand in
+// it is left out, and the distance is that of the straight line through the
+// rest. click is where in the strip the person clicked. False when fewer
+// than notchPitchRows places stand evenly, or when none of them is beside
+// the row that was clicked.
+func watchExact(edges []float64, pitch float64, click int) (exact float64, rows int, ok bool) {
+	peaks := watchPeaks(edges)
+	if len(peaks) < notchPitchRows || pitch < notchPitchLeast-0.5 {
+		return 0, 0, false
+	}
+	// Where the evenly spaced places begin, and how far apart they are to
+	// begin with: whatever puts the most weight on them. The distance the
+	// strip repeats at may be half a pixel out, and twenty rows on that is
+	// half a row, so a little to either side of it is tried too.
+	start, most := 0.0, 0.0
+	exact = pitch
+	for trial := pitch - 0.5; trial <= pitch+0.5; trial += 0.05 {
+		for phase := 0.0; phase < trial; phase += 0.25 {
+			weight := 0.0
+			for _, peak := range peaks {
+				off := math.Abs(math.Mod(peak.at-phase, trial))
+				off = math.Min(off, trial-off)
+				if off < 2 {
+					weight += peak.weight * (1 - off/2)
+				}
+			}
+			if weight > most {
+				start, exact, most = phase, trial, weight
+			}
+		}
+	}
+	var on []watchPeak
+	var places []int
+	for _, slack := range []float64{2, 1.5, 1.25, 1.25} {
+		on, places = watchOnComb(peaks, start, exact, slack)
+		if len(on) < notchPitchRows {
+			return 0, len(on), false
+		}
+		// The straight line through them, the heavier counting for more.
+		var sw, sk, sc, skk, skc float64
+		for i, peak := range on {
+			k, w := float64(places[i]), peak.weight
+			sw, sk, sc, skk, skc = sw+w, sk+w*k, sc+w*peak.at, skk+w*k*k, skc+w*k*peak.at
+		}
+		spread := sw*skk - sk*sk
+		if spread <= 0 {
+			return 0, len(on), false
+		}
+		exact = (sw*skc - sk*sc) / spread
+		start = (sc - exact*sk) / sw
+		if exact < notchPitchLeast-0.5 || math.Abs(exact-pitch) > 0.75 {
+			// Not the rows the strip as a whole repeats at.
+			return 0, len(on), false
+		}
+	}
+	// They must be the rows that were clicked: one of them within a row of the click.
+	beside := false
+	for _, peak := range on {
+		if math.Abs(peak.at-float64(click)) <= exact+notchPitchSlack {
+			beside = true
+			break
+		}
+	}
+	// And they must be most of the places from the first to the last: a few
+	// things that happen to stand evenly with gaps between them, the bars at
+	// the top of a window, are not rows.
+	span := places[len(places)-1] - places[0]
+	if !beside || span < notchPitchRows-1 || len(on)*2 < span+1 {
+		return 0, len(on), false
+	}
+	return exact, len(on), true
+}
+
+// watchRowStep measures, from a strip of the screen, how far the person moved
+// between two clicks, made exact: a whole number of rows times the distance
+// between two rows. about is roughly how far apart the clicks were, and click
+// is how far down the strip the place that was clicked is. why says, in
+// numbers only, what was found when no rows were: it is for the log.
+func watchRowStep(pixels []uint32, width, height int, about float64, click int) (step float64, why string, ok bool) {
+	edges := watchEdges(pixels, width, height)
+	if edges == nil {
+		return 0, "no strip", false
+	}
+	want := math.Abs(about)
+	if want < 6 || height < int(want)*notchPitchRows {
+		return 0, fmt.Sprintf("a strip %d high for clicks %.0f apart", height, want), false
+	}
+	pitch, like, found := watchRepeat(edges, want)
+	if !found {
+		return 0, fmt.Sprintf("a strip %dx%d that is %.2f like itself a row down", width, height, like), false
+	}
+	exact, lines, sure := watchExact(edges, pitch, click)
+	if !sure {
+		return 0, fmt.Sprintf("a strip %dx%d that repeats every %.2f, with %d lines that far apart beside the click", width, height, pitch, lines), false
+	}
+	rows := math.Round(want / exact)
+	if rows < 1 || math.Abs(want-rows*exact) > 0.45*exact {
+		// What the person did is not a whole number of these rows.
+		return 0, fmt.Sprintf("rows %.2f apart, clicks %.0f apart", exact, want), false
+	}
+	return rows * exact, "", true
 }
 
 // watchStrip is the part of a window a row's distance is measured in: a band
-// round the place that was clicked, running several rows up and many rows
-// down (or the other way, going up), kept inside the window.
+// round the place that was clicked, running a little way back and a long way
+// on in the direction the job goes, kept inside the window. What lies ahead
+// is what matters; what lies behind is often the heading over the list.
 func watchStrip(win lookRect, at lookPoint, about float64) lookRect {
 	step := int(math.Ceil(math.Abs(about)))
-	top, bottom := at.Y-4*step, at.Y+16*step
+	top, bottom := at.Y-2*step, at.Y+20*step
 	if about < 0 {
-		top, bottom = at.Y-16*step, at.Y+4*step
+		top, bottom = at.Y-20*step, at.Y+2*step
 	}
 	left, right := at.X-90, at.X+90
 	top, bottom = max(top, win.Y), min(bottom, win.Y+win.H)

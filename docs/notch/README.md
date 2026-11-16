@@ -1351,10 +1351,19 @@ says of itself, the clipboard, a click or a key made as if by hand),
     far to the side the hand landed is the hand, not the job; a job that
     goes across is not a round, because columns are not evenly wide), and
     before anything is offered the desktop app measures how far apart the
-    rows really are at each place a round touches (`watchPitch`): it finds
-    the distance at which a strip of the screen is most like itself, which
-    the lines of a grid and line after line of writing both give, to a
-    fraction of a pixel, in any program, asking the program nothing. A
+    rows really are at each place a round touches (`watchRowStep`). It reads
+    a strip of the screen as where it changes going down, not as how bright
+    it is: a line between two rows is a row of pixels unlike the one above
+    nearly all the way across, and a fill, a selected row or a dark theme
+    change nothing but their own edges, which are where the rows are. It
+    finds the distance at which the strip is most like itself
+    (`watchRepeat`), then takes the places where it changes one by one, keeps
+    the evenly spaced set that carries the most weight, leaves out what does
+    not stand in it (a heading over the list), and takes the distance of the
+    straight line through the rest (`watchExact`). The rows it measures must
+    be the ones that were clicked, and most of the places between the first
+    and the last must have a line: a few bars that happen to stand evenly
+    are not rows. This works in any program and asks the program nothing. A
     number leaves the desktop app and no pixel does. Where the rows cannot
     be seen, or what was measured does not fit what the hand did, nothing is
     offered at all, and "run it" says so: a row pasted one line off is worse
@@ -1388,8 +1397,10 @@ says of itself, the clipboard, a click or a key made as if by hand),
     touched and the notch says so. A step that typed into a password field
     was never kept, so the job stops there and says that step is the
     person's; going on continues after it. A job with a step that has no
-    place (told with no window, outside its window, a key that types) is
-    not kept as places at all, and "run it" says to show it again: half a
+    place (told with no window, outside its window, a key that types), or
+    with a field that held more than 2,000 signs (it is read whole or not
+    kept, never a part passed off as the whole), is not kept as places at
+    all, and "run it" says to show it again: half a
     job is worse than none. On Windows nothing changes: the product's
     replay is used (`byPlace` in `src/daemon/notch-jobs.ts` asks which
     system the desktop app is on).
@@ -1406,12 +1417,24 @@ What is not done, or not proven, in pass 10:
   from one moment to the next, or scrolls between rounds, will be clicked in
   the wrong place, and only the window's size is checked. A job stops at the
   edge of its window: it does not scroll.
-- **Measuring rows from the screen is tested on made-up strips, not on a
-  real program.** It finds rows 17.5 to 31.5 pixels apart to within a
-  twentieth of a pixel when the clicks were up to seven pixels out, and lines
-  of writing with no grid. How often a real sheet or list gives it a strip it
-  can read is not known. Rows of uneven height cannot be measured, and there
-  nothing is offered.
+- **Measuring rows from the screen failed the owner's first test, and was
+  rebuilt the same day (16 November 2026).** The first version read how
+  bright each pixel row was. On two Google Sheets it saw no rows, and nothing
+  was offered. On a copy of his screen it was worse than that: beside the row
+  numbers it saw nothing, and elsewhere it named 15.6, 20.0 and 23.3 pixels
+  for rows that are 21 apart, because what is in the rows (fills, a selected
+  row, names of different lengths) changes the brightness far more than a
+  thin grey line does. Read as where the strip changes, the same screen gives
+  21.00 within 0.07 at about 2,600 places across both sheets, sees no rows
+  in the toolbar, and says "no rows" at 8 places. That copy was a picture he
+  sent, made smaller and sharpened back, not his screen itself: a real screen
+  is crisper, which should help, and has not been tried. The tests paint
+  sheets with what his had (a heading, fills that hide lines, a selected
+  row, a dark window, a striped list, rows that are not a whole number of
+  pixels apart). Lines of writing with no lines between them are measured
+  only when they are regular enough; otherwise it says it saw no rows. Rows
+  of uneven height cannot be measured, and there nothing is offered. When it
+  sees no rows the log now says what it found, in numbers only.
 - **A settings change used to cut the desktop app's recorder off from the
   brain until the next connection** (the events were sent on a cancelled
   context). Found by reading while building this, and fixed in
