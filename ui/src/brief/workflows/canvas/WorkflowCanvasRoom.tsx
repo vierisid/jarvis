@@ -16,6 +16,7 @@ import {
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
 import "./canvas.css";
+import { workflowStatusWords, WORKFLOW_SAVE_ACTION } from "../status-words";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
 
 export interface WorkflowCanvasBinding {
@@ -165,6 +166,14 @@ function CanvasHeader({
   const needsSetup = setupSteps.length > 0;
   const hasCode = editor.allSteps.some(({ step }) => step.type === 'CODE');
   const codeBlocked = hasCode && binding.permissions?.codeSteps?.enabled !== true;
+  const flow = binding.permissions;
+  const savedLine = flow
+    ? workflowStatusWords({
+        activation: flow.status,
+        draftChangesNotLive: editor.version?.state === "DRAFT" && !!flow.publishedVersionId,
+        readiness: needsSetup ? "blocked" : "ready",
+      }).line
+    : needsSetup ? "Needs setup" : "Saved";
   const versionMatches = editor.version?.id === binding.versionId;
   async function run() {
     if (busy.current || !binding.run || codeBlocked || editor.dirty || !versionMatches) return;
@@ -198,8 +207,7 @@ function CanvasHeader({
     : !versionMatches && editor.version ? "Version changed. Reopen from Workflows before editing."
     : note ? (editor.dirty && !runMessage ? `${note} Unsaved changes` : note)
     : editor.dirty ? editor.invalidJsonMessage ?? "Unsaved changes"
-    : editor.version?.state === "LOCKED" ? "Published version"
-    : needsSetup ? "Saved draft · Setup required" : "Saved draft";
+    : savedLine;
   return (
     <WorkflowViewHeader
       shell={shell}
@@ -233,7 +241,7 @@ function CanvasHeader({
             codeBlocked ? "Review Flow permissions to allow CODE steps" : needsSetup ? "Complete setup before running" : editor.dirty
               ? "Save your changes before running"
               : !binding.run
-                ? binding.publish ? "Publish this saved draft before running" : "Run is not available"
+                ? binding.publish ? "Save and turn on this draft before running" : "Run is not available"
                 : undefined
           }
         >
@@ -242,8 +250,8 @@ function CanvasHeader({
       }
     >
       <div className="brief-canvas-tools" aria-label="Draft tools">
-        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>Publish version</BriefButton>}
-        {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit a new draft</BriefButton>}
+        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!)}>{WORKFLOW_SAVE_ACTION}</BriefButton>}
+        {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!)}>Edit workflow</BriefButton>}
         <BriefButton
           size="sm"
           onClick={() => shell.navigate({ room: "workflows", selection: {} })}
@@ -299,8 +307,8 @@ function CanvasHeader({
           onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Permission state could not be refreshed. Reopen this workflow to check.')); }} />
       </details>}
       {needsSetup && <details className="brief-canvas-setup" open>
-        <summary>Setup required</summary>
-        <p>Fill in these details when you're ready. Save your progress at any time. Running and publishing stay unavailable until setup is complete.</p>
+        <summary>Needs setup</summary>
+        <p>Fill in these details when you're ready. Save your progress at any time. Running and turning on stay unavailable until setup is complete.</p>
         <ul>{setupSteps.map(({ name, gaps }) => <li key={name}>
           <BriefButton size="sm" onClick={() => selectSetupStep(name)}>{gaps[0]!.stepDisplayName}</BriefButton>
           <span>{gaps.map(gap => gap.fieldLabel).join(', ')}</span>
