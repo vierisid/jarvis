@@ -7,6 +7,7 @@ import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version';
 import { graphHasSteps, versionReadiness, WorkflowReadinessError } from '../workflows/db/repos/flow-readiness';
+import { displayWorkflowName } from '../workflows/display-name';
 import { CodeStepsRefusedError, ungrantedCodeSteps } from '../workflows/db/repos/flow-code-steps';
 import type { TriggerManager } from '../workflows/runner/triggers/manager';
 import { stopRunsOfTurnedOffFlow } from '../workflows/db/repos/flow-turn-off';
@@ -16,7 +17,8 @@ import { effectDispatchInFlight } from '../workflows/runtime/effect-inflight';
 import type { ManagedWorkflow, RemovalReceipt, WorkflowManageCommand, WorkflowManageResult,
   WorkflowPurgeCommand, WorkflowPurgeResult } from './workflow-removal-contracts';
 
-export const WORKFLOW_REMOVAL_LIMITS = { undoMs: 30_000, flows: 1000, commands: 10_000, receipts: 10_000, runs: 1000, bytes: 16 * 1024 * 1024 } as const;
+/** `flows` is the largest page of the list, not a cap on how many workflows there may be. */
+export const WORKFLOW_REMOVAL_LIMITS = { undoMs: 30_000, flows: 200, defaultPage: 100, commands: 10_000, receipts: 10_000, runs: 1000, bytes: 16 * 1024 * 1024 } as const;
 export const WORKFLOW_REMOVAL_SCOPE = {
   futureRuns: 'refused_while_removed', existingRuns: 'queued_and_waiting_runs_stopped_running_runs_finish_but_never_resume',
   undo: 'same_identity_and_position_paused_no_run_replay', history: 'versions_runs_and_effects_retained_until_a_person_purges',
@@ -126,20 +128,33 @@ export class WorkflowRemoval {
       revision: hash([f, version && { id: version.id, name: version.displayName, trigger: version.trigger,
         state: version.state, valid: version.valid, schemaVersion: version.schemaVersion,
         agentIds: version.agentIds, connectionIds: version.connectionIds, notes: version.notes }, state.generation]),
-      name: (version?.displayName || 'Untitled workflow').slice(0, 4000),
+      name: displayWorkflowName(version?.displayName).slice(0, 4000),
       description: typeof metadata?.description === 'string' ? metadata.description.slice(0, 4000) : '',
       trigger: workflowTriggerLabel(version?.trigger),
       activation: f.status, publication: f.published_version_id ? 'published' : 'unpublished',
       readiness: { state: ready ? 'ready' : 'blocked', reason: ready ? null : 'Workflow setup or permission needs review before enabling' },
       latestRun: last ? { runId: last.id, label: last.status === 'SUCCEEDED' && continuedFailures(getFlowRun(last.id)!).length ? continuedFailureHeadline(1) : last.status } : null };
   }
-  read() {
+  /**
+   * One page of the list, newest slot first. The key is the slot position, which never changes for a
+   * workflow, so workflows added or removed while a client pages cannot shift or repeat a page.
+   * `position` is the slot table's INTEGER PRIMARY KEY AUTOINCREMENT: unique and never reused, so it is
+   * a total order on its own and needs no tiebreaker (it is the slot's id).
+   */
+  read(query: { limit?: number; cursor?: string } = {}) {
     this.ready();
+    const limit = query.limit ?? WORKFLOW_REMOVAL_LIMITS.defaultPage;
+    if (!Number.isInteger(limit) || limit < 1 || limit > WORKFLOW_REMOVAL_LIMITS.flows) throw new WorkflowRemovalError('invalid_query');
+    if (query.cursor !== undefined && !/^[0-9]{1,15}$/.test(query.cursor)) throw new WorkflowRemovalError('invalid_query');
     return this.db.transaction(() => {
-      const rows = this.db.query<FlowRow & { position: number; receipt_id: string | null; reconcile_pending: number }, [string, number]>(
+      const found = this.db.query<FlowRow & { position: number; receipt_id: string | null; reconcile_pending: number }, [string, number | null, number]>(
         `SELECT f.*, s.position, s.receipt_id, s.reconcile_pending FROM flow f JOIN brief_workflow_slots s ON s.flow_id = f.id
-         WHERE f.project_id = ? ORDER BY s.position DESC LIMIT ?`).all(this.projectId, WORKFLOW_REMOVAL_LIMITS.flows + 1);
-      if (rows.length > WORKFLOW_REMOVAL_LIMITS.flows) throw new WorkflowRemovalError('capacity_exceeded', 503);
+         WHERE f.project_id = ?1 AND (?2 IS NULL OR s.position < ?2) ORDER BY s.position DESC LIMIT ?3`)
+        .all(this.projectId, query.cursor === undefined ? null : Number(query.cursor), limit + 1);
+      const rows = found.slice(0, limit);
+      const nextCursor = found.length > limit ? String(rows.at(-1)!.position) : null;
+      const total = this.db.query<{ n: number }, [string]>(
+        'SELECT COUNT(*) AS n FROM flow f JOIN brief_workflow_slots s ON s.flow_id = f.id WHERE f.project_id = ?').get(this.projectId)!.n;
       const items: ManagedWorkflow[] = [], removals = [];
       for (const row of rows) {
         if (!row.receipt_id) { items.push(this.item(this.flow(row.id))); continue; }
@@ -153,7 +168,8 @@ export class WorkflowRemoval {
           removedAt: r.removed_at, undoAvailable: this.now() < r.expires_at, runs, item: this.item(this.flow(row.id)),
           registration: row.reconcile_pending ? 'pending' : 'reconciled' });
       }
-      const data = { scopeId: this.projectId, items, removals, slots: rows.map(r => ({ flowId: r.id, position: r.position })), scope: WORKFLOW_REMOVAL_SCOPE };
+      const data = { scopeId: this.projectId, items, removals, slots: rows.map(r => ({ flowId: r.id, position: r.position })), scope: WORKFLOW_REMOVAL_SCOPE,
+        nextCursor, total };
       if (Buffer.byteLength(JSON.stringify(data)) > WORKFLOW_REMOVAL_LIMITS.bytes) throw new WorkflowRemovalError('capacity_exceeded', 503);
       return { state: items.length || removals.length ? 'ready' as const : 'empty' as const, data, asOf: this.now() };
     })();

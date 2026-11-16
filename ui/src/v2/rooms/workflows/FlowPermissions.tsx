@@ -64,7 +64,7 @@ export function FlowPermissions({ flow, onChanged, request = fetch }: { flow: Fl
     acting.current = true; setBusy(true); setMessage(null);
     try {
       if (enabled && !await confirmDialog(
-        `Allow CODE steps in the workflow ${name}?\nA CODE step runs custom JavaScript on the computer Jarvis runs on, with your user's full access to its files, network and shell, and installs the packages it declares. It runs without an approval card. This covers any CODE step added to this workflow later. Allow it only for code you trust.`,
+        `Allow CODE steps in the workflow ${name}?\nA CODE step runs custom JavaScript on the computer Jarvis runs on, with your user's full access to its files, network and shell, and installs the packages it declares. It can also read every saved connection in this workspace, not only the ones this workflow uses. It runs without an approval card. This covers any CODE step added to this workflow later. Allow it only for code you trust.`,
         { title: "Allow CODE steps?", confirmLabel: "Allow CODE steps", danger: true },
       )) return;
       const res = await request(`/api/workflows/${encodeURIComponent(flow.id)}/code-steps`, {
@@ -86,7 +86,7 @@ export function FlowPermissions({ flow, onChanged, request = fetch }: { flow: Fl
         <p>
           <strong>CODE steps</strong>: {code?.enabled
             ? <>allowed.{grantNote(code.grantedBy, code.grantedAt)}</>
-            : "not allowed. A version with a CODE step cannot be published, enabled or run. Turning this off does not stop a run already going or a schedule already set up; disable the workflow to stop those."}
+            : "not allowed. A version with a CODE step cannot be published, enabled or run, and its webhook, event and schedule triggers stop starting it. Turning this off also stops its runs of such a version that are queued, waiting or going."}
         </p>
         {code ? (code.enabled
           ? <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setCodeSteps(false)}>Stop allowing CODE steps</Button>

@@ -21,8 +21,11 @@ export function createMemoryDecisionRoutes(capabilities: BriefCapabilities, json
         }
       } finally { reader.releaseLock(); }
       req.signal.throwIfAborted();
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
-      const body = JSON.parse(text), id = decodeURIComponent(req.params?.id ?? '');
+      // A body that is not valid UTF-8 JSON is the caller's mistake (400), not an unconfirmed write (503).
+      let body: any;
+      try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); }
+      catch { return reply({ state: 'error', reason: 'The request body must be valid JSON.' }, 400); }
+      const id = decodeURIComponent(req.params?.id ?? '');
       if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !['kind', 'revision', 'object', 'reason', 'confirmed'].includes(k))
         || !['correct', 'confirm'].includes(body.kind) || typeof body.revision !== 'string' || body.confirmed !== true) return reply({ state: 'error' }, 400);
       const reason = factText(body.reason, 'reason', 1000);
