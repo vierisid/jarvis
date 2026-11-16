@@ -22,6 +22,7 @@ import { redactSecrets } from '../util/redact';
 import { boundedReceiptText } from '../roles/untrusted';
 import { HUMAN_INPUT_PENDING_LIMIT, HUMAN_INPUT_REJECTED_CODE } from '../workflows/runtime/human-input-contract';
 import { causeSentence, failureCause } from './cause';
+import { statusLabel } from './step-error';
 
 export type FailureCategory =
   /** The input or definition is not valid; fixing it is the person's call. */
@@ -103,6 +104,8 @@ export type FailureEvidence =
    * same way. `message` is the step's own error report; only its cause is read.
    */
   | { source: 'local'; message: string }
+  /** A step's own error text already settles the outcome: the server refused the request, or the workflow it called failed. */
+  | { source: 'step_result'; result: { kind: 'server_refused'; status: number } | { kind: 'child_failed'; child?: string } }
   | { source: 'unknown'; message: string };
 
 const DETAIL_MAX = 1200;
@@ -418,6 +421,21 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
     case 'local': {
       const cause = failureCause(evidence.message);
       return build('invalid_input', 'none', `${s} failed.`, cause ? `${NOTHING} ${causeSentence(cause)}` : NOTHING, ['fix_step'], links, null, cause ?? '');
+    }
+    case 'step_result': {
+      const r = evidence.result;
+      if (r.kind === 'server_refused') {
+        // The server's answer came back: the request was turned away, not lost in transit.
+        const said = `The server answered ${statusLabel(r.status)}`;
+        return build('not_started', 'none', `${s} failed: ${said.charAt(0).toLowerCase()}${said.slice(1)}.`,
+          'The server refused the request, so it did not take effect.', ['edit_and_run_again'],
+          links, `HTTP_${r.status}`, `${said}.`);
+      }
+      // The called workflow's own run ended Failed. This step did no more, but that workflow's steps may have run.
+      const who = r.child ? `the workflow "${r.child}"` : 'the workflow it called';
+      return build('internal', 'unknown', `${s} failed because ${who} failed.`,
+        'Steps inside that workflow may already have run. Open its latest run to see which ones, and why it failed.',
+        ['check_before_running_again'], links, 'CHILD_RUN_FAILED', `${upper(who)} failed.`);
     }
     case 'unknown': {
       // No typed evidence: say what is known, and for work that can change

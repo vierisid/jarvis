@@ -28,6 +28,9 @@ import { listWorkflowEffects, type WorkflowEffect } from '../db/repos/workflow-e
 import { walkFlowNodes } from '../db/flow-graph';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { nodeConnectionReferences, type RunConnectionBindingView } from '../db/repos/binding-pins';
+import { calledWorkflowFailure, plainStepMessage, serverRefusalStatus } from '../../failures/step-error';
+import { GRAPHQL_PIECE, HTTP_PIECE } from './piece-effects';
+import { SUBFLOW_PIECE } from './subflow-contract';
 import { expressionFailureGuidance, failedOnMissingReference, loopInputFailure, missingReference } from './expression-failure';
 import { HUMAN_INPUT_LIMIT_CODE, HUMAN_INPUT_REJECTED_CODE, HUMAN_INPUT_UNAVAILABLE_CODE, isHumanInputStep } from './human-input-contract';
 import { IN_RUN_STEP_PIECES } from './step-admission';
@@ -211,6 +214,26 @@ function makesNoOutsideCall(node: FlowTriggerNode): boolean {
 }
 
 /**
+ * What the failed step's own error text settles: an HTTP or GraphQL step whose
+ * server answered 4xx was turned away, and a call step whose child run ended
+ * Failed is known to have failed. Anything else (a timeout, a dropped
+ * connection, a server error, a child that never reported back) is not read
+ * here and stays uncertain.
+ */
+function settledByStepError(node: FlowTriggerNode | undefined, message: string | undefined): FailureEvidence | null {
+  const piece = node?.settings?.pieceName;
+  if (piece === HTTP_PIECE || piece === GRAPHQL_PIECE) {
+    const status = serverRefusalStatus(message);
+    return status === null ? null : { source: 'step_result', result: { kind: 'server_refused', status } };
+  }
+  if (piece === SUBFLOW_PIECE) {
+    const failed = calledWorkflowFailure(message);
+    return failed ? { source: 'step_result', result: { kind: 'child_failed', ...(failed.child ? { child: failed.child } : {}) } } : null;
+  }
+  return null;
+}
+
+/**
  * The failure of a run that ended badly, or null for one that did not. Pass
  * `effects` and `nodes` when the caller already has them; nothing is read for
  * a run that did not end badly.
@@ -310,7 +333,8 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
     // resolved and the reference it names is one the step's own settings read.
     const beforeDispatch = !!node && failedOnMissingReference(message) && !own.some(dispatched)
       && (!untracked(node) || (!inLoopBody(graph, node) && stoppedResolvingInput(run, node, message)));
-    evidence = noOutsideCall || beforeDispatch ? { source: 'local', message } : { source: 'unknown', message };
+    const settled = settledByStepError(node, step.errorMessage);
+    evidence = settled ?? (noOutsideCall || beforeDispatch ? { source: 'local', message } : { source: 'unknown', message: plainStepMessage(message) });
     // A record still pending (waiting on approval, or refused before its claim) never dispatched.
     sideEffects = own.some(dispatched) || !node || (untracked(node) && !noOutsideCall && !beforeDispatch);
   }

@@ -10,7 +10,7 @@ import { flowExecutor } from './flow-executor'
 
 export const routerExecuter: BaseExecutor<RouterAction> = {
     async handle(params) {
-        // === JARVIS PATCH: a router that cannot resolve an operand fails as the router step ===
+        // === JARVIS PATCH: a router that cannot resolve an operand, or whose number condition has an operand that is not a number, fails as the router step ===
         // Without this the error escaped as an engine error naming no step
         // (a reference with no value ended the run on "<engine>"). Only resolving
         // and evaluating the conditions is caught: the chosen branch runs after,
@@ -22,9 +22,12 @@ export const routerExecuter: BaseExecutor<RouterAction> = {
         }
         catch (error) {
             const { action, executionState } = params
-            const message = utils.formatError(error as Error)
+            // A number condition's own message already names the operand as the run
+            // records it (censored), so it is kept as it is and no input is recorded.
+            const nonNumeric = error instanceof NonNumericOperandError
+            const message = error instanceof NonNumericOperandError ? error.message : utils.formatError(error as Error)
             return executionState
-                .upsertStep(action.name, RouterStepOutput.init({ input: action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
+                .upsertStep(action.name, RouterStepOutput.init({ input: nonNumeric ? {} : action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
                 .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
         }
         return runBranches()
@@ -67,7 +70,17 @@ const resolveRoute = async ({
                     const result = await resolver.resolve<BranchCondition>({ unresolvedInput: condition, executionState })
                     resolvedGroup.push(result.resolvedInput)
                     censoredGroup.push(result.censoredInput as BranchCondition)
-                    matched = evaluateConditions([[result.resolvedInput]])
+                    // === JARVIS PATCH: a number condition names its operand as the run records it ===
+                    // The censored operand, so a connection value reads **REDACTED**.
+                    try {
+                        matched = evaluateConditions([[result.resolvedInput]])
+                    }
+                    catch (error) {
+                        if (!(error instanceof NonNumericOperandError)) throw error
+                        const censored = result.censoredInput as { firstValue?: unknown, secondValue?: unknown }
+                        throw new NonNumericOperandError(error.which, shownOperand(error.which === 'first' ? censored.firstValue : censored.secondValue))
+                    }
+                    // === END JARVIS PATCH ===
                     if (!matched) break
                 }
                 if (matched) break
@@ -276,24 +289,26 @@ export function evaluateConditions(conditionGroups: BranchCondition[][]): boolea
                     )
                     break
                 }
+                // === JARVIS PATCH: a number condition with an operand that is not a number fails the step ===
                 case BranchOperator.NUMBER_IS_GREATER_THAN: {
-                    const firstValue = parseStringToNumber(castedCondition.firstValue)
-                    const secondValue = parseStringToNumber(castedCondition.secondValue)
+                    const firstValue = parseStringToNumber(castedCondition.firstValue, 'first')
+                    const secondValue = parseStringToNumber(castedCondition.secondValue, 'second')
                     andGroup = andGroup && firstValue > secondValue
                     break
                 }
                 case BranchOperator.NUMBER_IS_LESS_THAN: {
-                    const firstValue = parseStringToNumber(castedCondition.firstValue)
-                    const secondValue = parseStringToNumber(castedCondition.secondValue)
+                    const firstValue = parseStringToNumber(castedCondition.firstValue, 'first')
+                    const secondValue = parseStringToNumber(castedCondition.secondValue, 'second')
                     andGroup = andGroup && firstValue < secondValue
                     break
                 }
                 case BranchOperator.NUMBER_IS_EQUAL_TO: {
-                    const firstValue = parseStringToNumber(castedCondition.firstValue)
-                    const secondValue = parseStringToNumber(castedCondition.secondValue)
+                    const firstValue = parseStringToNumber(castedCondition.firstValue, 'first')
+                    const secondValue = parseStringToNumber(castedCondition.secondValue, 'second')
                     andGroup = andGroup && firstValue == secondValue
                     break
                 }
+                // === END JARVIS PATCH ===
                 case BranchOperator.BOOLEAN_IS_TRUE:
                     andGroup = andGroup && !!castedCondition.firstValue
                     break
@@ -344,10 +359,46 @@ function toLowercaseIfCaseInsensitive(text: unknown, caseSensitive: boolean | un
     return caseSensitive ? textAsString : textAsString.toLowerCase()
 }
 
-function parseStringToNumber(str: string): number | string {
-    const num = Number(str)
-    return isNaN(num) ? str : num
+// === JARVIS PATCH: a number condition with an operand that is not a number fails the step ===
+// Upstream kept a non-numeric operand as a string, so "abc" > 5 was simply false
+// and the run silently took the fallback branch. The step now fails and names
+// the operand instead (`routerExecuter.handle` makes this the router step's
+// own failure, with this message as it is). The operand is attached where the
+// censored input is at hand; without one the message names no value.
+class NonNumericOperandError extends Error {
+    constructor(readonly which: 'first' | 'second', shown?: string) {
+        super(`The ${which} value${shown === undefined ? '' : ` ${shown}`} is not a number. A number condition needs a number on both sides.`)
+    }
 }
+
+// The operand on one line, at most 60 characters: text in double quotes, any
+// other value as its JSON. Control characters, line and paragraph separators
+// and bidirectional controls are written as escapes, so the value cannot break
+// or reorder the message it is echoed into.
+function shownOperand(value: unknown): string {
+    let text: string
+    if (typeof value === 'string') text = value
+    else {
+        try {
+            text = JSON.stringify(value) ?? String(value)
+        }
+        catch {
+            text = String(value)
+        }
+    }
+    const chars = Array.from(text.slice(0, 121))
+    const clipped = chars.slice(0, 60).join('')
+    const shown = (typeof value === 'string' ? JSON.stringify(clipped) : clipped)
+        .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+    return chars.length > 60 ? `${shown}...` : shown
+}
+
+function parseStringToNumber(value: unknown, which: 'first' | 'second'): number {
+    const num = Number(value)
+    if (Number.isNaN(num)) throw new NonNumericOperandError(which)
+    return num
+}
+// === END JARVIS PATCH ===
 
 function parseListAsArray(input: unknown): unknown[] | undefined {
     if (typeof input === 'string') {
