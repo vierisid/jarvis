@@ -161,6 +161,17 @@ export function validateCronExpression(expression: string): void {
 }
 
 /**
+ * How far ahead the next time of a schedule is looked for: one Gregorian
+ * cycle, 400 years, which is a whole number of weeks. Calendar dates and
+ * weekdays repeat exactly every cycle, so an expression with no time inside it
+ * never fires, and one that has a time has it inside it however rare it is
+ * (a leap day is up to 8 years apart, a leap day that must be a Monday up to
+ * 40). Both nextRun paths use this one bound.
+ */
+const CRON_LOOKAHEAD_DAYS = 146_097;
+const CRON_LOOKAHEAD_MS = CRON_LOOKAHEAD_DAYS * 24 * 60 * 60_000;
+
+/**
  * Parse a full 5-field cron expression into its component arrays.
  */
 function parseExpression(expression: string): {
@@ -367,6 +378,24 @@ function zoneFormatter(zone: string): Intl.DateTimeFormat {
   });
 }
 
+/**
+ * Whole days nextRun can jump past from a day `wc` that does not match,
+ * without stepping over one that might: to two days before the next day of
+ * the month the expression names, or before the next month when this month
+ * is not named. Two days of slack keep a jump of that many 24-hour spans on
+ * or before the target's eve even where a zone moved its date line (Samoa
+ * skipped a whole day); `startOfNextLocalDay` and the loop do the rest day by
+ * day. Without it a far search walks every day of the 400-year bound.
+ */
+function daysPassedOver(parsed: ParsedCron, wc: WallClock): number {
+  const monthDays = new Date(Date.UTC(wc.year, wc.month, 0)).getUTCDate();
+  // LW falls on one of the last three days of the month.
+  const target = !parsed.months.includes(wc.month) ? monthDays + 1
+    : parsed.lastWeekday ? monthDays - 2
+    : Math.min(parsed.daysOfMonth.find((d) => d > wc.dom) ?? monthDays + 1, monthDays + 1);
+  return Math.max(0, target - wc.dom - 2);
+}
+
 /** Local calendar date as a single comparable number (yyyymmdd). */
 function localDateKey(wc: WallClock): number {
   return wc.year * 10_000 + wc.month * 100 + wc.dom;
@@ -492,7 +521,7 @@ export class CronScheduler {
    * Calculate the next execution time for a cron expression.
    * @param expression - 5-field cron expression
    * @param from - start searching from this date (default: now)
-   * @returns Date of next execution, or null if none found within 1 year
+   * @returns Date of next execution, or null if it never fires (see CRON_LOOKAHEAD_DAYS)
    */
   static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Date | null {
     validateCronDstPolicy(dstPolicy);
@@ -506,10 +535,8 @@ export class CronScheduler {
       start.setSeconds(0, 0);
       start.setMinutes(start.getMinutes() + 1);
 
-      // Search up to 1 year ahead (minute-by-minute is too slow; step by minute smartly)
-      const limit = new Date(from);
-      limit.setFullYear(limit.getFullYear() + 1);
-      if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
+      // Search one 400-year cycle ahead (minute-by-minute is too slow; step by minute smartly)
+      const limit = new Date(Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER));
 
       const candidate = new Date(start);
 
@@ -589,13 +616,13 @@ export class CronScheduler {
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
-      const limit = Math.min(from.getTime() + 366 * 24 * 60 * 60_000, limitMs ?? Number.MAX_SAFE_INTEGER);
+      const limit = Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER);
       let guard = 0;
 
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
         if (!matchesDay(parsed, wc)) {
-          ts = startOfNextLocalDay(ts, zone);
+          ts = startOfNextLocalDay(ts + daysPassedOver(parsed, wc) * 86_400_000, zone);
           continue;
         }
         if (!hours.includes(wc.hour)) {
