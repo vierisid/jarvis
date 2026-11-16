@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -31,6 +32,7 @@ var (
 	procWatchGlobalUnlock = kernel32.NewProc("GlobalUnlock")
 	procWatchGlobalFree   = kernel32.NewProc("GlobalFree")
 	procWatchGlobalSize   = kernel32.NewProc("GlobalSize")
+	procRegisterClipFmtW  = user32.NewProc("RegisterClipboardFormatW")
 )
 
 const (
@@ -175,30 +177,67 @@ func clipboardText() (string, bool) {
 	return string(utf16.Decode(units[:end])), true
 }
 
-func clipboardSetText(text string) bool {
-	units := utf16.Encode([]rune(text + "\x00"))
-	handle, _, _ := procWatchGlobalAlloc.Call(gmemMoveable, uintptr(len(units)*2))
+// clipboardBlock copies bytes into a block the clipboard can take.
+func clipboardBlock(data []byte) uintptr {
+	handle, _, _ := procWatchGlobalAlloc.Call(gmemMoveable, uintptr(len(data)))
 	if handle == 0 {
-		return false
+		return 0
 	}
 	ptr, _, _ := procWatchGlobalLock.Call(handle)
 	if ptr == 0 {
 		procWatchGlobalFree.Call(handle)
+		return 0
+	}
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(ptr)), len(data)), data) //nolint:govet // a block we allocated and locked
+	procWatchGlobalUnlock.Call(handle)
+	return handle
+}
+
+func clipboardSetText(text string) bool { return clipboardSet(text, "") }
+
+// clipboardSet puts words on the clipboard, and beside them the same thing
+// as a table or a list when there is one (pasteHTML), the way a spreadsheet
+// does: a program takes the one it understands.
+func clipboardSet(plain, html string) bool {
+	units := utf16.Encode([]rune(plain + "\x00"))
+	wide := make([]byte, len(units)*2)
+	for i, unit := range units {
+		wide[i*2], wide[i*2+1] = byte(unit), byte(unit>>8)
+	}
+	text := clipboardBlock(wide)
+	if text == 0 {
 		return false
 	}
-	copy(unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len(units)), units) //nolint:govet // a block we allocated and locked
-	procWatchGlobalUnlock.Call(handle)
+	var rich, richFormat uintptr
+	if html != "" {
+		name, _ := syscall.UTF16PtrFromString("HTML Format")
+		richFormat, _, _ = procRegisterClipFmtW.Call(uintptr(unsafe.Pointer(name)))
+		if richFormat != 0 {
+			rich = clipboardBlock(append(clipHTML(html), 0))
+		}
+	}
 	if !clipboardOpen() {
-		procWatchGlobalFree.Call(handle)
+		procWatchGlobalFree.Call(text)
+		if rich != 0 {
+			procWatchGlobalFree.Call(rich)
+		}
 		return false
 	}
 	defer procCloseClipboard.Call()
 	procEmptyClipboard.Call()
-	if set, _, _ := procSetClipboardData.Call(cfUnicodeText, handle); set == 0 {
-		procWatchGlobalFree.Call(handle)
+	if set, _, _ := procSetClipboardData.Call(cfUnicodeText, text); set == 0 {
+		procWatchGlobalFree.Call(text)
+		if rich != 0 {
+			procWatchGlobalFree.Call(rich)
+		}
 		return false
 	}
-	// The clipboard owns the block now.
+	// The clipboard owns the first block now. The table is worth having, and not worth failing for.
+	if rich != 0 {
+		if set, _, _ := procSetClipboardData.Call(richFormat, rich); set == 0 {
+			procWatchGlobalFree.Call(rich)
+		}
+	}
 	return true
 }
 
@@ -530,6 +569,29 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		return done(clipShapeOf(text).payload())
 
 	case "paste":
+		plain, html, shape := pasteFlavours(act)
+		if act.Front {
+			// Where the person already is: at the caret of the window in
+			// front, with no click first.
+			front := win32RootWindow(win32GetForegroundWindow())
+			switch {
+			case front == 0:
+				return refuse(&notchActError{"gone", "no window is in front"})
+			case ownWindow(front):
+				return refuse(&notchActError{"own", "one of Jarvis's own windows is in front"})
+			case windowKeyReach(front) == keysBlocked:
+				return refuse(&notchActError{"elevated", "that window runs as administrator"})
+			}
+			if !clipboardSet(plain, html) {
+				return refuse(&notchActError{"failed", "the clipboard could not be written"})
+			}
+			if err := pressKeysNative("ctrl,v"); err != nil {
+				return refuse(&notchActError{"failed", err.Error()})
+			}
+			time.Sleep(120 * time.Millisecond)
+			win, _ := watchWindowOf(front)
+			return done(map[string]any{"win": win.payload(), "app": win.App, "shape": clipShapeOf(shape).payload()})
+		}
 		var hwnd uintptr
 		rect := lookRect{}
 		if !act.Screen {
@@ -543,7 +605,7 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 			return refuse(err.(*notchActError))
 		}
 		before, had := clipboardText()
-		if !clipboardSetText(act.Text) {
+		if !clipboardSet(plain, html) {
 			return refuse(&notchActError{"failed", "the clipboard could not be written"})
 		}
 		restore := func() {
@@ -577,7 +639,7 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		return done(map[string]any{
 			"win": win.payload(), "app": win.App,
 			"pt":    map[string]any{"x": at.X - win.left, "y": at.Y - win.top},
-			"shape": clipShapeOf(act.Text).payload(),
+			"shape": clipShapeOf(shape).payload(),
 		})
 	}
 	return nil, fmt.Errorf("notch.act: do must be click, keys, copy, paste, hand, home, front, count or pitch")

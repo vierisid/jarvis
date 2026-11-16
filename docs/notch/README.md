@@ -1301,17 +1301,31 @@ Code: `src/notch/rounds.ts` (telling a repeated round from shapes),
     asks once.** The skill's own classification of its steps decides
     (`resolveSkillEffect`).
 109. **Put it there: what was shown is held for ninety seconds, and goes
-    where the person points.** After a look the brain holds what was read
-    and tells the desktop app a few words for it (`notch.hold`). With the
-    talk keys down, "Put 3 rows here" stands beside the pointer over a place
-    that can take it (a field, a cell, a page of writing), before anything
-    is clicked. A click there is not a new look: the notch asks, and on a
-    yes the thing is pasted at that place. What is put is what was read,
-    cells parted by tabs and rows by line ends, with nothing rewritten by a
-    model. After ninety seconds it has forgotten and says so. The text stays
-    on the clipboard afterwards: putting the person's own back risks a slow
-    program pasting that instead.
-
+    where the person points, in the form it should have.** After a look the
+    brain holds what was read and tells the desktop app a few words for it
+    (`notch.hold`). With the talk keys down, "Put 3 rows here" stands beside
+    the pointer over a place that can take it (a field, a cell, a page of
+    writing), before anything is clicked. A click there is not a new look:
+    the notch asks "Put 3 rows here as a table?", and on a yes the thing is
+    pasted at that place. Rows copied out of a sheet by hand and pasted into
+    a document come out as words with gaps between them, so what Jarvis puts
+    goes to the desktop app as rows of cells with a form (`as`), and the
+    desktop app puts it on the clipboard twice, the way a spreadsheet does
+    (`pasteFlavours`): a real table or list for a program that takes one,
+    and plain words for one that does not. A document gets a table, a sheet
+    gets cells, a plain field gets columns that line up, with numbers set to
+    the right. The form is a lit word on the line (a table, a list, plain
+    text) and can be said instead of tapped ("as a list"); into a cell there
+    is no form to choose, and one value is just put. With a thing held and
+    no place pointed at, "put it here as a table" puts it at the caret of
+    the window in front. Every cell is escaped: what was read off a screen
+    is words in the table, never markup. Nothing is rewritten by a model.
+    After ninety seconds it has forgotten and says so. The text stays on the
+    clipboard afterwards: putting the person's own back risks a slow program
+    pasting that instead. A click to put something, with nothing said in the
+    same hold, is not "I did not catch that" (`NotchLook.during`). The
+    owner, 16 November 2026: the feature "is only useful if the formatting
+    is done correctly".
 110. **Where each step lands is measured on the screen, not taken from the
     hand.** Two clicks by hand on two rows are never exactly one row apart:
     the hand lands a few pixels higher in one row and lower in the next, and
@@ -1366,10 +1380,15 @@ What is not done, or not proven, in pass 10:
 - **Undo exists for a paste only.** A draft that was made is taken back
   inside its send window (pass 7), and nothing on the notch makes a calendar
   event yet, so there is nothing of that kind to undo.
-- **Three things the prototype showed are not built:** changing a job by
-  voice while it runs ("skip the fees"), choosing the form a thing is put
-  in ("as a sentence"), and making an agent out of a finished job. The last
-  is pass 11.
+- **Two things the prototype showed are not built:** changing a job by
+  voice while it runs ("skip the fees"), and making an agent out of a
+  finished job. The last is pass 11. The prototype's "as a sentence" is not
+  one of the forms a thing can be put in: that would have a model rewrite
+  what was read.
+- **Whether a given program takes the table is not known.** Word, Google
+  Docs, mail composers and sheets read a table off the clipboard; a chat box
+  or a plain field takes the plain words. Which one a program picks is its
+  own choice and was not tried.
 - **Words that start these are matched in English and a little Italian**
   ("watch me", "done", "run it on nine rows", "undo that").
 
@@ -1577,7 +1596,7 @@ What is not done, or not proven, in pass 10:
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
 | brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
-| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place, `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
+| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
 | brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
 | brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |

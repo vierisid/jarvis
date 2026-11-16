@@ -270,8 +270,15 @@ type notchAct struct {
 	Hand int
 	// hand: come up beside the person's own pointer instead of out of the notch.
 	Beside bool
-	// paste: what is put there.
+	// paste: what is put there. Either words as they are, or rows of cells
+	// with the form they are to take: "cells" (into a sheet), "table",
+	// "list" or "text".
 	Text string
+	Rows [][]string
+	As   string
+	// paste: where the person already is, with no click first: at the caret
+	// of the window in front.
+	Front bool
 	// copy: so many cells to the right and down are taken into the selection
 	// first, to read back a thing that was put there earlier.
 	Right, Down int
@@ -281,6 +288,12 @@ type notchAct struct {
 
 // The most a paste may hold: a few hundred rows.
 const notchActTextMax = 64 * 1024
+
+// The most rows and cells a paste may hold.
+const (
+	notchActRowsMax  = 500
+	notchActCellsMax = 60
+)
 
 // The furthest a selection may be stretched before a copy.
 const notchActStretchMax = 200
@@ -351,6 +364,37 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 	act.Double, _ = params["double"].(bool)
 	act.Beside, _ = params["beside"].(bool)
 	act.Text, _ = params["text"].(string)
+	act.Front, _ = params["front"].(bool)
+	if raw, ok := params["rows"].([]any); ok {
+		size := 0
+		for _, rawRow := range raw {
+			cells, ok := rawRow.([]any)
+			if !ok || len(cells) == 0 || len(cells) > notchActCellsMax || len(act.Rows) >= notchActRowsMax {
+				return act, fmt.Errorf("notch.act: rows are rows of cells, and not more than %d of %d", notchActRowsMax, notchActCellsMax)
+			}
+			row := make([]string, 0, len(cells))
+			for _, rawCell := range cells {
+				cell, ok := rawCell.(string)
+				if !ok {
+					return act, fmt.Errorf("notch.act: a cell is words")
+				}
+				size += len(cell) + 1
+				row = append(row, pasteCell(cell))
+			}
+			act.Rows = append(act.Rows, row)
+		}
+		if size > notchActTextMax {
+			return act, fmt.Errorf("notch.act: the rows hold more than %d bytes", notchActTextMax)
+		}
+		act.As, _ = params["as"].(string)
+		switch act.As {
+		case "":
+			act.As = "table"
+		case "cells", "table", "list", "text":
+		default:
+			return act, fmt.Errorf("notch.act: as is cells, table, list or text")
+		}
+	}
 	if !notchKeysSpec(act.Mods, true) {
 		return act, fmt.Errorf("notch.act: mods is ctrl, shift and alt, parted by commas")
 	}
@@ -361,11 +405,11 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 			return act, fmt.Errorf("notch.act: a click needs a place in a window")
 		}
 	case "paste":
-		if !placed {
-			return act, fmt.Errorf("notch.act: a paste needs a place")
+		if !placed && !act.Front {
+			return act, fmt.Errorf("notch.act: a paste needs a place, or to go where the person is")
 		}
-		if act.Text == "" || len(act.Text) > notchActTextMax {
-			return act, fmt.Errorf("notch.act: a paste needs words, and no more than %d bytes of them", notchActTextMax)
+		if len(act.Rows) == 0 && (act.Text == "" || len(act.Text) > notchActTextMax) {
+			return act, fmt.Errorf("notch.act: a paste needs words or rows, and no more than %d bytes of them", notchActTextMax)
 		}
 	case "keys", "copy":
 		if act.Win.ID == "" {
@@ -767,4 +811,186 @@ func watchStrip(win lookRect, at lookPoint, about float64) lookRect {
 		return lookRect{}
 	}
 	return lookRect{left, top, right - left, bottom - top}
+}
+
+// ---------------------------------------------------------------------------
+// What is put somewhere, in the form it is to take
+// ---------------------------------------------------------------------------
+
+// Rows copied out of a sheet and pasted into a document as they are come out
+// as words with gaps between them. So what Jarvis puts somewhere is put on
+// the clipboard twice, the way a spreadsheet does it: once as a real table
+// (or a list), for a program that takes one, and once as plain words, for a
+// program that does not. A document then gets a table, a sheet gets cells,
+// and a plain field gets columns that line up.
+
+// pasteCell makes a text fit to be one cell: one line, no tabs.
+func pasteCell(text string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, text)), " ")
+}
+
+// pasteTSV is rows as a spreadsheet copies them: cells parted by tabs, rows
+// by line ends. This is also what reading the cells back gives, so it is what
+// a paste's shape is taken from.
+func pasteTSV(rows [][]string) string {
+	lines := make([]string, len(rows))
+	for i, row := range rows {
+		lines[i] = strings.Join(row, "\t")
+	}
+	return strings.Join(lines, "\r\n")
+}
+
+// pasteNumber says whether a cell is a number as people write one in a
+// table: such a column is set to the right, in a table and in plain words.
+func pasteNumber(cell string) bool {
+	digits := 0
+	for _, r := range cell {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case strings.ContainsRune(" .,'-+()%$€£¥", r):
+		default:
+			return false
+		}
+	}
+	return digits > 0
+}
+
+// pasteRight says which columns hold numbers and nothing else (a heading in
+// the first row does not count against them).
+func pasteRight(rows [][]string) []bool {
+	width := 0
+	for _, row := range rows {
+		width = max(width, len(row))
+	}
+	right := make([]bool, width)
+	for col := range right {
+		numbers := 0
+		right[col] = true
+		for i, row := range rows {
+			if col >= len(row) || row[col] == "" {
+				continue
+			}
+			if pasteNumber(row[col]) {
+				numbers++
+			} else if i > 0 || len(rows) == 1 {
+				right[col] = false
+			}
+		}
+		if numbers == 0 {
+			right[col] = false
+		}
+	}
+	return right
+}
+
+// pasteAligned is rows as plain words that line up: every column as wide as
+// its widest cell, two spaces between columns, numbers set to the right.
+func pasteAligned(rows [][]string) string {
+	right := pasteRight(rows)
+	widths := make([]int, len(right))
+	for _, row := range rows {
+		for col, cell := range row {
+			widths[col] = max(widths[col], utf8.RuneCountInString(cell))
+		}
+	}
+	lines := make([]string, len(rows))
+	for i, row := range rows {
+		var line strings.Builder
+		for col, cell := range row {
+			pad := strings.Repeat(" ", widths[col]-utf8.RuneCountInString(cell))
+			if col > 0 {
+				line.WriteString("  ")
+			}
+			if right[col] {
+				line.WriteString(pad + cell)
+			} else {
+				line.WriteString(cell + pad)
+			}
+		}
+		lines[i] = strings.TrimRight(line.String(), " ")
+	}
+	return strings.Join(lines, "\r\n")
+}
+
+// pasteBullets is rows as a list in plain words: one line a row.
+func pasteBullets(rows [][]string) string {
+	lines := make([]string, len(rows))
+	for i, row := range rows {
+		lines[i] = "- " + strings.Join(row, " · ")
+	}
+	return strings.Join(lines, "\r\n")
+}
+
+func pasteEscape(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\"", "&quot;").Replace(text)
+}
+
+// pasteHTML is rows as a table, or as a list, for a program that takes one.
+// Every cell is escaped: what was read off a screen is words here, never
+// markup.
+func pasteHTML(rows [][]string, as string) string {
+	var out strings.Builder
+	if as == "list" {
+		out.WriteString("<ul>")
+		for _, row := range rows {
+			out.WriteString("<li>" + pasteEscape(strings.Join(row, " · ")) + "</li>")
+		}
+		out.WriteString("</ul>")
+		return out.String()
+	}
+	right := pasteRight(rows)
+	out.WriteString(`<table style="border-collapse:collapse">`)
+	for _, row := range rows {
+		out.WriteString("<tr>")
+		for col, cell := range row {
+			style := "border:1px solid #9aa0a6;padding:4px 8px"
+			if col < len(right) && right[col] {
+				style += ";text-align:right"
+			}
+			out.WriteString(`<td style="` + style + `">` + pasteEscape(cell) + "</td>")
+		}
+		out.WriteString("</tr>")
+	}
+	out.WriteString("</table>")
+	return out.String()
+}
+
+// pasteFlavours is what a paste puts on the clipboard: the plain words, the
+// table or list for a program that takes one ("" when there is none), and the
+// words a paste's shape is taken from.
+func pasteFlavours(act notchAct) (plain, html, shape string) {
+	if len(act.Rows) == 0 {
+		return act.Text, "", act.Text
+	}
+	tsv := pasteTSV(act.Rows)
+	switch act.As {
+	case "cells":
+		// Into a sheet: both ways of saying it are cells.
+		return tsv, pasteHTML(act.Rows, "table"), tsv
+	case "list":
+		return pasteBullets(act.Rows), pasteHTML(act.Rows, "list"), tsv
+	case "text":
+		return tsv, "", tsv
+	default:
+		return pasteAligned(act.Rows), pasteHTML(act.Rows, "table"), tsv
+	}
+}
+
+// clipHTML wraps a piece of HTML the way the Windows clipboard carries one
+// ("HTML Format"): a few lines that say, in bytes from the start, where the
+// HTML and the piece that matters begin and end.
+func clipHTML(fragment string) []byte {
+	const head = "Version:0.9\r\nStartHTML:%010d\r\nEndHTML:%010d\r\nStartFragment:%010d\r\nEndFragment:%010d\r\n"
+	const before, after = "<html><body><!--StartFragment-->", "<!--EndFragment--></body></html>"
+	start := len(fmt.Sprintf(head, 0, 0, 0, 0))
+	fragmentStart := start + len(before)
+	fragmentEnd := fragmentStart + len(fragment)
+	end := fragmentEnd + len(after)
+	return []byte(fmt.Sprintf(head, start, end, fragmentStart, fragmentEnd) + before + fragment + after)
 }
