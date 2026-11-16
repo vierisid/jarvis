@@ -8,6 +8,7 @@ import { getFlow } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { getFlowRun, type FlowRun } from '../workflows/db/repos/flow-run.ts';
 import { listWaitpointsByFlowRun } from '../workflows/db/repos/waitpoint.ts';
+import { runAsShown } from '../workflows/runtime/step-credentials.ts';
 import { oneLineTaskText } from '../vault/commitment-text.ts';
 
 export type WorkMode = 'manual' | 'workflow';
@@ -80,8 +81,13 @@ export function getWorkItem(id: string): WorkItem {
   const w = row(id);
   const commitment = getCommitment(id)!;
   const decision = w.decision ? JSON.parse(w.decision) as WorkDecision : null;
-  const resultCheck = w.result_check ? JSON.parse(w.result_check) as ResultCheck : null;
-  const run = w.run_id && workflowAvailable() ? getFlowRun(w.run_id) : null;
+  const stored = w.result_check ? JSON.parse(w.result_check) as ResultCheck : null;
+  // The run, and a run snapshot kept by an earlier check, as run history shows
+  // them: no generated password or old webhook credential header (read side).
+  const asShown = (run: FlowRun) => runAsShown(run, getFlowVersion(run.flowVersionId)?.trigger);
+  const resultCheck = stored?.runSnapshot ? { ...stored, runSnapshot: asShown(stored.runSnapshot) } : stored;
+  const storedRun = w.run_id && workflowAvailable() ? getFlowRun(w.run_id) : null;
+  const run = storedRun ? asShown(storedRun) : null;
   const recovery = run ? getRunRecovery(run.id) : null;
   const waitpoint = run ? listWaitpointsByFlowRun(run.id, false)[0] : undefined;
   let blocker: WorkItem['blocker'] = w.blocker ? { kind: 'manual', ref: null, reason: w.blocker } : null;
