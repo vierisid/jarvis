@@ -21,9 +21,9 @@
 import { join } from 'node:path';
 import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
+import { tryAcquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { clearLaunchRecord, daemonOwnsPort, describeDashboard, detachedDaemonArgs, ensurePortReleased, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -188,9 +188,17 @@ async function cmdStart(args: string[]): Promise<void> {
 
   if (!detach) {
     // Run in foreground — acquire lock atomically (checks + locks in one step)
-    if (!acquireLock(process.pid)) {
-      console.log(c.yellow('JARVIS is already running'));
-      console.log(c.dim('  Stop it first with: jarvis stop'));
+    const lock = tryAcquireLock(process.pid);
+    if (!lock.ok) {
+      // Two different failures: another daemon holds the lock, or the lock file
+      // cannot be written (read-only or full disk, wrong owner). Only the first
+      // is "already running".
+      if (lock.reason === 'held') {
+        console.log(c.yellow('JARVIS is already running'));
+        console.log(c.dim('  Stop it first with: jarvis stop'));
+      } else {
+        console.error(c.red(`Jarvis did not start. ${lock.message}`));
+      }
       process.exit(1);
     }
     // Release the flock on final exit. Do NOT handle SIGINT/SIGTERM here: the
@@ -232,7 +240,7 @@ async function cmdStart(args: string[]): Promise<void> {
     // Run in background — spawn a detached child process with log file
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));
 
-    const logPath = getLogPath();
+    const logPath = plainLogPath();
 
     const daemonArgs = detachedDaemonArgs(join(PACKAGE_ROOT, 'bin/jarvis.ts'), { port, dataDir, noLocalTools, systemConfigPath });
 
@@ -303,11 +311,9 @@ async function cmdStart(args: string[]): Promise<void> {
   }
 }
 
-// Something else holds the port: say what, and that it was left alone.
-function printForeignListeners(port: number, foreign: { pid: number; name: string }[]): void {
-  for (const f of foreign) {
-    console.log(c.dim(`  Port ${port} is held by another program (${f.name}, PID ${f.pid}), not JARVIS. It was left running.`));
-  }
+// What still holds the port after a stop, and why it was left there.
+function printLeftAlone(port: number, listeners: PortListener[], print: (line: string) => void = console.log): void {
+  for (const line of describeLeftAlone(port, listeners)) print(c.dim(`  ${line}`));
 }
 
 // Returns true when the daemon is stopped and its lock cleared; false when a
@@ -347,16 +353,23 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       console.log(c.yellow('JARVIS is not running.'));
       return true;
     }
+    // Signals only this install's daemon for this data folder that the lock
+    // no longer shows (its lock file was deleted under it, say). Any other
+    // listener on the port is named, never stopped.
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
       const details = cleanup.forced.length > 0
-        ? ` Force-killed lingering listener(s) on port ${port}: ${cleanup.forced.join(', ')}.`
-        : ` Cleaned up lingering listener(s) on port ${port}: ${cleanup.terminated.join(', ')}.`;
-      console.log(c.green(`✓ JARVIS was not locked, but the port is now clear.${details}`));
+        ? ` Force-killed the Jarvis daemon still listening on port ${port}: ${cleanup.forced.join(', ')}.`
+        : ` Stopped the Jarvis daemon still listening on port ${port}: ${cleanup.terminated.join(', ')}.`;
+      // "Clear" only when it is: another program can share the port (one on
+      // 127.0.0.1, another on ::1), and it is named just below.
+      console.log(cleanup.released
+        ? c.green(`✓ JARVIS was not locked, but the port is now clear.${details}`)
+        : c.yellow(`JARVIS was not locked.${details} Port ${port} is still in use.`));
     } else {
       console.log(c.yellow('JARVIS is not running.'));
-      printForeignListeners(port, cleanup.foreign);
     }
+    printLeftAlone(port, [...cleanup.foreign, ...cleanup.stuck]);
     return true;
   }
 
@@ -421,17 +434,18 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     const cleanup = await ensurePortReleased(port);
     if (cleanup.stuck.length > 0) {
       console.error(c.red(`✗ JARVIS stopped but port ${port} is still occupied.`));
+      printLeftAlone(port, [...cleanup.foreign, ...cleanup.stuck], console.error);
       return false;
     }
     clearLaunchRecord();
 
     const details = cleanup.forced.length > 0
-      ? ` Force-killed lingering listener(s) on port ${port}: ${cleanup.forced.join(', ')}.`
+      ? ` Force-killed another Jarvis daemon for this data folder on port ${port}: ${cleanup.forced.join(', ')}.`
       : cleanup.terminated.length > 0
-        ? ` Cleaned up lingering listener(s) on port ${port}: ${cleanup.terminated.join(', ')}.`
+        ? ` Stopped another Jarvis daemon for this data folder on port ${port}: ${cleanup.terminated.join(', ')}.`
         : '';
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
-    printForeignListeners(port, cleanup.foreign);
+    printLeftAlone(port, cleanup.foreign);
     return true;
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
@@ -599,8 +613,18 @@ async function printLaunchdHandoffNote(): Promise<void> {
   } catch { /* the restart above is what matters */ }
 }
 
+/** The log file path, or a plain message and exit when the data folder cannot be written. */
+function plainLogPath(): string {
+  try {
+    return getLogPath();
+  } catch (err) {
+    console.error(c.red(err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+}
+
 function cmdLogs(args: string[]): void {
-  const logPath = getLogPath();
+  const logPath = plainLogPath();
 
   if (!existsSync(logPath)) {
     console.log(c.yellow('No log file found. Start the daemon first: jarvis start'));
