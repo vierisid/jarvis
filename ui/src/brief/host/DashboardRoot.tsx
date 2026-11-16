@@ -185,7 +185,10 @@ function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, mes
   const emergency = useEmergencyStatus(host.transport, `${owner.emergencyRevision}:${owner.isConnected}:${retries}`);
   const storageProblem = useStorageStatus(host.transport);
   const humanInputs = useHumanInputQueue(host.transport, isBriefCapabilityEnabled(host.capabilities(), 'decisions'));
-  const humanPending = humanInputs.requests.filter(r => humanRequestNeedsAttention(r) || hasLocalDraft(r)).length;
+  // Pending requests are counted by the server, whatever page is listed; the rest are the settled ones that still need attention.
+  const humanListedPending = humanInputs.requests.filter(r => r.status === 'pending').length;
+  const humanPending = humanInputs.requests.filter(r => r.status !== 'pending' && (humanRequestNeedsAttention(r) || hasLocalDraft(r))).length
+    + Math.max(humanInputs.pendingTotal ?? 0, humanListedPending);
   // The one derivation of "needs you": Today, the sidebar badge and the room all read it.
   const decisionsOn = isBriefCapabilityEnabled(host.capabilities(), 'decisions');
   const documents = useBriefProjection(host.data.decisionRead);

@@ -80,6 +80,7 @@ import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { siteProjectsDir } from "../util/jarvis-dirs.ts";
 import { initDatabase, closeDb } from "../vault/schema.ts";
 import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
@@ -909,8 +910,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
 
     // 2a. Seed webapp templates (upserts, safe to run every startup)
-    const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
-    seedWebappTemplates();
+    // Under the data dir, so an instance with its own JARVIS_HOME needs nothing from $HOME.
+    // A failure here is logged and skipped: the built-in templates are optional context.
+    try {
+      const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
+      seedWebappTemplates({ dataDir: jarvisConfig.daemon.data_dir.replace(/^~(?=$|[\\/])/, os.homedir()) });
+    } catch (err) {
+      logWithTimestamp(`Webapp templates were not seeded: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // 2a-bis. Relocate a pre-JARVIS_HOME keychain into the data dir before
     // anything reads a credential, so hydration below sees the moved store and
@@ -4491,6 +4498,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Channel conversation messages are kept forever unless the owner set a
     // retention (#1167); then a daily sweep deletes the older ones.
     startChannelMessageRetention(jarvisConfig);
+    // Finished workflow runs are kept forever unless the owner chose a limit in
+    // Brief Settings; a finished job's stored input is dropped after a week.
+    const { startRunHistoryRetention } = await import('../workflows/db/repos/run-retention.ts');
+    startRunHistoryRetention();
     // A workflow card past its explicit deadline leaves the dashboard the same way.
     onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
@@ -4602,6 +4613,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     settingsReload.registerApplier('llm', async (cfg) => {
       const { hotReloadLLMProviders } = await import('./llm-settings.ts');
       hotReloadLLMProviders(cfg, agentService.getLLMManager());
+      agentService.syncConversationTier();
       // `mergeLLMSettingsIntoConfig` REPLACES `config.llm.providers` rather
       // than mutating it, so the orchestrator's boot-time reference is
       // detached on every reload. Re-hand it, or the tool filter keeps
@@ -5507,7 +5519,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // daemon loads or runs, where a write is rated execute_command.
     {
       const { setSiteProjectsDir, setDaemonDataRoots } = await import('../actions/tools/file-path-policy.ts');
-      setSiteProjectsDir((jarvisConfig.sites?.projects_dir ?? '~/.jarvis/projects').replace(/^~/, os.homedir()));
+      setSiteProjectsDir(siteProjectsDir(jarvisConfig.sites?.projects_dir));
       // Where the keychain and the workflow key really are, which
       // JARVIS_SECRETS_DIR can put outside every data dir. Resolved through the
       // owning modules rather than recomputed, and tolerated failing: a read of
@@ -6088,13 +6100,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (jarvisConfig.sites?.enabled !== false) {
       try {
         const { SiteBuilderService } = await import('../sites/service.ts');
-        const sitesConfig = jarvisConfig.sites ?? {
-          enabled: true,
-          projects_dir: '~/.jarvis/projects',
-          port_range_start: 4000,
-          port_range_end: 4999,
-          auto_commit: true,
-          max_concurrent_servers: 3,
+        // The folder projects have always lived in; inside the data dir only
+        // when the home one cannot be written and JARVIS_HOME is set. The
+        // config defaults always fill in sites.projects_dir, so the default
+        // value is resolved here rather than taken literally.
+        const sitesConfig = {
+          ...(jarvisConfig.sites ?? {
+            enabled: true,
+            port_range_start: 4000,
+            port_range_end: 4999,
+            auto_commit: true,
+            max_concurrent_servers: 3,
+          }),
+          projects_dir: siteProjectsDir(jarvisConfig.sites?.projects_dir),
         };
         const siteBuilderService = new SiteBuilderService(sitesConfig);
         // Site projects stay uploadable even inside the data dir (#521).

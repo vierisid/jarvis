@@ -3,7 +3,8 @@
  *
  * Manages OAuth2 tokens for Google APIs (Gmail, Calendar).
  * Uses raw fetch() — no googleapis package needed.
- * Tokens stored at ~/.jarvis/google-tokens.json
+ * Tokens stored at googleTokensPath(): ~/.jarvis/google-tokens.json, or
+ * <JARVIS_HOME>/google-tokens.json on an instance with its own data dir.
  */
 
 import path from 'node:path';
@@ -20,8 +21,17 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
  * changing (settings-reload's per-section diff) cannot drift from the path this
  * class actually reads.
  */
-export function googleTokensPath(): string {
-  return path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+export function googleTokensPath(
+  env: Record<string, string | undefined> = process.env,
+  home: string = os.homedir(),
+): string {
+  const legacy = path.join(home, '.jarvis', 'google-tokens.json');
+  const dataDir = env.JARVIS_HOME?.trim();
+  if (!dataDir) return legacy;
+  // An instance with its own data dir keeps its tokens there. One that already
+  // has tokens in the old home location keeps using that file until it moves them.
+  const own = path.join(path.resolve(dataDir), 'google-tokens.json');
+  return !existsSync(own) && existsSync(legacy) ? legacy : own;
 }
 
 export interface ManagedRefresh {
@@ -95,7 +105,7 @@ export class GoogleAuth {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.refreshVia = opts?.refreshVia ?? null;
-    this.tokensPath = opts?.tokensPath ?? path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+    this.tokensPath = opts?.tokensPath ?? googleTokensPath();
     this.redirectUri = opts?.redirectUri ?? 'http://localhost:3142/api/auth/google/callback';
     this.loadTokens();
   }

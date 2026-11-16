@@ -19,7 +19,7 @@
  */
 
 import { resolve } from "node:path";
-import { homedir } from "node:os";
+import { homeJarvisDir } from "../../util/jarvis-dirs";
 import { existsSync } from "node:fs";
 import {
   buildEngineBundle,
@@ -139,7 +139,7 @@ export interface BootstrapWorkflowEngineResult {
   shutdown: () => Promise<void>;
 }
 
-const DEFAULT_CACHE_FILE = resolve(homedir(), ".jarvis", "cache", "piece-metadata.json");
+const DEFAULT_CACHE_FILE = homeJarvisDir("cache", "piece-metadata.json");
 
 export async function bootstrapWorkflowEngine(
   opts: BootstrapWorkflowEngineOptions,
