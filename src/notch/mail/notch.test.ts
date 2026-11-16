@@ -72,6 +72,8 @@ function harness(rows: MailProposalRow[], options: {
   const sent = [...(options.sent ?? [true])];
   const mailbox: Mailbox = {
     reader: async () => null,
+    write: async () => ({ ok: true }),
+    search: async () => [],
     reply: async (plan, work) => {
       plans.push(plan);
       const session: MailReplySession = {

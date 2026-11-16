@@ -238,7 +238,7 @@ export function notchWhereApp(value: unknown): NotchWhereApp | null {
 /** Brain to page. */
 export type NotchToPage =
   /** The answer to hello: everything the notch should be showing, at once. */
-  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood; where?: NotchWhereApp | null }
+  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood; where?: NotchWhereApp | null; eye?: boolean }
   /**
    * The app in front, for the icon beside the resting eyes. Null: none is
    * shown (nothing is in front, or the notch is not watching it). The brain

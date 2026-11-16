@@ -48,6 +48,7 @@ import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from
 import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatchPort } from './catch.ts';
 import { attachNotchJobs, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
+import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from './standing.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 
 export interface NotchRealDeps {
@@ -134,6 +135,12 @@ export interface NotchRealDeps {
    */
   mail?: Omit<NotchMailLayerDeps, 'paused' | 'log' | 'noClock'> & { noClock?: boolean };
   /**
+   * Standing things (pass 11), the part that stands on mail: an eye kept on
+   * a person's answer, and a chase until it is in. Needs `mail`. `chaseWaitMs`
+   * is given by a test brain: how long a chase waits between two steps.
+   */
+  standing?: { chaseWaitMs?: number; noClock?: boolean };
+  /**
    * From anywhere, and the shape of the day (pass 8). With this given: a
    * line nobody asked for comes up only in a still moment and never in the
    * person's quiet hours; a meeting is said ten minutes before; things are
@@ -217,6 +224,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let catcher: NotchCatch | null = null;
   let teach: NotchTeach | null = null;
   let put: NotchPutter | null = null;
+  let standing: NotchStanding | null = null;
+  let standingTimer: ReturnType<typeof setInterval> | null = null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
@@ -321,7 +330,12 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       point: deps.asks.point,
       // "Watch me", "done", "run it on nine rows", "undo that": the notch does these itself (pass 10).
       // And "put it here as a table", with a thing held.
-      side: teach ? (text) => put?.route(text) ?? teach!.route(text) : undefined,
+      // "Tell me when Sam replies", "get Sam's answer by Friday": an eye, a chase (pass 11).
+      side: (text) => put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? null,
+      standing: {
+        rows: () => standing?.rows() ?? [],
+        open: async (stage, row) => { if (row === 'eyes' || row === 'chases') await standing?.open(stage, row); },
+      },
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
@@ -387,7 +401,21 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   questionTimer?.unref?.();
   if (deps.mail) {
     const emergency = deps.emergency;
-    mail = attachMailLayer(inbox, { ...deps.mail, paused: emergency ? () => emergency.getState() !== 'normal' : undefined, log });
+    const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
+    mail = attachMailLayer(inbox, { ...deps.mail, paused, log });
+    if (deps.standing) {
+      const kept = attachNotchStanding({
+        inbox, db: deps.mail.db, mail: mail.standing, paused, log,
+        eye: (on) => surface.setEye(on),
+        fired: () => surface.act({ gesture: 'pop' }),
+        ...(deps.standing.chaseWaitMs ? { waitMs: deps.standing.chaseWaitMs } : {}),
+      });
+      standing = kept;
+      if (!deps.standing.noClock) {
+        standingTimer = setInterval(() => { void kept.tick().catch((error) => log(`[notch] a chase's step failed: ${error instanceof Error ? error.message : String(error)}`)); }, NOTCH_STANDING_TICK_MS);
+        standingTimer.unref?.();
+      }
+    }
   }
   // Pass 8, the rest of it: the calendar as a source, calls and the connection, and the lines of the day.
   let soon: NotchSoon | null = null;
@@ -497,6 +525,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       catcher?.stop();
       teach?.stop();
       put?.stop();
+      standing?.stop();
+      if (standingTimer) clearInterval(standingTimer);
       for (const timer of jobTimers) clearInterval(timer);
       for (const timer of dayTimers) clearInterval(timer);
     },
