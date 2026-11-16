@@ -40,8 +40,9 @@ The sync script applies the following modifications after copy. These keep diff 
 
 - **Stubbed:** `packages/server/engine/src/lib/core/code/v8-isolate-code-sandbox.ts`. The original imports `isolated-vm` (a Node N-API native addon). We never use V8 isolate sandboxing -- the engine runs in `SANDBOX_PROCESS` mode (see `SPIKE-SANDBOXING.md`). The stub preserves the import path and throws a clear error if `AP_EXECUTION_MODE` is ever set to `SANDBOX_CODE_ONLY` or `SANDBOX_CODE_AND_PROCESS`.
 - **Scrubbed:** `isolated-vm` removed from `packages/server/engine/package.json` `dependencies`.
+- **Jarvis behaviour:** `packages/pieces/core/approval` Wait for Approval stops the run when the approval is not given, unless `continueOnReject` is set (`src/workflows/runtime/human-input.ts`). Keep this when re-syncing.
 
-Both are driven by `STUB_FILES` and `SCRUB_DEPS` constants in `scripts/sync-activepieces.ts`. To extend, add entries there and re-run the sync.
+The first two are driven by `STUB_FILES` and `SCRUB_DEPS` constants in `scripts/sync-activepieces.ts`. To extend, add entries there and re-run the sync.
 
 ## Curated pieces
 

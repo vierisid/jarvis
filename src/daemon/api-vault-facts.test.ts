@@ -125,3 +125,23 @@ test('GET /api/vault/facts pages with limit and offset, and keeps the full list 
   expect(pages.map((f: { id: string }) => f.id)).toEqual(all.map(f => f.id));
   for (const bad of ['?limit=0', '?limit=1001', '?limit=x', '?limit=1&offset=-1', '?offset=2']) expect((await get(bad)).status).toBe(400);
 });
+
+test('D-12: forgetting a corrected fact leaves no earlier version in facts or search', async () => {
+  process.env.JARVIS_BRIEF_MEMORY_FORGET = '1';
+  const subject = createEntity('person', 'Ada').id;
+  const first = createFact(subject, 'pricing_note', 'Discount ZEBRAONE', { confirmed: true });
+  const second = correctFact(first.id, 'Discount ZEBRATWO', 'Changed once');
+  const third = correctFact(second.id, 'Discount ZEBRATHREE', 'Changed twice');
+  const service = new MemoryForget(getDb()), read = service.get(third.id);
+  if (read.state !== 'ready') throw new Error('fixture fact is not live');
+  service.forget(third.id, { requestId: crypto.randomUUID(), expectedRevision: read.revision, confirmed: true });
+
+  const facts = await routes()['/api/vault/facts'].GET(new Request('http://localhost/api/vault/facts?predicate=pricing_note&include_superseded=true'));
+  expect(JSON.stringify(await facts.json())).not.toContain('ZEBRA');
+  for (const word of ['ZEBRAONE', 'ZEBRATWO', 'ZEBRATHREE', 'Discount']) {
+    const found = await routes()['/api/vault/search'].GET(new Request(`http://localhost/api/vault/search?q=${word}`));
+    expect(JSON.stringify(await found.json())).not.toContain('ZEBRA');
+  }
+  expect(factCount()).toBe(0);
+  expect(evidenceCount()).toBe(0);
+});

@@ -181,6 +181,7 @@ import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-p
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { humanInputRefusal } from "../workflows/runtime/human-input-contract.ts";
+import { workflowStepToolRefusal } from "../workflows/runtime/effect-capabilities.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
@@ -5296,7 +5297,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       tool: name => {
         const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })),
-          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool) } : null;
+          workflowRefusal: workflowToolDeclarationRefusal(tool), switchRefusal: workflowToolSwitchRefusal(tool),
+          unsupported: params => workflowStepToolRefusal(tool, params) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
       roleTools: (id) => agentService.getSpecialists().get(id)?.tools ?? null,
@@ -5369,6 +5371,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const apiRoutes = {
       ...createApiRoutes(apiContext),
       ...createWorkflowRoutes({
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         recoveryAuthority: authorityEngine,
         briefWorkflowContext, briefCapabilities,
         triggerManager,
@@ -5698,6 +5701,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // buildSandboxServiceBackends if any of these are missing.
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
+        // The rule the engine's HTTP step connects under, so a request it would refuse is refused before a card.
+        egressPolicy: isHostedInstall(jarvisConfig) ? 'public-only' : 'private-allowed',
         decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         // Input and approval requests are answered in Needs you (#1266): with
         // decisions off nothing could answer one, so a step that asks fails now.
@@ -5742,6 +5747,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       const flowExecutor = new EngineFlowExecutor(workflowEngineRuntime);
       workflowWorker = new WorkflowWorker({
+        // A child that just ended, or a parent that just parked, continues its
+        // parent now; the scheduler's poll remains the safety net.
+        onJobSettled: (job) => { timerScheduler?.afterJobSettled(job); },
         handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor,
           // #1080: a run refused for what it is bound to (its computer, a
           // recipient) tells the owner once per workflow and reason.
