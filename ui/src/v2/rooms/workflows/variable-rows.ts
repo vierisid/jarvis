@@ -21,6 +21,7 @@
  */
 
 import type { FlowStepNode, PieceCatalogEntry } from "./useWorkflowEditor";
+import { manualTriggerFields } from "./trigger-kinds";
 
 /**
  * How many nested object levels the picker drills into. Most workflow event
@@ -65,8 +66,20 @@ export function buildVariableRows(
       ? undefined
       : lookupSiblingShape(step, allSteps, sampleData);
     const usable = pickUsableSample(captured, declared) ?? pickUsableSample(sibling, undefined);
+    // A manual trigger's declared input fields are what a run is started
+    // with, so they are always offered, ahead of anything a sample adds.
+    const declaredFields = manualTriggerFields(step);
+    for (const field of declaredFields) {
+      rows.push({ step, field, label: field, template: `{{${step.name}.${field}}}` });
+    }
     if (usable?.kind === "object") {
-      emitObjectRows(usable.value, step, "", rows, 0);
+      const sampleRows: VariableRow[] = [];
+      emitObjectRows(usable.value, step, "", sampleRows, 0);
+      const seen = new Set(declaredFields);
+      rows.push(...sampleRows.filter((r) => !seen.has(r.field)));
+    } else if (declaredFields.length) {
+      // The declared fields above are the whole picture for this step.
+      continue;
     } else if (usable?.kind === "array") {
       // Array output: first emit the iterate-all row (the whole step,
       // for LOOP_ON_ITEMS sources), then drill one level into the

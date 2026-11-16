@@ -582,3 +582,23 @@ describe("buildVariableRows", () => {
     });
   });
 });
+
+describe("a manual trigger's declared input fields", () => {
+  test("are listed as {{trigger.field}} rows even with no sample data", () => {
+    const trigger = { ...emptyTrigger("trigger"), settings: { input: { customer: "", amount: "" } } } as unknown as FlowStepNode;
+    const rows = buildVariableRows([trigger], {}, [], [trigger]);
+    expect(rows.map((r) => r.template)).toEqual(["{{trigger.customer}}", "{{trigger.amount}}"]);
+    expect(rows.some((r) => r.label === "(output)")).toBe(false);
+  });
+
+  test("come first and are not repeated by a captured sample", () => {
+    const trigger = { ...emptyTrigger("trigger"), settings: { input: { customer: "" } } } as unknown as FlowStepNode;
+    const rows = buildVariableRows([trigger], { trigger: { customer: "acme", note: "hi" } }, [], [trigger]);
+    expect(rows.map((r) => r.template)).toEqual(["{{trigger.customer}}", "{{trigger.note}}"]);
+  });
+
+  test("a manual trigger with none keeps the whole-output row", () => {
+    const trigger = emptyTrigger("trigger");
+    expect(buildVariableRows([trigger], {}, [], [trigger]).map((r) => r.template)).toEqual(["{{trigger}}"]);
+  });
+});

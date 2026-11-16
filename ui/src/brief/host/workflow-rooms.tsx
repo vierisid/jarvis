@@ -25,7 +25,7 @@ import type { InspectionSelection } from '../../../../src/brief/workflow-context
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { HostTransport } from './http';
 import { post, RequestError } from './http';
-import { needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
+import { manualTriggerFields, needsManualRunInput } from '../../v2/rooms/workflows/trigger-kinds';
 
 /** The workflow and its version were read, but no run has the selected id. */
 class RunNotFound extends Error {}
@@ -35,7 +35,7 @@ export interface WorkflowHost {
   storage: Pick<Storage, 'getItem' | 'setItem'>;
   dirty(key: string, value: boolean): void;
   /** Collect explicit manual input; null means the user cancelled before dispatch. */
-  runInput(): Promise<Record<string, unknown> | null>;
+  runInput(fields?: string[]): Promise<Record<string, unknown> | null>;
 }
 /** Controllers belong to the authenticated host, never to room renders. */
 export function createWorkflowRooms(host: WorkflowHost) {
@@ -56,7 +56,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   /** `superseded`: a locked version that is no longer the published one. Its runs and
    * context stay readable and a pending request can still be checked, but no new run
    * starts on it from here: a run opened from history must not re-run old steps. */
-  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true, superseded: boolean = false) {
+  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true, inputFields: string[] = [], superseded: boolean = false) {
     const key = JSON.stringify([flowId, versionId, editable, superseded]); let value = selections.get(key);
     if (value) return value;
     const base = `/api/brief/workflows/${encodeURIComponent(flowId)}`;
@@ -76,7 +76,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const runs = new WorkflowRunsController(scope, {
       list: read.list, detail: read.detail,
       ...(!editable ? { ...(!superseded ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
-        const payload = needsInput ? await host.runInput() : {};
+        const payload = needsInput ? await host.runInput(inputFields) : {};
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
         // Persist the identity before dispatch, or do not dispatch at all. One
         // outstanding request per version: never overwrite another window's.
@@ -133,7 +133,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   }
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
-    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; supersededBy: string | null; inspection: InspectionSelection } | null>(null);
+    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inputFields: string[]; supersededBy: string | null; inspection: InspectionSelection } | null>(null);
     const [error, setError] = useState<false | 'unavailable' | 'run-missing'>(false), [revision, retry] = useState(0);
     // A draft that was found but could not be opened (a broken graph): the one thing that can be done with it is discard it.
     const [brokenDraft, setBrokenDraft] = useState<string | null>(null);
@@ -159,7 +159,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
         // version is published that one is shown read only, never run or copied into a draft.
         const published = typeof detail.published?.id === 'string' ? detail.published.id as string : null;
         const supersededBy = version.state === 'LOCKED' && published && published !== version.id ? published : null;
-        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), supersededBy, inspection: value.data });
+        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inputFields: manualTriggerFields(version.trigger), supersededBy, inspection: value.data });
       })().catch((e: unknown) => { if (!abort.signal.aborted) { setError(e instanceof RunNotFound ? 'run-missing' : 'unavailable'); setBrokenDraft(e instanceof RunNotFound ? null : draftSeen); } });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
@@ -179,7 +179,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
       {error && brokenDraft && discarding !== 'asking' && <BriefButton onClick={() => setDiscarding('asking')} disabled={discarding === 'working'}>Discard this draft</BriefButton>}
       {discarding === 'asking' && <><BriefButton onClick={() => void discard()}>Yes, discard it</BriefButton><BriefButton onClick={() => setDiscarding('idle')}>Keep it</BriefButton></>}
       <BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
-    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput, !!selection.supersededBy);
+    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput, selection.inputFields, !!selection.supersededBy);
     const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities(),
       ...(selection.supersededBy ? { supersededBy: selection.supersededBy } : {}) };
     if (shell.route.room === 'workflow-runs') return <WorkflowRunsRoom shell={shell} binding={{ ...binding, controller: runs }} />;
