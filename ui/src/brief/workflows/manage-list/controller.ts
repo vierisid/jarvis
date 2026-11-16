@@ -9,6 +9,7 @@ import {
   type RemovalReceipt,
   type WorkflowManagementPort,
 } from "./model";
+import { DEFAULT_VIEW, type ListViewPrefs } from "./list-view";
 export interface ManagementSlot {
   item: ManagedWorkflow;
   removed: boolean;
@@ -29,6 +30,7 @@ export interface ManagementState {
   broken: string[];
   selectedId: string | null;
   scrollTop: number;
+  view: ListViewPrefs;
 }
 const slot = (item: ManagedWorkflow): ManagementSlot => ({
   item,
@@ -41,7 +43,7 @@ const slot = (item: ManagedWorkflow): ManagementSlot => ({
 });
 /** Q-06: turning a workflow off stops its queued and waiting runs. Say so. */
 export const PAUSED_MESSAGE =
-  "Workflow paused. Its queued and waiting runs were stopped.";
+  "Workflow is off. Its queued and waiting runs were stopped.";
 /** One owner-scoped instance survives room/shell changes. Retire on logout or
  * owner replacement. An uncertain command can ONLY be cleared by reconciliation. */
 export class WorkflowManagementController {
@@ -54,6 +56,7 @@ export class WorkflowManagementController {
     broken: [],
     selectedId: null,
     scrollTop: 0,
+    view: DEFAULT_VIEW,
   };
   private listeners = new Set<() => void>();
   private sequence = 0;
@@ -91,6 +94,27 @@ export class WorkflowManagementController {
   }
   savePosition(top: number, selectedId = this.state.selectedId) {
     this.publish({ scrollTop: Math.max(0, top), selectedId });
+  }
+  /** A new search or filter starts at the first page and forgets kept rows. */
+  setView(patch: Partial<Pick<ListViewPrefs, "query" | "filter">>) {
+    this.publish({
+      view: {
+        ...this.state.view,
+        ...patch,
+        limit: DEFAULT_VIEW.limit,
+        keep: [],
+      },
+    });
+  }
+  showMore(by: number) {
+    const v = this.state.view;
+    this.publish({ view: { ...v, limit: v.limit + by } });
+  }
+  /** Keep a row drawn after the founder acts on it, even once it stops matching. */
+  keepInView(id: string) {
+    const v = this.state.view;
+    if (!v.keep.includes(id))
+      this.publish({ view: { ...v, keep: [...v.keep, id] } });
   }
   get hasUnresolved() {
     return this.state.rows.some((r) => r.phase !== "idle");
@@ -313,7 +337,7 @@ export class WorkflowManagementController {
         phase: "idle",
         command: null,
         receipt: { ...result.receipt! },
-        message: "Workflow deleted. Undo restores it paused.",
+        message: "Workflow deleted. Undo restores it, switched off.",
       });
     else {
       if (this.state.read.status === "empty")
@@ -327,9 +351,9 @@ export class WorkflowManagementController {
         receipt: null,
         message:
           command.action === "restore"
-            ? "Restored, paused."
+            ? "Restored, switched off."
             : result.item!.activation === "ENABLED"
-              ? "Workflow enabled."
+              ? "Workflow is on."
               : PAUSED_MESSAGE,
       });
     }

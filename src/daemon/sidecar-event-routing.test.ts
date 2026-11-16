@@ -6,12 +6,16 @@
  * the dashboard socket. They are dropped now; everything else is unchanged.
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { setDesktopEnabledSource } from '../actions/tools/desktop-guard.ts';
+import { setDesktopEnabledSource, setScreenCaptureEnabledSource } from '../actions/tools/desktop-guard.ts';
 import { AWARENESS_EVENT_TYPES, skipGenericSidecarEvent } from './sidecar-event-routing.ts';
 
 let desktopOn = true;
-beforeEach(() => { desktopOn = true; setDesktopEnabledSource(() => desktopOn); });
-afterEach(() => setDesktopEnabledSource(null));
+let awarenessOn = true;
+beforeEach(() => {
+  desktopOn = true; awarenessOn = true;
+  setDesktopEnabledSource(() => desktopOn); setScreenCaptureEnabledSource(() => awarenessOn);
+});
+afterEach(() => { setDesktopEnabledSource(null); setScreenCaptureEnabledSource(null); });
 
 test('desktop off, awareness not running: screen events never reach the generic pipeline', () => {
   desktopOn = false;
@@ -22,8 +26,17 @@ test('awareness running: its events are left to it, as before', () => {
   for (const type of AWARENESS_EVENT_TYPES) expect(skipGenericSidecarEvent(type, true)).toBe(true);
 });
 
-test('desktop on, awareness off: the old pass-through is unchanged', () => {
+test('desktop on, awareness switched on but its service not running yet: the old pass-through is unchanged', () => {
   for (const type of AWARENESS_EVENT_TYPES) expect(skipGenericSidecarEvent(type, false)).toBe(false);
+});
+
+// #1314 follow-up: after a boot with screen awareness off its service is null,
+// and a capture a sidecar sent before the observer pause reached it went
+// through the generic pipeline, OCR text and all, to the dashboard socket.
+test('desktop on, screen awareness off and its service not running: screen events never reach the generic pipeline', () => {
+  awarenessOn = false;
+  for (const type of AWARENESS_EVENT_TYPES) expect({ type, skipped: skipGenericSidecarEvent(type, false) }).toEqual({ type, skipped: true });
+  for (const type of ['file_change', 'notification', 'clipboard_change']) expect(skipGenericSidecarEvent(type, false)).toBe(false);
 });
 
 test('other sidecar events are never skipped here, switch on or off', () => {

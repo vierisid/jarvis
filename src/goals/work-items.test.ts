@@ -126,6 +126,27 @@ describe('Today work trace', () => {
     expect(getWorkItem(work.id).resultCheck?.runSnapshot?.status).toBe('FAILED');
   });
 
+  test('a failed run blocker shows its message as run history does, without an old webhook credential', () => {
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    claimNextJob();
+    updateRun(run.id, { status: 'FAILED', finishTime: Date.now(),
+      steps: { trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers: { authorization: 'Bearer OLDSECRET4321' } } } } } },
+      failedStep: { name: 'send', displayName: 'Send', errorMessage: 'rejected token OLDSECRET4321' } });
+    expect(getWorkItem(work.id).blocker).toMatchObject({ kind: 'run_failure', reason: 'rejected token [redacted]' });
+    expect(JSON.stringify(getWorkItem(work.id))).not.toContain('OLDSECRET4321');
+    checkWorkResult(work.id, { ...result, verdict: 'failed' });
+    expect(JSON.stringify(getWorkItem(work.id).resultCheck)).not.toContain('OLDSECRET4321');
+    expect(getWorkItem(work.id).resultCheck?.runSnapshot?.id).toBe(run.id);
+    // A snapshot an earlier check kept in clear is shown the same way.
+    const raw = getDb().query('SELECT result_check FROM commitment_work WHERE work_id = ?').get(work.id) as { result_check: string };
+    const check = JSON.parse(raw.result_check);
+    check.runSnapshot = getFlowRun(run.id);
+    getDb().run('UPDATE commitment_work SET result_check = ? WHERE work_id = ?', [JSON.stringify(check), work.id]);
+    expect(JSON.stringify(getDb().query('SELECT result_check FROM commitment_work WHERE work_id = ?').get(work.id))).toContain('OLDSECRET4321');
+    expect(JSON.stringify(getWorkItem(work.id).resultCheck)).not.toContain('OLDSECRET4321');
+  });
+
   test('a crash between waitpoint creation and the pause upload leaves a checkable failure', async () => {
     const { flow, work, goal } = configuredWork(); accept(work.id);
     const run = startWorkItemRun(work.id, flow.id);
