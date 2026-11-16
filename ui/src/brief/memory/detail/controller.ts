@@ -246,6 +246,43 @@ export class MemoryDetailController {
       message: "",
     });
   }
+  /** Flip the fact's private switch, then read the fact again so the screen shows what was saved. */
+  async togglePrivate() {
+    const { read, factId, phase, panel } = this.state;
+    if (
+      !this.access ||
+      phase !== "idle" ||
+      panel ||
+      read.state !== "ready" ||
+      !factId
+    )
+      return;
+    const next = read.data.fact.is_private !== 1;
+    const { generation, signal } = this.start();
+    this.publish({ phase: "pending", message: "Saving…" });
+    try {
+      const result = await this.port.setPrivate(factId, next, signal);
+      if (!this.current(generation)) return;
+      if (result.state !== "saved") {
+        this.publish({ phase: "idle", message: result.reason });
+        return;
+      }
+      this.invalidate();
+      await this.load(factId, null);
+      if (this.access && this.state.factId === factId)
+        this.publish({
+          message: next
+            ? "Kept private. It stays here and is not sent to the AI model."
+            : "No longer private. It can be sent to the AI model again.",
+        });
+    } catch {
+      if (this.current(generation))
+        this.publish({
+          phase: "idle",
+          message: "Could not save that change. Try again.",
+        });
+    }
+  }
   async loadHistory() {
     const id = this.state.factId;
     if (!this.access || !id || this.state.read.state !== "ready") return;

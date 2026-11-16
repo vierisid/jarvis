@@ -14,6 +14,18 @@
  * `validDisplayName` in `api/routes.ts` and by `storedDisplayName` in
  * `db/repos/flow-version.ts`; that last one also maps a blank name to
  * `UNTITLED_WORKFLOW_NAME`, so no writer stores a blank row.
+ *
+ * The cap is one number for every writer: the routes, `manage_workflow`'s
+ * create, compose, continue_setup and update, and the chat draft-update tool.
+ * They drifted once: the routes allowed 512 while the assistant's update
+ * allowed 200 and its create and compose had no cap. `manage_workflow` also
+ * holds step names and display names to it (`stepNameRefusal` in
+ * src/actions/tools/workflow-draft-update.ts); the dashboard's version routes
+ * do not check step names.
+ *
+ * A write cap, not the prompt budget: `FLOW_NAME_MAX_CHARS` in
+ * manage-workflow.ts truncates what the model reads back, and covers rows
+ * written before any cap existed.
  */
 export const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
 
@@ -38,6 +50,11 @@ export function workflowNameProblem(raw: unknown, max = FLOW_DISPLAY_NAME_MAX_CH
   if (isBlankWorkflowName(name)) return { ok: false, problem: "blank" };
   if (name.length > max) return { ok: false, problem: "too_long", length: name.length, max };
   return { ok: true, name };
+}
+
+/** The plain refusal for a name over the cap. `what` names the field. */
+export function nameTooLongMessage(what: string, length: number, max = FLOW_DISPLAY_NAME_MAX_CHARS): string {
+  return `${what} is ${length} characters; the limit is ${max}`;
 }
 
 /** A stored name as a person should see it. */

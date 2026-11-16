@@ -4,6 +4,7 @@ import { readBoundedText } from '../../util/bounded-body.ts';
 import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
+import { boundedRunSteps } from './run-view';
 import { FLOW_DISPLAY_NAME_MAX_CHARS, isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from '../display-name';
 import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
 import type { FlowRun } from '../db/repos/flow-run';
@@ -2594,7 +2595,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           };
           if (status) opts.status = status;
           const graphs = new Map<string, FlowTriggerNode | undefined>();
-          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...boundedRunSteps(shown), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2711,7 +2712,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
           const shown = run ? shownRun(run) : null;
-          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
+          return shown ? ok({ ...boundedRunSteps(shown), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 

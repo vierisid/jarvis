@@ -26,9 +26,13 @@ export function createHostTransport(send: typeof fetch = fetch, onUnauthorized: 
   };
   return { request, json, stop: () => lifetime.abort(), signal: lifetime.signal };
 }
+/** A read the host answered with an error status, so a caller can tell a missing record from a broken read. */
+export class RequestError extends Error {
+  constructor(readonly status: number) { super(`Request unavailable (${status})`); this.name = 'RequestError'; }
+}
 /** A refused read or write: the status and, when the server sent JSON, what it said. */
-export class HostRefusal extends Error {
-  constructor(readonly status: number, readonly body: unknown) { super(`Request unavailable (${status})`); this.name = 'HostRefusal'; }
+export class HostRefusal extends RequestError {
+  constructor(status: number, readonly body: unknown) { super(status); this.name = 'HostRefusal'; }
 }
 export type HostTransport = ReturnType<typeof createHostTransport>;
 export const post = (value: unknown): RequestInit => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });

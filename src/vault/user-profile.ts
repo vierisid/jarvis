@@ -94,16 +94,31 @@ function saveUserProfileRecord(input: Record<string, unknown>): UserProfileRecor
 
 /** Called inside the fact correction transaction, so settings and projections commit together. */
 export function syncUserProfileFactCorrection(fact: Fact, object: string): void {
+  // A private fact never writes itself into the profile: profile answers reach every prompt.
+  if (fact.is_private) return;
+  const question = profileSyncQuestion(fact); if (!question) return;
+  const profile = getUserProfile(); if (!profile) return;
+  saveUserProfile({ ...profile.answers, [question]: object });
+}
+/** The profile question a correction or confirmation of this fact rewrites, or null when it rewrites none. */
+function profileSyncQuestion(fact: Fact): string | null {
   const question = profileQuestionForPredicate(fact.predicate_key);
-  if (!question || fact.scope || fact.valid_from !== null || fact.valid_to !== null) return;
+  if (!question || fact.scope || fact.valid_from !== null || fact.valid_to !== null) return null;
   // A separately entered legal name is not necessarily the preferred-name projection.
-  if (fact.predicate_key === 'name' && !hasProfileEvidence(fact)) return;
+  if (fact.predicate_key === 'name' && !hasProfileEvidence(fact)) return null;
   const currentUser = getDb().query<{ id: string }, [string]>(
     'SELECT id FROM entities WHERE source = ? ORDER BY updated_at DESC LIMIT 1'
   ).get(USER_PROFILE_VAULT_SOURCE);
-  const profile = getUserProfile();
-  if (!profile || currentUser?.id !== fact.subject_id) return;
-  saveUserProfile({ ...profile.answers, [question]: object });
+  return currentUser?.id === fact.subject_id ? question : null;
+}
+/**
+ * A fact the profile answers or the onboarding interview stand behind, or one a
+ * confirmation or correction would copy into a profile answer. Profile answers
+ * reach prompts from Profile settings, so such a fact cannot be kept private
+ * from Memory: the switch would promise more than it does.
+ */
+export function isProfileBackedFact(fact: Fact): boolean {
+  return hasProfileEvidence(fact) || profileSyncQuestion(fact) !== null;
 }
 
 function hasProfileEvidence(fact: Fact): boolean {
@@ -255,6 +270,9 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
         basis: fact.confirmed ? undefined : 'inferred', sourceRef: fact.sourceRef, quote: fact.quote,
       })]; } catch (error) { if (error instanceof FactSuppressedError) return []; throw error; }
     });
+    // What the owner typed into Profile settings reaches every prompt, so a fact
+    // it now stands behind is no longer private, and Memory does not say it is.
+    for (const fact of saved) if (fact.is_private) db.run('UPDATE facts SET is_private = 0 WHERE id = ?', [fact.id]);
     for (const old of previous) if (!saved.some(f => f.id === old.id)) {
       const next = saved.find(f => f.predicate_key === old.predicate_key);
       db.run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [next?.id ?? null, old.id]);

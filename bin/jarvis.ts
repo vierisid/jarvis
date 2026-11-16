@@ -65,6 +65,8 @@ ${c.bold('Start options:')}
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
   --data-dir <path> Override data directory (default: ~/.jarvis)
+  --new-database    Create an empty database even though saved state exists
+                    (a missing or empty jarvis.db otherwise stops the start)
   --no-local-tools  Run the general tools only on a sidecar (your machine), never
                     on this host (Docker/headless). The site builder still runs here.
   --system-config <path>
@@ -113,6 +115,7 @@ async function cmdStart(args: string[]): Promise<void> {
   const detach = args.includes('--detach') || args.includes('-d');
   const noOpen = args.includes('--no-open');
   const noLocalTools = args.includes('--no-local-tools');
+  const allowNewDatabase = args.includes('--new-database');
 
   // Parse --port (`--port N` or `--port=N`)
   const parsedPort = parsePortArg(args);
@@ -127,6 +130,13 @@ async function cmdStart(args: string[]): Promise<void> {
   const dataDirIdx = args.indexOf('--data-dir');
   if (dataDirIdx !== -1 && args[dataDirIdx + 1]) {
     dataDir = args[dataDirIdx + 1]!;
+    // Forwarded to the detached child and to `jarvis update`'s restart, where
+    // a dash-leading value would be read as a flag (`--data-dir -d` would make
+    // every child detach again).
+    if (dataDir.startsWith('-')) {
+      console.error(c.red(`Error: --data-dir value cannot start with '-' (for a directory named that, use ./${dataDir})`));
+      process.exit(1);
+    }
   }
 
   // Parse --system-config (hosted-mode flag, usejarvis #66).
@@ -213,7 +223,7 @@ async function cmdStart(args: string[]): Promise<void> {
     }
 
     const { startDaemon } = await import('../src/daemon/index.ts');
-    await startDaemon({ port, dataDir, noLocalTools, systemConfigPath });
+    await startDaemon({ port, dataDir, noLocalTools, systemConfigPath, allowNewDatabase });
 
     if (!noOpen && dashboard.openUrl) {
       openDashboard(dashboard.openUrl);
@@ -243,6 +253,7 @@ async function cmdStart(args: string[]): Promise<void> {
     const logPath = plainLogPath();
 
     const daemonArgs = detachedDaemonArgs(join(PACKAGE_ROOT, 'bin/jarvis.ts'), { port, dataDir, noLocalTools, systemConfigPath });
+    if (allowNewDatabase) daemonArgs.push('--new-database');
 
     // We redirect the child's stdout AND stderr into logPath. If
     // daemon.log_file_path names this same file the child does NOT install its
@@ -590,7 +601,11 @@ async function cmdRestart(args: string[]): Promise<void> {
   const pid = isLocked();
   // Read before the stop clears it: the new daemon starts the way the old one
   // did (detached or not, same port and options) unless the user says otherwise.
-  const startArgs = restartStartArgs(pid ? readLaunchRecord(pid) : null, args);
+  const recorded = pid ? readLaunchRecord(pid) : null;
+  const startArgs = restartStartArgs(recorded, args);
+  // restartStartArgs keeps the user's args first and appends what it took
+  // from the record, so the tail is what was reused.
+  const reused = startArgs.slice(args.length);
   if (pid) {
     if (!await cmdStop()) {
       // A service manager can bring the daemon back under a new pid before the
@@ -611,6 +626,12 @@ async function cmdRestart(args: string[]): Promise<void> {
   // Before the start, not after: with no -d, cmdStart does not return until the
   // daemon exits, and a note printed then would arrive hours late.
   await printLaunchdHandoffNote();
+  if (reused.length) {
+    console.log(c.dim(`  Starting with the options it was started with: ${reused.join(' ')}`));
+    console.log(c.dim('  (an option passed here replaces the recorded one)'));
+  } else if (pid && !recorded) {
+    console.log(c.dim('  The stopped daemon did not record its start options; starting with the ones given here.'));
+  }
   await cmdStart(startArgs);
 }
 
