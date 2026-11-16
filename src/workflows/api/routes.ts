@@ -3,7 +3,10 @@ import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
-import { editorVersion } from './editor-version';
+import { editorVersion, versionAsShown } from './editor-version';
+import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
+import type { FlowRun } from '../db/repos/flow-run';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -1743,7 +1746,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!scopedFlow(req, id)) return err("flow not found", 404);
-          return ok(listVersions(id));
+          return ok(listVersions(id).map(versionAsShown));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -1928,7 +1931,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
+          return ok(osWarnings.length > 0 ? { ...versionAsShown(locked), osWarnings } : versionAsShown(locked));
         }),
     },
 
@@ -1984,8 +1987,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          // A value the editor was shown as `[redacted]` and sent back unchanged keeps the stored one.
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, restoreShownSample(getFlowVersion(versionId), stepName, output)));
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
       DELETE: (req) =>
         trapErrors(() => {
@@ -1999,7 +2003,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
           const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
     },
 
@@ -2144,7 +2148,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version });
+          return ok({ flow: serializeFlow(flow), version: versionAsShown(version) });
         }),
     },
 
@@ -2349,7 +2353,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run), continuedFailures: continuedFailures(run) }));
+          const graphs = new Map<string, FlowTriggerNode | undefined>();
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2450,9 +2455,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const run = scopedRun(req, runId);
+        if (!run) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
+        // A generated password or an old webhook credential a step sent on is not shown here either.
+        const scrub = runScrubber(run, getFlowVersion(run.flowVersionId)?.trigger);
+        return ok({ runId, effects: scrubValue(listWorkflowEffects(runId), scrub), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2462,7 +2470,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run), continuedFailures: continuedFailures(run) }) : err("run not found", 404);
+          const shown = run ? shownRun(run) : null;
+          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 
@@ -2704,4 +2713,15 @@ function validateConnectionValueShape(
     default:
       return null;
   }
+}
+
+/**
+ * A run as the dashboard is shown it: no generated password and no webhook
+ * credential header, also in rows stored before the trigger withheld them
+ * (`runAsShown`). Read side only; the stored row is not rewritten. `graphs`
+ * caches each version's graph across a page of runs.
+ */
+function shownRun(run: FlowRun, graphs = new Map<string, FlowTriggerNode | undefined>()): FlowRun {
+  if (!graphs.has(run.flowVersionId)) graphs.set(run.flowVersionId, getFlowVersion(run.flowVersionId)?.trigger);
+  return runAsShown(run, graphs.get(run.flowVersionId));
 }

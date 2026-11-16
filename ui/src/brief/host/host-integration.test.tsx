@@ -279,10 +279,10 @@ test('publishing from the existing canvas route reloads authoritative state and 
   try {
     await React.act(async () => root.render(<Room shell={shell} />));
     expect(button('Run workflow').disabled).toBe(true); const before = reads;
-    await click('Publish version');
+    await click('Save and turn on');
     expect(publications).toBe(1); expect(reads).toBeGreaterThan(before);
     expect(button('Run workflow').disabled).toBe(false);
-    expect(button('Publish version')).toBeUndefined(); expect(button('Edit a new draft')).toBeTruthy();
+    expect(button('Save and turn on')).toBeUndefined(); expect(button('Edit workflow')).toBeTruthy();
   } finally { rooms.retire(); transport.stop(); }
 });
 
@@ -321,8 +321,8 @@ test('an earlier version opened from run history is read only: no Run, no new dr
     await React.act(async () => root.render(<Canvas shell={shell('workflow', { flowId, versionId: older })} />));
     await React.act(async () => { await new Promise(r => setTimeout(r, 50)); });
     expect(host.textContent).toContain('Earlier version (read only)');
-    expect(button('Edit a new draft')).toBeUndefined(); expect(button('Run workflow')).toBeUndefined();
-    expect(button('Publish version')).toBeUndefined();
+    expect(button('Edit workflow')).toBeUndefined(); expect(button('Run workflow')).toBeUndefined();
+    expect(button('Save and turn on')).toBeUndefined();
     await click('Open current version');
     expect(opened.at(-1)).toEqual({ room: 'workflow', selection: { flowId, versionId: current } });
     expect(writes).toEqual([]);
