@@ -533,7 +533,11 @@ Three things about #598 are load bearing beyond the frame itself:
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
   `displayName` that is not a non-empty string or exceeds 512 characters
-  (`WORKFLOW_NAME_MAX_CHARS` in `workflows/api/display-name.ts`). The assistant's
+  (`WORKFLOW_NAME_MAX_CHARS` in `workflows/api/display-name.ts`), or that holds
+  a control character, a line or paragraph separator or a lone surrogate (a
+  name the flow already stores is let through, so a workflow named before that
+  rule can still be saved; every writer stores a name on one line without the
+  bidi controls, `storedDisplayName`). The assistant's
   `manage_workflow` holds `create`, `compose`, `continue_setup` and `update`
   names, and the step `name` / `displayName` a compose saves or an update
   writes, to the same 512. A composer-chosen workflow name over it falls back
