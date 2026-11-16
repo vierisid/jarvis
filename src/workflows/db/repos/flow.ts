@@ -11,6 +11,7 @@ import { withOwnedFlowVersion } from "./flow-version-ownership";
 import { assertFlowCodeStepsAllowed } from "./flow-code-steps";
 import { assertFlowHasSteps, assertFlowReady, assertVersionReady } from './flow-readiness';
 import { pinFlowBindings } from './binding-pins';
+import { MAX_TIME_SAVED_PER_RUN } from '../../time-saved-estimate';
 
 export type FlowStatus = "ENABLED" | "DISABLED";
 
@@ -148,6 +149,20 @@ export function listFlows(
 }
 
 /**
+ * Every flow of a project, newest first, in ONE query. `listFlows` is a page
+ * (default 100); a caller that means "all of them" (trigger registration at
+ * startup, a name lookup) must not use it or it silently stops at the page
+ * size. SQLite reads `LIMIT -1` as no limit, and a single synchronous read is
+ * a consistent snapshot even when the caller awaits between rows.
+ */
+export function listAllFlows(
+  projectId: string = DEFAULT_IDS.project,
+  opts: { status?: FlowStatus } = {},
+): FlowRow[] {
+  return listFlows(projectId, { ...opts, limit: -1, offset: 0 });
+}
+
+/**
  * Set the flow's status. Turning an ENABLED flow off stamps `disabled_at`, and
  * the caller then stops the runs it had started (repos/flow-turn-off.ts,
  * Q-06); `turnedOff` says whether this call did that.
@@ -254,6 +269,15 @@ export function updateFlowMetadata(id: string, metadata: Record<string, unknown>
     [metadata ? JSON.stringify(metadata) : null, now(), id],
   );
   if (res.changes === 0) throw new Error(`updateFlowMetadata: flow not found (id=${id})`);
+}
+
+/** Minutes one run of this flow saves, as set by its owner. Null clears it (the estimate applies again). */
+export function updateFlowTimeSavedPerRun(id: string, minutes: number | null): void {
+  if (minutes !== null && (!Number.isInteger(minutes) || minutes < 0 || minutes > MAX_TIME_SAVED_PER_RUN)) {
+    throw new Error(`time saved per run must be a whole number of minutes from 0 to ${MAX_TIME_SAVED_PER_RUN}, or null`);
+  }
+  const res = db().run(`UPDATE flow SET time_saved_per_run = ?, updated = ? WHERE id = ?`, [minutes, now(), id]);
+  if (res.changes === 0) throw new Error(`updateFlowTimeSavedPerRun: flow not found (id=${id})`);
 }
 
 export function deleteFlow(id: string): void {
