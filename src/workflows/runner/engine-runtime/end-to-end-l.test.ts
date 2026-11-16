@@ -24,9 +24,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../db";
 import { graphDigest } from "../../runtime/continuation";
+import { PieceCatalog, metadataToCatalogEntry } from "../../runtime/piece-catalog";
+import { compileWorkflow } from "../../runtime/workflow-readiness";
 import { createFlow } from "../../db/repos/flow";
 import {
   createDraftVersion,
@@ -53,6 +56,7 @@ import { EngineFlowExecutor } from "./engine-flow-executor";
 import type { Job } from "../../db/repos/job-queue";
 import type { RunFlowJobPayload } from "../handler";
 
+const require = createRequire(import.meta.url);
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const initialCached = findCachedBundle();
 const skipBundleTests = initialCached === null && !buildOptIn;
@@ -110,66 +114,59 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
     closeWorkflowDb();
   });
 
+  /** Runs one validate step with `input` through the production executor and returns its envelope. */
+  async function runValidate(input: Record<string, unknown>) {
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const trigger: FlowTriggerNode = {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      displayName: "Manual",
+      settings: {
+        pieceName: PIECE_TEST_NAME,
+        pieceVersion: PIECE_VERSION,
+        triggerName: "manual",
+        input: { payload: {} },
+      },
+      nextAction: {
+        name: "step_validate",
+        type: "PIECE",
+        displayName: "Validate plumbing",
+        settings: {
+          pieceName: PIECE_VALIDATE_NAME,
+          pieceVersion: PIECE_VERSION,
+          actionName: "validate",
+          input,
+        },
+      },
+    };
+    const v = createDraftVersion({ flowId: flow.id, displayName: "L plumbing", trigger });
+    updateDraftVersion(v.id, { trigger, valid: true });
+    lockVersion(v.id);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+    // The graph the RUN_FLOW handler records before the engine starts.
+    getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(trigger), run.id]);
+    // Drive through the production EngineFlowExecutor (not the raw handle)
+    // so the K-review's race-tolerant terminal-status wait is exercised.
+    const executor = new EngineFlowExecutor(runtime!);
+    const result = await executor.execute({
+      run: getFlowRun(run.id)!,
+      version: getFlowVersion(v.id)!,
+      job: { id: "job_l", payload: { runId: run.id, payload: {}, executeTrigger: false } } as unknown as Job<RunFlowJobPayload>,
+      payload: {},
+    });
+    return { trigger, result, persisted: getFlowRun(run.id) };
+  }
+
   test.skipIf(skipE2eTests)(
     "OAuth2 connection round-trips through credential resolver; store r/w lands; run SUCCEEDS",
     async () => {
-      const flow = createFlow({ projectId: DEFAULT_IDS.project });
-      const trigger: FlowTriggerNode = {
-        name: "trigger",
-        type: "PIECE_TRIGGER",
-        displayName: "Manual",
-        settings: {
-          pieceName: PIECE_TEST_NAME,
-          pieceVersion: PIECE_VERSION,
-          triggerName: "manual",
-          input: { payload: {} },
-        },
-        nextAction: {
-          name: "step_validate",
-          type: "PIECE",
-          displayName: "Validate plumbing",
-          settings: {
-            pieceName: PIECE_VALIDATE_NAME,
-            pieceVersion: PIECE_VERSION,
-            actionName: "validate",
-            // The `auth` key uses upstream's `{{connections['<externalId>']}}`
-            // template syntax. The engine's props-resolver dereferences it
-            // by calling /v1/worker/app-connections/<externalId>, which
-            // dispatches to our CredentialResolver -> validateSource.
-            input: {
-              auth: `{{connections['${CONNECTION_EXTERNAL_ID}']}}`,
-              storeValue: "round-trip-payload",
-            },
-          },
-        },
-      };
-      const v = createDraftVersion({
-        flowId: flow.id,
-        displayName: "L plumbing",
-        trigger,
-      });
-      updateDraftVersion(v.id, { trigger, valid: true });
-      lockVersion(v.id);
-
-      const run = createFlowRun({
-        flowId: flow.id,
-        flowVersionId: v.id,
-        environment: "TESTING",
-      });
-      // The graph the RUN_FLOW handler records before the engine starts.
-      getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ?", [graphDigest(trigger), run.id]);
-
-      // Drive through the production EngineFlowExecutor (not the raw handle)
-      // so the K-review's race-tolerant terminal-status wait is exercised.
-      const executor = new EngineFlowExecutor(runtime!);
-      const result = await executor.execute({
-        run: getFlowRun(run.id)!,
-        version: getFlowVersion(v.id)!,
-        job: {
-          id: "job_l",
-          payload: { runId: run.id, payload: {}, executeTrigger: false },
-        } as unknown as Job<RunFlowJobPayload>,
-        payload: {},
+      // The `auth` key uses upstream's `{{connections['<externalId>']}}`
+      // template syntax. The engine's props-resolver dereferences it
+      // by calling /v1/worker/app-connections/<externalId>, which
+      // dispatches to our CredentialResolver -> validateSource.
+      const { result, persisted } = await runValidate({
+        auth: `{{connections['${CONNECTION_EXTERNAL_ID}']}}`,
+        storeValue: "round-trip-payload",
       });
 
       // Successful return means: engine processed flow; uploadRunLog landed
@@ -177,7 +174,6 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
       // logic settled.
       expect(result.stepsCount).toBeGreaterThanOrEqual(1);
 
-      const persisted = getFlowRun(run.id);
       expect(persisted?.status).toBe("SUCCEEDED");
 
       // Engine wraps each action's return in a StepOutput envelope:
@@ -205,6 +201,46 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
       expect(output["storeValue"]).toBe("round-trip-payload");
       expect(output["storeReadBack"]).toBe("round-trip-payload");
       expect(output["projectId"]).toBe(DEFAULT_IDS.project);
+    },
+    60_000,
+  );
+
+  // F-28: the piece declares OAuth2, but its action does not need a connection.
+  // A step without one must pass readiness (as the catalog the daemon builds
+  // from the piece's metadata describes it) and run.
+  test.skipIf(skipE2eTests)(
+    "a validate step without a saved connection is ready, runs, and reports no token",
+    async () => {
+      const mod = require(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces/jarvis/validate/dist/src/index.js")) as {
+        jarvisValidatePiece: { metadata(): unknown };
+      };
+      const entry = metadataToCatalogEntry({ ...(mod.jarvisValidatePiece.metadata() as object), name: PIECE_VALIDATE_NAME });
+      expect(entry.auth).toBeDefined();
+      const input = { storeValue: "no-connection" };
+      const graph = {
+        name: "trigger", type: "EMPTY",
+        nextAction: { name: "step_validate", type: "PIECE", settings: { pieceName: PIECE_VALIDATE_NAME, actionName: "validate", input } },
+      };
+      const readiness = compileWorkflow(graph, { pieces: new PieceCatalog([entry]) });
+      expect(readiness.issues).toEqual([]);
+      expect(readiness.ready).toBe(true);
+
+      // Not requiring a connection must not exempt one that is bound: the
+      // binding is still checked against the saved, governed inventory.
+      const bound = { ...input, auth: "{{connections['not-saved']}}" };
+      const refused = compileWorkflow(
+        { ...graph, nextAction: { ...graph.nextAction, settings: { ...graph.nextAction.settings, input: bound } } },
+        { pieces: new PieceCatalog([entry]), connection: () => "Connection not-saved is not saved" },
+      );
+      expect(refused.ready).toBe(false);
+      expect(refused.issues.map(i => i.code)).toContain("CONNECTION_BINDING");
+
+      const { persisted } = await runValidate(input);
+      expect(persisted?.status).toBe("SUCCEEDED");
+      const step = ((persisted?.steps ?? {}) as Record<string, { output?: { status?: string; output?: Record<string, unknown> } }>)["step_validate"];
+      expect(step?.output?.status).toBe("SUCCEEDED");
+      expect(step?.output?.output?.["accessToken"]).toBeNull();
+      expect(step?.output?.output?.["storeReadBack"]).toBe("no-connection");
     },
     60_000,
   );
