@@ -53,8 +53,23 @@ prevents a resumed selected send from being sent twice.
 Work items include the same additive `recovery` member. Healthy/nonterminal runs
 return `null`; terminal incomplete runs return:
 
-- `state`: `unknown`, `blocked` (recorded effects did not dispatch), or
-  `recoverable` (partial completion evidence exists, still no replay).
+- `state`: `unknown`, `blocked` (recorded effects did not dispatch),
+  `recoverable` (partial completion evidence exists, still no replay), or
+  `nothing_happened`.
+  A run stopped (Kill, cancel, turn off, crash) before any step that can reach
+  outside Jarvis ran is `nothing_happened`: no effect record, no untracked step,
+  and either it never began or a readable graph accounts for every recorded step
+  with no external step (CODE or a piece that is not one of Jarvis's own) that
+  could have run unrecorded. A run never began when it was still queued when
+  stopped and the run handler never recorded its graph, step or effect (a start
+  time alone is not evidence: a run gets one when it is requested). It never
+  needs attention and is not listed in the inbox, so one Kill does not bury real
+  uncertain sends under queued runs. Jarvis's own pieces (`@jarvispieces/`:
+  notify, ask, agent, ...) leave no untracked step: when they dispatch they have
+  an effect record. The in-run core steps (store, delay, ...) still count as
+  untracked, as on the Runs tab. Anything else stays `unknown`: an effect that
+  is dispatching or unknown, an untracked step that may have run, or a run that
+  began and cannot be shown to have run nothing external.
 - `effects`: stable effect/step IDs, `unknown` / `not_started` / `completed`,
   lookup capability and qualified provider evidence. A legacy authorization is
   never presented as a completed external effect.
