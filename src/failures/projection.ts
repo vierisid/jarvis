@@ -35,6 +35,8 @@ export type FailureCategory =
   | 'provider_limit'
   /** The computer, service or provider it needed could not be reached. */
   | 'target_offline'
+  /** A provider answered with an error or a reply it could not use. */
+  | 'provider_error'
   /** An approval was denied, expired or withdrawn, or Authority does not allow it. */
   | 'approval_denied'
   /** It may or may not have taken effect. */
@@ -57,7 +59,7 @@ export type RecoveryStep =
   | 'edit_and_run_again' | 'connect' | 'wait_or_switch_model' | 'bring_online' | 'ask_again' | 'review_authority'
   | 'check_before_running_again' | 'check_earlier_steps' | 'run_again' | 'resend' | 'check_before_resending' | 'open_details'
   | 'wait_and_run_again' | 'run_again_when_resumed' | 'accept_binding_change' | 'update_recipient' | 'update_desktop_app'
-  | 'change_request' | 'appeal_restriction' | 'reinstall_piece';
+  | 'change_request' | 'appeal_restriction' | 'reinstall_piece' | 'handle_less_data';
 
 export interface FailureLinks {
   runId?: string; flowId?: string; stepName?: string; effectId?: string;
@@ -141,6 +143,10 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
+  // G-6: the card was raised, then the run could not load the connection because its credential was replaced
+  // (accept the change before a new run is admitted) or the connection was removed (set it up again).
+  CONNECTION_CHANGED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was changed after you were asked, so nothing was sent', step: 'accept_binding_change' },
+  CONNECTION_REMOVED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was removed after you were asked, so nothing was sent', step: 'connect' },
   // A child call reused an invocation key for a different payload (for example a constant key in a loop); nothing was started.
   INVOCATION_KEY_REUSED: { category: 'invalid_input', why: 'its invocation key was already used for different data. Include something that changes per item in the key', step: 'edit_and_run_again' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
@@ -170,6 +176,8 @@ const APPROVAL_WHY: Record<string, string> = {
   APPROVAL_WITHDRAWN: 'its approval was withdrawn', APPROVAL_REQUIRED: 'it now needs approval',
   EFFECT_CHANGED_AFTER_REVIEW: 'what it would do changed after it was approved',
 };
+/** The engine stopped a run whose recorded data passed the size Jarvis keeps for one run. */
+export const RUN_LOG_SIZE_EXCEEDED = 'RUN_LOG_SIZE_EXCEEDED';
 /** What an action does, for "needs a higher level". */
 const ASKED_ACTIONS: Record<string, { what: string; setting: string }> = {
   send_email: { what: 'sending email', setting: 'Send email' },
@@ -220,7 +228,7 @@ const PROVIDER: Record<LLMErrorCode, { category: FailureCategory; what: string }
   bad_request: { category: 'invalid_input', what: 'the AI provider refused the request as invalid' },
   unsupported_tools: { category: 'provider_limit', what: 'the selected model cannot use tools' },
   not_found: { category: 'missing_binding', what: 'the configured model or endpoint does not exist' },
-  server: { category: 'target_offline', what: 'the AI provider had a server error' },
+  server: { category: 'provider_error', what: 'the AI provider returned an error' },
   quota_exhausted: { category: 'provider_limit', what: "the plan's included AI usage is used up for now" },
   content_policy: { category: 'provider_limit', what: "the AI platform's content policy blocked the request" },
   restricted: { category: 'provider_limit', what: 'hosted AI is restricted on this account' },
@@ -249,6 +257,7 @@ const NEXT: Record<RecoveryStep, string> = {
   // Waiting does not lift a content policy block or an account restriction.
   change_request: 'Change what it asks, then try again. If you think it was blocked by mistake, contact support.',
   appeal_restriction: 'Contact support to appeal, or use your own AI provider.',
+  handle_less_data: 'Change the workflow to handle less data per run, for example fewer items or smaller results, then run it again.',
 };
 const next = (...steps: RecoveryStep[]) => steps.map(step => ({ step, label: NEXT[step] }));
 /** Recovery steps with their labels, for a reading that adjusts a projected failure. */
@@ -311,6 +320,11 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         return build(uncertain ? 'uncertain_effect' : 'not_started', uncertain ? 'unknown' : 'none',
           `${s} could not complete the tools required for its task.`, uncertain ? MAYBE : NOTHING,
           ['review_authority', 'open_details'], links, code, detail);
+      }
+      // The size is checked after a step finishes, so nothing after that step started.
+      if (code === RUN_LOG_SIZE_EXCEEDED) {
+        return build('invalid_input', 'none', `${s} stopped: it produced more data than Jarvis keeps for one run (10 MB).`,
+          'Nothing after that point ran.', ['handle_less_data'], links, code, detail);
       }
       const browserTask = code ? BROWSER_TASK_FAILURES[code] : undefined;
       if (browserTask) return build(browserTask.category, o.effect === 'not_started' ? 'none' : 'unknown',
@@ -428,7 +442,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         : evidence.code === 'restricted' ? ['appeal_restriction']
         : mapped.category === 'provider_limit' ? ['wait_or_switch_model']
         : mapped.category === 'missing_binding' ? ['connect']
-        : mapped.category === 'target_offline' ? (effect === 'none' ? ['run_again'] : [])
+        : mapped.category === 'target_offline' || mapped.category === 'provider_error' ? (effect === 'none' ? ['run_again'] : [])
         : mapped.category === 'invalid_input' ? ['edit_and_run_again'] : [];
       if (effect === 'unknown') steps.push('check_before_running_again');
       return build(mapped.category, effect, `${s} failed: ${mapped.what}.`,

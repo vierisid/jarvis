@@ -198,6 +198,14 @@ export function makeMemoryDetailFixture(
         ),
       };
     },
+    async setPrivate(factId, value) {
+      await pause();
+      const old = facts.get(factId);
+      if (!old) return { state: "missing", reason: "This fact is no longer available." };
+      old.fact = { ...old.fact, is_private: value ? 1 : 0 };
+      old.item = { ...old.item, private: value, revision: digest(++revision) };
+      return { state: "saved" };
+    },
     async decide(command) {
       writes++;
       await pause();

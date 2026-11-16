@@ -699,3 +699,111 @@ describe('OpenAI Responses connection test', () => {
     expect(body.error).not.toContain('sk-example-secret');
   });
 });
+
+describe('POST /api/config/llm/test redacts credentials a provider echoes', () => {
+  const realFetch = globalThis.fetch;
+  const previousSecretsDir = process.env.JARVIS_SECRETS_DIR;
+  // No recognizable prefix: only the exact-key redaction can catch these.
+  const savedKey = 'opaque-gateway-key-0123456789';
+  const typedKey = 'typed-opaque-key-9876543210';
+  const gateway: LLMProviderEntry = { kind: 'openai_compatible', base_url: 'https://gw.example/v1', api_key: savedKey };
+  let secretsDir = '';
+
+  beforeEach(() => {
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-llm-redact-test-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = previousSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  /** Every chat request fails with a body that repeats the bearer it was sent. */
+  function echoingGateway(status: number, wording: (bearer: string) => string): void {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/models')) {
+        return Response.json({ data: [{ id: 'gw-model' }] });
+      }
+      const bearer = (new Headers(init?.headers).get('authorization') ?? '').replace(/^Bearer /, '');
+      return new Response(wording(bearer), { status, headers: { 'Content-Type': 'text/plain' } });
+    }) as unknown as typeof fetch;
+  }
+
+  it('drops the saved key from a failed test call', async () => {
+    echoingGateway(401, (bearer) => `invalid credential ${bearer}; upstream said sk-upstream-leaked-1234`);
+    const response = await callEndpoint({ gw: gateway }, { name: 'gw' }, { default: 'gw:gw-model' });
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('invalid credential ***redacted***');
+    expect(body.error).not.toContain(savedKey);
+    // The shared patterns still apply on top of the exact key.
+    expect(body.error).not.toContain('sk-upstream-leaked-1234');
+  });
+
+  it('drops the saved key from the last error of a model walk', async () => {
+    echoingGateway(404, (bearer) => `model gw-model not found for ${bearer}`);
+    const response = await callEndpoint({ gw: gateway }, { name: 'gw' });
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('none of the first 1 accepted a test request');
+    expect(body.error).toContain('***redacted***');
+    expect(body.error).not.toContain(savedKey);
+  });
+
+  it('drops a key typed into the test form, and the saved one', async () => {
+    echoingGateway(401, (bearer) => `rejected ${bearer}, previously ${savedKey}`);
+    const response = await callEndpoint(
+      { gw: gateway },
+      { name: 'gw', api_key: typedKey },
+      { default: 'gw:gw-model' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('rejected ***redacted***, previously ***redacted***');
+    expect(body.error).not.toContain(typedKey);
+    expect(body.error).not.toContain(savedKey);
+  });
+
+  it('drops a padded typed key, and its URL-encoded and JSON-escaped echoes', async () => {
+    const awkwardKey = 'k+y/="abc-0123456789';
+    globalThis.fetch = (async () => new Response(
+      `rejected ?key=${encodeURIComponent(awkwardKey)} body {"key":${JSON.stringify(awkwardKey)}}`,
+      { status: 401, headers: { 'Content-Type': 'text/plain' } },
+    )) as unknown as typeof fetch;
+    const response = await callEndpoint(
+      { gw: gateway },
+      { name: 'gw', api_key: `  ${awkwardKey} ` },
+      { default: 'gw:gw-model' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('rejected ?key=***redacted*** body {"key":"***redacted***"}');
+  });
+
+  it('drops the key from the last error of a custom Anthropic endpoint walk', async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/v1/models')) return Response.json({ data: [{ id: 'gw-claude' }] });
+      const sent = new Headers(init?.headers).get('x-api-key') ?? new Headers(init?.headers).get('authorization') ?? '';
+      return Response.json(
+        { error: { type: 'not_found_error', message: `model gw-claude not found for ${sent.replace(/^Bearer /, '')}` } },
+        { status: 404 },
+      );
+    }) as unknown as typeof fetch;
+    const response = await callEndpoint(
+      { claude: { kind: 'anthropic', base_url: 'https://claude-gw.example', api_key: savedKey } },
+      { name: 'claude' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('could not use any of the 1 tried');
+    expect(body.error).toContain('***redacted***');
+    expect(body.error).not.toContain(savedKey);
+  });
+});
