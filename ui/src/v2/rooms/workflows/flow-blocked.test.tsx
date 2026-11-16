@@ -131,3 +131,20 @@ test("a run refused for its computer reads as the last run's outcome, not as blo
   expect(badge.textContent).toStartWith("Last run refused: ");
   expect(badge.getAttribute("title")).toContain("offline");
 });
+
+test("a block no run shows (a replaced key) is a plain label: no button, and a click opens nothing", async () => {
+  const { FlowBlockedChip } = await import("./WorkflowsRoom");
+  const focused: unknown[] = [];
+  function Probe() {
+    useRunFocus((target) => { focused.push(target); });
+    return <FlowBlockedChip flowId="flow_1" blocked={{ code: "BINDING_STALE", kind: "readiness", runId: null, at: 1,
+      message: "The credential stored in connection account was replaced, so this workflow is paused. Publish it again to accept the change." }} />;
+  }
+  await act(async () => root!.render(<Probe />));
+  const badge = host.querySelector<HTMLElement>("[data-blocked-code]")!;
+  expect(badge.getAttribute("role")).toBeNull();
+  expect(badge.getAttribute("tabindex")).toBeNull();
+  expect(badge.getAttribute("aria-label")).not.toContain("Open the run");
+  await act(async () => { badge.click(); });
+  expect(focused).toEqual([]);
+});

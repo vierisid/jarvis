@@ -7,6 +7,7 @@ import { compileWorkflow, type ReadinessContext } from '../../workflows/runtime/
 import { CODE_STEP_TYPE, walkFlowNodes } from '../../workflows/db/flow-graph';
 import { credentialEditRefusal, restoreRedactedCredentials, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
+import { workflowNameProblem } from '../../workflows/display-name';
 
 /** Covers the persisted authoring snapshot, not a recomputed readiness report. */
 export function draftRevision(version: FlowVersion): string {
@@ -94,7 +95,10 @@ export function updateSavedDraft(input: {
     if (flow.status === 'ENABLED' && !flow.published_version_id) fail('this unpublished draft is live; disable the workflow before editing');
     if (!/^[a-f0-9]{64}$/.test(input.expectedRevision) || draftRevision(version) !== input.expectedRevision) fail('draft changed since readback; get the definition again before editing');
     if (!input.context.pieces) fail('installed action schemas are unavailable');
-    if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200)) fail('name must be a nonempty string of at most 200 characters');
+    // The shared name rule (trimmed, a visible character, a cap), 200 here as before.
+    const named = input.name === undefined ? null : workflowNameProblem(input.name, 200);
+    if (named && !named.ok) fail('name must be a nonempty string of at most 200 characters');
+    const name = named?.ok ? named.name : undefined;
     // The model reads credential-taking steps redacted (`versionForModel`):
     // a value it wrote back unchanged keeps the stored credential, and an edit
     // that would store the marker in its place is refused (#1153).
@@ -109,8 +113,8 @@ export function updateSavedDraft(input: {
     const validation = compileWorkflow(graph, { ...input.context, phase: 'composition' });
     if (!validation.ready) fail('edited graph is invalid: ' + validation.issues.slice(0, 5).map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));
     input.validateContract?.(graph);
-    const changed = JSON.stringify(graph) !== JSON.stringify(version.trigger) || input.name !== undefined && input.name !== version.displayName;
+    const changed = JSON.stringify(graph) !== JSON.stringify(version.trigger) || name !== undefined && name !== version.displayName;
     if (!changed) return { version, changed: false };
-    return { version: updateDraftVersion(version.id, { trigger: graph, ...(typeof input.name === 'string' ? { displayName: input.name } : {}) }), changed: true };
+    return { version: updateDraftVersion(version.id, { trigger: graph, ...(name !== undefined ? { displayName: name } : {}) }), changed: true };
   }).immediate();
 }

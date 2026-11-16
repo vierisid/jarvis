@@ -42,6 +42,12 @@ test('distinct stable sources never merge same-service accounts or library authe
   expect(JSON.stringify(snapshot)).not.toContain('SECRET');
   expect(JSON.stringify(snapshot)).not.toContain('enc2:');
 });
+test('the engine test fixture pieces are not offered as connectable library pieces', () => {
+  sources.pieces = () => new PieceCatalog([piece(), piece('@jarvispieces/piece-jarvis-validate'), piece('@jarvispieces/piece-jarvis-test', false)]);
+  const snapshot = provider.read();
+  expect(snapshot.rows.filter(r => r.kind === 'library_piece').map(r => r.sourceId)).toEqual(['piece:@fixture/mail']);
+  expect(snapshot.setup.some(a => a.id.includes('piece-jarvis-'))).toBe(false);
+});
 test('scope and owner filters run before selecting any credential material', () => {
   account('a'); account('foreign', { project_id: 'elsewhere' }); account('foreign-owner', { owner_id: 'elsewhere' });
   expect(provider.read().rows.filter(r => r.kind === 'workflow_connection').map(r => r.accountId)).toEqual(['a']);

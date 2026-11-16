@@ -291,8 +291,10 @@ jobs:
       - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
       # This job exists for the macOS-only behaviour (what launchd's KeepAlive
-      # does and does not relaunch, plist generation); the rest of src/cli is
-      # already covered on ubuntu and would only add 10x-billed minutes.
+      # does and does not relaunch, plist generation, and how `jarvis stop`
+      # tells its own daemon from another listener through lsof, without
+      # /proc); the rest of src/cli is already covered on ubuntu and would
+      # only add 10x-billed minutes.
       #
       # (A wider `bun test src/cli/` run used to fail backup.test.ts here with
       # SQLITE_CANTOPEN. That turned out to be the test, not `jarvis restore` —
@@ -306,6 +308,7 @@ jobs:
             src/cli/daemon-control.launchd.test.ts \
             src/cli/daemon-control.systemd.test.ts \
             src/cli/autostart.test.ts \
+            src/cli/stop-port-ownership.test.ts \
             src/daemon/pid.test.ts
 
   # ─── Sidecar compile + test gate (cgo) ─────────────────────────
