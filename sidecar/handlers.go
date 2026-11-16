@@ -142,6 +142,9 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		// "Where is...?": a ring round something on the screen (notch_looker.go).
 		registry["notch.point"] = makeNotchPointHandler(notchLooker)
 		registry["notch.window"] = makeNotchWindowHandler()
+		// The same window as a picture with a ruler, for a program that says
+		// nothing about itself (notch_shot.go).
+		registry["notch.shot"] = makeNotchShotHandler()
 		// Pass 10: a thing held to be put somewhere, the notch watching what
 		// the hands do, and doing a step again where it can be seen.
 		registry["notch.hold"] = makeNotchHoldHandler(notchLooker)

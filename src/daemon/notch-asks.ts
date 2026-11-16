@@ -29,7 +29,7 @@ import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { BriefAttachmentProvider } from '../brief/attachments.ts';
 import { NotchFilesNotKept, type NotchTurnDoor } from '../notch/asks.ts';
 import { NOTCH_LOOK_FILE, NOTCH_LOOK_PICTURE, NOTCH_LOOK_QUESTION, NOTCH_LOOK_WINDOW, type NotchLookPort } from '../notch/look.ts';
-import { createNotchPoint } from '../notch/point.ts';
+import { createNotchPoint, pointSeen } from '../notch/point.ts';
 import type { NotchRealDeps } from '../notch/real.ts';
 import { NOTCH_TOLD_SOURCE, createNotchRemember } from '../notch/remember.ts';
 import type { NotchScriptDeps } from '../notch/script.ts';
@@ -364,6 +364,19 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
       // later. The answer is one short JSON object.
       choose: (messages) => runWithOrigin('user', async () =>
         (await options.llm().chatTier('medium', 'notch_point', messages, { max_tokens: 80, temperature: 0 })).content),
+      // A window that says nothing about what is in it (a page in a browser,
+      // an app built on one, a game) is looked at instead: a picture of it
+      // with a ruler, and then the place a model named, close up. Nothing is
+      // copied with watching switched off, and the desktop app copies nothing
+      // where it looks away.
+      async see(part) {
+        const at = machine();
+        if (!at || !isScreenCaptureEnabled()) return null;
+        // An older desktop app does not know it and refuses: then only a window that describes itself can be pointed in.
+        return pointSeen(await at.manager.dispatchRPC(at.id, 'notch.shot', part ? { x: part.x, y: part.y, w: part.w, h: part.h } : {}, { initial: 8000, max: 8000 }));
+      },
+      look: (messages) => runWithOrigin('user', async () =>
+        (await options.llm().chatTier('medium', 'notch_point_seen', messages, { max_tokens: 160, temperature: 0 })).content),
       async ring(rect, label, ms) {
         const at = machine();
         if (!at) return false;
