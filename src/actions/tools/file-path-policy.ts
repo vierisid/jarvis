@@ -1061,9 +1061,11 @@ function ownUnitNames(): string[] {
  */
 function isEnvDefinitionFile(s: string): boolean {
   // A `jarvis export` archive holds .secrets.key, the workflow key, the
-  // sidecar keypair and google-tokens.json verbatim (cli/backup.ts:112), and
-  // they are ASCII, so a plain text read of the tar prints them.
-  return /(?:^|\/)jarvis-(?:export|backup)-[^/]*\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
+  // sidecar keypair and google-tokens.json verbatim (cli/backup.ts
+  // SECRET_ENTRIES, in every archive by default), and they are ASCII, so a
+  // plain text read of the tar prints them. Covers the default name
+  // (jarvis-export-<time>.tar) and the README's `--out jarvis-backup.tar`.
+  return /(?:^|\/)jarvis-(?:export|backup)(?:-[^/]*)?\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
 }
 
 /**

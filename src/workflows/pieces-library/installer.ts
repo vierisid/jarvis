@@ -313,7 +313,7 @@ async function restoreInstall(base: string, snapshot: InstallSnapshot): Promise<
 }
 
 /** An npm package name, scoped or not, with no path segment that could leave `node_modules`. */
-const SAFE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u;
+export const SAFE_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/u;
 
 /**
  * Take one package out of the pieces dir's `node_modules`, by exact name.
