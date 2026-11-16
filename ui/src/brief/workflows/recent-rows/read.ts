@@ -1,54 +1,33 @@
 import type { BriefReadState } from "../../contracts";
-import type { Flow, FlowRun } from "../../../v2/rooms/workflows/useWorkflowsData";
+import type { FlowRun } from "../../../v2/rooms/workflows/useWorkflowsData";
 import { projectRecentWorkflows, type RecentWorkflow } from "./model";
 
-/** Explicit read adapter for the current workflow API. No implicit polling.
- * There is no global recent-run endpoint: inspect latest runs with four bounded
- * workers, and disclose an incomplete inventory instead of claiming global recency.
+/** One read of `GET /api/workflows/recent-runs`: the newest run of each workflow, most recent first, with
+ * the workflow's name. It reads recent runs, not a window of workflows, so a workflow that ran today shows
+ * however many workflows there are. One request, whatever the number of workflows.
  * F-25 owns invocation, cancellation and scope retention; do not run every render. */
 export async function readRecentWorkflows(request: (url:string, init?:RequestInit)=>Promise<Response> = fetch,
   signal?: AbortSignal): Promise<BriefReadState<readonly RecentWorkflow[]>> {
-  const flows:Pick<Flow,"id"|"displayName">[]=[], runs:Array<Parameters<typeof projectRecentWorkflows>[1][number]>=[];
-  let incomplete=false;
-  const read=async(path:string)=>{
-    signal?.throwIfAborted();
-    const res=await request(path,{credentials:"same-origin",cache:"no-store",signal:signal ? AbortSignal.any([signal,AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000)});
-    if(!res.ok)throw Error("Unavailable");return res.json();
-  };
+  let items:unknown;
   try {
-    for(let offset=0;offset<=200;offset+=50){
-      const list:unknown=await read(`/api/workflows?limit=${offset===200?1:50}&offset=${offset}`);
-      if(!Array.isArray(list)||list.length>(offset===200?1:50)||list.some(f=>!f||typeof f.id!=="string"||!f.id))throw Error("Invalid inventory");
-      if(offset===200){incomplete=list.length>0;break;}
-      for(const f of list)if(!flows.some(x=>x.id===f.id))flows.push({id:f.id});
-      if(list.length<50)break;
-    }
+    signal?.throwIfAborted();
+    const res=await request("/api/workflows/recent-runs?limit=6",{credentials:"same-origin",cache:"no-store",
+      signal:signal ? AbortSignal.any([signal,AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000)});
+    if(!res.ok)throw Error("Unavailable");
+    items=(await res.json() as {items?:unknown})?.items;
+    if(!Array.isArray(items)||items.length>20)throw Error("Invalid runs");
   } catch { return {status:"unavailable",reason:"Recent runs are unavailable."}; }
-  let index=0;
-  await Promise.all(Array.from({length:Math.min(4,flows.length)},async()=>{
-    while(index<flows.length){
-      const flow=flows[index++]!;
-      if(signal?.aborted){incomplete=true;break;}
-      try {
-        // The runs route answers one `{ items, nextOffset }` page (#652), never a bare array.
-        const page=await read(`/api/workflows/${encodeURIComponent(flow.id)}/runs?limit=1`) as {items?:unknown}|null;
-        const list=page?.items;
-        if(!Array.isArray(list)||list.length>1)throw Error("Invalid runs");
-        if(!list.length)continue;
-        const run=list[0] as FlowRun;
-        if(run.flowId!==flow.id||typeof run.id!=="string"||!run.id||typeof run.flowVersionId!=="string"||!run.flowVersionId
-          ||typeof run.status!=="string"||!["PRODUCTION","TESTING"].includes(run.environment)
-          ||!Number.isFinite(run.startTime??run.created))throw Error("Invalid run");
-        // Project only identity/status/time. Captured step output is never copy.
-        runs.push({id:run.id,flowId:run.flowId,flowVersionId:run.flowVersionId,status:run.status,startTime:run.startTime,created:run.created,environment:run.environment});
-        const detail=await read(`/api/workflows/${encodeURIComponent(flow.id)}`) as {latestDraft?:{displayName?:unknown};published?:{displayName?:unknown}};
-        const name=detail.latestDraft?.displayName??detail.published?.displayName;
-        if(typeof name==="string"&&name.trim())flow.displayName=name;
-      }catch{incomplete=true;}
-    }
-  }));
+  const flows:{id:string;displayName:string}[]=[], runs:Array<Parameters<typeof projectRecentWorkflows>[1][number]>=[];
+  let skipped=false;
+  for(const value of items as (FlowRun&{displayName?:unknown})[]){
+    // Project only identity/status/time. Captured step output is never copy.
+    if(!value||typeof value.id!=="string"||!value.id||typeof value.flowId!=="string"||!value.flowId||typeof value.flowVersionId!=="string"||!value.flowVersionId
+      ||typeof value.status!=="string"||!["PRODUCTION","TESTING"].includes(value.environment)||!Number.isFinite(value.startTime??value.created)){skipped=true;continue;}
+    flows.push({id:value.flowId,displayName:typeof value.displayName==="string"&&value.displayName.trim()?value.displayName:value.flowId});
+    runs.push({id:value.id,flowId:value.flowId,flowVersionId:value.flowVersionId,status:value.status,startTime:value.startTime,created:value.created,environment:value.environment});
+  }
   const data=projectRecentWorkflows(flows,runs);
-  return incomplete ? data.length ? {status:"stale",data,reason:"Some recent runs could not be checked. This list may be incomplete."}
+  return skipped ? data.length ? {status:"stale",data,reason:"Some recent runs could not be checked. This list may be incomplete."}
     : {status:"unavailable",reason:"Recent runs could not be checked."}
     : data.length ? {status:"ready",data} : {status:"empty"};
 }
