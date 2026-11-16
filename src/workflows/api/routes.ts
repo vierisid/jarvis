@@ -1,9 +1,10 @@
-import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
-import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
+import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, humanInputQueue, resolveHumanInput } from '../runtime/human-input';
+import { HUMAN_INPUT_LIST_DEFAULT, HUMAN_INPUT_LIST_MAX, HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
 import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
+import { boundedRunSteps } from './run-view';
 import { FLOW_DISPLAY_NAME_MAX_CHARS, isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from '../display-name';
 import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
 import type { FlowRun } from '../db/repos/flow-run';
@@ -2594,7 +2595,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           };
           if (status) opts.status = status;
           const graphs = new Map<string, FlowTriggerNode | undefined>();
-          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...boundedRunSteps(shown), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2711,7 +2712,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
           const shown = run ? shownRun(run) : null;
-          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
+          return shown ? ok({ ...boundedRunSteps(shown), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 
@@ -2752,9 +2753,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-inputs": {
       GET: req => trapErrors(() => {
         const refused = decisionsRefusal(); if (refused) return refused;
-        const project = callerProject(req), requests = listHumanInputs(project);
+        // `limit` bounds the pending requests listed; `pendingTotal` counts them all, so a count never depends on the page.
+        const raw = new URL(req.url).searchParams.get('limit');
+        if (raw !== null && (!/^[0-9]{1,6}$/.test(raw) || Number(raw) < 1 || Number(raw) > HUMAN_INPUT_LIST_MAX)) return err(`limit must be a whole number from 1 to ${HUMAN_INPUT_LIST_MAX}`, 400);
+        const project = callerProject(req), { requests, pendingTotal } = humanInputQueue(project, { limit: raw === null ? HUMAN_INPUT_LIST_DEFAULT : Number(raw) });
         // Polled every few seconds: the cursor is an ids-only indexed read, not a second outcome lookup.
-        return ok({ requests, historyCursor: humanInputHistoryCursor(project) });
+        return ok({ requests, pendingTotal, historyCursor: humanInputHistoryCursor(project) });
       }),
     },
     "/api/workflow-inputs/history": {
