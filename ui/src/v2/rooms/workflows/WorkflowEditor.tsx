@@ -104,16 +104,21 @@ import {
 import { findStep, flattenSteps, needsPieceChoice, pathToStep, withoutChosenZone } from "./tree";
 import { buildVariableRows, type VariableRow } from "./variable-rows";
 import { TRIGGER_KINDS, detectTriggerKind } from "./trigger-kinds";
+import { describeSchedule, isScheduleSettings } from "./schedule-words";
+import { ScheduleEditor } from "./ScheduleEditor";
+import { splitAdvancedFields } from "./advanced-fields";
+import { humanizePieceName } from "./workflow-summary";
 import { fetchFlowsForPicker, type FlowPickerEntry } from "./flow-picker-data";
 import { useListNav } from "./use-list-nav";
 import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useLibrary";
 import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
-import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
+import { CANCELED_EFFECT_WARNING, continuedFailureLabel } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
-import { NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, stepNotApprovalGated } from "./approval-gate";
+import { isHumanInputStep } from "../../../../../src/workflows/runtime/human-input-contract";
+import { CONTINUE_UNAVAILABLE_MESSAGE, NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -267,6 +272,8 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         nodeId: string;
         isTrigger: boolean;
         stepType: FlowStepNode["type"];
+        /** A step that asks a person: no "Add error handling", it stops on a "no". */
+        asksPerson: boolean;
       }
     | null
   >(null);
@@ -591,6 +598,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
         nodeId: node.id,
         isTrigger,
         stepType: node.data.step.type,
+        asksPerson: isHumanInputStep(node.data.step.settings?.pieceName, node.data.step.settings?.actionName),
       });
     },
     [editor.draftTrigger?.name, closePopover, closeCanvasMenu, closeLibraryPicker],
@@ -1210,7 +1218,7 @@ export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeade
                     },
                   },
                 ]),
-            ...(nodeContextMenu.stepType === "PIECE"
+            ...(nodeContextMenu.stepType === "PIECE" && !nodeContextMenu.asksPerson
               ? [
                   {
                     key: "add-error-handling",
@@ -3220,7 +3228,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
   const notApprovalGated = stepNotApprovalGated(step, catalog);
 
   const routerKind = step.settings?.routerKind;
-  let kindLabel: string;
+  let kindLabel: string | null;
   let kindTone: "accent" | "neutral" | "warn" | "ok" = "neutral";
   if (step.type === "EMPTY") { kindLabel = "Manual"; kindTone = "accent"; }
   else if (isTrigger) { kindLabel = "Trigger"; kindTone = "accent"; }
@@ -3234,7 +3242,9 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
     kindTone = "warn";
   }
   else if (workspace && step.settings?.pieceName === '@jarvispieces/piece-jarvis-agent') { kindLabel = 'AI judgment'; kindTone = 'accent'; }
-  else { kindLabel = workspace ? 'Programmed' : 'Action'; }
+  // A plain piece step needs no label in the workspace: "Programmed" only meant
+  // "not an AI step", which is not something a person is choosing between.
+  else { kindLabel = workspace ? null : 'Action'; }
 
   // ROUTER branches feed the right-edge source handles. The handle id
   // encodes the branch name so onConnect can route a connection straight
@@ -3350,7 +3360,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
       {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
         {workspace && <NodeIdentityIcon step={step}/>}
-        <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
+        {kindLabel ? <Chip tone={kindTone} dot={false}>{kindLabel}</Chip> : null}
         <span className="wf-node__name">{step.displayName ?? step.name}</span>
         {runPipTitle ? (
           <span
@@ -3379,9 +3389,11 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
           </span>
         ) : step.type === "CODE" ? (
           <span className="wf-node__piece">Custom JavaScript</span>
+        ) : isTrigger && (detectTriggerKind(step) === "schedule" || isScheduleSettings(step.settings)) ? (
+          <span className="wf-node__piece">{describeSchedule(step.settings)}</span>
         ) : step.settings?.pieceName ? (
           <>
-            <span className="wf-node__piece">{piece?.displayName ?? step.settings.pieceName}</span>
+            <span className="wf-node__piece">{piece?.displayName ?? humanizePieceName(step.settings.pieceName)}</span>
             {subDisplayName ? <span className="wf-node__sep">·</span> : null}
             {subDisplayName ? <span className="wf-node__action">{subDisplayName}</span> : null}
           </>
@@ -3454,7 +3466,7 @@ interface PropertiesPanelProps {
   onTestFromHere: () => Promise<{ ok: boolean; message: string }>;
 }
 
-function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
+export function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const {
     step,
     isTriggerStep,
@@ -3569,8 +3581,6 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const requestWebhook = detectedTriggerKind === 'webhook' && 'request_id_field' in formInput;
   const formWebhook = detectedTriggerKind === 'webhook' && ('submission_id_field' in formInput || 'submission_email_field' in formInput);
   const schema = detectedTriggerKind === 'schedule' && step.settings?.pieceName === 'schedule' ? {fields:[
-    {name:'cron_expression',label:'Schedule (cron)',type:'string' as const,required:true,description:'Choose the execution time before running. For weekdays, use minute hour * * 1-5. For the last weekday of each month at 17:00, use 0 17 LW * *.'},
-    {name:'timezone',label:'Timezone',type:'string' as const,required:false,description:'IANA timezone. Empty uses the timezone configured for Jarvis.'},
     {name:'dst_policy',label:'Daylight-saving policy',type:'string' as const,required:false,description:'skip_missing_first_repeated skips nonexistent local times and uses only the first repeated time, including after restart. Omitted or shift_missing_once retains legacy spring shifting.'},
   ]} : requestWebhook ? { fields: [
     { name: 'request_id_field', label: 'Request ID field', type: 'string' as const, required: true, description: 'Stable request ID path. Repeated requests are accepted once; no email is required.' },
@@ -3727,11 +3737,18 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
                 input={(step.settings?.input ?? {}) as Record<string, unknown>} onSetInput={onSetInput} /> : null}
             </>
           ) : schema ? (
-            <SchemaInputs
-              schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
-              input={(step.settings?.input ?? {}) as Record<string, unknown>}
-              onSetInput={onSetInput}
-            />
+            <>
+              {isTriggerStep && detectedTriggerKind === "schedule" && step.settings?.pieceName === "schedule" ? (
+                <ScheduleEditor input={(step.settings?.input ?? {}) as Record<string, unknown>} chosenTimezone={step.settings?.chosenTimezone} onSetInput={onSetInput} />
+              ) : null}
+              <SchemaInputsWithAdvanced
+                pieceName={step.settings?.pieceName}
+                subName={subName}
+                schema={meetingAccounts.length ? {...schema, fields:schema.fields.filter(f=>!meetingAccounts.some(([field])=>field===f.name))} : schema}
+                input={(step.settings?.input ?? {}) as Record<string, unknown>}
+                onSetInput={onSetInput}
+              />
+            </>
           ) : (
             <FreeformInputs
               inputEntries={inputEntries}
@@ -3779,6 +3796,8 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         showErrorHandling={(step.type === "PIECE" || step.type === "CODE") && !isTriggerStep}
         continueOnFailure={!!step.settings?.errorHandlingOptions?.continueOnFailure?.value}
         retryOnFailure={!!step.settings?.errorHandlingOptions?.retryOnFailure?.value}
+        retryAvailable={step.type === "PIECE" && piece?.retrySafe === true}
+        continueAvailable={!(step.type === "PIECE" && piece?.actions.find((a) => a.name === step.settings?.actionName)?.continueUnavailable === true)}
         onSetErrorHandling={onSetErrorHandling}
         stepName={step.name}
         sampleData={props.sampleData}
@@ -3805,7 +3824,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           onCommit={onSetDisplayName}
         />}
         <p>
-          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : step.type === "CODE" ? "Code" : "Action"}
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Trigger") : isLoop ? "Loop" : isRouter ? "Router" : step.type === "CODE" ? "Code" : "Action"}
         </p>
       </header>
 
@@ -3838,6 +3857,8 @@ function AdvancedSettings(props: {
   showErrorHandling: boolean;
   continueOnFailure: boolean;
   retryOnFailure: boolean;
+  retryAvailable: boolean;
+  continueAvailable: boolean;
   onSetErrorHandling: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
   stepName: string;
   sampleData: unknown | undefined;
@@ -3867,6 +3888,8 @@ function AdvancedSettings(props: {
             <ErrorHandlingSection
               continueOnFailure={props.continueOnFailure}
               retryOnFailure={props.retryOnFailure}
+              retryAvailable={props.retryAvailable}
+              continueAvailable={props.continueAvailable}
               onChange={props.onSetErrorHandling}
             />
           ) : null}
@@ -4077,10 +4100,14 @@ function ConnectionPicker({
 function ErrorHandlingSection({
   continueOnFailure,
   retryOnFailure,
+  retryAvailable,
+  continueAvailable,
   onChange,
 }: {
   continueOnFailure: boolean;
   retryOnFailure: boolean;
+  retryAvailable: boolean;
+  continueAvailable: boolean;
   onChange: (patch: { continueOnFailure?: boolean; retryOnFailure?: boolean }) => void;
 }): React.ReactElement {
   return (
@@ -4089,26 +4116,30 @@ function ErrorHandlingSection({
       <label className="wf-props__field wf-props__field--inline">
         <input
           type="checkbox"
-          checked={continueOnFailure}
+          checked={continueOnFailure && continueAvailable}
+          disabled={!continueAvailable}
           onChange={(e) => onChange({ continueOnFailure: e.target.checked })}
         />
         <span className="wf-props__field-label">Continue on failure</span>
       </label>
       <p className="wf-props__hint">
-        Treat this step's failure as success. Downstream steps still run; the
-        failure shows up in the step's output for routers to branch on.
+        {continueAvailable
+          ? "If this step fails, the steps after it still run. The step shows as failed and the run shows as finished with a failed step. A step that Jarvis refused to run, or that was refused approval, is never continued past."
+          : `${CONTINUE_UNAVAILABLE_MESSAGE}${continueOnFailure ? " This step has it turned on, but it is ignored." : ""}`}
       </p>
       <label className="wf-props__field wf-props__field--inline">
         <input
           type="checkbox"
-          checked={retryOnFailure}
+          checked={retryOnFailure && retryAvailable}
+          disabled={!retryAvailable}
           onChange={(e) => onChange({ retryOnFailure: e.target.checked })}
         />
         <span className="wf-props__field-label">Retry on failure</span>
       </label>
       <p className="wf-props__hint">
-        Retry up to 4 times with exponential backoff (~14s total) before
-        giving up. Final failure still respects "Continue on failure".
+        {retryAvailable
+          ? "Try again up to 4 times, waiting a little longer each time (about 14 seconds in all), before giving up."
+          : `${RETRY_UNAVAILABLE_MESSAGE}${retryOnFailure ? " This step has it turned on, but it is ignored." : ""}`}
       </p>
     </section>
   );
@@ -4556,6 +4587,35 @@ function SchemaInputs({
         </li>
       ))}
     </ul>
+  );
+}
+
+/** SchemaInputs with the step's rarely-needed fields folded under a collapsed "Advanced". */
+function SchemaInputsWithAdvanced({
+  pieceName,
+  subName,
+  schema,
+  input,
+  onSetInput,
+}: {
+  pieceName: string | undefined;
+  subName: string | undefined;
+  schema: { fields: PieceInputField[] };
+  input: Record<string, unknown>;
+  onSetInput: (key: string, value: unknown) => void;
+}): React.ReactElement {
+  const { primary, advanced } = splitAdvancedFields(pieceName, subName, schema.fields);
+  const set = advanced.filter((f) => input[f.name] !== undefined && input[f.name] !== "").length;
+  return (
+    <>
+      {primary.length ? <SchemaInputs schema={{ fields: primary }} input={input} onSetInput={onSetInput} /> : null}
+      {advanced.length ? (
+        <details className="wf-props__advanced-fields">
+          <summary>{set ? `Advanced (${set} set)` : "Advanced"}</summary>
+          <SchemaInputs schema={{ fields: advanced }} input={input} onSetInput={onSetInput} />
+        </details>
+      ) : null}
+    </>
   );
 }
 
@@ -6049,6 +6109,11 @@ function RunRow({
         {run.failedStep ? (
           <span className="wf-editor__run-failed">@ {run.failedStep.displayName}</span>
         ) : null}
+        {continuedFailureLabel(run) ? (
+          <span className="wf-editor__run-failed">
+            {continuedFailureLabel(run)}: {(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}
+          </span>
+        ) : null}
         <span className="wf-editor__run-time">{startedAt}</span>
         <span className="wf-editor__run-duration">{duration}</span>
       </button>
@@ -6145,6 +6210,7 @@ function OverlayBanner({
         Viewing run {startedAt} -- <strong>{run.status}</strong>
         {!run.failure && run.cancellation?.inFlightMayHaveCompleted ? <span className="wf-editor__overlay-banner-reason">{CANCELED_EFFECT_WARNING}</span> : null}
         {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
+        {continuedFailureLabel(run) ? <> -- {continuedFailureLabel(run)}: <code>{(run.continuedFailures ?? []).map((s) => s.displayName).join(", ")}</code></> : null}
         {!hasOverlayData ? (
           <em className="wf-editor__overlay-banner-note">
             {" "}-- no per-step trace recorded for this run

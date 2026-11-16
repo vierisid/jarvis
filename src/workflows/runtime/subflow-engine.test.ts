@@ -103,6 +103,26 @@ for(const scenario of ['success','invalid','failure','timeout'])test('real paren
  else expect(final.failedStep?.errorMessage).toContain(scenario==='invalid'?'different shape':scenario==='failure'?'failed':'did not finish');
  const replay=await f.run();expect(replay.status).toBe(final.status);expect(f.children()).toHaveLength(1);
 },60_000);
+// The daemon wires the worker's job-settled hook to the scheduler, so a parent continues when its child ends without waiting for the poll.
+async function runWithSettleHook(flowId:string,versionId:string){
+ const scheduler=new TimerWaitpointScheduler();
+ const hooked=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime),now:()=>now})},onJobSettled:job=>{scheduler.afterJobSettled(job);}});
+ const r=createFlowRun({flowId,flowVersionId:versionId});runIds.push(r.id);enqueue({jobType:RUN_FLOW,payload:{runId:r.id,payload},flowId,flowRunId:r.id});
+ await hooked.drain();
+ for(const child of listRuns({limit:500}).filter(x=>x.parentRunId))if(!runIds.includes(child.id))runIds.push(child.id);
+ return getFlowRun(r.id)!;
+}
+for(const scenario of ['success','invalid'])test('a parent continues as soon as its child ends, with no poll: '+scenario,async()=>{
+ const f=await fixture();mode=scenario;
+ const final=await runWithSettleHook(f.parent.id,f.pv.id);
+ expect(final.status).toBe(scenario==='success'?'SUCCEEDED':'FAILED');
+ if(scenario==='invalid')expect(final.failedStep?.errorMessage).toMatch(/invalid_output|different shape/);
+});
+test('without the settle hook the poll still continues a parent after a restart',async()=>{
+ const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');
+ new TimerWaitpointScheduler().tick(now);await worker.drain();
+ expect(getFlowRun(first.id)!.status).toBe('SUCCEEDED');
+});
 test('database reopen after child completion resumes parent and reuses child on new parent run',async()=>{
  const f=await fixture(),first=await f.run();expect(first.status).toBe('PAUSED');expect(f.children()[0]!.status).toBe('SUCCEEDED');
  closeWorkflowDb();initWorkflowDb(join(dir,'fixture.db'));setEncryptionKey(Buffer.alloc(32,79));configureWorkflowReadiness({pieces:catalog});

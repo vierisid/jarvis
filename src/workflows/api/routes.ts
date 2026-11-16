@@ -1,8 +1,12 @@
 import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, listHumanInputs, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
+import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
-import { editorVersion } from './editor-version';
+import { editorVersion, versionAsShown } from './editor-version';
+import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
+import type { FlowRun } from '../db/repos/flow-run';
+import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
@@ -35,9 +39,11 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  */
 
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
+import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
+import { continuedFailures } from '../runtime/continued-failures';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
 import {
@@ -69,6 +75,8 @@ import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '..
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { getFlowReadHosts, setFlowReadHosts } from "../db/repos/flow-read-hosts";
 import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
+import { LOCAL_ADDRESS_REFUSAL, localHostRefusal } from "../runtime/http-approval";
+import type { EgressPolicy } from "../runtime/http-egress";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -80,6 +88,7 @@ import {
   createFlowRun,
   getFlowRun,
   getFlowRunInProject,
+  listRecentRuns,
   listRuns,
   type FlowRunStatus,
   type RunEnvironment,
@@ -114,7 +123,7 @@ import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oaut
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
-import { isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
@@ -584,8 +593,13 @@ const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
  * The caller's `displayName`, or the refusal. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
  * validate and then pass the unnarrowed value on.
+ *
+ * `flowId` names the flow a version route writes to. A name that flow already
+ * stores is let through the character rule, so a workflow named before the
+ * rule existed can still be saved: the editor sends the current name with
+ * every save, and refusing it would lock the workflow until it was renamed.
  */
-function validDisplayName(raw: unknown): { name: string } | { error: Response } {
+function validDisplayName(raw: unknown, flowId?: string): { name: string } | { error: Response } {
   if (typeof raw !== "string" || raw.length === 0) {
     return { error: err("displayName is required and must be a non-empty string") };
   }
@@ -597,7 +611,18 @@ function validDisplayName(raw: unknown): { name: string } | { error: Response } 
       ),
     };
   }
+  // A name is one line of plain text: a control character in it (NUL, a bell,
+  // an escape, a line break, C1, the line and paragraph separators) breaks
+  // lists and logs, and a lone surrogate is not text. The rule a task's text is
+  // stored under (vault/commitment-text.ts). Refused as a plain 400.
+  if ((!raw.isWellFormed() || NOT_ONE_LINE.test(raw)) && !(flowId && nameStoredOnFlow(flowId, raw))) {
+    return { error: err("displayName cannot contain control characters") };
+  }
   return { name: raw };
+}
+
+function nameStoredOnFlow(flowId: string, name: string): boolean {
+  return getWorkflowDb().query("SELECT 1 FROM flow_version WHERE flow_id = ? AND display_name = ? LIMIT 1").get(flowId, name) !== null;
 }
 
 /**
@@ -703,6 +728,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  /** Where a workflow HTTP step may connect; the read list refuses a host it can never reach. Absent: private ranges are allowed, the rest is not. */
+  egressPolicy?: EgressPolicy;
   recoveryAuthority?: AuthorityEngine;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
@@ -924,6 +951,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // editor badges its steps. The daemon decides, so the badge and
             // the gate in `pieceAuthorize` cannot disagree.
             ...(isCommunityPiece(p.name) ? { notApprovalGated: true } : {}),
+            // "Retry on failure" applies only to built-in steps that act inside the run.
+            ...(canRetryStep(p.name) ? { retrySafe: true } : {}),
             actions: Object.values(p.actions).map((a) => ({
               name: a.name,
               displayName: a.displayName,
@@ -931,6 +960,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // A step that asks a person stops on a "no": "Continue on failure" does not apply.
+              ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).
               // Surfaced to the dashboard so the variable picker can show
               // field-level rows for actions that have never been run yet.
@@ -1673,7 +1704,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
           // Turning a workflow off stops its queued and waiting runs (Q-06).
-          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
+          if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
@@ -1715,7 +1746,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!scopedFlow(req, id)) return err("flow not found", 404);
-          return ok(listVersions(id));
+          return ok(listVersions(id).map(versionAsShown));
         }),
       POST: (req) =>
         trapErrors(async () => {
@@ -1735,7 +1766,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName);
+          const named = validDisplayName(body.displayName, id);
           if ("error" in named) return named.error;
           // `uiMeta` is checked BEFORE the insert, not after (#632). There is
           // no transaction around the two writes below, so a malformed `uiMeta`
@@ -1856,7 +1887,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // transaction, so a bad name cannot half-apply a patch.
           const uiMeta = body.uiMeta;
           if (body.displayName !== undefined) {
-            const named = validDisplayName(body.displayName);
+            const named = validDisplayName(body.displayName, scopedFlow(req, id) ? id : undefined);
             if ("error" in named) return named.error;
             // The NARROWED value goes on, so this cannot validate one string
             // and forward another. Identical today because the validator
@@ -1900,7 +1931,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
+          return ok(osWarnings.length > 0 ? { ...versionAsShown(locked), osWarnings } : versionAsShown(locked));
         }),
     },
 
@@ -1956,8 +1987,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          // A value the editor was shown as `[redacted]` and sent back unchanged keeps the stored one.
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, restoreShownSample(getFlowVersion(versionId), stepName, output)));
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
       DELETE: (req) =>
         trapErrors(() => {
@@ -1971,7 +2003,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ).params;
           if (!scopedFlow(req, id)) return versionNotInScope();
           const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
-          return ok({ versionId: v.id, sampleData: v.sampleData });
+          return ok({ versionId: v.id, sampleData: versionAsShown(v).sampleData });
         }),
     },
 
@@ -2083,6 +2115,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           let expected: string[] | null = null;
           try {
             hosts = normalizeReadHosts(body.hosts);
+            const local = hosts.find((host) => localHostRefusal(host, opts.egressPolicy ?? "private-allowed") !== null);
+            if (local) return err(`${local}: ${LOCAL_ADDRESS_REFUSAL} Jarvis could never read it, so it is not added to the list.`, 400);
             if (Array.isArray(body.expected)) expected = normalizeReadHosts(body.expected);
           } catch (e) {
             return err(e instanceof Error ? e.message : String(e), 400);
@@ -2114,7 +2148,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version });
+          return ok({ flow: serializeFlow(flow), version: versionAsShown(version) });
         }),
     },
 
@@ -2319,8 +2353,25 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          const items = listRuns(opts).map(run => ({ ...run, failure: runFailure(run) }));
+          const graphs = new Map<string, FlowTriggerNode | undefined>();
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...shown, failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
+        }),
+    },
+
+    // Today's "Recent activity": the latest production, top-level run of each
+    // flow in the caller's project, newest first. One bounded read, so Today
+    // does not list every flow and fetch each flow's runs. Identity, status and
+    // time only; never step output.
+    "/api/workflow-runs/recent": {
+      GET: req =>
+        trapErrors(() => {
+          const { limit } = clampPage(new URL(req.url).searchParams, 5);
+          // The name is model- or person-authored text shown on Today: invisible
+          // and bidi control characters are dropped and it is capped, as on a card.
+          const items = listRecentRuns(callerProject(req), limit)
+            .map(row => ({ ...row, name: forCard(row.name, RECENT_RUN_NAME_MAX) }));
+          return ok({ items });
         }),
     },
 
@@ -2404,9 +2455,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-        if (!scopedRun(req, runId)) return err('run not found', 404);
+        const run = scopedRun(req, runId);
+        if (!run) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
+        // A generated password or an old webhook credential a step sent on is not shown here either.
+        const scrub = runScrubber(run, getFlowVersion(run.flowVersionId)?.trigger);
+        return ok({ runId, effects: scrubValue(listWorkflowEffects(runId), scrub), children: listChildRuns(runId), recovery: getRunRecovery(runId) });
       }),
     },
 
@@ -2416,7 +2470,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
-          return run ? ok({ ...run, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(run) }) : err("run not found", 404);
+          const shown = run ? shownRun(run) : null;
+          return shown ? ok({ ...shown, fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 
@@ -2603,6 +2658,8 @@ function numParam(raw: string | null): number | null {
  * moves, move `LIST_RUNS_MAX_LIMIT` with it.
  */
 const LISTING_MAX_LIMIT = 100;
+/** Longest workflow name Today's Recent activity shows. */
+const RECENT_RUN_NAME_MAX = 120;
 
 /**
  * A listing's `limit` and `offset`, clamped. Three listings were doing this
@@ -2656,4 +2713,15 @@ function validateConnectionValueShape(
     default:
       return null;
   }
+}
+
+/**
+ * A run as the dashboard is shown it: no generated password and no webhook
+ * credential header, also in rows stored before the trigger withheld them
+ * (`runAsShown`). Read side only; the stored row is not rewritten. `graphs`
+ * caches each version's graph across a page of runs.
+ */
+function shownRun(run: FlowRun, graphs = new Map<string, FlowTriggerNode | undefined>()): FlowRun {
+  if (!graphs.has(run.flowVersionId)) graphs.set(run.flowVersionId, getFlowVersion(run.flowVersionId)?.trigger);
+  return runAsShown(run, graphs.get(run.flowVersionId));
 }

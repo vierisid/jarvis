@@ -11,6 +11,7 @@ import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
+import { getLatestDraft, updateDraftVersion } from "../db/repos/flow-version";
 import {
   createWorkflowRoutes,
   FLOW_VERSION_REF_ID_MAX_CHARS,
@@ -65,6 +66,19 @@ function plainReq(method: string, url: string, body?: unknown): Request {
     init.headers = { "Content-Type": "application/json" };
   }
   return new Request(url, init);
+}
+
+/**
+ * A trigger plus the smallest step that needs no piece catalog. Turning a
+ * workflow on refuses a graph that is only a trigger, so a test that publishes
+ * or enables a flow gives it this first.
+ */
+const RUNNABLE_TRIGGER = {
+  name: "trigger", type: "EMPTY", displayName: "Manual",
+  nextAction: { name: "step_1", type: "ROUTER", settings: { executionType: "EXECUTE_FIRST_MATCH", branches: [{ branchType: "FALLBACK", branchName: "Otherwise" }] }, children: [null] },
+};
+function giveSteps(flowId: string): void {
+  updateDraftVersion(getLatestDraft(flowId)!.id, { trigger: RUNNABLE_TRIGGER });
 }
 
 /** `GET /api/workflows/:id/runs`'s body since #652. */
@@ -333,6 +347,7 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
   test("an omitted metadata still leaves the column alone", async () => {
     const { body } = await create({ displayName: "keeps", metadata: { keep: "me" } });
     const id = (body as { flow: { id: string } }).flow.id;
+    giveSteps(id);
     const patched = await patch(id, { status: "ENABLED" });
     expect(patched.status).toBe(200);
     expect((patched.body as { metadata: unknown }).metadata).toEqual({ keep: "me" });
@@ -581,6 +596,7 @@ describe("workflow API: flows", () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
+    giveSteps(flowId);
 
     const patch = routes["/api/workflows/:id"]?.PATCH;
     const { status, body } = await callJson(
@@ -713,6 +729,7 @@ describe("workflow API: versions", () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const flowId = created.body.flow.id;
+    giveSteps(flowId);
     const versionId = created.body.version.id;
 
     const publish = routes["/api/workflows/:id/publish"]?.POST;
@@ -885,6 +902,108 @@ describe("workflow API: runs", () => {
   });
 });
 
+describe("workflow API: what a run and its sample data show (read side)", () => {
+  test("webhook credential headers stored before redaction and a generated password are withheld; the stored row keeps them", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun, getFlowRun } = await import("../db/repos/flow-run");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "hooked", trigger: {
+      type: "PIECE_TRIGGER", name: "trigger", displayName: "Webhook", settings: { pieceName: "webhook", triggerName: "catch_webhook", input: {} },
+      nextAction: { type: "PIECE", name: "make_pw", displayName: "Password", settings: { pieceName: "@activepieces/piece-crypto", actionName: "generate-password", input: { length: 20 } } },
+    } as unknown as Record<string, unknown> });
+    const triggerOutput = { type: "PIECE_TRIGGER", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { authorization: "Bearer OLD-HEADER-SECRET-1", "x-github-event": "push" } } } };
+    const pwOutput = { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: "GENpw4Secret7Value9xy" };
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+    updateRun(run.id, { status: "SUCCEEDED", steps: { trigger: { output: triggerOutput }, make_pw: { output: pwOutput } } });
+    setSampleDataEntry(v.id, "trigger", triggerOutput);
+    setSampleDataEntry(v.id, "make_pw", pwOutput);
+    const leaks = ["OLD-HEADER-SECRET-1", "GENpw4Secret7Value9xy"];
+    const responses = [
+      await callJson(routes["/api/workflow-runs/:runId"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/${run.id}`, { runId: run.id })),
+      await callJson(routes["/api/workflows/:id/runs"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/runs`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id/versions"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/versions`, { id: flow.id })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId"]?.GET, reqWithParams("GET", `http://x/api/workflows/${flow.id}/versions/${v.id}`, { id: flow.id, versionId: v.id })),
+    ];
+    for (const { status, body } of responses) {
+      expect(status).toBe(200);
+      const text = JSON.stringify(body);
+      for (const leak of leaks) expect(text).not.toContain(leak);
+      expect(text).toContain('"x-github-event":"push"');
+    }
+    // Not rewritten: what a resumed run rebuilds its steps from still holds the real values.
+    const stored = JSON.stringify(getFlowRun(run.id)!.steps);
+    for (const leak of leaks) expect(stored).toContain(leak);
+  });
+});
+
+describe("workflow API: a failed run, its effects, open failures, and lock and publish (read side)", () => {
+  test("a password in a failure message, an effect record and a locked or published version's sample data is withheld", async () => {
+    configureWorkflowReadiness({ pieces: new PieceCatalog([...sampleCatalog().list(),
+      { name: "@activepieces/piece-crypto", displayName: "Crypto", description: "", actions: { "generate-password": { name: "generate-password", displayName: "Generate", description: "" } } }]) });
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const { getWorkflowDb } = await import("../db/index");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "pw", trigger: {
+      type: "EMPTY", name: "trigger", displayName: "Manual", settings: {},
+      nextAction: { type: "PIECE", name: "make_pw", displayName: "Password", settings: { pieceName: "@activepieces/piece-crypto", actionName: "generate-password", input: { length: 20 } } },
+    } as unknown as Record<string, unknown> });
+    const PASSWORD = "GENpw4Secret7Value9xy";
+    const pwOutput = { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: PASSWORD };
+    setSampleDataEntry(v.id, "make_pw", pwOutput);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "PRODUCTION" });
+    updateRun(run.id, { status: "FAILED", finishTime: Date.now(), steps: { make_pw: { output: pwOutput } },
+      failedStep: { name: "send", displayName: "Send", errorMessage: `server rejected password ${PASSWORD}` } });
+    getWorkflowDb().run(`INSERT INTO workflow_effect (id, run_id, status, record) VALUES ('eff1', ?, 'failed', ?)`,
+      [run.id, JSON.stringify({ id: "eff1", runId: run.id, status: "failed", arguments: { password: PASSWORD, to: "ann@example.test" } })]);
+    const bodies: unknown[] = [];
+    for (const [route, url, params] of [
+      ["/api/workflow-runs/:runId", `http://x/api/workflow-runs/${run.id}`, { runId: run.id }],
+      ["/api/workflows/:id/runs", `http://x/api/workflows/${flow.id}/runs`, { id: flow.id }],
+      ["/api/workflow-runs/:runId/effects", `http://x/api/workflow-runs/${run.id}/effects`, { runId: run.id }],
+      ["/api/failures/open", "http://x/api/failures/open", {}],
+    ] as const) {
+      const { status, body } = await callJson(routes[route]?.GET, reqWithParams("GET", url, params as Record<string, string>));
+      expect([route, status]).toEqual([route, 200]);
+      bodies.push(body);
+    }
+    // The editor saves the sample it was shown: the marker keeps the captured password; a new value replaces it.
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    const sample = routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
+    const params = { id: flow.id, versionId: v.id, stepName: "make_pw" };
+    const saved = await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params,
+      { output: { ...pwOutput, output: "[redacted]", input: { length: 21 } } }));
+    expect(saved.status).toBe(200);
+    expect(JSON.stringify(saved.body)).not.toContain(PASSWORD);
+    expect(getFlowVersion(v.id)!.sampleData!.make_pw).toEqual({ ...pwOutput, input: { length: 21 } });
+    await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params,
+      { output: { ...pwOutput, output: "typed-by-hand-1" } }));
+    expect((getFlowVersion(v.id)!.sampleData!.make_pw as { output: string }).output).toBe("typed-by-hand-1");
+    await callJson(sample, reqWithParams("PATCH", `http://x/api/workflows/${flow.id}/versions/${v.id}/sample-data/make_pw`, params, { output: pwOutput }));
+    const lock = await callJson(routes["/api/workflows/:id/versions/:versionId/lock"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flow.id}/versions/${v.id}/lock`, { id: flow.id, versionId: v.id }));
+    expect(lock.status).toBe(200);
+    expect(JSON.stringify(lock.body)).toContain('"make_pw"');
+    bodies.push(lock.body);
+    const published = await callJson(routes["/api/workflows/:id/publish"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${flow.id}/publish`, { id: flow.id }, { versionId: v.id }));
+    expect(published.status).toBe(200);
+    expect(JSON.stringify(published.body)).toContain('"make_pw"');
+    bodies.push(published.body);
+    const text = JSON.stringify(bodies);
+    expect(text).not.toContain(PASSWORD);
+    // Not vacuous: the failure, the effect and the open failure are there.
+    expect(text).toContain("server rejected password [redacted]");
+    expect(text).toContain("ann@example.test");
+    expect(JSON.stringify(bodies[3])).toContain(run.id);
+  });
+});
+
 describe("workflow API: waitpoint resume", () => {
   test("POST /api/webhooks/waitpoints/:id enqueues RUN_FLOW(executionType=RESUME) and marks waitpoint resumed", async () => {
     const { createFlow, setPublishedVersion, updateFlowStatus } = await import(
@@ -904,7 +1023,7 @@ describe("workflow API: waitpoint resume", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "paused flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     setPublishedVersion(flow.id, v.id);
@@ -984,7 +1103,7 @@ describe("workflow API: waitpoint resume", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "broken flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     const run = createFlowRun({
@@ -1031,7 +1150,7 @@ describe("workflow API: waitpoint resume ingress guards", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "paused flow",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     setPublishedVersion(flow.id, v.id);
@@ -1966,7 +2085,7 @@ describe("workflow API: waitpoints surface", () => {
     const v = createDraftVersion({
       flowId: flow.id,
       displayName: "wp-surface",
-      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+      trigger: RUNNABLE_TRIGGER,
     });
     lockVersion(v.id);
     const run = createFlowRun({
@@ -3459,6 +3578,106 @@ describe("#652: the runs listing says where the next page starts", () => {
     expect((await page(flowId, "?limit=-3")).nextOffset).toBe(1);
   });
 
+  test("the recent-runs read gives each flow's latest real run, newest first, scoped and clamped", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const make = (name: string, projectId?: string) => {
+      const flow = createFlow(projectId ? { projectId } : undefined);
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      return { flow, version };
+    };
+    const OTHER_PROJECT = "proj_other_recent";
+    const a = make("Alpha"), b = make("Beta"), c = make("Gamma"), other = make("Foreign", OTHER_PROJECT);
+    const old = createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, status: "FAILED" });
+    await Bun.sleep(3);
+    const latestA = createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, status: "SUCCEEDED", steps: { secret: "CANARY" } } as never);
+    await Bun.sleep(3);
+    // A newer test run and a newer child run must not replace the real latest run.
+    createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, environment: "TESTING", status: "FAILED" });
+    createFlowRun({ flowId: a.flow.id, flowVersionId: a.version.id, parentRunId: old.id, status: "FAILED" });
+    await Bun.sleep(3);
+    const latestB = createFlowRun({ flowId: b.flow.id, flowVersionId: b.version.id, status: "PAUSED" });
+    await Bun.sleep(3);
+    // A flow with only a test run is not listed at all.
+    createFlowRun({ flowId: c.flow.id, flowVersionId: c.version.id, environment: "TESTING", status: "SUCCEEDED" });
+    createFlowRun({ flowId: other.flow.id, flowVersionId: other.version.id, status: "SUCCEEDED" });
+    const read = async (query: string, r = routes) => {
+      const res = await callJson(r["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/recent${query}`, {}));
+      expect(res.status).toBe(200);
+      return res.body as { items: Array<{ runId: string; name: string; status: string }> };
+    };
+    const all = await read("");
+    expect(all.items.map((row) => [row.runId, row.name, row.status])).toEqual([
+      [latestB.id, "Beta", "PAUSED"], [latestA.id, "Alpha", "SUCCEEDED"],
+    ]);
+    expect(JSON.stringify(all)).not.toContain("CANARY");
+    expect((await read("?limit=1")).items.map((row) => row.runId)).toEqual([latestB.id]);
+    expect((await read("?limit=-4")).items).toHaveLength(1);
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    expect((await read("", scoped)).items.map((row) => row.name)).toEqual(["Foreign"]);
+    // A rename shows the flow's current name, as the Workflows room does, not the
+    // name of the version the run used.
+    await Bun.sleep(3);
+    createDraftVersion({ flowId: a.flow.id, displayName: "Alpha renamed",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    expect((await read("")).items.find((row) => row.runId === latestA.id)?.name).toBe("Alpha renamed");
+  });
+
+  test("the recent-runs read leaves out removed workflows and single-step tests, and cleans the name", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { getWorkflowDb } = await import("../db/index");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      return { flow, version };
+    };
+    const kept = make("Invoice\u202Etxt.exe  sender\u200B"), removed = make("Removed"), stepped = make("Stepped");
+    const keptRun = createFlowRun({ flowId: kept.flow.id, flowVersionId: kept.version.id, status: "SUCCEEDED" });
+    createFlowRun({ flowId: removed.flow.id, flowVersionId: removed.version.id, status: "SUCCEEDED" });
+    await Bun.sleep(3);
+    const realStepped = createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, status: "FAILED" });
+    await Bun.sleep(3);
+    // "Test this step" sent as a production run is still a test of one step.
+    createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, stepNameToTest: "step_1", status: "SUCCEEDED" });
+    // A removed workflow (Undo receipt held) is gone from the Workflows room, so from Today too.
+    getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt' WHERE flow_id = ?", [removed.flow.id]);
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent", {}));
+    const items = (res.body as { items: Array<{ runId: string; name: string; status: string }> }).items;
+    expect(items.map(row => [row.runId, row.status])).toEqual([[realStepped.id, "FAILED"], [keptRun.id, "SUCCEEDED"]]);
+    expect(items[1]!.name).toBe("Invoicetxt.exe sender");
+  });
+
+  test("a paused run in the recent-runs read says whether it waits on a person or a timer", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const make = (name: string) => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: name,
+        trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "PAUSED" });
+      return { flow, run };
+    };
+    const timer = make("Timer flow"), person = make("Person flow"), hook = make("Hook flow");
+    const resume = new Date(Date.now() + 3600_000).toISOString();
+    createWaitpoint({ flowRunId: timer.run.id, projectId: "proj", stepName: "delay", type: "TIMER", resumeDateTime: resume });
+    createWaitpoint({ flowRunId: person.run.id, projectId: "proj", stepName: "ask", type: "MANUAL" });
+    createWaitpoint({ flowRunId: hook.run.id, projectId: "proj", stepName: "hook", type: "WEBHOOK" });
+    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent?limit=50", {}));
+    const items = (res.body as { items: Array<{ runId: string; waitingOn?: string; resumeAt?: number }> }).items;
+    const of = (id: string) => items.find(row => row.runId === id);
+    expect(of(timer.run.id)).toMatchObject({ waitingOn: "timer", resumeAt: Date.parse(resume) });
+    expect(of(person.run.id)).toMatchObject({ waitingOn: "person" });
+    expect(of(person.run.id)?.resumeAt).toBeUndefined();
+    expect(of(hook.run.id)).toMatchObject({ waitingOn: "other" });
+  });
+
   test("following nextOffset from the start visits every run once, newest first", async () => {
     const { flowId, ids } = await flowWithRuns(105);
     const seen: string[] = [];
@@ -3497,6 +3716,7 @@ describe("#649: /run, /publish and /code-steps bound their bodies and keep the e
 
   async function newFlow(): Promise<string> {
     const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    giveSteps(created.body.flow.id);
     return created.body.flow.id;
   }
 

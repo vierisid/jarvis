@@ -282,7 +282,7 @@ test('measured goals show their score without an editor', async () => {
   goal={...goal,score:0.6,measurement:{basis:'value',revision:1}};
   await render(); await select();
   expect(host.querySelector('input[aria-label="Goal score"]')).toBeNull();
-  expect(host.textContent).toContain('Score · 60%'); expect(host.textContent).toContain('Record a new measurement');
+  expect(host.textContent).toContain('Score · 60%'); expect(host.textContent).toContain('Log progress from the Brief Goals room');
   expect(host.textContent).not.toContain('Save score');
 });
 test('returning to the saved score with no reason drops the draft; a reason alone can still be saved', async () => {
@@ -319,4 +319,30 @@ test('drafts belong to one workspace and in-memory drafts are dropped when the o
   expect(scoreInput().value).toBe('35'); expect(reasonInput().value).toBe('Workspace one');
   await React.act(async () => root.unmount()); root=createRoot(host); workspace='ws-2'; await render(); await select();
   expect(reasonInput().value).toBe('');
+});
+
+test('the create dialog says new goals start as drafts, and refuses a past deadline or a long title before writing', async () => {
+  await render(); await click('New');
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  expect(dialog.textContent).toContain('A new goal starts as a draft');
+  const title = dialog.querySelector<HTMLInputElement>('input[type="text"]')!;
+  await fill(title, 'x'.repeat(201)); await click('Create', dialog);
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toBe('Titles can be up to 200 characters. Shorten it and try again.');
+  await fill(title, 'Late goal');
+  await fill(dialog.querySelector<HTMLInputElement>('input[type="date"]')!, '2020-01-01'); await click('Create', dialog);
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toBe('That date has passed. Pick today or a later date.');
+  expect(writes).toHaveLength(0);
+});
+test('a server refusal of a new goal is shown in plain words inside the dialog toast', async () => {
+  await render(); await click('New');
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+  globalThis.fetch = (async (_url: any, _init?: RequestInit) => Response.json({ error: 'goal.title: must be 200 characters or fewer', code: 'INVALID_GOAL' }, { status: 400 })) as typeof fetch;
+  await fill(dialog.querySelector<HTMLInputElement>('input[type="text"]')!, 'Fine title'); await click('Create', dialog);
+  expect(host.querySelector('.v2-goals__toast')?.textContent).toBe('Titles can be up to 200 characters. Shorten it and try again.');
+});
+test('a goal whose title was saved before the 200 character cap can still move its deadline', async () => {
+  goal={...goal,title:'x'.repeat(250)};
+  await render();await select();await click('Edit title and deadline');
+  await fill(host.querySelector<HTMLInputElement>('form input[type="date"]')!,'2027-03-01');await click('Save details');
+  expect(writes).toEqual([{method:'PATCH',body:{deadline:new Date(2027,2,1,23,59).getTime()}}]);
 });

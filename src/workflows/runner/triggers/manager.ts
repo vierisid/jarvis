@@ -83,11 +83,17 @@ interface TriggerNode {
   };
 }
 
+/** What a founder reads when a schedule could not be started. The log keeps the technical error. */
+const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow is not running. Turn it off and on again, or change the schedule.";
+
 /**
  * Queued jobs beyond which webhook ingress is refused (503, Retry-After) and
  * any webhook fire that slipped past the probe is dropped with a log line.
  */
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
+
+/** The admission refusal for a flow that is off; a webhook sender is told so. */
+const TURNED_OFF = "The workflow is turned off.";
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
@@ -201,6 +207,13 @@ export class TriggerManager {
   private readonly onRegistrationBlocked: TriggerManagerDeps['onRegistrationBlocked'];
   private readonly registrationFailures = new Map<string, string>();
   /**
+   * Why an enabled flow's trigger is not running, in words a founder can read:
+   * a schedule that could not be started, or a registration retried until it
+   * was given up. Shown as the workflow's blocked reason (`registrationProblem`)
+   * so it does not read "On" while nothing happens.
+   */
+  private readonly notRunning = new Map<string, string>();
+  /**
    * The last live readiness refusal per flow. A schedule tick or a pre-poll
    * check carries no input of its own, so a repeat of the same refusal is
    * one failed run plus a counted blocked row, not a failed run per minute.
@@ -225,6 +238,16 @@ export class TriggerManager {
         return true; // a probe failure must not close the ingress
       }
     });
+    // A webhook flow that exists but is off answers "turned off", not "not
+    // found". Only a flow whose trigger is the Webhook trigger: any other
+    // flow's id stays as unknown to a caller as an id that never existed.
+    this.webhooks.setTurnedOffCheck((flowId) => {
+      const flow = getFlow(flowId);
+      if (!flow || flow.status === 'ENABLED' || workflowRemovalState(flowId).receipt_id) return false;
+      const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+      const trigger = versionId ? getFlowVersion(versionId)?.trigger as unknown as TriggerNode | null | undefined : null;
+      return trigger?.type === 'PIECE_TRIGGER' && trigger.settings?.pieceName === 'webhook';
+    });
     this.engineRuntime = deps.engineRuntime;
     this.log = deps.log ?? ((line) => console.log(`[trigger-manager] ${line}`));
     // 5s / 15s / 1m / 5m / 15m -- covers a brief engine hiccup within seconds
@@ -247,6 +270,14 @@ export class TriggerManager {
     const sub = this.subs.get(flowId);
     if (sub?.versionId === versionId && !sub.incomplete) return 'registered';
     return this.inFlight.has(flowId) || this.enableRetries.has(flowId) ? 'pending' : 'blocked';
+  }
+
+  /**
+   * Why a flow that is on is not running, or null: its trigger could not be
+   * registered and is not being retried. Plain words, for the workflow list.
+   */
+  registrationProblem(flowId: string): string | null {
+    return this.notRunning.get(flowId) ?? null;
   }
 
   /** Public surface for the webhook ingress route. */
@@ -289,6 +320,7 @@ export class TriggerManager {
     }
     this.subs.clear();
     this.registrationFailures.clear();
+    this.notRunning.clear();
     this.cron.cancelAll();
     this.log("stopped");
   }
@@ -401,6 +433,7 @@ export class TriggerManager {
       return;
     }
     this.registrationFailures.delete(flow.id);
+    this.notRunning.delete(flow.id);
     const pieceName = trigger.type === "PIECE_TRIGGER" ? trigger.settings?.pieceName : undefined;
     // Only a schedule is owed its times: a flow switched to another trigger
     // and back must not have the gap reported as missed.
@@ -444,6 +477,7 @@ export class TriggerManager {
     // version.
     this.clearEnableRetry(flowId);
     this.registrationFailures.delete(flowId);
+    this.notRunning.delete(flowId);
     this.liveRefusals.delete(flowId);
     this.untold.delete(flowId);
     const sub = this.subs.get(flowId);
@@ -495,6 +529,7 @@ export class TriggerManager {
       });
     } catch (e) {
       this.log(`flow ${flowId}: failed to schedule cron "${expression}": ${(e as Error).message}`);
+      this.notRunning.set(flowId, SCHEDULE_NOT_RUNNING);
     }
   }
 
@@ -684,6 +719,10 @@ export class TriggerManager {
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
+    // A schedule that could not be started, with nothing else to deliver,
+    // means the workflow is not running at all. One whose webhook still
+    // delivers keeps the sub's warning instead (register() cleared any old reason).
+    if (noSubscription && schedule?.cronExpression) this.notRunning.set(flow.id, SCHEDULE_NOT_RUNNING);
     if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
     else this.clearEnableRetry(flow.id);
   }
@@ -705,6 +744,7 @@ export class TriggerManager {
     const delay = this.enableRetryDelaysMs[attempt];
     if (delay === undefined) {
       this.enableRetries.delete(flowId);
+      if (!this.notRunning.has(flowId)) this.notRunning.set(flowId, "Jarvis could not start this workflow's trigger, so it is not running. Turn it off and on again to try once more.");
       this.log(
         `flow ${flowId}: ${source} failed: ${reason} -- giving up after ${total} ` +
           `retries; the flow is NOT firing. Re-enable it (or restart the daemon) once the engine is healthy`,
@@ -838,7 +878,7 @@ export class TriggerManager {
   private notAdmitted(flowId: string, versionId: string, generation?: number): string | null {
     const flow = getFlow(flowId);
     if (!flow) return "The workflow no longer exists.";
-    if (flow.status !== "ENABLED") return "The workflow is turned off.";
+    if (flow.status !== "ENABLED") return TURNED_OFF;
     // F-20: a removed workflow starts nothing, and a subscription registered
     // before a Remove (even one later undone and re-enabled) is not current.
     const removal = workflowRemovalState(flowId);
@@ -911,7 +951,7 @@ export class TriggerManager {
       const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source, scheduledFor: opts.scheduledFor,
         outcome: "blocked", detail: { reason: off, ...(opts.dedupeKey ? { deliveryKey: opts.dedupeKey } : {}) } });
       this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
-      return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
+      return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true, ...(off === TURNED_OFF ? { turnedOff: true } : {}) };
     }
     // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
     // skipped and shown, keyed so it is never run late after Resume; a webhook

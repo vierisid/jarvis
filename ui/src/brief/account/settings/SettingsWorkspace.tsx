@@ -8,13 +8,9 @@ import React, {
 import { ArrowRight } from "lucide-react";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
-import {
-  BriefButton,
-  BriefSelect,
-  BriefSegments,
-} from "../../components/controls";
+import { BriefButton, BriefSelect } from "../../components/controls";
 import { AppearanceSelector } from "./AppearanceSelector";
-import { SettingsController } from "./controller";
+import { SettingsController, type SettingsState } from "./controller";
 import type { SettingsDestination } from "./model";
 import "./settings.css";
 export interface SettingsBinding {
@@ -74,6 +70,38 @@ export function SettingsWorkspace({
     />
   );
 }
+function aiRow(ai: SettingsState["ai"], hosted: boolean) {
+  if (ai === null) return { title: "AI provider", text: "Loading…", warn: false, action: "" };
+  if (ai === "error")
+    return {
+      title: "AI provider",
+      text: "Could not read your AI provider.",
+      warn: false,
+      action: hosted ? "" : "Change AI provider",
+    };
+  if (ai.state === "managed")
+    return {
+      title: "Usejarvis AI",
+      text: ai.model
+        ? `Included with your plan. Model: ${ai.model}.`
+        : "Included with your plan. Nothing to set up.",
+      warn: false,
+      action: "",
+    };
+  if (ai.state === "missing")
+    return {
+      title: ai.provider ?? "No AI provider",
+      text: "Jarvis can't reach your AI provider. Update your key.",
+      warn: true,
+      action: "Change AI provider",
+    };
+  return {
+    title: ai.provider,
+    text: `Model: ${ai.model}`,
+    warn: false,
+    action: "Change AI provider",
+  };
+}
 function SettingsBody({ controller }: { controller: SettingsController }) {
   const state = useSyncExternalStore(
       controller.subscribe,
@@ -111,6 +139,7 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
     value = controller.value(),
     pending = state.phase === "saving";
   const retry = ["unknown", "error"].includes(state.phase);
+  const ai = aiRow(state.ai, data?.setup.deployment === "hosted");
   const link = (
     destination: SettingsDestination,
     label: string,
@@ -143,6 +172,31 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
         <h1 className="brief-type-room-title">Settings</h1>
         <AppearanceSelector />
       </header>
+      <section aria-labelledby={`${id}-ai`}>
+        <h2 id={`${id}-ai`}>AI provider</h2>
+        <div className="brief-settings-row">
+          <div>
+            <h3>{ai.title}</h3>
+            <p id={`${id}-ai-status`} role={ai.warn ? "alert" : undefined}>
+              {ai.text}
+            </p>
+          </div>
+          {ai.action && (
+            <BriefButton
+              variant="text"
+              disabled={!controller.destinations.credentials}
+              aria-describedby={`${id}-ai-status`}
+              onClick={() => void controller.navigate("credentials")}
+            >
+              {ai.action}
+            </BriefButton>
+          )}
+        </div>
+      </section>
+      <section aria-labelledby={`${id}-permissions`}>
+        <h2 id={`${id}-permissions`}>Permissions and approvals</h2>
+        {link("authority", "Authority", "What Jarvis may do and when it asks")}
+      </section>
       <section aria-labelledby={`${id}-conversation`}>
         <h2 id={`${id}-conversation`}>Conversation</h2>
         <div className="brief-settings-row">
@@ -229,30 +283,8 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
           </div>
         </div>
       </section>
-      <section aria-labelledby={`${id}-checkins`}>
-        <h2 id={`${id}-checkins`}>Check-ins</h2>
-        <p>How often Jarvis brings you a useful next step.</p>
-        <BriefSegments
-          label="Check-in frequency — unavailable"
-          value=""
-          options={[
-            { value: "less", label: "Less often", disabled: true },
-            { value: "balanced", label: "Balanced", disabled: true },
-            { value: "more", label: "More often", disabled: true },
-          ]}
-          onValueChange={() => {}}
-        />
-        <p className="brief-settings-unavailable">
-          Check-in preferences are not supported yet.
-        </p>
-        <div className="brief-settings-row">
-          <h3>Active hours</h3>
-          <span className="brief-settings-unavailable">Unavailable</span>
-        </div>
-      </section>
       <section aria-labelledby={`${id}-workspace`}>
         <h2 id={`${id}-workspace`}>Workspace controls</h2>
-        {link("authority", "Authority", "Permissions & approvals")}
         {link("connections", "Connected workspace", "Devices & services")}
         {link(
           "advanced-settings",

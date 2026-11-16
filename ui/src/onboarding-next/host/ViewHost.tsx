@@ -24,6 +24,7 @@ import { IntercomConnection } from '../../v2/integrations/IntercomConnection';
 import { CalendlyConnection } from '../../v2/integrations/CalendlyConnection';
 import { NotionConnection } from '../../v2/integrations/NotionConnection';
 import type { Session } from './session.ts';
+import { useSuggestions } from './suggestions.ts';
 import './host.css';
 
 class ViewBoundary extends Component<{ children: ReactNode; recover: () => void }, { failed: boolean }> {
@@ -61,6 +62,7 @@ export function ViewHost({ session, legacy, children, renderWorkspace }: { sessi
 function OnboardingViewHost({ session, legacy, children }: { session: Session; legacy: ReactNode; children: ReactNode }) {
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   const [theme, setTheme] = useTheme();
+  const suggestions = useSuggestions(state.view === 'explainer', session.installMode());
   const headingHost = useRef<HTMLDivElement>(null);
   const focusedView = useRef<string | null>(null);
   // Capture before React commits `inert`, which makes browsers blur controls.
@@ -119,14 +121,14 @@ function OnboardingViewHost({ session, legacy, children }: { session: Session; l
   let props: Record<string, unknown> = { ...state.presentation?.ports, model };
   switch (state.view) {
     case 'welcome': props = { model: { theme, installMode: session.installMode(), state: navigation, setupCompleted: state.journey.setupState === 'completed' }, onSetUp: () => action('continue'), onExit: () => action('explore'), onThemeChange: setTheme }; break;
-    case 'explainer': props = { model: { theme, state: navigation }, onBack: () => action('back'), onContinue: () => action('continue') }; break;
+    case 'explainer': props = { model: { theme, suggestions, state: navigation }, onBack: () => action('back'), onContinue: () => action('continue') }; break;
     case 'google': props = { ...props, additionalConnections: <div className="on-host__clickup"><ClickUpConnection optional appearance="onboarding" /><GitHubConnection optional appearance="onboarding" /><TrelloConnection optional appearance="onboarding" /><MailchimpConnection optional appearance="onboarding" /><SlackConnection optional appearance="onboarding" /><DropboxConnection optional appearance="onboarding" /><TodoistConnection optional appearance="onboarding" /><AsanaConnection optional appearance="onboarding" /><PipedriveConnection optional appearance="onboarding" /><ZoomConnection optional appearance="onboarding" /><HelpScoutConnection optional appearance="onboarding" /><IntercomConnection optional appearance="onboarding" /><CalendlyConnection optional appearance="onboarding" /><AirtableConnection optional appearance="onboarding" /><TypeformConnection optional appearance="onboarding" /><NotionConnection optional appearance="onboarding" /><LinearConnection optional appearance="onboarding" /><GitLabConnection optional appearance="onboarding" /><WrikeConnection optional appearance="onboarding" /><MondayConnection optional appearance="onboarding" /><FigmaConnection optional appearance="onboarding" /><WebflowConnection optional appearance="onboarding" /></div>, model: { ...model, navigation }, onConnect: () => action('connect'), onCancel: (attemptId: string) => action('cancel', { attemptId }), onBack: () => action('back'), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'interview': props = { ...props, model: { ...model, navigation }, onDraftChange: draft, onSubmit: (answer: unknown) => action('answer', answer), onRetry: (recovery: unknown) => action('retry', recovery), onSkip: () => action('skip'), onContinue: () => action('continue') }; break;
     case 'tour': case 'pebble-tour': props = { ...props, onNavigate: intent }; break;
     case 'activation': props = { ...props, onDraftChange: draft, onIntent: intent }; break;
     case 'build': props = { ...props, model: { ...model, actions: { ...(base.actions as Record<string, unknown>), openResult: !state.busy && (base.actions as Record<string, unknown>)?.openResult === true } }, onIntent: intent }; break;
     case 'result': props = { ...props, onReview: (value: unknown) => action('review', value), onContinue: (value: unknown) => action('finish', value), onRefresh: (value: unknown) => action('refresh', value), onOpenWorkflow: (value: unknown) => action('open_workflow', value), onBack: (value: unknown) => action('back', value) }; break;
-    case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back') }; break;
+    case 'legacy-provider-setup': props = { ...props, onComplete: () => action('complete'), onBack: () => action('back'), onLeave: (outcome: unknown) => action('leave', outcome) }; break;
   }
   const View = state.view === 'legacy-provider-setup' ? state.presentation?.ports?.View as ComponentType<Record<string, unknown>> : session.views()?.[state.view];
   return <div className={`on-host${state.view === 'result' ? ' brief-root' : ''}`} data-theme={theme} data-brief-theme={theme} data-onboarding-step={state.view} ref={headingHost}>
