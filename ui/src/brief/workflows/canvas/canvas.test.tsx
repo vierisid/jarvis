@@ -292,6 +292,32 @@ test("detached chains extend with global IDs and delete only the chosen step", a
   expect(editor.draftOrphans[0]?.node.nextAction?.name).toBe("orphan_child");
 });
 
+test("a control-flow step picked for a blank placeholder replaces it in the chain; a configured step is never swapped", async () => {
+  await mount();
+  const chainNames = () => { const names: string[] = []; for (let s = editor.draftTrigger; s; s = s.nextAction ?? null) names.push(s.name); return names; };
+  let blank: string | null = null;
+  await React.act(async () => { blank = editor.insertStepAfter("notes"); });
+  const before = chainNames(), orphans = editor.draftOrphans.length;
+  expect(before).toContain(blank!);
+  let done = false;
+  await React.act(async () => { done = editor.replaceBlankStepWithControlFlow(blank!, "ROUTER"); });
+  expect(done).toBe(true);
+  expect(chainNames()).toEqual(before);
+  expect(editor.draftOrphans.length).toBe(orphans);
+  const router = editor.allSteps.find((s) => s.step.name === blank)!.step;
+  expect(router.type).toBe("ROUTER");
+  // The default "New step" name gives way to what the step now is.
+  expect(router.displayName).toBe("Router");
+  expect(router.children).toEqual([null, null]);
+  await React.act(async () => editor.undo());
+  expect(editor.allSteps.find((s) => s.step.name === blank)!.step.type).toBe("PIECE");
+  // "notes" has real configuration: nothing changes and the caller falls back to a loose node.
+  const snapshot = JSON.stringify(editor.draftTrigger);
+  await React.act(async () => { done = editor.replaceBlankStepWithControlFlow("notes", "LOOP_ON_ITEMS"); });
+  expect(done).toBe(false);
+  expect(JSON.stringify(editor.draftTrigger)).toBe(snapshot);
+});
+
 test("discard restores the saved workflow name, not the edited version object", async () => {
   await mount();
   const original = editor.version!.displayName;
