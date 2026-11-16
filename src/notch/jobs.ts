@@ -393,18 +393,18 @@ export const NOTCH_SECRET_STEP = 'The next step types something secret, which I 
  * stops before anything is touched: what was at a place in a window of
  * another size is somewhere else now.
  */
-export async function runPlaced(run: PlacedRun, hands: NotchJobHands, options: NotchRunOptions): Promise<NotchJobEnd> {
+export async function runPlaced(placed: PlacedRun, hands: NotchJobHands, options: NotchRunOptions): Promise<NotchJobEnd> {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  while (run.next < run.steps.length) {
+  while (placed.next < placed.steps.length) {
     if (options.signal.aborted) return { how: 'stopped' };
-    const i = run.next;
-    const step = run.steps[i]!;
+    const i = placed.next;
+    const step = placed.steps[i]!;
     if (step.kind === 'secret') {
       // Going on continues after it: the person has done it by then.
-      run.next = i + 1;
+      placed.next = i + 1;
       return { how: 'failed', why: NOTCH_SECRET_STEP };
     }
-    let win = run.found.get(step.win.id);
+    let win = placed.found.get(step.win.id);
     let result: NotchActResult | null;
     try {
       if (!win) {
@@ -416,7 +416,7 @@ export async function runPlaced(run: PlacedRun, hands: NotchJobHands, options: N
           return { how: 'failed', why: `I cannot find the window as it was when you showed me${step.app ? `: ${step.app}, at the same size` : ''}.` };
         }
         win = found.win;
-        run.found.set(step.win.id, win);
+        placed.found.set(step.win.id, win);
       }
       const where = winRequest(win);
       result = await hands.act(step.kind === 'click'
@@ -425,13 +425,13 @@ export async function runPlaced(run: PlacedRun, hands: NotchJobHands, options: N
     } catch {
       if (!win) return { how: 'failed', why: 'I lost touch with your computer.' };
       // Sent, and no answer: it may have happened. It is not sent again.
-      run.next = i + 1;
+      placed.next = i + 1;
       return { how: 'failed', why: 'I lost touch with your computer in the middle of a step.', unsure: true };
     }
     if (!result) return { how: 'failed', why: 'Your computer is not connected.' };
     if (!result.done) return { how: 'failed', why: actRefusal(result.why) };
-    run.next = i + 1;
-    options.onProgress(run.next);
+    placed.next = i + 1;
+    options.onProgress(placed.next);
     await sleep(step.kind === 'click' ? AFTER_CLICK_MS : step.kind === 'type' ? AFTER_PASTE_MS : AFTER_KEYS_MS);
   }
   return { how: 'done' };
