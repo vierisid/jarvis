@@ -543,6 +543,11 @@ func (s *macWatchState) dropField() {
 	s.field = macElem{}
 }
 
+// The longest a field's words may be for a step that types them again
+// (NOTCH_PLACED_TEXT_MAX in the brain's src/notch/teach.ts). A longer one is
+// told one sign longer, and the brain then keeps no such step.
+const macRecordValueMax = 2000
+
 // flushField tells what was typed into the field that is being left: what
 // the field holds now, read from the program. What is typed into a password
 // field is never read, and is told as a field with no value.
@@ -558,9 +563,8 @@ func (s *macWatchState) flushField() {
 	payload["secure"] = field.secure
 	payload["ref"] = macRef(field)
 	if !field.secure {
-		if full, ok := macElemOf(field.ref, false); ok {
-			payload["value"] = full.value
-		}
+		// Whole, or longer than the brain takes: never a part passed off as the whole.
+		payload["value"] = macElemHolds(field, macRecordValueMax)
 	}
 	log.Printf("[recorder] set_value: a %s (secure=%v)", field.kind, field.secure)
 	emitInteraction(payload)
@@ -744,7 +748,7 @@ func notchActMac(act notchAct) (*RPCResult, error) {
 
 	case "pitch":
 		// How far apart the rows really are at a place, read from the screen
-		// (watchPitch). A number leaves this function, and nothing else.
+		// (watchRowStep). A number leaves this function, and nothing else.
 		win, refusal := macActWindow(act)
 		if refusal != nil {
 			return refuse(refusal)
@@ -765,9 +769,10 @@ func notchActMac(act notchAct) (*RPCResult, error) {
 		}
 		pixels, width, height := shot.pixels()
 		shot.close()
-		exact, ok := watchPitch(watchProfile(pixels, width, height), float64(act.Dy))
+		exact, why, ok := watchRowStep(pixels, width, height, float64(act.Dy), at.Y-strip.Y)
 		if !ok {
-			log.Printf("[notch] act: no rows could be seen at that place")
+			// Numbers only: how large the strip was and what repeated in it.
+			log.Printf("[notch] act: no rows could be seen at that place: %s (the hand went %d)", why, act.Dy)
 			return done(unknown)
 		}
 		if act.Dy < 0 {

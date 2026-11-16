@@ -388,41 +388,133 @@ func TestCountingSaysWhenItCannotTell(t *testing.T) {
 	}
 }
 
-// A strip of a sheet as the screen shows it: white rows with a grey line
-// between them, `pitch` pixels apart. The pitch need not be a whole number:
-// at 125% and 150% display scaling it is not.
-func gridProfile(height int, pitch float64, phase float64) []float64 {
-	profile := make([]float64, height)
-	for y := range profile {
-		profile[y] = 250
-		// How near this pixel row is to a grid line.
-		off := math.Mod(float64(y)+phase, pitch)
-		if off < 1 {
-			profile[y] = 250 - 60*(1-off)
-		} else if pitch-off < 1 {
-			profile[y] = 250 - 60*(1-(pitch-off))
+// madeSheet paints a strip of a made-up sheet the way a screen shows one:
+// rows with a thin line under each, words of different lengths in them, and
+// the things that are in a real sheet and do not repeat: a heading over the
+// rows that is not on their grid, rows with a fill that hides the lines
+// between them, a row that is selected. Rows need not be a whole number of
+// pixels apart: at 125% and 150% display scaling they are not.
+type madeSheet struct {
+	width, height int
+	pitch         float64
+	// Where the first row begins, in pixels from the top. Above it is a heading.
+	top int
+	// No lines between the rows: only the words in them.
+	bare bool
+	// Rows whose fill hides the line under them (the row and the next share it).
+	filled func(row int) bool
+	// The row that is selected, or -1.
+	selected int
+	// Light lines on a dark window.
+	dark bool
+	// Every other row a shade darker, and no lines.
+	striped bool
+	seed    uint32
+}
+
+func (m madeSheet) pixels() []uint32 {
+	paper, line, ink := uint32(0xffffff), uint32(0xe2e2e2), uint32(0x202124)
+	if m.dark {
+		paper, line, ink = 0x1e1e1e, 0x2b2b2b, 0xd4d4d4
+	}
+	out := make([]uint32, m.width*m.height)
+	for i := range out {
+		out[i] = paper
+	}
+	set := func(x, y int, colour uint32) {
+		if x >= 0 && x < m.width && y >= 0 && y < m.height {
+			out[y*m.width+x] = colour
 		}
 	}
-	return profile
+	hash := func(a, b, c int) uint32 {
+		h := m.seed + uint32(a)*2654435761 + uint32(b)*40503 + uint32(c)*2246822519
+		h ^= h >> 15
+		h *= 2246822519
+		h ^= h >> 13
+		return h
+	}
+	// The heading: a bar, a thicker line, and words, at distances that have
+	// nothing to do with the rows.
+	if m.top > 0 {
+		for x := 0; x < m.width; x++ {
+			for y := 0; y < m.top-7 && y < 9; y++ {
+				set(x, y, 0xf1f3f4)
+			}
+			for y := m.top - 4; y < m.top; y++ {
+				set(x, y, 0xbdc1c6)
+			}
+		}
+		for x := 10; x < m.width*2/3; x++ {
+			for y := 12; y < m.top-8; y++ {
+				if hash(x/2, 999, y/3)&3 == 0 {
+					set(x, y, ink)
+				}
+			}
+		}
+	}
+	rowTop := func(row int) int { return m.top + int(math.Round(float64(row)*m.pitch)) }
+	for row := 0; rowTop(row) < m.height; row++ {
+		from, to := rowTop(row), rowTop(row+1)
+		fill := paper
+		switch {
+		case m.striped && row%2 == 1:
+			fill = 0xfafafa
+		case row == m.selected:
+			fill = 0x0b57d0
+		case m.filled != nil && m.filled(row):
+			fill = 0x0000ff
+		}
+		hidden := m.bare || m.striped || (m.filled != nil && m.filled(row) && m.filled(row+1))
+		for y := from; y < to; y++ {
+			for x := 0; x < m.width; x++ {
+				set(x, y, fill)
+			}
+		}
+		if !hidden {
+			// The line is the last pixel row of the row above the next.
+			for x := 0; x < m.width; x++ {
+				set(x, to-1, line)
+			}
+		}
+		// Words: a band of strokes, as long as this row's words happen to be.
+		long := 20 + int(hash(row, 1, 1)%uint32(max(m.width-30, 1)))
+		for x := 6; x < 6+long && x < m.width-2; x++ {
+			for y := from + 5; y < from+14 && y < to-2; y++ {
+				if hash(x/2, row, y/3)&3 == 0 {
+					colour := ink
+					if fill != paper && fill != 0xfafafa {
+						colour = 0xffffff
+					}
+					set(x, y, colour)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func plainSheet(pitch float64, rows int) madeSheet {
+	return madeSheet{width: 180, height: int(pitch * float64(rows)), pitch: pitch, selected: -1, seed: 11}
 }
 
 // The fault this measuring exists for: two clicks by hand on two rows are
 // not one row apart, and going on by their distance lands in the wrong row.
 func TestTheRealDistanceBetweenRowsIsFoundFromTheScreenNotFromTheHand(t *testing.T) {
 	for _, pitch := range []float64{20, 21, 24, 26.25, 31.5, 17.5} {
-		profile := gridProfile(int(pitch*20), pitch, 3)
+		sheet := plainSheet(pitch, 22)
+		pixels := sheet.pixels()
 		// The hand was up to seven pixels out, either way.
 		for _, wobble := range []float64{-7, -3, 0, 4, 7} {
-			got, ok := watchPitch(profile, pitch+wobble)
+			got, why, ok := watchRowStep(pixels, sheet.width, sheet.height, pitch+wobble, int(2*pitch))
 			if !ok {
-				t.Fatalf("rows %.2f apart, clicks %.2f apart: no rows were seen", pitch, pitch+wobble)
+				t.Fatalf("rows %.2f apart, clicks %.2f apart: no rows were seen: %s", pitch, pitch+wobble, why)
 			}
 			if math.Abs(got-pitch) > 0.06 {
 				t.Fatalf("rows %.2f apart, clicks %.2f apart: measured %.3f", pitch, pitch+wobble, got)
 			}
-			// Twenty rows on, the click is still in its row: less than a quarter of a row out.
-			if drift := math.Abs(got-pitch) * 20; drift > pitch/4 {
-				t.Fatalf("rows %.2f apart: twenty rows on it is %.1f pixels out", pitch, drift)
+			// Fifty rows on, the click is still in its row: less than a quarter of a row out.
+			if drift := math.Abs(got-pitch) * 50; drift > pitch/4 {
+				t.Fatalf("rows %.2f apart: fifty rows on it is %.1f pixels out", pitch, drift)
 			}
 			// What going on by the hand's own distance would have done.
 			if wobble == 7 && (pitch+wobble)*20-pitch*20 < pitch {
@@ -432,83 +524,199 @@ func TestTheRealDistanceBetweenRowsIsFoundFromTheScreenNotFromTheHand(t *testing
 	}
 }
 
+// The owner's first test, 16 November 2026: two Google Sheets, and no rows
+// were seen. What is in the rows of a real sheet changes how bright they are
+// far more than the thin lines between them do: fills, a selected row, names
+// of different lengths, a heading above. Read as where the strip changes,
+// not as how bright it is, none of that matters.
+func TestARealSheetIsMeasuredWhateverIsInItsRows(t *testing.T) {
+	const pitch = 21
+	sheets := map[string]madeSheet{
+		"a heading over the rows":        {top: 52},
+		"a row that is selected":         {selected: 4},
+		"fills that hide half the lines": {filled: func(row int) bool { return row%6 < 3 }, top: 30},
+		"all of it at once":              {top: 47, selected: 3, filled: func(row int) bool { return row >= 5 && row < 9 || row >= 14 && row < 16 }},
+		"a dark window":                  {dark: true, top: 40},
+		"a striped list with no lines":   {striped: true},
+	}
+	for name, sheet := range sheets {
+		sheet.width, sheet.height, sheet.pitch = 180, 22*pitch, pitch
+		if name != "a row that is selected" && name != "all of it at once" {
+			sheet.selected = -1
+		}
+		for seed := uint32(1); seed <= 12; seed++ {
+			sheet.seed = seed
+			pixels := sheet.pixels()
+			for _, clicks := range []float64{17, 21, 26} {
+				got, why, ok := watchRowStep(pixels, sheet.width, sheet.height, clicks, sheet.top+2*pitch+9)
+				if !ok {
+					t.Fatalf("%s (%d): clicks %.0f apart: no rows were seen: %s", name, seed, clicks, why)
+				}
+				if math.Abs(got-pitch) > 0.05 {
+					t.Fatalf("%s (%d): clicks %.0f apart: measured %.3f for rows %d apart", name, seed, clicks, got, pitch)
+				}
+			}
+		}
+	}
+	// A narrow strip, beside the window's edge, is enough.
+	narrow := madeSheet{width: 46, height: 22 * pitch, pitch: pitch, selected: 5, seed: 3}
+	if got, why, ok := watchRowStep(narrow.pixels(), narrow.width, narrow.height, 23, 50); !ok || math.Abs(got-pitch) > 0.05 {
+		t.Fatalf("a narrow strip: got %.3f, %v: %s", got, ok, why)
+	}
+}
+
 func TestSkippingRowsIsAWholeNumberOfThem(t *testing.T) {
-	profile := gridProfile(21*30, 21, 0)
+	sheet := plainSheet(21, 30)
+	pixels := sheet.pixels()
 	// Every other row, and every third.
 	for rows, clicks := range map[float64]float64{2: 45, 3: 60} {
-		got, ok := watchPitch(profile, clicks)
+		got, why, ok := watchRowStep(pixels, sheet.width, sheet.height, clicks, 100)
 		if !ok || math.Abs(got-rows*21) > 0.2 {
-			t.Fatalf("clicks %.0f apart on rows 21 apart: got %.2f, %v; want %.0f rows", clicks, got, ok, rows)
+			t.Fatalf("clicks %.0f apart on rows 21 apart: got %.2f, %v (%s); want %.0f rows", clicks, got, ok, why, rows)
 		}
 	}
 	// Going up is the same distance.
-	if got, ok := watchPitch(profile, -19); !ok || math.Abs(got-21) > 0.1 {
+	if got, _, ok := watchRowStep(pixels, sheet.width, sheet.height, -19, 500); !ok || math.Abs(got-21) > 0.1 {
 		t.Fatalf("going up: got %.2f, %v", got, ok)
 	}
 }
 
 func TestWhereNoRowsCanBeSeenItSaysSo(t *testing.T) {
-	blank := make([]float64, 500)
+	const width, height = 180, 500
+	blank := make([]uint32, width*height)
 	for i := range blank {
-		blank[i] = 255
+		blank[i] = 0xffffff
 	}
-	if _, ok := watchPitch(blank, 22); ok {
+	if _, _, ok := watchRowStep(blank, width, height, 22, 60); ok {
 		t.Fatal("a blank strip has rows")
 	}
 	// A picture: bright and dark with no evenness to it.
-	noise := make([]float64, 500)
+	noise := make([]uint32, width*height)
 	seed := uint32(7)
 	for i := range noise {
 		seed = seed*1664525 + 1013904223
-		noise[i] = float64(seed >> 24)
+		noise[i] = seed >> 8
 	}
-	if got, ok := watchPitch(noise, 22); ok {
+	if got, _, ok := watchRowStep(noise, width, height, 22, 60); ok {
 		t.Fatalf("a strip with no rows in it was measured as rows %.2f apart", got)
 	}
+	// Rows of every height: nothing to go on by.
+	uneven := make([]uint32, width*height)
+	copy(uneven, blank)
+	for y, row := 0, 0; y < height; row++ {
+		seed = seed*1664525 + 1013904223
+		y += 14 + int(seed>>28)*2
+		for x := 0; x < width && y < height; x++ {
+			uneven[y*width+x] = 0xe2e2e2
+		}
+	}
+	if got, _, ok := watchRowStep(uneven, width, height, 22, 60); ok {
+		t.Fatalf("rows of every height were measured as rows %.2f apart", got)
+	}
+	// The bars at the top of a window: a few lines that happen to stand
+	// evenly, with nothing between most of them.
+	bars := make([]uint32, width*height)
+	copy(bars, blank)
+	for _, y := range []int{22, 44, 110, 132, 198, 286, 330} {
+		for x := 0; x < width; x++ {
+			bars[y*width+x] = 0xc0c0c0
+		}
+	}
+	if got, _, ok := watchRowStep(bars, width, height, 22, 60); ok {
+		t.Fatalf("a few bars with gaps between them were measured as rows %.2f apart", got)
+	}
 	// Too short a strip to be sure of.
-	if _, ok := watchPitch(gridProfile(60, 21, 0), 21); ok {
+	short := plainSheet(21, 3)
+	if _, _, ok := watchRowStep(short.pixels(), short.width, short.height, 21, 30); ok {
 		t.Fatal("three rows were enough to measure by")
 	}
 	// What the person did does not fit the rows that are there: half a row on.
-	if got, ok := watchPitch(gridProfile(40*20, 40, 0), 60); ok {
+	tall := plainSheet(40, 20)
+	if got, _, ok := watchRowStep(tall.pixels(), tall.width, tall.height, 60, 90); ok {
 		t.Fatalf("a row and a half was taken for a whole number of rows: %.2f", got)
 	}
 	// A hand that barely moved is not a step.
-	if _, ok := watchPitch(gridProfile(400, 21, 0), 3); ok {
+	sheet := plainSheet(21, 20)
+	if _, _, ok := watchRowStep(sheet.pixels(), sheet.width, sheet.height, 3, 50); ok {
 		t.Fatal("three pixels were taken for a step")
 	}
+	// A strip that is not there.
+	if _, _, ok := watchRowStep(nil, 0, 0, 21, 0); ok {
+		t.Fatal("no strip at all was measured")
+	}
 }
 
-func TestLinesOfWritingAreRowsToo(t *testing.T) {
-	// No grid: line after line of writing, each a darker band with a gap under it. The lines differ.
-	const pitch = 19
-	profile := make([]float64, pitch*24)
-	seed := uint32(3)
-	for line := 0; line < 24; line++ {
-		seed = seed*1664525 + 1013904223
-		ink := 120 + float64(seed>>27) // each line is a little darker or lighter than the next
-		for y := 0; y < pitch; y++ {
-			v := 255.0
-			if y >= 4 && y < 15 {
-				v = ink
-			}
-			profile[line*pitch+y] = v
+// The rows that are measured must be the ones that were clicked: a list
+// further down the window, with nothing where the click was, is another list.
+func TestTheRowsMeasuredAreTheOnesThatWereClicked(t *testing.T) {
+	const width, pitch = 180, 21
+	list := plainSheet(pitch, 12)
+	rows := list.pixels()
+	// Three hundred pixels of nothing, then the list.
+	const gap = 300
+	pixels := make([]uint32, width*(gap+list.height))
+	for i := 0; i < width*gap; i++ {
+		pixels[i] = 0xffffff
+	}
+	copy(pixels[width*gap:], rows)
+	if got, _, ok := watchRowStep(pixels, width, gap+list.height, 21, 40); ok {
+		t.Fatalf("a click on nothing was measured by the list below it: %.2f", got)
+	}
+	if got, why, ok := watchRowStep(pixels, width, gap+list.height, 21, gap+60); !ok || math.Abs(got-pitch) > 0.05 {
+		t.Fatalf("a click in the list: got %.2f, %v: %s", got, ok, why)
+	}
+}
+
+// With no lines between them, lines of writing are rows only when they are
+// regular enough to tell. A ragged page may not be: then it says it saw no
+// rows. What it must never do is name a distance that is not theirs.
+func TestLinesOfWritingAreMeasuredRightOrNotAtAll(t *testing.T) {
+	measured := 0
+	for seed := uint32(1); seed <= 24; seed++ {
+		page := madeSheet{width: 180, height: 19 * 24, pitch: 19, bare: true, selected: -1, seed: seed}
+		got, _, ok := watchRowStep(page.pixels(), page.width, page.height, 24, 50)
+		if !ok {
+			continue
+		}
+		measured++
+		if math.Abs(got-19) > 0.1 {
+			t.Fatalf("lines of writing 19 apart (%d): measured %.2f", seed, got)
 		}
 	}
-	got, ok := watchPitch(profile, 24)
-	if !ok || math.Abs(got-pitch) > 0.1 {
-		t.Fatalf("lines of writing 19 apart: got %.2f, %v", got, ok)
+	if measured < 12 {
+		t.Fatalf("only %d of 24 pages of writing could be measured", measured)
 	}
 }
 
-func TestAStripIsReadAsHowBrightEachRowIs(t *testing.T) {
-	// Two pixel rows of three: white, then mid grey.
-	pixels := []uint32{0xffffff, 0xffffff, 0xffffff, 0x808080, 0x808080, 0x808080}
-	got := watchProfile(pixels, 3, 2)
-	if len(got) != 2 || math.Abs(got[0]-255) > 0.01 || math.Abs(got[1]-128) > 0.01 {
+func TestAStripIsReadAsWhereItChanges(t *testing.T) {
+	// Four pixel rows of four: white, white, a grey line, white again.
+	white, grey := uint32(0xffffff), uint32(0xe2e2e2)
+	pixels := []uint32{
+		white, white, white, white,
+		white, white, white, white,
+		grey, grey, grey, white,
+		white, white, white, white,
+	}
+	got := watchEdges(pixels, 4, 4)
+	want := []float64{0, 0, 0.75, 0.75}
+	if len(got) != 4 {
 		t.Fatalf("got %v", got)
 	}
-	if watchProfile(pixels, 4, 2) != nil || watchProfile(nil, 0, 0) != nil {
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 0.001 {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+	// How bright a row is does not count: a fill is its two edges and nothing between.
+	fill := []uint32{white, white, 0x0000ff, 0x0000ff, 0x0000ff, 0x0000ff, white, white}
+	if edges := watchEdges(fill, 2, 4); edges[1] != 1 || edges[2] != 0 || edges[3] != 1 {
+		t.Fatalf("a fill: %v", edges)
+	}
+	// A shade too faint to be anything is not a change.
+	if edges := watchEdges([]uint32{0xffffff, 0xfdfdfd}, 1, 2); edges[1] != 0 {
+		t.Fatalf("two shades apart: %v", edges)
+	}
+	if watchEdges(pixels, 5, 4) != nil || watchEdges(nil, 0, 0) != nil {
 		t.Fatal("a strip that is not there was read")
 	}
 }
@@ -517,7 +725,7 @@ func TestTheStripStaysInsideTheWindow(t *testing.T) {
 	win := lookRect{100, 50, 800, 600}
 	// Going down: a little above the click, a long way below it.
 	down := watchStrip(win, lookPoint{400, 200}, 21)
-	if down.Y != 200-4*21 || down.Y+down.H != 200+16*21 || down.X != 310 || down.W != 180 {
+	if down.Y != 200-2*21 || down.Y+down.H != 200+20*21 || down.X != 310 || down.W != 180 {
 		t.Fatalf("going down: %+v", down)
 	}
 	// Near the edges it is cut to the window.
@@ -526,7 +734,7 @@ func TestTheStripStaysInsideTheWindow(t *testing.T) {
 		t.Fatalf("near the corner: %+v", corner)
 	}
 	up := watchStrip(win, lookPoint{400, 500}, -21)
-	if up.Y != 500-16*21 || up.Y+up.H != 500+4*21 {
+	if up.Y != 500-20*21 || up.Y+up.H != 500+2*21 {
 		t.Fatalf("going up: %+v", up)
 	}
 	if got := watchStrip(win, lookPoint{2000, 2000}, 21); !got.empty() {
