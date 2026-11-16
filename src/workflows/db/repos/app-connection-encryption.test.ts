@@ -108,7 +108,7 @@ describe("native credential storage", () => {
     expect(getWorkflowDb().query("SELECT id FROM app_connection").all()).toHaveLength(1);
   });
 
-  test("POST, repeated POST and PATCH encrypt credentials without returning their values", async () => {
+  test("POST and PATCH encrypt credentials without returning their values", async () => {
     const routes = createWorkflowRoutes();
     const post = routes["/api/workflows/connections"]!.POST!;
     const request = (method: string, value: unknown) => new Request("http://x/api/workflows/connections", {
@@ -122,7 +122,8 @@ describe("native credential storage", () => {
     expect(getConnection(body.id)?.value).toEqual({ secret_text: TOKEN });
 
     const repeated = await post(request("POST", input({ secret_text: ROTATED })));
-    expect((await repeated.json() as { id: string }).id).toBe(body.id);
+    expect(repeated.status).toBe(409);
+    expect(getConnection(body.id)?.value).toEqual({ secret_text: TOKEN });
     const patch = routes["/api/workflows/connections/:id"]!.PATCH!;
     const patchRequest = Object.assign(request("PATCH", { value: { secret_text: TOKEN } }), {
       params: { id: body.id },
