@@ -11,7 +11,7 @@ failure itself.
 
 | Field | Contract |
 | --- | --- |
-| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `approval_denied`, `uncertain_effect`, `not_started`, `resource_paused`, `cancelled`, `delivery_failed` or `internal`. |
+| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `provider_error`, `approval_denied`, `uncertain_effect`, `not_started`, `resource_paused`, `cancelled`, `delivery_failed` or `internal`. |
 | `effect` | What took effect: `none`, `unknown` or `partial`. Never `none` without evidence that nothing did. |
 | `headline`, `outcome` | One sentence each: what happened, and what did and did not take effect. |
 | `next` | Safe next steps the person starts. Always ends with `open_details`. Nothing in the projection runs, retries or resends anything. |
