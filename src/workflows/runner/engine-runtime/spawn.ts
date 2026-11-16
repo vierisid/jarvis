@@ -532,11 +532,25 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // `jarvis doctor` warns below that (MIN_BUN_FOR_NO_ENV_FILE). The empty
   // config works on all of them.
   //
+  // --disable-warning=DEP0169: every engine process printed two log lines
+  // (the warning and "Use `bun --trace-warnings`") for `url.parse()`, so every
+  // run added about six lines to the daemon log. The call is not ours: it is
+  // `xmlhttprequest-ssl`'s `Url.parse(settings.url)`, reached through
+  // socket.io-client's long-polling transport, and the engine cannot move to
+  // the websocket transport (the daemon's worker-rpc.ts documents that Bun's
+  // upgrade does not complete). So this one code is silenced for the engine
+  // process and nothing else: every other warning, deprecation included, still
+  // reaches the log. Bun 1.4.x raises DEP0169 and honours the flag; 1.3.x
+  // (1.3.11 is the oldest this package allows) never raises it and ignores
+  // the flag, so it is harmless there. Checked by running 1.3.11, 1.3.14 and
+  // 1.4.2. The warning text is fixed and names no URL, so nothing is hidden
+  // that redaction would have had to see.
+  //
   // `opts.runtime` (tests only, with /bin/true) gets none of these: they are
   // Bun flags, and that binary is not Bun.
   const args = opts.runtime
     ? [opts.bundlePath]
-    : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", opts.bundlePath];
+    : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", "--disable-warning=DEP0169", opts.bundlePath];
   const child = spawn(runtime, args, {
     env,
     cwd: opts.cwd,
