@@ -639,9 +639,16 @@ started by an older version, is restarted with the defaults (or, for `restart`,
 the flags given), and the command says so. `jarvis start -d` hands its detached
 child the same options; it used to drop `--data-dir` and `--no-local-tools`.
 
-The record is mode 0600, names the daemon's pid and is removed when that daemon
-exits; a record for another pid is ignored. Its values are passed as arguments,
-never through a shell.
+`--data-dir` and `--system-config` are recorded as absolute paths, resolved
+against the directory `jarvis start` ran in, so a restart or update run from
+another directory reuses the same folders.
+
+The record is written mode 0600 through a temporary file renamed into place, so
+it never follows a symlink. It names the daemon's pid and is removed when that
+daemon exits; a record for another pid, one that is a symlink, belongs to
+another user or is writable by anyone else is ignored. Its values are checked
+again before use (a port in range, absolute paths that cannot be read as a flag)
+and passed as arguments, never through a shell.
 
 ### Running under systemd
 

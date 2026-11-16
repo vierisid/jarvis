@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   clearLaunchRecord,
   daemonStartFlags,
@@ -145,6 +145,76 @@ describe('restart keeps how the daemon was started', () => {
 
   test('with no record the arguments are passed through unchanged', () => {
     expect(restartStartArgs(null, ['--port', '9'])).toEqual(['--port', '9']);
+  });
+});
+
+describe('the launch record is only trusted when it is ours', () => {
+  const recordPath = () => join(SANDBOX, 'jarvis.launch.json');
+  const plant = (record: unknown, mode = 0o600) => {
+    rmSync(recordPath(), { force: true });
+    writeFileSync(recordPath(), JSON.stringify(record), { mode });
+    chmodSync(recordPath(), mode); // whatever the umask
+  };
+
+  test('is written beside the lock, 0600, and read back for its pid', () => {
+    clearLaunchRecord();
+    writeLaunchRecord({ pid: 100, detached: false, noOpen: false, noLocalTools: true, port: 4100, dataDir: '/srv/jarvis' });
+    expect(statSync(recordPath()).mode & 0o777).toBe(0o600);
+    expect(readLaunchRecord(100)).toMatchObject({ noLocalTools: true, port: 4100, dataDir: '/srv/jarvis' });
+  });
+
+  test('stores relative paths as the absolute paths the daemon used', () => {
+    writeLaunchRecord({ pid: 100, detached: false, noOpen: false, noLocalTools: false, dataDir: 'rel/data', systemConfigPath: 'rel/system.yaml' });
+    expect(readLaunchRecord(100)).toMatchObject({ dataDir: resolve('rel/data'), systemConfigPath: resolve('rel/system.yaml') });
+  });
+
+  test('is 0600 even when it replaces a looser file, and never writes through a symlink', () => {
+    plant({}, 0o644);
+    writeLaunchRecord({ pid: 100, detached: false, noOpen: false, noLocalTools: false, port: 4100 });
+    expect(statSync(recordPath()).mode & 0o777).toBe(0o600);
+
+    rmSync(recordPath());
+    const target = join(SANDBOX, 'elsewhere.txt');
+    writeFileSync(target, 'untouched');
+    symlinkSync(target, recordPath());
+    writeLaunchRecord({ pid: 100, detached: false, noOpen: false, noLocalTools: false, port: 4100 });
+    expect(readFileSync(target, 'utf-8')).toBe('untouched');
+    expect(lstatSync(recordPath()).isSymbolicLink()).toBe(false);
+    expect(readLaunchRecord(100)).toMatchObject({ port: 4100 });
+    expect(existsSync(`${recordPath()}.${process.pid}.tmp`)).toBe(false);
+  });
+
+  test('ignores a record others can write, or one that is a symlink', () => {
+    writeLaunchRecord({ pid: 100, detached: false, noOpen: false, noLocalTools: false, port: 4100 });
+    chmodSync(recordPath(), 0o666);
+    expect(readLaunchRecord(100)).toBeNull();
+    chmodSync(recordPath(), 0o620);
+    expect(readLaunchRecord(100)).toBeNull();
+
+    rmSync(recordPath());
+    const planted = join(SANDBOX, 'planted.json');
+    writeFileSync(planted, JSON.stringify({ pid: 100, detached: false, noOpen: false, noLocalTools: false, port: 4100 }), { mode: 0o600 });
+    symlinkSync(planted, recordPath());
+    expect(readLaunchRecord(100)).toBeNull();
+    rmSync(recordPath());
+  });
+
+  test('drops a relative, dash-leading or NUL-carrying path from a hand-edited record', () => {
+    plant({ pid: 100, detached: false, noOpen: false, noLocalTools: false, port: 4100, dataDir: 'relative/data', systemConfigPath: '/etc/j\u0000.yaml' });
+    expect(readLaunchRecord(100)).toMatchObject({ port: 4100, dataDir: undefined, systemConfigPath: undefined });
+    plant({ pid: 100, detached: false, noOpen: false, noLocalTools: false, dataDir: '-d', systemConfigPath: '--no-open' });
+    const record = readLaunchRecord(100);
+    expect(record).toMatchObject({ dataDir: undefined, systemConfigPath: undefined });
+    expect(restartStartArgs(record, [])).toEqual([]);
+  });
+
+  test('reads nothing when there is no record or it is not JSON', () => {
+    clearLaunchRecord();
+    expect(readLaunchRecord(100)).toBeNull();
+    rmSync(recordPath(), { force: true });
+    writeFileSync(recordPath(), 'not json', { mode: 0o600 });
+    expect(readLaunchRecord(100)).toBeNull();
+    clearLaunchRecord();
   });
 });
 
