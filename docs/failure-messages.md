@@ -11,7 +11,7 @@ failure itself.
 
 | Field | Contract |
 | --- | --- |
-| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `approval_denied`, `uncertain_effect`, `not_started`, `resource_paused`, `cancelled`, `delivery_failed` or `internal`. |
+| `category` | `invalid_input`, `missing_binding`, `provider_limit`, `target_offline`, `provider_error`, `approval_denied`, `uncertain_effect`, `not_started`, `resource_paused`, `cancelled`, `delivery_failed` or `internal`. |
 | `effect` | What took effect: `none`, `unknown` or `partial`. Never `none` without evidence that nothing did. |
 | `headline`, `outcome` | One sentence each: what happened, and what did and did not take effect. |
 | `next` | Safe next steps the person starts. Always ends with `open_details`. Nothing in the projection runs, retries or resends anything. |
@@ -128,8 +128,13 @@ refusals decided before dispatch as typed outcomes: `APPROVAL_DENIED`,
 `APPROVAL_EXPIRED`, `APPROVAL_WITHDRAWN`, `APPROVAL_REQUIRED`,
 `AUTHORITY_DENIED`, `EMERGENCY_STOPPED`, `RUN_NOT_RUNNING`, `WORKFLOW_CHANGED`.
 These governance refusals are never a handled outcome, even for a probe step.
-An AI step keeps its provider's code as `PROVIDER_<CODE>`. Run list and run
-detail responses carry `failure`. Run lists retain main's `{ items, nextOffset }`
+An AI step keeps its provider's code as `PROVIDER_<CODE>`. A run the engine
+stopped because its recorded data passed the per-run cap (`LOG_SIZE_EXCEEDED`,
+10 MB) reads as `RUN_LOG_SIZE_EXCEEDED`: nothing after that point ran, and the
+steps before it are read the careful way above. Run list and run
+detail responses carry `failure`. A run whose step data passes 1 MB is answered
+with each step's type and status only and `stepsTruncated: true`; the stored
+run is unchanged. Run lists retain main's `{ items, nextOffset }`
 pagination envelope, with the failure on each item. An approved card whose action
 is later blocked or fails still receives main's terminal receipt alongside the
 typed failure evidence.

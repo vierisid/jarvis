@@ -252,6 +252,8 @@ export interface DaemonConfig {
    * self-host installs, which keep the forgiving loader defaults.
    */
   systemConfigPath?: string;
+  /** Owner asked for a fresh database even though other install state exists (`--new-database`). */
+  allowNewDatabase?: boolean;
 }
 
 let shutdownInProgress = false;
@@ -309,6 +311,9 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): Partial<Daemo
       case '--no-local-tools':
         config.noLocalTools = true;
         break;
+      case '--new-database':
+        config.allowNewDatabase = true;
+        break;
       case '--system-config': {
         // Hosted-mode flag (usejarvis #66): pin the config read to a
         // root-owned path. A missing value, or one that looks like another
@@ -337,6 +342,9 @@ Options:
   --db-path <path>         Database file path (default: ~/.jarvis/jarvis.db)
   --data-dir <path>        Data directory (default: ~/.jarvis)
   --health-interval <ms>   Health check interval in ms (default: 30000)
+  --new-database           Create an empty database even though this data directory has
+                           other saved state (a missing or empty jarvis.db otherwise
+                           stops the start so you can run jarvis restore)
   --no-local-tools         Keep the general tools (run_command, read_file, desktop, browser...) off
                            this host: they only run on a connected sidecar, i.e. your machine.
                            The site builder still builds and runs projects on this host.
@@ -857,9 +865,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 1. Ensure data directory exists
     ensureDataDir(config.dataDir);
 
-    // 2. Initialize database
+    // 2. Initialize database. An install that has other state but no database
+    // (deleted, emptied) is lost data, not a new install: refuse rather than
+    // start empty and lock out every enrolled device. `--new-database` is the
+    // owner asking for a fresh one.
+    const { assertDatabaseUsable, watchDatabaseFile } = await import('../vault/db-guard.ts');
+    assertDatabaseUsable(config.dbPath, config.dataDir, { allowNew: userConfig?.allowNewDatabase });
     logWithTimestamp(`Initializing database at ${config.dbPath}`);
     initDatabase(config.dbPath);
+    // Notice the file being deleted, emptied or swapped while running: writes
+    // then stop with a loud error instead of going to a file that is gone.
+    watchDatabaseFile(config.dbPath);
     const { syncInterviewProfileKnowledgeAtStartup } = await import('../vault/user-profile.ts');
     syncInterviewProfileKnowledgeAtStartup((message) => logWithTimestamp(message));
     logWithTimestamp('Database initialized successfully');
@@ -4498,6 +4514,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Channel conversation messages are kept forever unless the owner set a
     // retention (#1167); then a daily sweep deletes the older ones.
     startChannelMessageRetention(jarvisConfig);
+    // Finished workflow runs are kept forever unless the owner chose a limit in
+    // Brief Settings; a finished job's stored input is dropped after a week.
+    const { startRunHistoryRetention } = await import('../workflows/db/repos/run-retention.ts');
+    startRunHistoryRetention();
     // A workflow card past its explicit deadline leaves the dashboard the same way.
     onApprovalDeadlineExpired(request => wsService.broadcastApprovalUpdate(request));
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
@@ -5818,7 +5838,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: flowExecutor,
           // #1080: a run refused for what it is bound to (its computer, a
           // recipient) tells the owner once per workflow and reason.
-          onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)) }) },
+          onRunEnded: bindingRefusalNotifier((notice) => notifyAll(notice)),
+          // A card closed because its run ended before the effect could send (G-6).
+          onCardClosed: (approvalId) => {
+            const request = approvalManager.getRequest(approvalId);
+            if (request) wsService.broadcastApprovalUpdate(request);
+          } }) },
       });
       workflowWorker.start({ concurrency: WORKFLOW_WORKER_CONCURRENCY });
 
@@ -6368,9 +6393,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log('');
 
   } catch (error) {
-    // A taken port arrives as plain words with the next step, not a stack.
+    // A database problem or a taken port arrives as plain words with the next
+    // step; a stack trace would only bury it.
+    const { DatabaseProblemError } = await import('../vault/db-guard.ts');
     const { PortUnavailableError } = await import('./port-check.ts');
-    if (error instanceof PortUnavailableError) console.error(`\n[Daemon] ${error.message}\n`);
+    if (error instanceof DatabaseProblemError || error instanceof PortUnavailableError) console.error(`\n[Daemon] ${error.message}\n`);
     else console.error('[Daemon] Fatal error during startup:', error);
     process.exit(1);
   }

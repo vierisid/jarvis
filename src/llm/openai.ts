@@ -245,7 +245,20 @@ export class OpenAIProvider implements LLMProvider {
       );
     }
 
-    const data = await response.json() as OpenAIResponse;
+    let data: OpenAIResponse;
+    try {
+      data = await response.json() as OpenAIResponse;
+    } catch (error) {
+      // Only a body that is not JSON (a captive portal, a gateway error page
+      // served with a 200) is the provider's bad reply. Anything else raised
+      // while reading it (a dropped connection, an abort or the manager's
+      // timeout) keeps its own error and code.
+      if (!(error instanceof SyntaxError)) throw error;
+      throw new LLMProviderError(`${this.errorLabel} API error: the reply was not valid JSON (HTTP ${response.status})`, 'server');
+    }
+    if (!Array.isArray(data?.choices) || data.choices.length === 0) {
+      throw new LLMProviderError(`${this.errorLabel} API error: the reply had no answer in it (HTTP ${response.status})`, 'server');
+    }
     return this.convertResponse(data);
   }
 
