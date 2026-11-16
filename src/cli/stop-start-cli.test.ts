@@ -39,9 +39,8 @@ afterAll(async () => {
   // Nothing here should have started a daemon. If a regression did, its lock
   // is in this HOME and `stop` signals only that lock's holder. The port is
   // pinned to one of our own listeners (never this install's, so never
-  // signalled): a bare `stop` would fall back to 3142 and clear any daemon
-  // run from this checkout -- the developer's own -- since its command line is
-  // this bin/jarvis.ts.
+  // signalled): a bare `stop` would fall back to 3142, where the developer's
+  // own daemon may be listening.
   if (existsSync(join(HOME, '.jarvis', 'jarvis.pid')) && heldPort !== null) {
     await cli(['stop'], { JARVIS_PORT: String(heldPort) }).catch(() => {});
   }

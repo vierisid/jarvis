@@ -18,6 +18,18 @@ import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } fr
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
+import { memoryTaintSource } from '../vault/memory-use-context.ts';
+
+/**
+ * Memory the owner did not enter themselves is outside content: a turn that was
+ * handed any is tainted from its first call, as after a clipboard read, so a
+ * model that obeys an injected fact meets an approval card. The mark names the
+ * source ("memory") in the card's reason.
+ */
+function noteMemoryTaint(taint: Set<string> | undefined): void {
+  const source = taint ? memoryTaintSource() : null;
+  if (source) taint!.add(source);
+}
 
 /**
  * Whether a resumed task buffer holds a browser read whose element ids the
@@ -951,6 +963,7 @@ export class AgentOrchestrator {
     // The thread's untrusted sources join the same set, so they are recorded
     // in the carry too: a bare yes after a forward stays tainted (#1155).
     const turnTaint = carry?.open() ?? new Set<string>();
+    noteMemoryTaint(turnTaint);
     for (const source of ownThread?.untrustedSources ?? []) turnTaint.add(source);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
@@ -1144,6 +1157,7 @@ export class AgentOrchestrator {
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
     const turnTaint = opts.taintCarry?.open() ?? new Set<string>();
+    noteMemoryTaint(turnTaint);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
     // the newest one another channel or the voice route took (#827,
@@ -1467,6 +1481,7 @@ export class AgentOrchestrator {
     // turn's reads gate this turn's later calls and nothing else, unless the
     // message is a bare "yes" to a tainted turn (agents/turn-taint-carry.ts).
     const turnTaint = carry?.open() ?? new Set<string>();
+    noteMemoryTaint(turnTaint);
     for (const source of conversation?.untrustedSources ?? []) turnTaint.add(source);
     // The browser snapshots THIS loop reads (remote #827, local #1161), entered around each of its tool
     // calls, so a browser card it raises binds the snapshot it read and not
@@ -1960,6 +1975,7 @@ export class AgentOrchestrator {
     // (#571, actions/tools/turn-scope-store.ts). Ambient rather than passed
     // because `createCommitment` has six callers, four with no turn in hand.
     // Nothing reads it to grant anything.
+    noteMemoryTaint(taint);
     // Arguments the model wrote that are not valid JSON: nothing ran, and the
     // model is told so and can send the call again. Before the gate, like an
     // unknown tool name: a call that cannot run is not a governance decision.

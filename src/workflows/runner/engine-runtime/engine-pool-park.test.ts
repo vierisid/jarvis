@@ -20,6 +20,7 @@ import { CredentialResolver } from "../../credentials/adapter";
 import { EngineTokenSigner } from "../../sandbox-api/engine-token";
 import { SandboxApi } from "../../sandbox-api/server";
 import { EngineRuntime, type EngineHandle } from "./engine-runtime";
+import { signalCodeStepsRevoked } from "../../runtime/cancellation-signals";
 
 const SOCKET_CLIENT = require.resolve("socket.io-client");
 
@@ -168,6 +169,23 @@ describe("a parked warm engine", () => {
     expect(next.sandboxId).not.toBe(first.sandboxId);
     expect(signalsAfterExit).toEqual([]);
     expect(api.registry.get(first.sandboxId)).toBeNull();
+    await next.release();
+  });
+
+  test("revoking CODE steps for its flow retires it; a revoke for another flow does not (#1426)", async () => {
+    const first = await acquire("run-1");
+    const { proc } = first._internals();
+    await first.release();
+    signalCodeStepsRevoked("flow-b");
+    expect(proc.alive()).toBe(true);
+    expect(api.registry.get(first.sandboxId)).not.toBeNull();
+    signalCodeStepsRevoked("flow-a");
+    expect(api.registry.get(first.sandboxId)).toBeNull();
+    await proc.exited;
+    expect(proc.alive()).toBe(false);
+    // The next run of the flow gets an engine of its own.
+    const next = await acquire("run-2");
+    expect(next.sandboxId).not.toBe(first.sandboxId);
     await next.release();
   });
 });

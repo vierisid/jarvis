@@ -38,11 +38,21 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
-`jarvis stop` only signals a process it can prove is this Jarvis: the daemon
-holding its lock, or a leftover process whose command line is this install's
-`jarvis`. Anything else listening on the port is named (program and PID) and
-left running. `--port N` and `--port=N` both work, and a `--port` with no usable
-value is an error rather than the default.
+`jarvis stop` never stops a program that is not this Jarvis. It stops the
+daemon holding the lock as before. With no daemon holding the lock, it still
+looks at the port, but it signals a listener only when both are true: its
+command line is this install's `jarvis`, and it holds this data folder's lock
+file open, which the daemon does for its whole life (on Linux, also after the
+lock file, or the whole data folder, was deleted under it). Anything else on
+the port is left running and named (program and PID), with the command to see
+what it is (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr
+:<port>` on Windows). That includes another program, and a Jarvis from this
+install running for a different data folder. Such a listener does not make
+`jarvis stop` fail; it fails, and says the port is still occupied, only when
+this data folder's own daemon is still on the port. A program run by another
+user may not show up at all without root; `sudo lsof -nP -iTCP:<port>
+-sTCP:LISTEN` shows it. `--port N` and `--port=N` both work, and a `--port`
+with no usable value is an error rather than the default.
 
 `jarvis restart` starts the daemon the way the running one was started:
 detached or not, with the same `--port`, `--data-dir`, `--no-open`,
