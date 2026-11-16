@@ -316,3 +316,68 @@ describe('a human input step refused before it asked anyone', () => {
     expect(runFailure(asking('@jarvispieces/piece-jarvis-input', 'request_input')(quoted))).toMatchObject({ category: 'internal', code: null });
   });
 });
+
+describe('a failure whose cause the step error already settles', () => {
+  const stepGraph = (pieceName: string, actionName: string) => ({ name: 'call', type: 'PIECE', displayName: 'Call step',
+    settings: { pieceName, pieceVersion: '0.0.1', actionName, input: {} } });
+  function run(piece: string, action: string, errorMessage: string, other?: Record<string, unknown>) {
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Parent', trigger: { name: 'trigger', type: 'EMPTY',
+      nextAction: other ?? stepGraph(piece, action) } as never });
+    const created = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING', startTime: Date.now() });
+    // The call was dispatched: its record is complete, the step's own error is all that says how it ended.
+    saveWorkflowEffect({ id: `wfe_call_${created.id}`, runId: created.id, projectId: created.projectId, flowId: flow.id, versionId: version.id,
+      versionDigest: 'v', stepName: 'call', executionPath: [], route: 'tool', toolName: 't', actionCategory: 'write_data', requestDigest: 'r',
+      arguments: {}, target: {}, provenance: {}, decision: 'allowed', reason: '', status: 'succeeded', approvalId: null, waitpointId: null,
+      createdAt: Date.now() });
+    return updateRun(created.id, { status: 'FAILED', failedStep: { name: 'call', displayName: 'Call step', errorMessage } })!;
+  }
+  const HTTP = '@activepieces/piece-http';
+
+  test('a server that answered 404 turned the request away: nothing took effect', () => {
+    const failure = runFailure(run(HTTP, 'send_request', 'The server answered 404 Not Found.'))!;
+    expect(failure).toMatchObject({ effect: 'none', code: 'HTTP_404' });
+    expect(failure.headline).toBe('The step "Call step" failed: the server answered 404 Not Found.');
+    expect(failure.headline + failure.outcome).not.toContain('cannot tell');
+    expect(failure.outcome).not.toContain('may already have taken effect');
+    expect(failure.detail).toContain('404 Not Found');
+  });
+
+  test('the older response shape is read the same way', () => {
+    expect(runFailure(run(HTTP, 'send_request', '{"response":{"status":404,"body":""},"request":{}}'))).toMatchObject({ effect: 'none', code: 'HTTP_404' });
+  });
+
+  test('a timeout, a dropped connection or a server error stays uncertain', () => {
+    for (const message of ['The request timed out after 30 seconds.', 'Could not reach example.com.', 'The server answered 502 Bad Gateway.']) {
+      const failure = runFailure(run(HTTP, 'send_request', message))!;
+      expect(failure.effect).toBe('unknown');
+      expect(failure.headline).toContain('cannot tell whether it took effect');
+    }
+  });
+
+  test('a 404 in a step that is not an HTTP request is not read as a refusal', () => {
+    expect(runFailure(run('@activepieces/piece-slack', 'send', 'The server answered 404 Not Found.'))!.effect).toBe('unknown');
+  });
+
+  test('a child run that failed names the workflow and the way to its run', () => {
+    const SUBFLOW = '@jarvispieces/piece-jarvis-subflow';
+    const failure = runFailure(run(SUBFLOW, 'call', 'The workflow "Ledger" failed. Open its latest run to see why. This step failed with it.'))!;
+    expect(failure).toMatchObject({ code: 'CHILD_RUN_FAILED', effect: 'unknown' });
+    expect(failure.headline).toBe('The step "Call step" failed because the workflow "Ledger" failed.');
+    expect(failure.outcome).toContain('Open its latest run to see which ones, and why it failed.');
+    expect(failure.headline).not.toContain('cannot tell');
+  });
+
+  test('a child that timed out or never reported back stays uncertain', () => {
+    const SUBFLOW = '@jarvispieces/piece-jarvis-subflow';
+    for (const message of ['The workflow "Ledger" did not finish within 30 seconds.', 'The workflow "Ledger" stopped before it could report back, so it is not known whether it finished.']) {
+      expect(runFailure(run(SUBFLOW, 'call', message))!.headline).toContain('cannot tell whether it took effect');
+    }
+  });
+
+  test('the wrappers of an untyped step error do not reach the detail', () => {
+    const failure = runFailure(run('@activepieces/piece-slack', 'send', 'Governed piece @activepieces/piece-slack/send was not authorized: daemon responded 409: {"error":"Sending needs your approval."}'))!;
+    expect(failure.detail).toBe('Sending needs your approval.');
+  });
+});
+
