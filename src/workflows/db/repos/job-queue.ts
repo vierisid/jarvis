@@ -82,6 +82,14 @@ export interface ClaimOptions {
   /** Lease duration for retryable jobs. RUN_FLOW claims cannot be stolen. */
   leaseMs?: number;
   now?: number;
+  /**
+   * Skip a RUN_FLOW job whose workflow already has a RUN_FLOW job running, so
+   * several workers never execute two runs of one workflow at once. Jobs of
+   * one workflow keep the order they had with a single worker. Runs whose
+   * graph may use the project-wide store also wait for each other (see
+   * usesSharedStore).
+   */
+  serializeFlows?: boolean;
 }
 
 export interface FailJobOptions {
@@ -124,12 +132,78 @@ function rowToJob<P = Record<string, unknown>>(row: JobRow): Job<P> {
   };
 }
 
+/** The workflow a RUN_FLOW job belongs to: its own column, else its run's. */
+const JOB_FLOW = (alias: string) =>
+  `COALESCE(${alias}.flow_id, (SELECT fr.flow_id FROM flow_run fr WHERE fr.id = ${alias}.flow_run_id))`;
+
+const JOB_VERSION = (alias: string) =>
+  `COALESCE(${alias}.flow_version_id, (SELECT fr.flow_version_id FROM flow_run fr WHERE fr.id = ${alias}.flow_run_id))`;
+
+/**
+ * Whether a version's graph has a store step that may use the PROJECT-wide
+ * ("COLLECTION") store: its append, add_to_list and remove_from_list read the
+ * value, change it and write it back as separate calls, so two workflows doing
+ * that on one key at once can lose an update. Deliberately an over-estimate
+ * (any store step naming COLLECTION, or choosing its scope from data): a wrong
+ * yes only makes such runs wait for each other. Cached per version; a draft
+ * is re-read when it changes.
+ */
+const sharedStoreCache = new Map<string, { updated: number; shared: boolean }>();
+function usesSharedStore(versionId: string): boolean {
+  // Every claim asks, so read the graph itself only when the version changed.
+  const stamp = db()
+    .query<{ updated: number }, [string]>(`SELECT updated FROM flow_version WHERE id = ?`)
+    .get(versionId);
+  if (!stamp) return false;
+  const hit = sharedStoreCache.get(versionId);
+  if (hit && hit.updated === stamp.updated) return hit.shared;
+  const trigger = db()
+    .query<{ trigger: string }, [string]>(`SELECT trigger FROM flow_version WHERE id = ?`)
+    .get(versionId)?.trigger ?? "";
+  const shared = trigger.includes("piece-store")
+    && (trigger.includes("COLLECTION") || /"store_scope"\s*:\s*"[^"]*\{\{/.test(trigger));
+  if (sharedStoreCache.size > 2000) sharedStoreCache.clear();
+  sharedStoreCache.set(versionId, { updated: stamp.updated, shared });
+  return shared;
+}
+
+/** Version ids of queued runs that must wait because a shared-store run is running. */
+function blockedSharedStoreVersions(): string[] {
+  const versionIds = (status: string) => db()
+    .query<{ v: string | null }, [string, string]>(
+      `SELECT DISTINCT ${JOB_VERSION("j")} AS v FROM workflow_job j WHERE j.job_type = ? AND j.status = ?`)
+    .all(RUN_FLOW, status).map((r) => r.v).filter((v): v is string => !!v);
+  if (!versionIds("RUNNING").some(usesSharedStore)) return [];
+  return versionIds("QUEUED").filter(usesSharedStore);
+}
+
 /** Jobs waiting to run. Used to refuse public ingress once a backlog builds. */
 export function countQueued(): number {
   const row = db()
     .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM workflow_job WHERE status = 'QUEUED'`)
     .get();
   return row?.n ?? 0;
+}
+
+/**
+ * Where a run's queued RUN_FLOW job stands, or null when none is waiting:
+ * how many workflow jobs are ahead of it (running, or queued earlier in claim
+ * order). Runs reads this to say why a run has not started.
+ */
+export function queueWait(runId: string): { ahead: number } | null {
+  const own = db()
+    .query<JobRow, [string, string]>(
+      `SELECT * FROM workflow_job WHERE flow_run_id = ? AND job_type = ? AND status = 'QUEUED' ORDER BY created DESC LIMIT 1`,
+    )
+    .get(runId, RUN_FLOW);
+  if (!own) return null;
+  const row = db()
+    .query<{ n: number }, [string, string, number, number, number, number, number]>(
+      `SELECT COUNT(*) AS n FROM workflow_job WHERE job_type = ? AND id != ? AND (status = 'RUNNING'
+         OR (status = 'QUEUED' AND (priority > ? OR (priority = ? AND (scheduled_at < ? OR (scheduled_at = ? AND created <= ?))))))`,
+    )
+    .get(RUN_FLOW, own.id, own.priority, own.priority, own.scheduled_at, own.scheduled_at, own.created);
+  return { ahead: row?.n ?? 0 };
 }
 
 export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Job<P> {
@@ -179,20 +253,25 @@ export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {
     // Older chat jobs may already be queued for a second attempt. Retire
     // those before claiming anything, even when boot recovery wasn't called.
     retireWorkflowRetries(now, false);
+    const blocked = opts.serializeFlows ? blockedSharedStoreVersions() : [];
     const row = db()
-      .query<JobRow, [JobStatus, number, number, number, number, string]>(
+      .query<JobRow, [JobStatus, number, number, number, number, string, string]>(
         `UPDATE workflow_job
        SET status = ?, attempt = attempt + 1, locked_until = ?, updated = ?
        WHERE id = (
          SELECT id FROM workflow_job
-         WHERE (status = 'QUEUED' AND scheduled_at <= ?)
-            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?)
+         WHERE ((status = 'QUEUED' AND scheduled_at <= ?)
+            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?))
+           ${opts.serializeFlows ? `AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_FLOW("workflow_job")} IS NOT NULL
+             AND EXISTS (SELECT 1 FROM workflow_job busy WHERE busy.status = 'RUNNING' AND busy.job_type = '${RUN_FLOW}'
+               AND busy.id != workflow_job.id AND ${JOB_FLOW("busy")} = ${JOB_FLOW("workflow_job")}))
+             AND NOT (job_type = '${RUN_FLOW}' AND ${JOB_VERSION("workflow_job")} IN (SELECT value FROM json_each(?)))` : "AND ? IS NOT NULL"}
          ORDER BY priority DESC, scheduled_at ASC, created ASC
          LIMIT 1
        )
        RETURNING *`,
       )
-      .get("RUNNING", leaseUntil, now, now, now, RUN_FLOW);
+      .get("RUNNING", leaseUntil, now, now, now, RUN_FLOW, JSON.stringify(blocked));
     return row ? rowToJob<P>(row) : null;
   })();
 }
@@ -265,8 +344,9 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * Other job types may re-queue within their attempt budget. Returns how many
  * retryable jobs were re-queued. Must run BEFORE the worker starts polling.
  * Runs stranded by an older daemon's recovery code are closed the same way.
+ * `bootedAt` (this process's start) bounds which jobless runs are settled.
  */
-export function recoverOrphanedJobs(): number {
+export function recoverOrphanedJobs(bootedAt: number = performance.timeOrigin): number {
   // Before the transaction below, and before retireWorkflowRetries, on purpose.
   // (1) cancelFlowRun opens its own BEGIN IMMEDIATE and only announces the stop
   // decision once that commits; nesting it here would signal on a savepoint
@@ -313,8 +393,36 @@ export function recoverOrphanedJobs(): number {
       [JSON.stringify({ name: '<recovery>', displayName: 'Recovery',
         errorMessage: 'Execution was interrupted and exhausted its attempts. Its outcome is unknown; inspect partial results before proposing another run.' }), ts, ts],
     );
+    settleRunsWithoutJob(bootedAt, ts);
     return res.changes;
   })();
+}
+
+/**
+ * Every path that queues a run writes the run row and its job together, so a
+ * QUEUED run with no job at all, created by an earlier process, can only come
+ * from a crash in code that wrote them separately (before they shared one
+ * transaction). Nothing will ever start it, and the client that asked for it
+ * never got an answer and may have asked again, so it is NOT queued again: it
+ * closes as stopped, saying it never started. Runs a job exists for, in any
+ * state, are left to the recovery above. Runs this process created are never
+ * touched: the prepared dry runner executes its run in process with no job,
+ * and may already be doing so while boot recovery runs.
+ */
+function settleRunsWithoutJob(createdBefore: number, ts: number): number {
+  // Two NOT EXISTS rather than one OR, so each can use idx_workflow_job_flow_run
+  // instead of scanning every job (jobs are never deleted) for each QUEUED run.
+  return db().run(
+    `UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ?, failed_step = ?
+     WHERE status = 'QUEUED' AND created < ?
+       AND NOT EXISTS (SELECT 1 FROM workflow_run_cancellation c WHERE c.run_id = flow_run.id)
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id)
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id IS NULL
+         AND CASE WHEN json_valid(j.payload) THEN json_extract(j.payload, '$.runId') END = flow_run.id)`,
+    [ts, ts, JSON.stringify({ name: '<lifecycle>', displayName: 'Did not start',
+      errorMessage: 'This run did not start and nothing ran. Jarvis stopped before it could begin. Start it again if you still want it.' }),
+      createdBefore],
+  ).changes;
 }
 
 /**

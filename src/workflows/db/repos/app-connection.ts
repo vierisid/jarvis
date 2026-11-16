@@ -359,6 +359,13 @@ export function getConnection(id: string): AppConnection | null {
   return row ? rowToConnection(row) : null;
 }
 
+/** Whether a connection with this id exists for the piece. Metadata only: the secret is not opened. */
+export function connectionExists(projectId: string, pieceName: string, externalId: string): boolean {
+  return !!db()
+    .query(`SELECT 1 FROM app_connection WHERE project_id = ? AND piece_name = ? AND external_id = ? LIMIT 1`)
+    .get(projectId, pieceName, externalId);
+}
+
 export function getConnectionByExternalId(
   projectId: string,
   pieceName: string,
