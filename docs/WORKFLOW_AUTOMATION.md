@@ -31,7 +31,7 @@ The runtime guarantees:
 What it deliberately is NOT:
 
 - Not multi-tenant. One daemon, one user. No projects table: every row carries the constant `DEFAULT_IDS.project` (`jrv_proj_default`).
-- Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
+- Not distributed. The job queue is SQLite-backed. The daemon runs up to 3 workflow runs at once (`JARVIS_WORKFLOW_CONCURRENCY`, 1 to 8), each in its own engine process. Runs of one workflow never overlap and keep their queue order, and so do runs of workflows whose graph may use the project-wide store (a store step with `COLLECTION` scope, or a scope chosen from data), because append, add_to_list and remove_from_list read, change and write back as separate calls. A long loop therefore holds up only its own workflow and such store users. A continuation (an approval, an answer, a due timer) is claimed ahead of runs that have not started. A run still waiting for a worker says so in its Runs detail: "Waiting for another workflow run to finish (N ahead)."
 - Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
 ## Upgrade notes
@@ -59,6 +59,13 @@ Practical consequences:
   context rule on `read_data` with the condition `tool_name` set to
   `workflow_notify` and the effect `require_approval`. A repeated
   `idempotencyKey` is deduplicated before any approval is asked.
+  A card for such a notice that an earlier version created (when every notify
+  was a governed send) and parked is not retired and not approved for the owner:
+  it stays a waiting card until answered. Approved, the step delivers once and
+  the run continues; denied, it ends as denied. The recorded effect is moved to
+  the new category only when the request, the workflow version and the tool are
+  unchanged and its frozen channels are still only the owner's own, so any
+  other change after the card was made is still refused as a changed effect.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
@@ -673,6 +680,16 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the
   failure. That step still gets `text`; it never gets `parsed`.
+- An empty reply (nothing, or only whitespace and characters that render as
+  nothing, such as a zero-width space) from a step with no JSON contract is
+  `EMPTY_AI_REPLY`, an `error` with effect `may_have_occurred` (the provider
+  processed the request, as for `INVALID_JSON_OUTPUT`): the step fails by
+  default, so later steps never run on an empty string, and with
+  `requireSuccess: false` it is data to route on. Any visible reply, however
+  short (`0`, `No`), is an answer. A step that asks for JSON keeps
+  `INVALID_JSON_OUTPUT` for an empty reply. Upgrading changes published
+  workflows: an Ask step that used to succeed with an empty reply now fails it
+  unless `Require valid output` is off.
 - `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
@@ -714,6 +731,16 @@ cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
+
+When the agent finishes but some of its tool calls failed, were denied or named
+a tool that is not available, the step keeps its outcome (published workflows
+that finish today keep finishing unless `Required tools` says otherwise), and
+its output adds `warning` (how many calls did not work and which tools, at most
+five named) and `toolErrors` (name and bounded, credential-redacted error text
+per failed call, at most ten). A tool name is the model's own and is clipped to
+one line of 64 characters. The
+agent's final message may read as success; these fields are where a person reading
+the run sees what was not done.
 
 ### Required nested workflow continuation
 
@@ -944,7 +971,9 @@ HTTP request specifics:
   Found.` plus `It said:` and the first 300 characters of the reply in quotes,
   redacted by the same credential rules as the card and the receipt, with frame
   delimiters defanged (the reply is the server's text, never Jarvis's own
-  words); `The request timed out after 2 seconds.` for the step's own timeout
+  words). A reply that is a web page is never quoted as markup: the sentence
+  says `It sent a web page titled "..."`, or quotes the text a reader would see
+  when it has no title; `The request timed out after 2 seconds.` for the step's own timeout
   (never shown as a server 500); `Could not reach api.example.com.` only when
   no connection was made (the name did not resolve, or the address refused or
   could not be routed to). Any other failure with no answer (a reset, a TLS or
@@ -1032,6 +1061,20 @@ HTTP request specifics:
   for the run's list (`GET /v1/jarvis/read-hosts`, engine token) and a file
   URL whose host is not listed, or a redirect off the list, fails the step
   naming the host and the list.
+- **File shapes.** One rule in `processors/file.ts` decides what a file field
+  accepts, for every piece: the bare step-file path (`/v1/step-files/<id>`, what
+  zip, PDF, image and QR code steps return), the `{ fileName, url }` object
+  Create file returns (so `{{step_1}}` works as well as `{{step_1.url}}`), an
+  `http(s)` URL (held to the read list above), a base64 `data:` URL of any
+  media type (decoded in place, never fetched), and a `{ filename, base64 }`
+  object (`fileName` or `name` also count; the base64 may carry a `data:`
+  prefix). Base64 is held to the same 7.3 MiB cap as a download. The refusal
+  messages never repeat the value or its name.
+  Only an exact step-file path earns the engine credential; a padded or
+  query-carrying path does not. Any other value (plain text, a number, a list,
+  an object with no file) fails the step with "This field needs a file from an
+  earlier step, such as the output of Create file. It got text instead.", not
+  "required input is missing". An empty value is still no value.
 - **What the card says, and what is refused before it.** An HTTP or GraphQL
   request's card (and its Needs you entry) says what will happen in words,
   naming the method, the host and the path ("Jarvis wants to send a POST
@@ -1302,6 +1345,10 @@ latest version and ran it. Now:
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,
   and the version's other steps keep their trees.
+- What a running CODE step may take (each CODE step is its own child process):
+  - **Time:** the flow's 10-minute timeout, and cancelling the run ends the child. Nothing shorter is imposed, so a `fetch` with no timeout of its own waits as long as the other side lets it.
+  - **Memory:** an address-space ceiling of 4 GiB per step on Linux (usable memory is lower: about 1.5 GB on Bun 1.3.11, more on newer Bun) (`ulimit -v`; `JARVIS_CODE_STEP_MEMORY_MB` in the daemon's environment changes it, `0` removes it). An allocation past it fails inside the step, and the step fails with "This CODE step ran out of memory: a step may use up to N MB". A process the step starts inherits the same ceiling, each on its own, so the ceiling stops a runaway, not a step written to get around it. macOS ignores that limit and Windows has no shell to set it, so there a step runs without a ceiling.
+  - **Output:** what the step prints is copied into the daemon log up to 64 KiB per stream, then one line says how many bytes were left out (the step still runs to the end). A failure message carries the last 64 KiB of each stream. A step's result is part of the run's data, which a run keeps up to 10 MB; a result past that fails the step with "This CODE step returned N MB of data, more than a run can keep (10 MB)". The step's own process measures what the step returns, so an over-size result is not handed to the engine.
 - Every version that ran a CODE step has a tree under
   `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
   and hourly unless its version is a flow's published version or current
@@ -1351,6 +1398,11 @@ ternaries, and `flattenNestedKeys(data, path)`.
 
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+
+A step may have any name the readiness check allows, including `toString`,
+`valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
+recorded (`ownStep`), never among `Object.prototype`'s members; only
+`__proto__`, `prototype`, `constructor` and `connections` stay reserved.
 
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.
@@ -1402,7 +1454,15 @@ threshold); without one, including rows saved before #954, on first use.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
-  "Expired".
+  "Expired". Having the refresh details is not proof that a refresh works, so a
+  row that carries them but whose refresh is known to fail says so instead
+  (`oauth2.refreshProblem` on the connections list): "Refresh failed:
+  reconnect" when the provider or the network policy refused it; "Refresh
+  blocked: reconnect" when the token URL is an IP address this install never
+  connects to, known without trying; "Refresh failing:
+  provider not answering" when the provider did not answer. The refusal is
+  remembered in memory until the value changes or a refresh succeeds, so a
+  restart forgets it until the next use. A named host is not guessed at.
 - `jarvis:*` connections are not refreshed here: their own source does that
   (`GoogleAuth`, through the control plane on hosted).
 - Bun 1.3.8-1.3.10 cannot verify the token endpoint's certificate for its host
@@ -1824,6 +1884,13 @@ What that means in practice:
   unfinished run goes `FAILED` too, in one transaction, keeping whatever step
   outputs were recorded. It is NOT resumed -- the effects of the interrupted
   step are unknown.
+- A run row and its job are always written in one transaction (manual run
+  route, chat `run`, Brief manual run, triggers, goals, nested runs). A QUEUED
+  run that has no job at all, left by an older crash between the two writes,
+  is closed at boot as `STOPPED` ("did not start and nothing ran"). It is not
+  queued again: the client never got an answer and may have asked a second
+  time. Only runs from before this boot are closed; the prepared dry runner's
+  in-process run has no job and is left alone.
 - A run that had durably PAUSED is the exception: if it still has an open
   waitpoint, or a fresh single-attempt `RESUME` job already queued for it,
   boot recovery leaves it `PAUSED` so the planned continuation still fires.
@@ -1902,6 +1969,8 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 | `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire. An optional `secret` (the editor's "Signing secret", at least 32 characters when set) makes it refuse any request whose `X-Jarvis-Signature` is not the hex HMAC-SHA256 of `<X-Jarvis-Timestamp>.<raw body>` with a timestamp within 5 minutes; a legacy webhook (saved before #1153, no `signature_scheme: "timestamped"`) also takes a body-only signature. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
+At startup `TriggerManager.start()` registers every ENABLED flow of the project, however many there are (`listAllFlows`, one query); a flow that cannot be read is logged and skipped, and the rest still register. A code path that means "all flows" must use `listAllFlows`: `listFlows` is a page and stops at 100 unless told otherwise.
+
 Polling triggers (e.g. Gmail's watch) live in this third category: the engine schedules a cron-driven `RUN` of the trigger's polling logic and emits new items.
 
 ## API surface
@@ -1939,7 +2008,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
-| POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
+| POST | `/api/workflows/connections` | Create a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }`. An existing `(pieceName, externalId)` is a 409 that points to Rotate: adding never replaces a saved key |
 | PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
 | DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
@@ -1984,7 +2053,7 @@ empty or whitespace-only body reads as `{}`.
 
 | Route | Body cap | Other limits |
 |---|---|---|
-| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400) |
+| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
 | `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
@@ -2068,8 +2137,11 @@ Notable behaviors a contributor should know:
 - Editor state is owned by `useWorkflowEditor.ts`; tree algebra (insert/delete/wire branches) is a pure module at `tree.ts` with its own test file.
 - LOOP body and ROUTER branches render as indented sub-graphs on the canvas. The tree-aware auto-layout distributes router branches symmetrically around the parent.
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
+- A file field (a piece property of type FILE) is a text field like any other: it takes an earlier step's stored file, such as `{{step_1.url}}` from Create file (a `/v1/step-files/<id>` path, readable only by runs of the same flow), or a link, which is fetched only when its host is on the flow's read list. The engine's file processor takes a string, so a reference to Create file's whole output object (`{{step_1}}`) resolves to no file and a required file field fails the run. It is never a JSON box unless the saved value is already an object.
+- The HTTP and GraphQL steps' Headers and Query params are optional (`required: false` in the vendored piece, registered in `scripts/activepieces-expression-patch.ts`); a step with only a method and a URL is ready.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
+- "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
 - The editor's runs panel (`useFlowRuns.ts`) polls adaptively: every 2s while any run is QUEUED, RUNNING or PAUSED, every 8s otherwise, and not at all while the tab is hidden. The room-level list (`useWorkflowsData.ts`) polls every 8s.
