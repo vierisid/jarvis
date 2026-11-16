@@ -13,6 +13,7 @@ import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage } from './approval-decision.ts';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance.ts';
 import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
@@ -3707,6 +3708,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const enriched = rows.map((r) => ({
           ...r,
           execution_state: executionState(r),
+          // A screen-derived request while screen awareness is off: approving waits (#1314 follow-up).
+          held: r.status === 'pending' && approvalHeldByAwareness(r) ? AWARENESS_HELD_APPROVAL_MESSAGE : null,
           impact: impactFromCategory(r.action_category as ActionCategory),
           // `intent` is the joined sentence; since #792 `intent_action` and
           // `intent_reason` carry its two parts apart, so a card can show the
@@ -4661,8 +4664,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      */
     '/api/awareness/toggle': {
       POST: async (req: Request) => {
-        const service = ctx.awarenessService;
-        if (!service) return error('Awareness service not available', 503);
+        // After a boot with awareness off there is no service yet: the
+        // awareness applier starts it when this turns awareness on. Without a
+        // settings coordinator only a running service can be switched.
+        if (!ctx.settingsReload && !ctx.awarenessService) return error('Awareness service not available', 503);
         let body: unknown;
         try {
           body = await req.json();
@@ -4681,7 +4686,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         };
         const apply = async () => {
           if (ctx.settingsReload) return ctx.settingsReload.applyNow('awareness');
-          service.toggle(enabled);
+          ctx.awarenessService?.toggle(enabled);
           return null;
         };
         // Off fails closed, like desktop control: it takes effect now even if
