@@ -42,9 +42,20 @@ export const GOAL_STATUSES = [
   "completed",
 ] as const;
 export type GoalFilter = Exclude<GoalDatum["status"], "completed"> | "all";
+/** One write from the Goals room: saved, or a plain-words reason it was not. */
+export type GoalWrite = { ok: true } | { ok: false; message: string };
+/** Every write carries a request id the host reuses on a retry, so a repeated save never counts twice. */
+export interface GoalWritesPort {
+  logValue(goal: GoalDatum, input: { requestId: string; value: number; measuredAt: number }): Promise<GoalWrite>;
+  addEntry(goal: GoalDatum, input: { requestId: string; note: string; link: string }): Promise<GoalWrite>;
+  defineMeasure(goal: GoalDatum, input: { requestId: string; kind: "number" | "count"; unit: string; baseline: number; target: number }): Promise<GoalWrite>;
+  activate(goal: GoalDatum): Promise<GoalWrite>;
+}
 export interface GoalsPort {
   source: "live" | "fixture";
   scopeId: string;
+  /** Absent where the room only shows goals (previews). */
+  write?: GoalWritesPort;
   /** Complete authorized roots and their explicit paths. Not the first page of a list. */
   read: () => Promise<BriefReadState<GoalCollection>>;
 }
@@ -158,4 +169,14 @@ export function nextGoalRoute(
       ...(next.approvalId ? { approvalId: next.approvalId } : {}),
     },
   };
+}
+
+export const GOAL_CONFLICT_TEXT = "This goal changed since you opened it. Refresh and try again.";
+export const GOAL_SAVE_FAILED_TEXT = "That did not save. Try again.";
+export const GOAL_COUNTED_TEXT = "This goal is counted from its entries. Add an entry instead.";
+export const GOAL_MEASURE_LOCKED_TEXT = "This goal already has logged values, so how it is measured cannot change here.";
+/** How a goal is measured, in the words the room uses. */
+export function measureKind(goal: GoalDatum): "none" | "number" | "count" {
+  const definition = goal.measurementDefinition;
+  return !definition ? "none" : definition.basis === "observations" ? "count" : "number";
 }

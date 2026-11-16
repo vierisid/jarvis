@@ -121,3 +121,41 @@ describe('the inline gate caps an approved multi-modal result before framing it 
     expectOneWholeBlock(text);
   });
 });
+
+// #1314 follow-up: a screen-derived card the person approved as screen awareness
+// went off is held: the gate hands the model no tool result, and nothing ran.
+test('the inline gate answers a held approval as awaiting approval, not as a result', async () => {
+  const { runWithApprovalProvenance } = await import('./approval-provenance.ts');
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  let on = true; setScreenCaptureEnabledSource(() => on);
+  let ran = 0;
+  try {
+    const role = { id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['desktop'], authority_level: 10 } as unknown as RoleDefinition;
+    const approvals = new ApprovalManager();
+    const audit = new AuditTrail();
+    const reg = new ToolRegistry();
+    reg.register({ name: 'desktop_launch_app', category: 'desktop', description: 'synthetic', parameters: {}, execute: async () => { ran++; return 'launched'; } });
+    const orch = new AgentOrchestrator();
+    orch.setToolRegistry(reg);
+    orch.setAuthorityEngine(new AuthorityEngine({ default_level: 10, governed_categories: ['read_data', 'control_app'],
+      overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' }));
+    orch.setApprovalManager(approvals);
+    orch.setAuditTrail(audit);
+    const ex = new DeferredExecutor(approvals, audit);
+    ex.setToolRegistry(reg);
+    orch.setDeferredExecutor(ex);
+    orch.createPrimary(role);
+    type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
+    const pending = runWithApprovalProvenance('screen', () => (orch as unknown as Exec).executeTool({ id: 'call', name: 'desktop_launch_app', arguments: {} }, undefined, new Set()));
+    let card = approvals.getPending()[0];
+    for (let i = 0; !card && i < 200; i++) { await new Promise((r) => setTimeout(r, 5)); card = approvals.getPending()[0]; }
+    expect(card?.provenance).toBe('screen');
+    approvals.approve(card!.id, 'dashboard');
+    on = false;
+    const result = String(await pending);
+    expect(result.startsWith('[AWAITING_APPROVAL]')).toBe(true);
+    expect(result).toContain('held while screen awareness is off');
+    expect(ran).toBe(0);
+    expect(approvals.getRequest(card!.id)).toMatchObject({ status: 'pending', execution_mode: 'deferred' });
+  } finally { setScreenCaptureEnabledSource(null); }
+});

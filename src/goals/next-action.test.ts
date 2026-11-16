@@ -12,7 +12,7 @@ import { createDraftVersion, lockVersion } from '../workflows/db/repos/flow-vers
 import { createFlowRun, updateRun } from '../workflows/db/repos/flow-run.ts';
 import { createWaitpoint, type WaitpointType } from '../workflows/db/repos/waitpoint.ts';
 import { getGoalApplication } from './application-service.ts';
-import { checkWorkResult, createWorkItem, decideWorkItem } from './work-items.ts';
+import { checkWorkResult, createWorkItem, decideWorkItem, NEEDS_YOU_NOT_DOING_REF } from './work-items.ts';
 import { nextAction, observeNextAction, PLAN_TTL, planNextAction, PLANNER, type NextActionPlan } from './next-action.ts';
 import { approvalDigest, RUBRIC, SCENARIO_NOW, SCENARIO_SET, scenarioMisses, scenarioSnapshot, type NextActionScenario } from './next-action-scenarios.ts';
 
@@ -435,6 +435,26 @@ describe('live observation', () => {
     expect(p.considered.filter(c => c.kind === 'close_goal').map(c => c.title).sort())
       .toEqual(['Record whether "Call Ana about invoice 1042" is done', 'Record whether "Send invoice reminders" is done']);
     expect(p.considered).toContainEqual(expect.objectContaining({ kind: 'start_step', title: 'Start "Update pricing page"' }));
+  });
+
+  test('a step the founder chose not to do reads as their decision, not as a failed attempt to retry', () => {
+    const dropped = goals.createGoal('Find a new supplier', 'task', { status: 'active' });
+    const call = accept('Call the supplier', dropped.id);
+    checkWorkResult(call.id, { verdict: 'failed', summary: 'Not worth it', evidence: [{ ref: NEEDS_YOU_NOT_DOING_REF, description: 'Not worth it' }] });
+    const failed = goals.createGoal('Send invoice reminders', 'task', { status: 'active' });
+    const send = accept('Send the reminders', failed.id);
+    checkWorkResult(send.id, { verdict: 'failed', summary: 'Three bounced', evidence: [{ ref: 'gmail:sent', description: 'Bounces' }] });
+
+    const snapshot = observeNextAction();
+    const result = (id: string) => snapshot.goals.find(g => g.id === id)!.lastResult;
+    expect(result(dropped.id)).toMatchObject({ verdict: 'failed', dropped: true });
+    expect(result(failed.id)!.dropped).toBeUndefined();
+    const titles = planNextAction(snapshot).considered.map(c => c.title);
+    expect(titles).toContain('Choose another step toward "Find a new supplier"');
+    expect(titles).not.toContain('Retry "Find a new supplier" or change the approach');
+    expect(titles).toContain('Retry "Send invoice reminders" or change the approach');
+    const only = planNextAction({ ...snapshot, goals: snapshot.goals.filter(g => g.id === dropped.id) });
+    expect(asked(only)).toBe('You chose not to do "Call the supplier" (Not worth it). What should the next step toward "Find a new supplier" be, if any?');
   });
 
   test('a waiting run says who resumes it, and planning over runs writes nothing', () => {
