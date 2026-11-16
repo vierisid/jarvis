@@ -4,6 +4,7 @@ import advancedFormat from 'dayjs/plugin/advancedFormat';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import duration from 'dayjs/plugin/duration';
+import { parseDateInstant } from '../../../../../../../../runtime/date-parse';
 
 
 function extendDayJs(): typeof dayjs {
@@ -81,27 +82,21 @@ export enum timeParts {
 export const getCorrectedFormat = (format:string) =>{
   return format.replaceAll('DDDD','dddd').replaceAll('DDD','ddd');
 }
-export function parseDate(date: string, format: string): dayjs.Dayjs {
-  const correctedFormat = getCorrectedFormat(format);
-  
-  // Try strict parsing with the provided format
-  let djs = apDayjs(date, correctedFormat, true);
-  
-  // If strict parsing fails, try lenient parsing (useful for formats that native parser handles well)
-  if (!djs.isValid()) {
-    djs = apDayjs(date, correctedFormat, false);
-  }
-  
-  // If still invalid, try without format (native parser fallback)
-  if (!djs.isValid()) {
-    djs = apDayjs(date);
-  }
-  
-  if (!djs.isValid()) {
-    throw new Error(`Failed to parse the date: ${date} with format: ${correctedFormat}`);
-  }
-  return djs;
+// === JARVIS PATCH: one instant-based parser for every Date Helper action ===
+// The upstream parser read the text in the process zone, accepted text that
+// did not match the format, and rolled impossible dates over. The parse lives
+// in runtime/date-parse.ts (see its header for the rules). `zone` is where a
+// wall time with no offset is read; actions without a zone setting read UTC.
+export function parseDate(date: string, format: string, zone = 'UTC'): dayjs.Dayjs {
+  // Always a UTC-mode value: its parts are UTC, and `.tz()` on it converts the real instant.
+  return apDayjs.utc(parseDateInstant(date, getCorrectedFormat(format), zone));
 }
+
+/** Format an instant. `X` is formatted from the instant: the upstream plugin reads a shifted clock for a zoned value. */
+export function formatDate(date: dayjs.Dayjs, format: string): string {
+  return format === 'X' ? String(date.unix()) : date.format(format);
+}
+// === END JARVIS PATCH ===
 export const timeFormatDescription = `Here's what each part of the format (e.g., YYYY) represents:
 \nYYYY : Year (4 digits) - Example: 2023
 \nYY : Year (2 digits) - Example: 23
