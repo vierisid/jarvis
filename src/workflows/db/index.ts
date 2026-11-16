@@ -64,7 +64,7 @@ export function assertEncryptionKeyForStoredCredentials(db: Database = getDb()):
       ...usableKeyFileCandidates().map((path) => `  ${path}`),
       "or set JARVIS_WORKFLOW_ENCRYPTION_KEY (64 hex chars) / JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE.",
       "",
-      "A `jarvis export --full` archive taken by this version carries the key as",
+      "A `jarvis export` archive (without --no-secrets) taken by this version carries the key as",
       "`workflow-encryption.key`. Older archives do not -- check any separate key escrow,",
       "and any backup of the data dir, before deleting anything.",
     ].join("\n"),
