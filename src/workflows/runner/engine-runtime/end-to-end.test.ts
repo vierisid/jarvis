@@ -203,7 +203,8 @@ describe("Engine end-to-end (F gate)", () => {
       try {
         const result = await handle.executeFlow({ flowVersion: version, payload: fixture.payload } as never);
         expect(result.status).toBe(fixture.succeeds ? 'SUCCEEDED' : 'FAILED');
-        if (!fixture.succeeds) expect(JSON.stringify(result.failedStep)).toContain('absent value');
+        // The engine names the missing reference (the plain failure wording).
+        if (!fixture.succeeds) expect(JSON.stringify(result.failedStep)).toContain('\\"{{trigger.missing}}\\" has no value in this run');
       } finally { await handle.release(); }
     }, 60_000);
   }
