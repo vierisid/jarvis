@@ -444,3 +444,83 @@ export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
     .all(...args, limit, offset)
     .map(rowToRun);
 }
+
+/** One row of the Today recent-runs read: identity, status and time only. */
+export interface RecentRunRow {
+  runId: string;
+  flowId: string;
+  flowVersionId: string;
+  name: string;
+  status: FlowRunStatus;
+  startTime: number | null;
+  created: number;
+  /** Only set on a PAUSED run: who or what it waits on. */
+  waitingOn?: "person" | "timer" | "other";
+  /** Earliest timer resume time (ms) when waitingOn is "timer". */
+  resumeAt?: number;
+}
+
+/**
+ * The latest production, top-level run of each workflow in a project, newest
+ * first. Test runs, single-step tests and subflow child runs are never
+ * candidates, so they cannot hide a workflow's real latest run, and a removed
+ * workflow (Undo receipt held) is left out as the Workflows room leaves it out.
+ *
+ * Each workflow's latest run is one seek on `idx_flow_run_recent`, so the cost
+ * grows with the number of workflows, not with their accumulated run history:
+ * Today polls this, and a window over every run sorted the whole history on the
+ * daemon thread (about 96 ms at 200 workflows and 100k runs, 0.4 ms this way;
+ * 1.5 ms at 1000 workflows).
+ *
+ * The name is the one the Workflows room shows (the published version's, else
+ * the selected draft's), falling back to the version the run used. `steps` is
+ * not selected; captured step output never leaves the database through this read.
+ */
+export function listRecentRuns(projectId: string, limit: number): RecentRunRow[] {
+  const rows = db()
+    .query<{ id: string; flow_id: string; flow_version_id: string; status: FlowRunStatus; start_time: number | null; created: number; display_name: string },
+      SQLQueryBindings[]>(
+      // The latest runs first, then names for those few rows only: the draft
+      // selection view is per workflow, and joined to every workflow it made
+      // the read grow with the square of the workflow count.
+      `SELECT t.id, t.flow_id, t.flow_version_id, t.status, t.start_time, t.created,
+              COALESCE(CASE WHEN t.published_version_id IS NOT NULL
+                         THEN (SELECT display_name FROM flow_version WHERE id = t.published_version_id)
+                         ELSE (SELECT v.display_name FROM brief_workflow_draft_selection d
+                                 JOIN flow_version v ON v.id = d.version_id WHERE d.flow_id = t.flow_id) END,
+                       (SELECT display_name FROM flow_version WHERE id = t.flow_version_id)) AS display_name
+         FROM (SELECT r.id, r.flow_id, r.flow_version_id, r.status, r.start_time, r.created, f.published_version_id
+                 FROM flow f
+                 JOIN flow_run r ON r.id = (
+                        SELECT x.id FROM flow_run x INDEXED BY idx_flow_run_recent
+                         WHERE x.project_id = f.project_id AND x.flow_id = f.id
+                           AND x.environment = 'PRODUCTION' AND x.parent_run_id IS NULL AND x.step_name_to_test IS NULL
+                         ORDER BY x.created DESC, x.id DESC LIMIT 1)
+                WHERE f.project_id = ?
+                  AND f.id NOT IN (SELECT flow_id FROM brief_workflow_slots WHERE receipt_id IS NOT NULL)
+                ORDER BY COALESCE(r.start_time, r.created) DESC, r.created DESC, r.id DESC
+                LIMIT ?) t
+        ORDER BY COALESCE(t.start_time, t.created) DESC, t.created DESC, t.id DESC`,
+    )
+    .all(projectId, limit)
+    .map(row => ({ runId: row.id, flowId: row.flow_id, flowVersionId: row.flow_version_id, name: row.display_name,
+      status: row.status, startTime: row.start_time, created: row.created } as RecentRunRow));
+  for (const row of rows) if (row.status === "PAUSED") Object.assign(row, pausedOn(row.runId));
+  return rows;
+}
+
+/**
+ * What a paused run waits on, from its unresumed waitpoints. MANUAL is an
+ * approval or input request, so a person. TIMER alone is a delay step and
+ * carries its resume time. Anything else (webhook, hold, deferral) is "other".
+ */
+function pausedOn(runId: string): Pick<RecentRunRow, "waitingOn" | "resumeAt"> {
+  const waits = db().query<{ type: string; resume_date_time: string | null }, SQLQueryBindings[]>(
+    "SELECT type, resume_date_time FROM waitpoint WHERE flow_run_id = ? AND resumed_at IS NULL").all(runId);
+  if (waits.some(w => w.type === "MANUAL")) return { waitingOn: "person" };
+  if (waits.length && waits.every(w => w.type === "TIMER")) {
+    const times = waits.map(w => Date.parse(w.resume_date_time ?? "")).filter(Number.isFinite);
+    return times.length ? { waitingOn: "timer", resumeAt: Math.min(...times) } : { waitingOn: "timer" };
+  }
+  return { waitingOn: "other" };
+}
