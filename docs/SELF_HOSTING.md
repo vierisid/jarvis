@@ -38,6 +38,19 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
+`jarvis stop` only signals a process it can prove is this Jarvis: the daemon
+holding its lock, or a leftover process whose command line is this install's
+`jarvis`. Anything else listening on the port is named (program and PID) and
+left running. `--port N` and `--port=N` both work, and a `--port` with no usable
+value is an error rather than the default.
+
+`jarvis restart` starts the daemon the way the running one was started:
+detached or not, with the same `--port`, `--data-dir`, `--no-open`,
+`--no-local-tools` and `--system-config`. It reads that from `jarvis.launch.json`
+next to the lock file. Flags you pass to `restart` replace the recorded ones.
+`jarvis start -d` reports success only once the daemon answers on its port; if
+the port is taken it says so and exits non-zero.
+
 **Access is JWT-only by default.** There is no shared password or token. You
 enroll devices:
 
@@ -613,20 +626,18 @@ nothing else - `jarvis uninstall` is the one that removes JARVIS itself, and it
 removes autostart first so the daemon is not relaunched halfway through.
 
 **Outside a service manager, `jarvis update` and `jarvis restart` restart the
-daemon the way it was started.** `jarvis start` records its `--port`,
-`--data-dir`, `--no-local-tools` and `--system-config` in `daemon-start.json`
-beside the lock, and the restart passes them on (relative paths are recorded as
-absolute ones). `jarvis restart` given any of those four uses only what it was
-given instead, so a restart can also drop one. A daemon that recorded nothing,
-such as one started by an older version, is restarted with the defaults, and the
-command says so. `jarvis start -d` hands its detached child the same options; it
-used to drop `--data-dir` and `--no-local-tools`.
+daemon the way it was started.** Both read `jarvis.launch.json` beside the lock
+(see `jarvis restart` above). `jarvis update` passes on the recorded `--port`,
+`--data-dir`, `--no-local-tools` and `--system-config`, and always restarts the
+daemon detached and without opening the dashboard. `jarvis restart` prints the
+options it took from the record. A daemon that recorded nothing, such as one
+started by an older version, is restarted with the defaults (or, for `restart`,
+the flags given), and the command says so. `jarvis start -d` hands its detached
+child the same options; it used to drop `--data-dir` and `--no-local-tools`.
 
 The record is mode 0600, names the daemon's pid and is removed when that daemon
-exits; a record for another pid, one that is a symlink, belongs to another user
-or is writable by anyone else is ignored. Its values are checked again before
-use (a port in range, absolute paths that cannot be read as a flag) and passed
-as arguments, never through a shell.
+exits; a record for another pid is ignored. Its values are passed as arguments,
+never through a shell.
 
 ### Running under systemd
 

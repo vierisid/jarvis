@@ -41,7 +41,7 @@ import {
 } from './install-method.ts';
 import { stopDaemonGracefully, type StopResult } from './daemon-control.ts';
 import { modelExecRestartWarning } from '../util/model-exec-marker.ts';
-import { daemonStartFlags, readStartOptions } from './start-options.ts';
+import { daemonStartFlags, readLaunchRecord } from './lifecycle.ts';
 
 export interface SpawnResult {
   exitCode: number;
@@ -384,7 +384,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const runningPid = checkRunning();
   // Read before the stop, while the record is plainly this daemon's: the
   // restart below starts the new daemon the way this one was started.
-  const startOptions = runningPid ? readStartOptions(runningPid) : null;
+  const startOptions = runningPid ? readLaunchRecord(runningPid) : null;
   // A daemon that is a systemd user unit's main process is updated by a
   // transient unit that stops and starts the service through systemd (#525;
   // src/cli/systemd-unit.ts): stopping it from here can kill this command
@@ -477,7 +477,9 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       // that can lack the workflow key (#514; util/model-exec-marker.ts).
       const warning = modelExecRestartWarning();
       if (warning) console.log(c.yellow(warning));
-      const jarvisArgs = ['start', '--no-open', ...daemonStartFlags(startOptions ?? {})];
+      // Only what the daemon runs with: this restart is always detached and
+      // never opens a browser, whatever the record says about those.
+      const jarvisArgs = ['start', '--no-open', ...(startOptions ? daemonStartFlags(startOptions) : [])];
       if (!startOptions) {
         // Started by an older version, or not through `jarvis start`: what it
         // was started with is not known here, so say what this one gets.

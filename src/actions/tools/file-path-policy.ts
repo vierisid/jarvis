@@ -431,8 +431,10 @@ const DATA_DIR_SENSITIVE_ENTRIES = new Set([
   'google-tokens.json',
   // Installed workflow pieces, which shadow the shared copy; the desktop
   // bridge the daemon launches; install.sh's daemon checkout; the PID
-  // `jarvis stop` signals.
-  'pieces', 'sidecar', 'daemon', 'jarvis.pid',
+  // `jarvis stop` signals; the launch record `jarvis restart` replays (it names
+  // the --system-config and --data-dir the next daemon starts with, and
+  // whether it keeps --no-local-tools).
+  'pieces', 'sidecar', 'daemon', 'jarvis.pid', 'jarvis.launch.json',
 ]);
 
 function isSensitiveDataEntry(relInDataDir: string): boolean {

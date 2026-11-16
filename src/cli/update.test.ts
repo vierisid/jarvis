@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runUpdate, type Spawner, type SpawnResult } from './update.ts';
-import { recordStartOptions } from './start-options.ts';
+import { writeLaunchRecord } from './lifecycle.ts';
 import type { InstallMethod, InstallMethodInfo } from './install-method.ts';
 
 let workDir: string;
@@ -327,7 +327,7 @@ describe('runUpdate - restart keeps the start options', () => {
 
   test('restarts with the flags the stopped daemon recorded', async () => {
     const dataDir = join(workDir, 'data');
-    recordStartOptions(runningPid, { port: 4100, dataDir, noLocalTools: true, systemConfigPath: '/etc/jarvis/system.yaml' });
+    writeLaunchRecord({ pid: runningPid, detached: false, noOpen: false, port: 4100, dataDir, noLocalTools: true, systemConfigPath: '/etc/jarvis/system.yaml' });
 
     expect(await updateAndRestart()).toEqual([[
       'start', '--no-open',
@@ -339,15 +339,21 @@ describe('runUpdate - restart keeps the start options', () => {
   });
 
   test('ignores a record another daemon left behind', async () => {
-    recordStartOptions(runningPid + 1, { port: 4100 });
+    writeLaunchRecord({ pid: runningPid + 1, detached: false, noOpen: false, noLocalTools: false, port: 4100 });
 
     expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
   });
 
   test('restarts with no extra flags when the daemon was started without any', async () => {
-    recordStartOptions(runningPid, {});
+    writeLaunchRecord({ pid: runningPid, detached: false, noOpen: false, noLocalTools: false });
 
     expect(await updateAndRestart()).toEqual([['start', '--no-open']]);
+  });
+
+  test('always restarts detached with --no-open, whatever the record says about those', async () => {
+    writeLaunchRecord({ pid: runningPid, detached: true, noOpen: false, noLocalTools: false, port: 4100 });
+
+    expect(await updateAndRestart()).toEqual([['start', '--no-open', '--port', '4100']]);
   });
 });
 
