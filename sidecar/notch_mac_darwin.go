@@ -314,6 +314,13 @@ static void jarvis_mac_ax_free(JarvisMacAX *t) {
 	t->role = t->subrole = t->name = t->value = NULL;
 }
 
+// What a field holds, as it is, cut at a length. The caller asks for one
+// more than it will take, so that it can tell a cut one from a whole one.
+// NULL when it holds nothing that is words. The caller frees it.
+static char *jarvis_mac_ax_value(AXUIElementRef e, int most) {
+	return jarvis_mac_dup(jarvis_mac_ax_text(e, kAXValueAttribute, (NSUInteger)most));
+}
+
 static void jarvis_mac_ax_release(AXUIElementRef e) {
 	if (e != NULL) CFRelease(e);
 }
@@ -903,6 +910,22 @@ func macElemOf(ref C.AXUIElementRef, light bool) (macElem, bool) {
 	var t C.JarvisMacAX
 	C.jarvis_mac_ax_describe(ref, boolToCInt(light), &t)
 	return macElemFrom(&t), true
+}
+
+// macElemHolds is what a field holds, as it is: not tidied and not cut short
+// the way a name for a tag is. most is the longest it may be; a longer one
+// comes back longer than most, so that whoever asked can refuse it instead of
+// taking a part for the whole. What a password field holds is never read.
+func macElemHolds(e macElem, most int) string {
+	if !e.held() || e.secure {
+		return ""
+	}
+	raw := C.jarvis_mac_ax_value(e.ref, C.int(most+1))
+	if raw == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(raw))
+	return C.GoString(raw)
 }
 
 // macWindowElem is the window of a program the person is in.

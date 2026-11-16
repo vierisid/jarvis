@@ -491,7 +491,7 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 
 	case "pitch":
 		// How far apart the rows really are at a place, read from the screen
-		// (watchPitch). A number leaves this function, and nothing else.
+		// (watchRowStep). A number leaves this function, and nothing else.
 		hands := notchActHands()
 		hwnd, rect, refusal := notchActWindowNow(act)
 		if refusal != nil {
@@ -516,9 +516,10 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 			// The copy is blue, green, red, and a fourth byte that is not looked at.
 			pixels[i] = uint32(shot.pixels[i*4+2])<<16 | uint32(shot.pixels[i*4+1])<<8 | uint32(shot.pixels[i*4])
 		}
-		exact, ok := watchPitch(watchProfile(pixels, shot.w, shot.h), float64(act.Dy))
+		exact, why, ok := watchRowStep(pixels, shot.w, shot.h, float64(act.Dy), at.Y-strip.Y)
 		if !ok {
-			log.Printf("[notch] act: no rows could be seen at that place")
+			// Numbers only: how large the strip was and what repeated in it.
+			log.Printf("[notch] act: no rows could be seen at that place: %s (the hand went %d)", why, act.Dy)
 			return done(unknown)
 		}
 		if act.Dy < 0 {
