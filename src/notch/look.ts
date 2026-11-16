@@ -403,6 +403,13 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
    * would be a second answer to something else.
    */
   const late = new Set<string>();
+  /**
+   * When a look was last taken as a place to put something, for each desktop
+   * app. Such a look is over at once, but the hold of the keys it was made in
+   * is not: with nothing said in it, that hold is still not "I did not catch
+   * that". The person pointed, and the notch is asking them about it.
+   */
+  const pointed = new Map<string, number>();
   let said = 0;
   let stopped = false;
 
@@ -492,6 +499,7 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
   }
 
   port.onSidecarDisconnected?.((sidecarId) => {
+    pointed.delete(sidecarId);
     const look = under.get(sidecarId);
     if (look) end(sidecarId, look, null);
   });
@@ -545,7 +553,7 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
       log(`[notch] a look could not be held: ${error instanceof Error ? error.message : String(error)}`);
     }
     // Pointed at as a place to put something: asked about there, and nothing else comes of this look.
-    if (taken) { end(sidecarId, look, null); return; }
+    if (taken) { pointed.set(sidecarId, look.begunAt); end(sidecarId, look, null); return; }
     settle(sidecarId, look);
   });
 
@@ -578,7 +586,8 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
     },
     during(sidecarId, since) {
       const look = under.get(sidecarId);
-      return !!look && look.then !== 'done' && look.begunAt >= since;
+      if (look && look.then !== 'done' && look.begunAt >= since) return true;
+      return (pointed.get(sidecarId) ?? -1) >= since;
     },
     alone(sidecarId) {
       const look = under.get(sidecarId);
