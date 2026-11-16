@@ -124,6 +124,7 @@ describe('catching a job the person does twice by hand', () => {
     h.row(1);
     await settle();
     await h.pass(500);
+    const measuredOnce = h.sent.filter((request) => request.do === 'pitch').length;
     h.row(2);
     await settle();
     await h.reply('yes');
@@ -131,6 +132,8 @@ describe('catching a job the person does twice by hand', () => {
     const steps = h.sent.filter((request) => request.do === 'click');
     // The fourth row, not the third again.
     expect(steps[0]).toMatchObject({ win: FILE, y: 266 });
+    // The rows were not measured a second time: by now Jarvis's own pointer stands where the strip would be read.
+    expect(h.sent.filter((request) => request.do === 'pitch').length).toBe(measuredOnce);
   });
 
   test('with no count to be had, the sentence makes none up, and it runs until nothing is left to copy', async () => {

@@ -22,7 +22,7 @@ import type { NotchInbox } from './inbox.ts';
 import { NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import type { NotchPart } from './protocol.ts';
 import {
-  NOTCH_WATCH_KEPT, findRounds, parseWatchEvent, roundPlace, roundsApps, roundsCopy, roundsName, roundsSource, roundsThatFit, roundsToDo,
+  NOTCH_WATCH_KEPT, carryExact, findRounds, parseWatchEvent, roundPlace, roundsApps, roundsCopy, roundsName, roundsSource, roundsThatFit, roundsToDo,
   type Rounds, type WatchStep,
 } from './rounds.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
@@ -191,8 +191,11 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
             await stage.say(['It is not where it was any more. Do one by hand and I will offer again.'], 4200, { mood: 'careful' });
             return 'settled';
           }
-          // Measured again, from that place: where each step lands has to be exact.
-          const latest = await sureRounds(raw, deps.hands);
+          // Where each step lands has to be exact. The distances measured for
+          // the offer still hold for the same job a step or a round further
+          // on; only when they do not fit is the screen measured again. (By
+          // now Jarvis's own pointer stands in the strip that would be read.)
+          const latest = carryExact(mine.rounds, raw) ?? await sureRounds(raw, deps.hands);
           if (!latest) {
             home();
             await stage.say([NOTCH_ROWS_NOT_SEEN], 4600, { mood: 'sorry' });
@@ -244,8 +247,8 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     const rounds = findRounds(steps);
     if (!rounds) return;
     const name = roundsName(rounds);
-    // Offered already, and still up or just turned down: the offer follows the person, it is not made again.
-    if (offer?.name === name) { offer.rounds = rounds; return; }
+    // Offered already, and still up: the offer follows the person, it is not made again.
+    if (offer?.name === name) return;
     const declined = quiet.get(name);
     if (declined !== undefined && now() - declined < NOTCH_CATCH_QUIET_MS) return;
     if (quiet.size > 64) quiet.clear();
