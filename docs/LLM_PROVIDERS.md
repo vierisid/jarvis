@@ -308,14 +308,14 @@ const response = await manager.chatTier('medium', 'my_script', messages);
 - A stream that stalls before it showed anything moves on the same way, as an outage.
 - It never moves on for `bad_request`, a content-policy block, or a key or plan the provider refused (`auth`, `forbidden`; on Usejarvis AI an inactive plan): those are verdicts on the request or the account, not an outage. A stated 4xx stays a request error even when its body mentions a timeout or a 5xx number.
 - A provider that failed this way is skipped under its other tiers too, and a stopped turn does not move on.
-- A stream that already produced text does not move on, whether it failed or stalled; the partial reply is kept and the turn fails.
+- A stream that already produced text or a tool call does not move on, whether it failed or stalled; the partial reply is kept and the turn fails.
 - In what the user reads: a 5xx is "the AI provider returned an error", a refused or dropped connection is "the AI provider could not be reached", a timeout or a stalled stream is "the AI provider did not answer in time".
 
 ### Timeouts
 
 - A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Any bytes count as data, including thinking, a tool call's arguments arriving in pieces, and keepalive pings. Time Jarvis spends running a tool between two events never counts.
 - Ollama and OpenAI-compatible endpoints (often a model on your own machine) get 5 minutes before the first data, because loading a model and reading a long prompt on a CPU sends nothing for that long.
-- A stalled stream is not retried on the same provider (a hung provider stays hung). If nothing was shown yet, Jarvis moves on: with a tier map to the next provider mapped for that tier, as for an outage; without one to the next provider in the fallback chain. Once any text was shown, the turn fails with "did not answer in time" and does not move on. Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
+- A stalled stream is not retried on the same provider (a hung provider stays hung). If nothing was shown yet, Jarvis moves on: with a tier map to the next provider mapped for that tier, as for an outage; without one to the next provider in the fallback chain. Once any text or tool call was shown, the turn fails with "did not answer in time" and does not move on. Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
 - A workflow Ask step has one overall deadline of 120 seconds across all retries and fallbacks.
 
 ### Per-Call Options
