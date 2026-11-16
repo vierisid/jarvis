@@ -566,6 +566,24 @@ describe('a look that is told is shown to whoever holds things (pass 10)', () =>
     expect(await h.look.files('pc')).toBeNull();
   });
 
+  // Found by review: a click to put something, with nothing said, was answered "I did not catch that".
+  test('the hold of the keys such a look was made in still counts as a hold with a look in it', async () => {
+    const h = harness({ shown: () => true });
+    const before = Date.now() - 50;
+    h.begun();
+    h.taken(threeRows, { how: 'click', rect: { x: 1, y: 1, w: 0, h: 0 } });
+    await h.wait(40);
+    // The look is over, and what talking asks is still yes: nothing said in this hold is not a miss.
+    expect(h.look.during('pc', before)).toBe(true);
+    expect(h.look.during('pc', Date.now() + 1000)).toBe(false);
+    expect(h.look.during('other', before)).toBe(false);
+    // Saying so starts nothing.
+    h.look.alone('pc');
+    await h.wait(40);
+    expect(h.line()).toBeNull();
+    expect(h.asked).toEqual([]);
+  });
+
   test('a look that was refused is shown too, so that it is not held; one that breaks the holder still answers', async () => {
     const refused: string[] = [];
     const h = harness({ shown: (_sidecarId, looked) => { refused.push(looked.refused); throw new Error('the holder broke'); } });

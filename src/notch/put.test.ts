@@ -4,12 +4,13 @@ import { NotchInbox } from './inbox.ts';
 import { attachNotchJobs, type NotchActResult, type NotchJobHands } from './jobs.ts';
 import type { NotchLooked, NotchThing } from './look.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
-import { NOTCH_HOLD_MS, attachNotchPut, heldFrom, takesAThing } from './put.ts';
+import { NOTCH_HOLD_MS, NOTCH_PUT_SAID_MS, attachNotchPut, heldFrom, heldIsTable, putAnswer, putForm, putRequest, takesAThing } from './put.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); };
-const text = (parts: NotchPart[] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
+const text = (parts: NotchPart[] | undefined): string =>
+  (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : 'word' in part ? part.word.value : '')).join('');
 
 const thing = (kind: string, more: Partial<NotchThing> = {}): NotchThing => ({ kind, name: '', value: '', parts: [], ...more });
 const looked = (things: NotchThing[], more: Partial<NotchLooked> = {}): NotchLooked =>
@@ -24,7 +25,14 @@ const FIELD = looked([thing('field', { role: 'Edit' })], { how: 'click', app: 'N
 
 describe('what is held, and what takes it', () => {
   test('rows are held as rows: cells parted by tabs, rows by line ends', () => {
-    expect(heldFrom(looked(ROWS), 5)).toEqual({ what: '3 rows', text: 'Acme\t1,200.00\tpaid\nLumen\t430.33\tlate\nNorthwind\t91.00\tpaid', app: 'Grafana', at: 5 });
+    expect(heldFrom(looked(ROWS), 5)).toEqual({
+      what: '3 rows', text: 'Acme\t1,200.00\tpaid\nLumen\t430.33\tlate\nNorthwind\t91.00\tpaid',
+      rows: [['Acme', '1,200.00', 'paid'], ['Lumen', '430.33', 'late'], ['Northwind', '91.00', 'paid']], app: 'Grafana', at: 5,
+    });
+    // Several rows, or one row of several cells, have a form to choose. One value is just put.
+    expect(heldIsTable(heldFrom(looked(ROWS), 5)!)).toBe(true);
+    expect(heldIsTable(heldFrom(looked([ROWS[0]!]), 5)!)).toBe(true);
+    expect(heldIsTable(heldFrom(looked([thing('text', { name: '1,291' })]), 5)!)).toBe(false);
   });
 
   test('one short thing is called by what it says, a long one by its kind', () => {
@@ -85,11 +93,18 @@ function harness(options: { result?: NotchActResult | null | 'lost'; paused?: ()
   });
   const line = (): NotchLine | null => surface.current().line;
   const said = (): string => text(line()?.say);
-  const reply = async (act: string): Promise<void> => {
-    fromPage({ type: 'answer', id: line()!.id, act });
+  const reply = async (act: string, more: Record<string, unknown> = {}): Promise<void> => {
+    fromPage({ type: 'answer', id: line()!.id, act, ...more });
     await settle();
   };
-  return { put, jobs, sent, holds, line, said, reply, advance: (ms: number) => { now += ms; }, now: () => now };
+  /** Says something on the notch, as asking does: the words are routed, and what they set off is run. */
+  const speak = async (words: string): Promise<string | null> => {
+    const route = put.route(words);
+    route?.run();
+    await settle();
+    return route?.did ?? null;
+  };
+  return { put, jobs, sent, holds, line, said, reply, speak, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 describe('show it a thing, then point at a place', () => {
@@ -109,17 +124,22 @@ describe('show it a thing, then point at a place', () => {
     // Taken: the look itself says nothing.
     expect(h.put.shown('pc', FIELD)).toBe(true);
     await settle();
-    expect(h.said()).toBe('Put 3 rows here?');
+    // Rows into a document go as a table, unless the person says otherwise.
+    expect(h.said()).toBe('Put 3 rows here as a table?');
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'put' });
     // Nothing has been done yet.
     expect(h.sent).toEqual([]);
     await h.reply('yes');
-    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, text: 'Acme\t1,200.00\tpaid\nLumen\t430.33\tlate\nNorthwind\t91.00\tpaid', hand: 0 });
+    // As rows of cells, with the form they are to take: the desktop app makes the table.
+    expect(h.sent[0]).toEqual({
+      do: 'paste', screen: true, x: 900, y: 500, as: 'table', hand: 0,
+      rows: [['Acme', '1,200.00', 'paid'], ['Lumen', '430.33', 'late'], ['Northwind', '91.00', 'paid']],
+    });
     // The pointer goes home when it is done.
     expect(h.sent[1]).toEqual({ do: 'home' });
     expect(h.said()).toBe('There. It is in Notepad.');
     // It is in what was done today. Into a page of writing, it cannot be taken back from there.
-    expect(h.jobs.done(0)).toMatchObject([{ text: 'Put 3 rows from Grafana into Notepad', undoable: false }]);
+    expect(h.jobs.done(0)).toMatchObject([{ text: 'Put 3 rows from Grafana into Notepad as a table', undoable: false }]);
     // Put once: it is not held any more.
     expect(h.put.held()).toBeNull();
     expect(h.holds.at(-1)).toEqual({ what: '', ms: 0 });
@@ -130,8 +150,11 @@ describe('show it a thing, then point at a place', () => {
     h.put.shown('pc', looked(ROWS));
     h.put.shown('pc', looked([thing('cell', { role: 'DataItem', name: 'B7' })], { how: 'click', app: 'Excel', at: { x: 400, y: 300 } }));
     await settle();
+    // Into a cell there is no form to choose: rows go in as cells.
+    expect(h.said()).toBe('Put 3 rows here?');
     await h.reply('yes');
-    expect(h.jobs.done(0)).toMatchObject([{ undoable: true }]);
+    expect(h.sent[0]).toMatchObject({ do: 'paste', as: 'cells', x: 400, y: 300 });
+    expect(h.jobs.done(0)).toMatchObject([{ text: 'Put 3 rows from Grafana into Notepad', undoable: true }]);
     expect(h.jobs.store.since(0)[0]!.puts).toEqual([{ win: { id: '0x9', pid: 9, w: 800, h: 600 }, x: 200, y: 300, rows: 3, cols: 3, hash: 'abc' }]);
     // Never the text.
     expect(JSON.stringify(h.jobs.store.since(0))).not.toContain('Acme');
@@ -210,5 +233,104 @@ describe('show it a thing, then point at a place', () => {
     expect(h.put.held()).toBeNull();
     h.put.shown('pc', looked(ROWS));
     expect(h.put.shown('pc', { ...FIELD, refused: 'bank' })).toBe(false);
+  });
+});
+
+// The owner, 16 November 2026: put it there "is only useful if the formatting is done correctly".
+describe('the form a thing is put in', () => {
+  test('the form can be changed on the line before the yes', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    expect(h.line()).toMatchObject({ say: ['Put ', { em: '3 rows' }, ' here as ', { word: { name: 'as', value: 'a table', options: ['a table', 'a list', 'plain text'] } }, '?'] });
+    await h.reply('word', { word: 'as', value: 'a list' });
+    expect(h.said()).toBe('Put 3 rows here as a list?');
+    // A value that is not one of the forms changes nothing.
+    await h.reply('word', { word: 'as', value: 'a spreadsheet' });
+    expect(h.said()).toBe('Put 3 rows here as a list?');
+    await h.reply('yes');
+    expect(h.sent[0]).toMatchObject({ do: 'paste', as: 'list', rows: [['Acme', '1,200.00', 'paid'], ['Lumen', '430.33', 'late'], ['Northwind', '91.00', 'paid']] });
+    expect(h.jobs.done(0)).toMatchObject([{ text: 'Put 3 rows from Grafana into Notepad as a list' }]);
+  });
+
+  test('one value has no form: it is put as the words it is', async () => {
+    const h = harness();
+    h.put.shown('pc', looked([thing('text', { name: '1,291' })]));
+    h.put.shown('pc', FIELD);
+    await settle();
+    expect(h.said()).toBe('Put 1,291 here?');
+    await h.reply('yes');
+    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, text: '1,291', hand: 0 });
+  });
+
+  test('what the words ask for', () => {
+    expect(putForm('put it here as a table')).toBe('a table');
+    expect(putForm('Paste that into the doc formatted as a table please')).toBe('a table');
+    expect(putForm('as a bulleted list')).toBe('a list');
+    expect(putForm('bullet points')).toBe('a list');
+    expect(putForm('just plain text')).toBe('plain text');
+    expect(putForm('put it here')).toBeNull();
+    for (const said of ['Put it here', 'put that here as a table', 'Paste it into the doc', 'Okay, put this in my document as a table', 'insert it here', 'mettilo qui']) expect(putRequest(said)).toBe(true);
+    for (const said of ['What does this put option do', 'I put it there yesterday', 'Can you summarise the table', '']) expect(putRequest(said)).toBe(false);
+    for (const said of ['yes', 'Here', 'as a list', 'As a table.', 'table', 'make it a list', 'plain text', 'yes, as a table', 'in a table']) expect(putAnswer(said)).toBe(true);
+    for (const said of ['the table is wrong', 'yes and then email it to Anna', 'what is a table', 'list my meetings']) expect(putAnswer(said)).toBe(false);
+  });
+
+  test('said instead of tapped: "as a list" answers the line that asked, and it is put in that form', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    expect(await h.speak('as a list')).toBe('Put what you showed me where you pointed.');
+    expect(h.sent[0]).toMatchObject({ do: 'paste', screen: true, x: 900, y: 500, as: 'list' });
+    expect(h.said()).toBe('There. It is in Notepad.');
+    // Once: the line that asked is gone, and saying it again finds nothing held.
+    expect(h.put.route('as a list')).toBeNull();
+    expect(h.sent.filter((request) => request.do === 'paste').length).toBe(1);
+  });
+
+  test('"yes" keeps the form the line shows', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    await h.reply('word', { word: 'as', value: 'plain text' });
+    await h.speak('yes');
+    expect(h.sent[0]).toMatchObject({ do: 'paste', as: 'text' });
+  });
+
+  // Without pointing: it goes where the caret is in the window in front.
+  test('"put it here as a table" with a thing held and no place pointed at puts it at the caret', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    expect(await h.speak('Put it here as a table')).toBe('Put what you showed me where you pointed.');
+    expect(h.sent[0]).toEqual({
+      do: 'paste', front: true, as: 'table', hand: 0,
+      rows: [['Acme', '1,200.00', 'paid'], ['Lumen', '430.33', 'late'], ['Northwind', '91.00', 'paid']],
+    });
+    expect(h.said()).toBe('There. It is in Notepad.');
+  });
+
+  test('with nothing held the same words are an instruction like any other', () => {
+    const h = harness();
+    expect(h.put.route('Put it here as a table')).toBeNull();
+    expect(h.put.route('as a list')).toBeNull();
+    // Held too long ago is not held.
+    h.put.shown('pc', looked(ROWS));
+    h.advance(NOTCH_HOLD_MS + 1);
+    expect(h.put.route('Put it here as a table')).toBeNull();
+  });
+
+  test('a few words long after the line asked are not its answer; other words never are', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    expect(h.put.route('What is on my calendar today')).toBeNull();
+    expect(h.put.route('the table is wrong')).toBeNull();
+    h.advance(NOTCH_PUT_SAID_MS + 1);
+    // "as a list" alone no longer answers it. "Put it here" still means what it says, while the thing is held.
+    expect(h.put.route('as a list')).toBeNull();
   });
 });

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -530,5 +531,174 @@ func TestTheStripStaysInsideTheWindow(t *testing.T) {
 	}
 	if got := watchStrip(win, lookPoint{2000, 2000}, 21); !got.empty() {
 		t.Fatalf("a place outside the window: %+v", got)
+	}
+}
+
+var pasteRows = [][]string{
+	{"Customer", "Amount", "State"},
+	{"Acme", "1,200.00", "paid"},
+	{"Lumen <Studio>", "430.33", "late & chased"},
+}
+
+func rowsParam(rows [][]string) []any {
+	out := make([]any, len(rows))
+	for i, row := range rows {
+		cells := make([]any, len(row))
+		for j, cell := range row {
+			cells[j] = cell
+		}
+		out[i] = cells
+	}
+	return out
+}
+
+// The owner, 16 November 2026: rows copied from a sheet and pasted into a
+// document "just look horrible". What Jarvis puts there is a table.
+func TestRowsArePutAsARealTableWithPlainWordsBesideIt(t *testing.T) {
+	act, err := parseNotchAct(map[string]any{"do": "paste", "screen": true, "x": float64(9), "y": float64(9), "rows": rowsParam(pasteRows)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if act.As != "table" {
+		t.Fatalf("rows with no form given are put as %q, want a table", act.As)
+	}
+	plain, html, shape := pasteFlavours(act)
+	wantHTML := `<table style="border-collapse:collapse">` +
+		`<tr><td style="border:1px solid #9aa0a6;padding:4px 8px">Customer</td><td style="border:1px solid #9aa0a6;padding:4px 8px;text-align:right">Amount</td><td style="border:1px solid #9aa0a6;padding:4px 8px">State</td></tr>` +
+		`<tr><td style="border:1px solid #9aa0a6;padding:4px 8px">Acme</td><td style="border:1px solid #9aa0a6;padding:4px 8px;text-align:right">1,200.00</td><td style="border:1px solid #9aa0a6;padding:4px 8px">paid</td></tr>` +
+		`<tr><td style="border:1px solid #9aa0a6;padding:4px 8px">Lumen &lt;Studio&gt;</td><td style="border:1px solid #9aa0a6;padding:4px 8px;text-align:right">430.33</td><td style="border:1px solid #9aa0a6;padding:4px 8px">late &amp; chased</td></tr>` +
+		`</table>`
+	if html != wantHTML {
+		t.Fatalf("the table:\n%s\nwant:\n%s", html, wantHTML)
+	}
+	// For a program that takes no table: columns that line up, numbers to the right.
+	wantPlain := "Customer          Amount  State\r\n" +
+		"Acme            1,200.00  paid\r\n" +
+		"Lumen <Studio>    430.33  late & chased"
+	if plain != wantPlain {
+		t.Fatalf("the plain words:\n%q\nwant:\n%q", plain, wantPlain)
+	}
+	// What its shape is taken from is the rows as a sheet would give them back.
+	if shape != "Customer\tAmount\tState\r\nAcme\t1,200.00\tpaid\r\nLumen <Studio>\t430.33\tlate & chased" {
+		t.Fatalf("the shape is taken from %q", shape)
+	}
+	if got := clipShapeOf(shape); got.Rows != 3 || got.Cols != 3 {
+		t.Fatalf("its shape: %+v", got)
+	}
+}
+
+func TestEachFormAPasteCanTake(t *testing.T) {
+	with := func(as string) notchAct {
+		act, err := parseNotchAct(map[string]any{"do": "paste", "front": true, "rows": rowsParam(pasteRows[1:]), "as": as})
+		if err != nil {
+			t.Fatalf("as %q: %v", as, err)
+		}
+		return act
+	}
+	// Into a sheet: tabs between cells both ways, so that it lands as cells.
+	plain, html, _ := pasteFlavours(with("cells"))
+	if plain != "Acme\t1,200.00\tpaid\r\nLumen <Studio>\t430.33\tlate & chased" || !strings.HasPrefix(html, "<table") {
+		t.Fatalf("as cells: %q and %q", plain, html)
+	}
+	// A list: one line a row.
+	plain, html, _ = pasteFlavours(with("list"))
+	if plain != "- Acme · 1,200.00 · paid\r\n- Lumen <Studio> · 430.33 · late & chased" {
+		t.Fatalf("as a list, plain: %q", plain)
+	}
+	if html != "<ul><li>Acme · 1,200.00 · paid</li><li>Lumen &lt;Studio&gt; · 430.33 · late &amp; chased</li></ul>" {
+		t.Fatalf("as a list: %q", html)
+	}
+	// Plain text: words only, and nothing a program could take for a table.
+	plain, html, _ = pasteFlavours(with("text"))
+	if html != "" || !strings.Contains(plain, "Acme\t1,200.00") {
+		t.Fatalf("as text: %q and %q", plain, html)
+	}
+	// Words alone are put as they are.
+	one, _ := parseNotchAct(map[string]any{"do": "paste", "front": true, "text": "1,291"})
+	if plain, html, shape := pasteFlavours(one); plain != "1,291" || html != "" || shape != "1,291" {
+		t.Fatalf("words alone: %q %q %q", plain, html, shape)
+	}
+}
+
+// What was read off a screen is words in the table, never markup, and a cell
+// cannot break the table it is in.
+func TestACellIsWordsWhateverItSays(t *testing.T) {
+	rows := [][]string{{`<script>alert(1)</script>`, "a\tb\r\nc", `"quoted" & more`}}
+	act, err := parseNotchAct(map[string]any{"do": "paste", "front": true, "rows": rowsParam(rows)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, html, shape := pasteFlavours(act)
+	if strings.Contains(html, "<script") || !strings.Contains(html, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Fatalf("markup from a cell is in the table: %s", html)
+	}
+	if !strings.Contains(html, "&quot;quoted&quot; &amp; more") {
+		t.Fatalf("a quote or an ampersand was not escaped: %s", html)
+	}
+	// A tab or a line end inside a cell would make two cells, or two rows, of one.
+	if got := clipShapeOf(shape); got.Rows != 1 || got.Cols != 3 {
+		t.Fatalf("one row of three cells became %+v (%q)", got, shape)
+	}
+}
+
+func TestTheClipboardsHTMLSaysWhereItsPartsAre(t *testing.T) {
+	fragment := "<table><tr><td>caffè €</td></tr></table>"
+	data := clipHTML(fragment)
+	text := string(data)
+	var start, end, fragmentStart, fragmentEnd int
+	if _, err := fmt.Sscanf(text, "Version:0.9\r\nStartHTML:%d\r\nEndHTML:%d\r\nStartFragment:%d\r\nEndFragment:%d\r\n", &start, &end, &fragmentStart, &fragmentEnd); err != nil {
+		t.Fatalf("the head could not be read: %v\n%s", err, text)
+	}
+	// Counted in bytes, not in letters: the fragment has letters of two and three bytes.
+	if got := string(data[fragmentStart:fragmentEnd]); got != fragment {
+		t.Fatalf("the fragment is said to be %q", got)
+	}
+	if got := string(data[start:end]); got != "<html><body><!--StartFragment-->"+fragment+"<!--EndFragment--></body></html>" {
+		t.Fatalf("the HTML is said to be %q", got)
+	}
+	if end != len(data) {
+		t.Fatalf("the HTML ends at %d of %d", end, len(data))
+	}
+}
+
+func TestAPasteNeedsSomethingToPutAndSomewhereToPutIt(t *testing.T) {
+	good := []map[string]any{
+		{"do": "paste", "front": true, "text": "1,291"},
+		{"do": "paste", "front": true, "rows": rowsParam(pasteRows), "as": "list"},
+		{"do": "paste", "screen": true, "x": float64(1), "y": float64(1), "rows": rowsParam(pasteRows), "as": "cells"},
+	}
+	for _, params := range good {
+		if _, err := parseNotchAct(params); err != nil {
+			t.Errorf("%v was refused: %v", params, err)
+		}
+	}
+	long := make([]any, notchActRowsMax+1)
+	for i := range long {
+		long[i] = []any{"x"}
+	}
+	bad := []map[string]any{
+		{"do": "paste", "front": true},   // nothing to put
+		{"do": "paste", "text": "1,291"}, // nowhere to put it
+		{"do": "paste", "front": true, "rows": rowsParam(pasteRows), "as": "spreadsheet"}, // not a form
+		{"do": "paste", "front": true, "rows": []any{[]any{}}},                            // a row of nothing
+		{"do": "paste", "front": true, "rows": []any{[]any{float64(3)}}},                  // a cell that is not words
+		{"do": "paste", "front": true, "rows": []any{"Acme"}},                             // a row that is not cells
+		{"do": "paste", "front": true, "rows": long},
+	}
+	for _, params := range bad {
+		if _, err := parseNotchAct(params); err == nil {
+			t.Errorf("%v was taken", params)
+		}
+	}
+}
+
+func TestOnlyAColumnOfNumbersIsSetToTheRight(t *testing.T) {
+	right := pasteRight([][]string{{"Name", "Seats", "Note", "Share"}, {"Anna", "5", "3 left", "12 %"}, {"Leo", "12", "", "(4.5)"}})
+	if len(right) != 4 || right[0] || !right[1] || right[2] || !right[3] {
+		t.Fatalf("got %v", right)
+	}
+	// One row of numbers is numbers, not a heading.
+	if only := pasteRight([][]string{{"1,291", "x"}}); !only[0] || only[1] {
+		t.Fatalf("one row: %v", only)
 	}
 }

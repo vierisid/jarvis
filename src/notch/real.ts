@@ -318,7 +318,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       understand: deps.asks.understand,
       point: deps.asks.point,
       // "Watch me", "done", "run it on nine rows", "undo that": the notch does these itself (pass 10).
-      side: teach ? (text) => teach!.route(text) : undefined,
+      // And "put it here as a table", with a thing held.
+      side: teach ? (text) => put?.route(text) ?? teach!.route(text) : undefined,
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
