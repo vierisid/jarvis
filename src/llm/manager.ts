@@ -390,6 +390,7 @@ export class LLMManager {
     const failures: string[] = [];
     let lastFailureCode: LLMErrorCode = 'unknown';
     let lastRetryAfterMs: number | undefined;
+    let lastHostedDetail: string | undefined;
     const exhaustedProviders = new Set<string>();
     const candidates = this.tierCandidates(tier);
     for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex++) {
@@ -447,6 +448,8 @@ export class LLMManager {
         lastFailureCode = code;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (retryAfterMs !== undefined) lastRetryAfterMs = retryAfterMs;
+        // Gated again: a failure reaching here may not have come through invokeWithRetry.
+        lastHostedDetail = hostedDetailOf(provider, err instanceof LLMProviderError ? err.hostedDetail : undefined);
         failures.push(msg);
         recordUsage({
           tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
@@ -463,7 +466,9 @@ export class LLMManager {
         }
       }
     }
-    throw new LLMProviderError(failures.join('\n\n'), lastFailureCode, lastRetryAfterMs);
+    // The hosted provider's authored detail travels with the failure it belongs to (#1326),
+    // as streamTier's does, so the composer can show it.
+    throw new LLMProviderError(failures.join('\n\n'), lastFailureCode, lastRetryAfterMs, undefined, lastHostedDetail);
   }
 
   /**
@@ -577,6 +582,7 @@ export class LLMManager {
     const errors: string[] = [];
     let lastCode: LLMErrorCode = 'unknown';
     let lastRetryAfterMs: number | undefined;
+    let lastHostedDetail: string | undefined;
     const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       options?.signal?.throwIfAborted();
@@ -600,6 +606,7 @@ export class LLMManager {
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastCode = getLLMErrorCode(err);
         lastRetryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
+        lastHostedDetail = hostedDetailOf(provider, err instanceof LLMProviderError ? err.hostedDetail : undefined);
         const shouldRetry = this.shouldRetry(err);
         console.error(
           `[LLM] Provider ${provider.name} failed (attempt ${attempt}/${LLMManager.MAX_RETRIES_PER_PROVIDER})${!shouldRetry ? ' [no retry]' : ''}: ${errorMsg}`
@@ -614,6 +621,8 @@ export class LLMManager {
       this.formatFailure(provider.name, errors),
       lastCode,
       lastRetryAfterMs,
+      undefined,
+      lastHostedDetail,
     );
   }
 
