@@ -15,6 +15,9 @@ export function createSession(config: Configuration) {
   let state: HostState = { mode: 'checking', journey: null, view: null, presentation: null, busy: false, blocked: false };
   let status: Status | null = null, views: LoadedViews | null = null;
   let disposed = false, started = false, inFlight = false, refreshQueued = false;
+  // The person left onboarding for this mount ("Explore" before setup, "Finish later").
+  // Nothing is saved, so a refresh must not pull them back; the next load resumes.
+  let left = false;
   const adapters: Partial<Record<keyof Configuration['adapters'], FeatureAdapter>> = {};
   let editing = false;
   const abort = new AbortController(), listeners = new Set<() => void>(), unsubscribes: Array<() => void> = [];
@@ -91,7 +94,7 @@ export function createSession(config: Configuration) {
     else { refreshQueued = false; update({ busy: false }); }
   }
   async function refresh() {
-    if (disposed || !started || state.mode === 'legacy') return;
+    if (disposed || !started || left || state.mode === 'legacy') return;
     if (inFlight) { refreshQueued = true; return; }
     inFlight = true; update({ busy: true });
     try {
@@ -113,11 +116,17 @@ export function createSession(config: Configuration) {
         // After setup, Explore is a durable exit (B01): welcome does not return on the next load.
         // Before setup it only leaves this mount, so welcome and setup come back ("I'll do this later").
         if (action === 'explore') {
-          if (state.journey!.setupState !== 'completed') { update({ mode: 'complete' }); return; }
+          if (state.journey!.setupState !== 'completed') { left = true; update({ mode: 'complete' }); return; }
           await navigate({ type: 'explore' });
         }
         else if (action === 'continue') await navigate({ type: 'navigate', stepId: 'explain' });
         else throw new Unavailable();
+      } else if (view === 'legacy-provider-setup' && action === 'leave') {
+        // Leaves this mount only. Finish later saves nothing, so the setup screen
+        // is where the next load resumes. After the AI step was skipped, setup is
+        // saved but the journey cannot go on without a provider; the setup screen
+        // then offers a way into the workspace rather than a step that cannot finish.
+        left = true; update({ mode: 'complete' }); return;
       } else if (view === 'explainer') {
         if (action === 'back') await navigate({ type: 'navigate', stepId: 'welcome' });
         else if (action === 'continue') {
