@@ -12,7 +12,9 @@
 import { getFlowRun } from './db/repos/flow-run.ts';
 import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoint.ts';
 import { stopTurnedOffRun, turnedOffReason } from './db/repos/flow-turn-off.ts';
-import { resumeCompletedChildRuns } from './runtime/child-run-scheduler';
+import { resumeCompletedChildRuns, runTouchesChildWait } from './runtime/child-run-scheduler';
+import type { Job } from './db/repos/job-queue';
+import { RUN_FLOW } from './queue/retry-policy';
 import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
 import { releaseDeferredSteps } from './runtime/deferred-cards';
 import { claimContinuation, releaseEmergencyHolds } from './runtime/continuation';
@@ -38,6 +40,35 @@ export class TimerWaitpointScheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Continue parents whose required child or call step has settled, now
+   * rather than on the next poll. The worker calls this after each job, when
+   * a child has just ended or a parent has just parked. The poll stays the
+   * safety net for a crash, a restart and anything that settles off the
+   * worker. Idempotent with `tick`: the same claim consumes each waitpoint
+   * once. Never throws.
+   */
+  resumeSettledChildren(): number {
+    if (emergencyHold()) return 0;
+    try { return resumeCompletedChildRuns(this.onCardClosed); }
+    catch (error) { console.error('[TimerScheduler] child continuation failed:', error); return 0; }
+  }
+
+  /**
+   * The worker's job-settled hook. Runs the child sweep after a RUN_FLOW job
+   * whose run is a child or waits on one; any other job leaves it to the
+   * poll, since the sweep's reads grow with run history. A job that names no
+   * run (an older shape) sweeps. Never throws.
+   */
+  afterJobSettled(job: Pick<Job, 'jobType' | 'flowRunId' | 'payload'>): number {
+    if (job.jobType !== RUN_FLOW) return 0;
+    const payloadRunId = (job.payload as { runId?: unknown } | null)?.runId;
+    const runId = job.flowRunId ?? (typeof payloadRunId === 'string' ? payloadRunId : null);
+    try { if (runId && !runTouchesChildWait(runId)) return 0; }
+    catch (error) { console.error('[TimerScheduler] child continuation check failed:', error); return 0; }
+    return this.resumeSettledChildren();
   }
 
   /**

@@ -541,4 +541,30 @@ describe('Vault Extractor', () => {
       for (const entity of extracted) expect(findFacts({ subject_id: entity.id })).toHaveLength(1);
     });
   });
+
+  describe('extractAndStore entity names under the vault limits', () => {
+    test('a long or control-laden name is stored cleaned and found again, not added once per turn', async () => {
+      const long = `${'N'.repeat(300)}`, bell = 'Bell\u0007Tool';
+      const provider: LLMProvider = {
+        name: 'mock',
+        async chat(): Promise<LLMResponse> {
+          return {
+            content: JSON.stringify({
+              entities: [{ name: long, type: 'project' }, { name: bell, type: 'tool' }],
+              facts: [{ subject: bell, predicate: 'made_by', object: 'Acme', confidence: 1 }],
+              relationships: [], commitments: [],
+            }),
+            tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 }, model: 'mock-model', finish_reason: 'stop',
+          };
+        },
+        async *stream() { yield { type: 'done', response: {} as any }; },
+        async listModels() { return ['mock-model']; },
+      };
+      await extractAndStore('first', 'ok', makeManager(provider));
+      await extractAndStore('second', 'ok', makeManager(provider));
+      const entities = findEntities({});
+      expect(entities.map(e => e.name).sort()).toEqual(['Bell Tool', 'N'.repeat(200)]);
+      expect(findFacts({ subject_id: entities.find(e => e.name === 'Bell Tool')!.id })).toHaveLength(1);
+    });
+  });
 });

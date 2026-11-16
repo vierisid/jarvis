@@ -322,3 +322,12 @@ test('R4: an invalid pinned draft cannot borrow readiness from an older runnable
     .toMatchObject({ status: 'rejected', code: 'not_ready' });
   expect(getFlow(flow.id)?.status).toBe('DISABLED');
 });
+
+test('the latest run of a workflow that went on past a failed step reads as such, not as a plain success', () => {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Lookup', trigger: { name: 'trigger', type: 'EMPTY', settings: {},
+    nextAction: { name: 'bad', type: 'PIECE', displayName: 'Look up', settings: { pieceName: 'p', actionName: 'a', input: {} } } } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  updateRun(run.id, { steps: { bad: { output: { type: 'PIECE', status: 'FAILED' } } } });
+  expect(service.read().data.items.find(i => i.flowId === flow.id)?.latestRun).toEqual({ runId: run.id, label: 'Finished with a failed step' });
+});
