@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, afterEach, afterAll, test, expect } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../../../../src/workflows/db';
-import { createWorkItem, getWorkItem } from '../../../../src/goals/work-items';
+import { createWorkItem, decideWorkItem, getWorkItem } from '../../../../src/goals/work-items';
 import { DecisionQueue } from '../../../../src/brief/decisions';
 import { createDecisionRoutes } from '../../../../src/brief/decision-routes';
 import { BriefCapabilities } from '../../../../src/brief/capabilities';
@@ -136,6 +136,53 @@ test('permission cards preserve selection and settle only the selected request o
   transport.stop();
 });
 
+const permissionRows = () => ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
+  title: 'Review ' + id + '. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required' },
+  supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
+const idle = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+test('a link to a request that is no longer pending selects nothing and offers no Grant or Deny', async () => {
+  const rows = permissionRows();
+  await React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} selection="already-granted" />));
+  expect(host.textContent).toContain('This request was already answered or no longer exists.');
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('article.brief-decision-paper')).toBeNull();
+  expect(host.querySelector('[aria-pressed="true"]')).toBeNull();
+  expect(button('Grant permission')).toBeUndefined();
+  expect(button('Deny permission')).toBeUndefined();
+  const navigated: any[] = [];
+  await React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} selection="already-granted" navigate={r => navigated.push(r)} />));
+  await React.act(async () => (host.querySelectorAll('.brief-decision-choice')[1] as HTMLElement).click());
+  expect(host.textContent).not.toContain('already answered');
+  expect(host.querySelector('article.brief-decision-paper')?.textContent).toContain('Review two');
+  expect(navigated).toEqual([{ room: 'needs-you', selection: {} }]);
+});
+test('a link to a pending request selects it, and no link selects the first', async () => {
+  const rows = permissionRows();
+  await React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} selection="two" />));
+  expect(host.querySelector('article.brief-decision-paper')?.textContent).toContain('Review two');
+  expect(host.textContent).not.toContain('already answered');
+  await React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} key="no-link" />));
+  expect(host.querySelector('article.brief-decision-paper')?.textContent).toContain('Review one');
+});
+test('the other decisions list stays quiet when the named request is in the document list', async () => {
+  await React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => permissionRows() as any} enabled changed={() => {}} selection="elsewhere" elsewhere />));
+  expect(host.textContent).not.toContain('already answered');
+  expect(host.querySelector('article.brief-decision-paper')).toBeNull();
+});
+test('reopening the same stale link after picking a card shows the message again, not the picked or first request', async () => {
+  const rows = permissionRows();
+  let selection: string | undefined = 'already-granted';
+  const draw = () => React.act(async () => root.render(<Commands.PendingDecisions http={idle} read={async () => rows as any} enabled changed={() => {}} selection={selection}
+    navigate={r => { selection = (r.selection as { approvalId?: string }).approvalId; void draw(); }} />));
+  await draw();
+  await React.act(async () => (host.querySelectorAll('.brief-decision-choice')[1] as HTMLElement).click());
+  expect(selection).toBeUndefined();
+  expect(host.querySelector('article.brief-decision-paper')?.textContent).toContain('Review two');
+  selection = 'already-granted'; await draw();
+  expect(host.textContent).toContain('This request was already answered or no longer exists.');
+  expect(host.querySelector('article.brief-decision-paper')).toBeNull();
+  expect(button('Grant permission')).toBeUndefined();
+});
 test('a browser click card leads with what will be clicked and where, with the generic action as subtitle', async () => {
   const row = { decisionId: 'approval:c', revision: 'r', kind: 'permission', state: 'pending', title: 'Review browser_click on element [5]. Business effect unknown.',
     review: { toolName: 'browser_click', reason: 'Approval required', origin: 'https://mail.example', element: 'button "Send" [5]' },
@@ -184,6 +231,18 @@ test('notification permission renders the reviewed message, destination and occu
   expect(host.textContent).toContain('Daily priorities'); expect(host.textContent).toContain('What is blocking you?');
   expect(host.textContent).toContain('dashboard'); expect(host.textContent).toContain('If no dashboard is open: desktop notification');
   expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
+  transport.stop();
+});
+
+// #1314 follow-up: a screen-derived permission held while screen awareness is off says so.
+test('a held permission says it is held while screen awareness is off, in the list and on the card', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const held = 'Held while screen awareness is off: this request came from what was on your screen. Turn screen awareness back on to approve it; it is still waiting.';
+  const row = { decisionId: 'approval:held', revision: 'r', kind: 'permission', state: 'pending', title: 'Send a reply', awarenessHeld: held,
+    review: { toolName: 'send_email', reason: 'Approval required' }, supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  expect(host.querySelector('.brief-decision-hint')?.textContent).toBe('Held while screen awareness is off.');
+  expect(host.querySelector('.brief-decision-document [role="note"]')?.textContent).toBe(held);
   transport.stop();
 });
 
@@ -316,6 +375,30 @@ test('publishing from the existing canvas route reloads authoritative state and 
     expect(button('Run workflow').disabled).toBe(false);
     expect(button('Save and turn on')).toBeUndefined(); expect(button('Edit workflow')).toBeTruthy();
   } finally { rooms.retire(); transport.stop(); }
+});
+
+test('an accepted step can be marked done from Needs you with the founder\'s own words, and says so', async () => {
+  const item = createWorkItem({ title: 'Ship the shortlist' });
+  decideWorkItem(item.id, { outcome: 'accepted', reason: 'Yes' });
+  const approvals = new ApprovalManager(), deferred = new DeferredExecutor(approvals, new AuditTrail());
+  const queue = new DecisionQueue(getWorkflowDb(), { approvalManager: approvals, deferredExecutor: deferred });
+  const caps = new BriefCapabilities([{ id: 'decisions', provider: queue }], ['decisions']);
+  const routes = createDecisionRoutes(caps, (value, status = 200) => Response.json(value, { status }), queue);
+  const transport = createHostTransport((async (path: string, init: RequestInit) => {
+    const request = Object.assign(new Request('http://localhost' + path, init), { params: { id: path.split('/').at(-2)! } });
+    return routes['/api/brief/decisions/:id/resolve']!.POST!(request);
+  }) as unknown as typeof fetch);
+  const read = async () => { const response = await queue.read({}); return response.state === 'ready' ? response.data.items : []; };
+  await React.act(async () => root.render(<><Input.InputHost /><Commands.PendingDecisions http={transport} read={read} enabled changed={() => {}} /></>));
+  expect(host.textContent).not.toContain('Needs your review'); expect(host.textContent).toContain('Accepted');
+  expect(button('Not doing this')).toBeTruthy();
+  await click('Mark done');
+  const input = document.querySelector('textarea')!;
+  await React.act(async () => { Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Sent it to Anna'); input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await click('Continue');
+  expect(getWorkItem(item.id)).toMatchObject({ status: 'verified', resultCheck: { verdict: 'passed', summary: 'Sent it to Anna' } });
+  expect(host.textContent).toContain('Marked done.');
+  transport.stop();
 });
 
 test('held runs show as one plain sentence and never count as something that needs the owner', async () => {
