@@ -306,6 +306,7 @@ await channels.connectAll();
 - **Channel Tokens**: Store in environment variables, never commit
 - **Rate Limiting**: Implement on message handlers to prevent abuse
 - **Input Validation**: Always sanitize user input before processing
+- **Error Answers**: A request body that is not JSON, or a numeric query value that is not a number, is a plain 400 (or is clamped), never a 500. An error no route caught is a plain JSON 500 from the server's `error` handler; stack traces, file paths and engine messages stay in the log
 
 ## Troubleshooting
 
