@@ -341,6 +341,24 @@ export const expressionPatches = {
     ['export const routerExecuter: BaseExecutor<RouterAction> = {\n    async handle({',
       '// === JARVIS PATCH: a number condition with an operand that is not a number fails the router step ===\nexport const routerExecuter: BaseExecutor<RouterAction> = {\n    async handle(params) {\n        try {\n            return await routerBranchExecuter.handle(params)\n        }\n        catch (error) {\n            if (!(error instanceof NonNumericOperandError)) throw error\n            const failedStepOutput = RouterStepOutput.init({ input: {} }).setStatus(StepOutputStatus.FAILED)\n            return params.executionState.upsertStep(params.action.name, failedStepOutput).setVerdict({ status: FlowRunStatus.FAILED, failedStep: {\n                name: params.action.name,\n                displayName: params.action.displayName,\n                message: error.message,\n            } })\n        }\n    },\n}\n\nconst routerBranchExecuter: BaseExecutor<RouterAction> = {\n    async handle({'],
   ],
+  // Jarvis: a failed HTTP request's bodies and headers never reach engine
+  // stderr (the daemon log and the per-run log buffer). Upstream's
+  // ERROR_MESSAGES_TO_REDACT looks for a prefix the HttpClient no longer prints;
+  // runtime/engine-console-redaction.ts replaces such errors by their status.
+  "packages/server/engine/src/lib/worker-socket.ts": [
+    ["import { runProgressService } from './handler/run-progress'",
+      "import { runProgressService } from './handler/run-progress'\n// Jarvis: no request or response body, and no request headers, of a failed HTTP request reach engine stderr.\nimport { installEngineOutputRedaction, redactEngineLogArgs } from '../../../../../../runtime/engine-console-redaction'"],
+    ["        console.log = function (...args): void {\n            notifyClient?.stdout",
+      "        console.log = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
+    ["        console.warn = function (...args): void {\n            notifyClient?.stdout",
+      "        console.warn = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            notifyClient?.stdout"],
+    ["        console.error = function (...args): void {\n            let sanitizedArgs",
+      "        console.error = function (...raw): void {\n            const args = redactEngineLogArgs(raw)\n            let sanitizedArgs"],
+    ["            originalError.apply(console, sanitizedArgs)\n        }\n",
+      "            originalError.apply(console, sanitizedArgs)\n        }\n        installEngineOutputRedaction()\n"],
+    ["notifyClient?.stderr({ message: inspect(error) })",
+      "notifyClient?.stderr({ message: inspect(redactEngineLogArgs([error])[0]) })"],
+  ],
   "packages/server/engine/src/lib/handler/piece-executor.ts": [
     ["import { ActionContext, backwardCompatabilityContextUtils, ", "import { helpScoutEngineProps } from \"../../../../../../../runtime/managed-help-scout-inputs\"\nimport { zoomEngineProps } from \"../../../../../../../runtime/managed-zoom-inputs\"\nimport { gitlabEngineProps } from \"../../../../../../../runtime/managed-gitlab-inputs\"\nimport { pipedriveEngineProps } from \"../../../../../../../runtime/managed-pipedrive-inputs\"\nimport { wrikeEngineProps } from \"../../../../../../../runtime/managed-wrike-inputs\"\nimport { mondayEngineProps } from \"../../../../../../../runtime/managed-monday-inputs\"\nimport { webflowEngineProps } from \"../../../../../../../runtime/managed-webflow-inputs\"\nimport { ActionContext, backwardCompatabilityContextUtils, "],
     ["\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings)\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n", "\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, helpScoutEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? zoomEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? gitlabEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pipedriveEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? wrikeEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? webflowEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings, { apiUrl: constants.internalApiUrl, engineToken: constants.engineToken })\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n"],
@@ -362,6 +380,32 @@ export const expressionPatches = {
   "packages/server/engine/src/lib/variables/processors/types.ts": [
     ["export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n) => OUTPUT\n", "export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n    fileContext?: { apiUrl: string; engineToken: string },\n) => OUTPUT\n"],
   ],
+  // F-06: date-helper rejects an expression it cannot read, and "Use Current Time"
+  // needs no time. `core-date-helper-piece.test.ts` covers both.
+  "packages/pieces/core/date-helper/src/lib/actions/next-day-of-week.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/next-day-of-year.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      day: z.number().min(1).max(31),\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      day: z.number().min(1).max(31),\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/first-day-of-prior-month.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/last-day-of-prior-month.ts": [
+    ['    await propsValidation.validateZod(context.propsValue, {\n      time: z.string().regex(/^\\d\\d:\\d\\d$/),\n    });',
+      '    // === JARVIS PATCH: "Use Current Time" does not need a time to be given ===\n    await propsValidation.validateZod(context.propsValue, {\n      ...(context.propsValue.currentTime === true ? {} : { time: z.string().regex(/^\\d\\d:\\d\\d$/) }),\n    });\n    // === END JARVIS PATCH ==='],
+    ['\'The time that you would like to get the date and time of. This must be in 24h format.\',',
+      '\'The time that you would like to get the date and time of, as HH:mm in 24h format, for example 09:30. Not used when "Use Current Time" is checked.\','],
+  ],
   // Date Helper: every date-reading action parses through runtime/date-parse.ts,
   // an instant in the zone setting (or UTC), not a wall clock in the daemon's zone.
   "packages/pieces/core/date-helper/src/lib/common/index.ts": [
@@ -377,6 +421,13 @@ export const expressionPatches = {
     ["let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);", "// Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.\n  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);"],
     ["return { result: AfterDate.tz(timeZone).format(outputFormat) };", "return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };"],
     ["return { result: AfterDate.format(outputFormat) };", "return { result: formatDate(AfterDate, outputFormat) };"],
+    // #1355: the expression must be readable, and a result outside the date range fails.
+    ["import { propsValidation } from '@activepieces/pieces-common';\n",
+      "import { propsValidation } from '@activepieces/pieces-common';\nimport { quote } from '../../../../../../../../runtime/date-parse';\n"],
+    ["function addSubtractTime(date: Date, expression: string, timeZone?: string): dayjs.Dayjs {\n",
+      "function addSubtractTime(date: Date, expression: string, timeZone?: string): dayjs.Dayjs {\n  // === JARVIS PATCH: an expression that is not one or more \"+/- number unit\" terms fails ===\n  // Anything else used to be skipped term by term, so \"banana\" changed nothing\n  // and a misspelt unit was ignored, while the step reported success. Any\n  // whitespace is dropped (the upstream line below only drops spaces and line\n  // breaks), and the refusal quotes a short one-line cut, as date-parse does.\n  const given = String(expression ?? '');\n  expression = given.replace(/\\s/g, '');\n  if (!/^(?:[+-]*\\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {\n    throw new Error(\n      `The expression ${quote(given)} could not be read. Use terms of a sign, a number and a unit, such as \"+ 1 day\" or \"+ 1 year - 3 month\". The units are year, month, day, hour, minute and second.`\n    );\n  }\n  // \"+ {{n}} day\" with a negative n reads \"+-3day\": a run of signs is one sign.\n  expression = expression.replace(/[+-]{2,}/g, (signs) => (signs.split('-').length % 2 === 0 ? '-' : '+'));\n  // === END JARVIS PATCH ===\n"],
+    ["  return dayjsDate;\n}",
+      "  // === JARVIS PATCH: a result outside the range a date can hold fails ===\n  if (!dayjsDate.isValid()) {\n    throw new Error('The expression moves the date outside the range a date can hold. Use a smaller number.');\n  }\n  // === END JARVIS PATCH ===\n  return dayjsDate;\n}"],
   ],
 } as const;
 
