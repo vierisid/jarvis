@@ -7,12 +7,21 @@ import React, {
 } from "react";
 import { ArrowLeft, Trash2, RefreshCw } from "lucide-react";
 import type { BriefRoomModule, BriefShellPort } from "../../contracts";
+import { workflowStatusWords } from "../status-words";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
 import {
   BriefButton,
   BriefIconButton,
+  BriefInput,
+  BriefSelect,
   BriefSwitch,
 } from "../../components/controls";
+import {
+  PAGE_SIZE,
+  STATE_FILTERS,
+  buildListView,
+  type StateFilter,
+} from "./list-view";
 import type {
   ManagementSlot,
   WorkflowManagementController,
@@ -82,8 +91,11 @@ function BoundManagement({
   const root = useRef<HTMLElement>(null),
     restore = useRef({ done: false, top: state.scrollTop });
   const [now, setNow] = useState(Date.now);
+  const { query, filter, limit, keep } = state.view;
   const removed = state.rows.filter((r) => r.removed),
     visible = state.rows.filter((r) => !r.removed);
+  const view = buildListView(state.rows, query, filter, limit, new Set(keep)),
+    narrowed = !!query.trim() || filter !== "all";
   useEffect(() => {
     void store.load();
   }, [store]);
@@ -202,7 +214,9 @@ function BoundManagement({
       <div className="brief-management-meta">
         <span aria-live="polite">
           {state.read.status === "ready" || state.read.status === "empty"
-            ? `${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
+            ? narrowed
+              ? `${view.matching} of ${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
+              : `${visible.length} ${visible.length === 1 ? "workflow" : "workflows"}`
             : state.read.status === "loading"
               ? "Loading workflows…"
               : "Workflows"}
@@ -215,8 +229,43 @@ function BoundManagement({
         />
       </div>
       <p className="brief-management-hint">
-        Pausing a workflow stops its queued and waiting runs.
+        Turning a workflow off stops its queued and waiting runs.
       </p>
+      {(visible.length > 1 || narrowed) && (
+        <div
+          className="brief-management-find"
+          role="search"
+          aria-label="Find a workflow"
+        >
+          <BriefInput
+            label="Search workflows"
+            type="search"
+            placeholder="Search"
+            maxLength={200}
+            value={query}
+            onChange={(e) => store.setView({ query: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && query) {
+                e.preventDefault();
+                store.setView({ query: "" });
+              }
+            }}
+          />
+          <BriefSelect
+            label="Show"
+            value={filter}
+            onChange={(e) =>
+              store.setView({ filter: e.target.value as StateFilter })
+            }
+          >
+            {STATE_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
+          </BriefSelect>
+        </div>
+      )}
       {state.read.status !== "ready" && state.read.status !== "empty" && (
         <p role="status" className="brief-management-notice">
           {state.read.status === "loading"
@@ -248,7 +297,7 @@ function BoundManagement({
             </span>
           </div>
           <div role="rowgroup">
-            {state.rows.map((r) => (
+            {view.rows.map((r) => (
               <WorkflowRow
                 key={r.item.flowId}
                 row={r}
@@ -267,6 +316,24 @@ function BoundManagement({
           !visible.length && (
             <p className="brief-management-empty">No workflows in this list.</p>
           )}
+        {visible.length > 0 && !view.matching && (
+          <div className="brief-management-empty" role="status">
+            <p>No workflows match.</p>
+            <BriefButton
+              size="sm"
+              onClick={() => store.setView({ query: "", filter: "all" })}
+            >
+              Clear search and filter
+            </BriefButton>
+          </div>
+        )}
+        {view.matching > limit && (
+          <div className="brief-management-more">
+            <BriefButton size="sm" onClick={() => store.showMore(PAGE_SIZE)}>
+              {`Show ${Math.min(PAGE_SIZE, view.matching - limit)} more (${view.matching - limit} left)`}
+            </BriefButton>
+          </div>
+        )}
       </div>
       <div
         className="brief-management-undo-list"
@@ -307,7 +374,10 @@ function BoundManagement({
                   r.receipt.expiresAt <= now
                 }
                 state={r.phase === "pending" ? "pending" : "idle"}
-                onClick={() => void store.restore(r.item.flowId)}
+                onClick={() => {
+                  store.keepInView(r.item.flowId);
+                  void store.restore(r.item.flowId);
+                }}
                 aria-label={`Undo delete ${r.item.name}`}
               >
                 Undo
@@ -351,7 +421,12 @@ function WorkflowRow({
     store.cancel(r.item.flowId);
   }
   const w = r.item,
-    locked = !store.canChange(w.flowId);
+    locked = !store.canChange(w.flowId),
+    words = workflowStatusWords({
+      activation: w.activation,
+      draftChangesNotLive: false,
+      readiness: w.readiness.state,
+    });
   return (
     <div
       className="brief-management-collapse"
@@ -388,33 +463,28 @@ function WorkflowRow({
             <p className="brief-management-description">
               {r.confirming ? "Delete this workflow?" : w.description}
             </p>
-            {!r.confirming &&
-              (w.publication === "unpublished" ||
-                w.readiness.state !== "ready") && (
-                <p className="brief-management-readiness">
-                  {w.publication === "unpublished" ? "Unpublished · " : ""}
-                  {w.readiness.state === "blocked"
-                    ? (w.readiness.reason ?? "Needs setup")
-                    : w.readiness.state === "unknown"
-                      ? "Readiness unknown"
-                      : "Ready"}
-                  {w.readiness.state === "blocked" && w.readiness.fix && (
-                    <>
-                      {" "}
-                      <BriefButton
-                        size="sm"
-                        onClick={() =>
-                          w.readiness.fix!.kind === "connections"
-                            ? openConnections()
-                            : open()
-                        }
-                      >
-                        {w.readiness.fix.label}
-                      </BriefButton>
-                    </>
-                  )}
-                </p>
-              )}
+            {!r.confirming && words.note && (
+              <p className="brief-management-readiness">
+                {words.note === "Needs setup"
+                  ? (w.readiness.reason ?? words.note)
+                  : words.note}
+                {w.readiness.state === "blocked" && w.readiness.fix && (
+                  <>
+                    {" "}
+                    <BriefButton
+                      size="sm"
+                      onClick={() =>
+                        w.readiness.fix!.kind === "connections"
+                          ? openConnections()
+                          : open()
+                      }
+                    >
+                      {w.readiness.fix.label}
+                    </BriefButton>
+                  </>
+                )}
+              </p>
+            )}
           </div>
           {r.confirming ? (
             <div role="cell" className="brief-management-confirm">
@@ -447,10 +517,13 @@ function WorkflowRow({
                 <BriefSwitch
                   label={`Enable ${w.name}`}
                   checked={w.activation === "ENABLED"}
-                  onCheckedChange={(v) => void store.activate(w.flowId, v)}
+                  onCheckedChange={(v) => {
+                    store.keepInView(w.flowId);
+                    void store.activate(w.flowId, v);
+                  }}
                   disabled={locked}
-                  onLabel="Enabled"
-                  offLabel="Paused"
+                  onLabel="On"
+                  offLabel="Off"
                 />
               </div>
               <div role="cell" className="brief-management-latest">
