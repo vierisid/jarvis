@@ -202,6 +202,12 @@ test('a deleted child is unknown, never completed or dispatched again', async ()
   const replay = await f.start();
   expect(replay.runId).toBe(result.runId);
   expect(replay.child).toMatchObject({ status: 'MISSING', outcome: { status: 'unknown' } });
+  // What the waiting parent fails with: a plain sentence, not the engine's status word or the run id.
+  let failure = '';
+  try { assertActionSucceeded(replay.child!.outcome!); } catch (error) { failure = (error as Error).message; }
+  expect(failure).toContain('The workflow this step started was deleted before it finished, so Jarvis cannot tell whether it did its work.');
+  expect(failure).not.toContain('MISSING');
+  expect(failure).not.toContain(result.runId!);
   expect(listChildRuns(f.run.id)).toHaveLength(1);
 });
 
