@@ -296,6 +296,24 @@ function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
+/**
+ * The answer to Pause, Resume, Kill or Reset. The state is in effect either
+ * way; `saved: false` says it could not be written to disk, so a restart would
+ * not keep it, and why (a full disk). The dashboard shows `warning` as is.
+ */
+function emergencyAnswer(controller: { getState(): string; persistence(): { saved: boolean; reason: string | null } }): Response {
+  const state = controller.getState();
+  const { saved, reason } = controller.persistence();
+  if (saved) return json({ ok: true, state, saved: true });
+  const now = state === 'paused' ? 'Jarvis is paused' : state === 'killed' ? 'Jarvis is stopped' : 'Jarvis is back to normal';
+  return json({
+    ok: true,
+    state,
+    saved: false,
+    warning: `${now}, but Jarvis could not save that because ${reason ?? 'the database could not be written'}. If Jarvis restarts before that is fixed, it will not remember this. Jarvis keeps trying to save it.`,
+  });
+}
+
 function awarenessHistoryHidden(): Response | null {
   return awarenessHistoryHiddenAs(json);
 }
@@ -312,9 +330,53 @@ function lifecycleRefusalResponse(err: AgentLifecycleRefusal): Response {
   return error(err.message, err.kind === 'halted' ? 409 : err.kind === 'too_many_waiting' ? 429 : 403);
 }
 
+/**
+ * A request body that is not usable JSON. It is an HttpError, so every route
+ * that already answers through errorFromException gives a plain 400 for it.
+ */
+class InvalidJsonBody extends HttpError {
+  constructor(message: string) { super(400, message); }
+}
+
+/**
+ * Read a JSON request body. Invalid JSON, `null`, bare scalars and arrays are
+ * refused with a plain 400 instead of reaching the handler and failing as a
+ * 500 with the engine's own message, or being read as "no fields set" (an
+ * array has no `scope`, so a reset would have fallen back to its default).
+ * `optional` treats an empty body as `{}` (routes whose body is a set of
+ * optional settings); invalid JSON is still refused. `allowArray` is for the
+ * one route whose body is a list (goals reorder, which checks it itself).
+ */
+async function readJson(req: Request, opts: { optional?: boolean; allowArray?: boolean } = {}): Promise<unknown> {
+  let text: string;
+  try { text = await req.text(); } catch { throw new InvalidJsonBody('Request body could not be read.'); }
+  if (opts.optional && !text.trim()) return {};
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { throw new InvalidJsonBody('Request body must be valid JSON.'); }
+  if (body === null || typeof body !== 'object' || (Array.isArray(body) && !opts.allowArray)) {
+    throw new InvalidJsonBody('Request body must be a JSON object.');
+  }
+  return body;
+}
+
+/**
+ * Whole-number query parameter. Missing, empty, NaN or non-numeric input falls
+ * back to `fallback`; a number outside [min, max] is clamped. Never throws, so
+ * `?limit=NaN` cannot reach a query as NaN (SQLite refuses it) or as -1
+ * (SQLite reads it as "no limit").
+ */
+function intParam(params: URLSearchParams, name: string, fallback: number, min = 1, max = 1000): number {
+  const raw = params.get(name);
+  const value = raw !== null && /^\s*[+-]?\d+\s*$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, min), max);
+}
+
+/** A failure no route chose a status for. The cause goes to the log, never to the caller. */
 function errorFromException(err: unknown): Response {
   if (err instanceof HttpError) return error(err.message, err.status);
-  return error(err instanceof Error ? err.message : String(err), 500);
+  console.error('[API] Unhandled route error:', err);
+  return error('Something went wrong on our side. Try again.', 500);
 }
 
 /**
@@ -515,7 +577,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       // explicit user-driven adds (UI button or voice "remember that").
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             name?: string;
             type?: EntityType;
             properties?: Record<string, unknown>;
@@ -605,7 +667,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             subject_id?: string;
             predicate?: string;
             object?: string;
@@ -659,7 +721,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             from_id?: string;
             to_id?: string;
             type?: string;
@@ -687,7 +749,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const params = getSearchParams(req);
         const q = params.get('q')?.trim() || '';
         const type = params.get('type') as EntityType | null;
-        const limit = Math.min(parseInt(params.get('limit') ?? '50') || 50, 200);
+        const limit = intParam(params, 'limit', 50, 1, 200);
 
         const db = getDb();
         const entityIds = new Set<string>();
@@ -760,7 +822,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const upcoming = params.get('upcoming');
 
         if (upcoming) {
-          return json(getUpcoming(parseInt(upcoming) || 10));
+          return json(getUpcoming(intParam(params, 'upcoming', 10, 1, 100)));
         }
 
         const query: {
@@ -800,7 +862,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/vault/commitments/reorder': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { items: { id: string; sort_order: number }[] };
+          const body = await readJson(req) as { items: { id: string; sort_order: number }[] };
           if (!body.items || !Array.isArray(body.items)) return error('Missing "items" array');
           reorderCommitments(body.items);
           return json({ ok: true });
@@ -844,7 +906,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const params = getSearchParams(req);
         const channel = params.get('channel');
-        const limit = Math.min(parseInt(params.get('limit') ?? '20') || 20, 100);
+        const limit = intParam(params, 'limit', 20, 1, 100);
 
         const db = getDb();
         let rows;
@@ -893,7 +955,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           .get(req.params.id, defaultConversationWorkspace(db));
         if (!owned) return error('Conversation not found', 404);
         const params = getSearchParams(req);
-        const limit = parseInt(params.get('limit') ?? '100') || 100;
+        const limit = intParam(params, 'limit', 100, 1, 1000);
         const messages = getMessages(req.params.id, { limit });
         return json(messages);
       },
@@ -904,7 +966,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const params = getSearchParams(req);
         const type = params.get('type') as ObservationType | undefined;
-        const limit = parseInt(params.get('limit') ?? '50') || 50;
+        const limit = intParam(params, 'limit', 50, 1, 1000);
         const summarized = params.get('summarized') === 'true';
         const obs = getRecentObservations(type, limit);
         if (!summarized) return json(obs);
@@ -919,8 +981,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/calendar': {
       GET: (req: Request) => {
         const params = getSearchParams(req);
-        const rangeStart = parseInt(params.get('range_start') ?? '0');
-        const rangeEnd = parseInt(params.get('range_end') ?? '0');
+        const rangeStart = intParam(params, 'range_start', 0, 0, Number.MAX_SAFE_INTEGER);
+        const rangeEnd = intParam(params, 'range_end', 0, 0, Number.MAX_SAFE_INTEGER);
 
         if (!rangeStart || !rangeEnd) {
           return error('Missing range_start and/or range_end (Unix ms timestamps)');
@@ -1010,7 +1072,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const taskManager = ctx.agentService.getTaskManager();
           if (!taskManager) return error('Persistent agents are not available.', 503);
 
-          const body = await req.json() as { specialist?: string; task?: string; context?: string };
+          const body = await readJson(req) as { specialist?: string; task?: string; context?: string };
           const deps = {
             orchestrator: ctx.agentService.getOrchestrator(),
             llmManager: ctx.agentService.getLLMManager(),
@@ -1110,10 +1172,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request & { params: { id: string } }) => {
         try {
           const url = new URL(req.url);
-          const limitParam = parseInt(url.searchParams.get('limit') ?? '', 10);
-          const offsetParam = parseInt(url.searchParams.get('offset') ?? '', 10);
-          const limit = Number.isFinite(limitParam) ? limitParam : 50;
-          const offset = Number.isFinite(offsetParam) ? offsetParam : 0;
+          const limit = intParam(url.searchParams, 'limit', 50, 1, 500);
+          const offset = intParam(url.searchParams, 'offset', 0, 0, Number.MAX_SAFE_INTEGER);
           const events = listAgentActivity(req.params.id, { limit, offset });
           const total = countAgentActivity(req.params.id);
           return json({ events, total });
@@ -1243,7 +1303,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { answers?: Record<string, unknown>; revision?: unknown };
+          const body = await readJson(req) as { answers?: Record<string, unknown>; revision?: unknown };
           if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1' && body.revision === undefined) {
             return error('Reload the profile before saving.', 428);
           }
@@ -1334,12 +1394,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/reset': {
       POST: async (req: Request) => {
         try {
-          const body = (await req.json().catch(() => ({}))) as {
-            scope?: 'all' | 'setup' | 'profile' | 'tutorial';
-          };
-          const scope = body?.scope ?? 'all';
-          if (!['all', 'setup', 'profile', 'tutorial'].includes(scope)) {
-            return error(`Invalid scope "${scope}".`, 400);
+          // A reset clears data, so it needs a JSON object (the dashboard
+          // always sends `{ scope }`). Only a left-out scope means "all"; an
+          // empty body, `null` or any other value is refused, never read as
+          // the widest default.
+          const body = (await readJson(req)) as { scope?: unknown };
+          const scope = body.scope === undefined ? 'all' : body.scope;
+          if (typeof scope !== 'string' || !['all', 'setup', 'profile', 'tutorial'].includes(scope)) {
+            return error('Invalid scope. Use all, setup, profile or tutorial.', 400);
           }
 
           const { saveUserSection } = await import('./user-settings.ts');
@@ -1527,7 +1589,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/tutorial/progress': {
       POST: async (req: Request) => {
         try {
-          const body = (await req.json().catch(() => ({}))) as { stepId?: string };
+          const body = (await readJson(req)) as { stepId?: string };
           const stepId = typeof body.stepId === 'string' ? body.stepId.trim() : '';
           if (!stepId) return error('Missing stepId.', 400);
           const { saveUserSection } = await import('./user-settings.ts');
@@ -1558,7 +1620,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/tutorial/speak': {
       POST: async (req: Request) => {
         try {
-          const body = (await req.json().catch(() => ({}))) as { text?: string };
+          const body = (await readJson(req)) as { text?: string };
           const text = typeof body.text === 'string' ? body.text.trim() : '';
           if (!text) return error('Missing text.', 400);
           if (!ctx.wsService) return error('WS service unavailable.', 503);
@@ -1612,7 +1674,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/onboarding/setup': {
       POST: async (req: Request) => {
         try {
-          const body = (await req.json()) as {
+          const body = (await readJson(req)) as {
             llm?: Record<string, unknown>;
             stt?: Record<string, unknown>;
             tts?: Record<string, unknown>;
@@ -1661,6 +1723,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             const { saveLLMSettings, hotReloadLLMProviders } = await import('./llm-settings.ts');
             saveLLMSettings(ctx.config, body.llm as any);
             hotReloadLLMProviders(ctx.config, ctx.agentService.getLLMManager());
+            ctx.agentService.syncConversationTier();
           }
 
           // 2. STT + TTS + the setup-completed flag in ONE config write.
@@ -1956,7 +2019,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           const { saveLLMSettings, hotReloadLLMProviders } = await import('./llm-settings.ts');
 
           saveLLMSettings(ctx.config, body as any);
@@ -1964,9 +2027,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // Hot-reload providers on the shared LLMManager
           const llmManager = ctx.agentService.getLLMManager();
           hotReloadLLMProviders(ctx.config, llmManager);
+          // Chat's router-first layer is built from the tier map: follow it now.
+          ctx.agentService.syncConversationTier();
 
           return json({ ok: true, message: 'LLM configuration saved and applied.' });
         } catch (err) {
+          if (err instanceof HttpError) return error(err.message, err.status);
           const msg = err instanceof Error ? err.message : String(err);
           return error(`Failed to save LLM config: ${msg}`);
         }
@@ -1976,7 +2042,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/llm/test': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             name?: string;
             provider?: string;
             kind?: import('../config/types.ts').LLMProviderKind;
@@ -2147,7 +2213,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/llm/omniroute/models': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             name?: string;
             base_url?: string;
             api_key?: string;
@@ -2188,7 +2254,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/llm/groq/models': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { name?: string; api_key?: string };
+          const body = await readJson(req) as { name?: string; api_key?: string };
           const providers = ctx.config.llm.providers ?? {};
           const providerName = body.name
             ?? Object.keys(providers).find((name) => (providers[name]?.kind ?? name) === 'groq');
@@ -2344,7 +2410,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             title: string;
             body?: string;
             content_type?: ContentType;
@@ -2376,7 +2442,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       PATCH: async (req: Request & { params: { id: string } }) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             title?: string;
             body?: string;
             content_type?: ContentType;
@@ -2430,7 +2496,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request & { params: { id: string } }) => {
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             stage: ContentStage;
             note: string;
             author?: string;
@@ -2976,7 +3042,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               409,
             );
           }
-          const body = await req.json() as { client_id: string; client_secret: string };
+          const body = await readJson(req) as { client_id: string; client_secret: string };
           if (!body.client_id || !body.client_secret) {
             return error('Missing client_id or client_secret');
           }
@@ -2991,8 +3057,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return error(`Failed to save Google config: ${msg}`, 500);
+          if (err instanceof HttpError) return error(err.message, err.status);
+          console.error('[API] Failed to save Google config:', err);
+          return error('Could not save the Google settings. Try again.', 500);
         }
       },
     },
@@ -3109,7 +3176,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/disconnect': {
       POST: async () => {
         try {
-          const tokensPath = path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+          const { googleTokensPath } = await import('../integrations/google-auth.ts');
+          const tokensPath = ctx.googleTokensPath ?? googleTokensPath();
           if (existsSync(tokensPath)) {
             const { unlinkSync } = await import('node:fs');
             unlinkSync(tokensPath);
@@ -3306,7 +3374,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           const { persistUserPatch, clearProviderChoice } = await import('./user-settings.ts');
           const { mergeSTTConfig } = await import('./config-merge.ts');
 
@@ -3417,7 +3485,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           const { persistUserPatch, clearProviderChoice } = await import('./user-settings.ts');
 
           // `provider: null` resets to the plan default, mirroring the STT
@@ -3566,7 +3634,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeVoiceConfig, validateVoicePatch } = await import('./config-merge.ts');
 
@@ -3637,7 +3705,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/tts/preview': {
       POST: async (req: Request) => {
         try {
-          const body = (await req.json().catch(() => ({}))) as {
+          const body = (await readJson(req, { optional: true })) as {
             provider?: string; voice?: string; api_key?: string; voice_id?: string; model?: string; text?: string;
           };
           const text = (typeof body.text === 'string' && body.text.trim() ? body.text.trim() : "Hi, I'm Jarvis. This is how I'll sound.").slice(0, 280);
@@ -3674,6 +3742,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const audio = await provider.synthesize(text);
           return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });
         } catch (err) {
+          // A bad body is the caller's 400, not a provider failure (502).
+          if (err instanceof HttpError) return error(err.message, err.status);
           const msg = err instanceof Error ? err.message : String(err);
           return error(msg, 502);
         }
@@ -3691,6 +3761,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({
           enabled: true,
           emergency_state: emergency.getState(),
+          emergency_saved: emergency.persistence?.().saved ?? true,
           pending_approvals: approvals?.getPending().length ?? 0,
           // Approved before a restart and never receipted; they need a decision too.
           unresolved_approvals: approvals?.getUnresolved().length ?? 0,
@@ -3710,7 +3781,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             : status === 'unresolved'
               ? ctx.approvalManager.getUnresolved()
               : ctx.approvalManager.getHistory({
-                  limit: parseInt(params.get('limit') ?? '50') || 50,
+                  limit: intParam(params, 'limit', 50, 1, 1000),
                   action: (params.get('action') as ActionCategory) || undefined,
                   agentId: params.get('agent_id') || undefined,
                   status: (params.get('status') as any) || undefined,
@@ -3820,7 +3891,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const { listRecentObjects } = require('../vault/recent-objects.ts');
         const params = getSearchParams(req);
-        const limit = Math.min(parseInt(params.get('limit') ?? '5') || 5, 50);
+        const limit = intParam(params, 'limit', 5, 1, 50);
         const rows = listRecentObjects(limit) as Array<{
           object_type: string;
           object_id: string;
@@ -3843,7 +3914,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = (await req.json()) as {
+          const body = (await readJson(req)) as {
             type?: string;
             id?: string;
             title?: string;
@@ -3863,7 +3934,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           });
           return json({ ok: true });
         } catch (err) {
-          return error(err instanceof Error ? err.message : 'failed', 500);
+          return errorFromException(err);
         }
       },
     },
@@ -3963,7 +4034,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const params = getSearchParams(req);
         const q = (params.get('q') ?? '').trim();
-        const perType = Math.min(parseInt(params.get('per_type') ?? '6') || 6, 20);
+        const perType = intParam(params, 'per_type', 6, 1, 20);
         const ql = q.toLowerCase();
         const matches = (s: string | undefined | null): boolean =>
           !ql || (typeof s === 'string' && s.toLowerCase().includes(ql));
@@ -4254,8 +4325,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           action: (params.get('action') as ActionCategory) || undefined,
           tool: params.get('tool') || undefined,
           decision: (params.get('decision') as AuthorityDecisionType) || undefined,
-          since: params.get('since') ? parseInt(params.get('since')!) : undefined,
-          limit: parseInt(params.get('limit') ?? '100') || 100,
+          since: params.get('since') ? intParam(params, 'since', 0, 0, Number.MAX_SAFE_INTEGER) : undefined,
+          limit: intParam(params, 'limit', 100, 1, 1000),
         }));
       },
     },
@@ -4264,7 +4335,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         if (!ctx.auditTrail) return json({ total: 0, allowed: 0, denied: 0, approvalRequired: 0, byCategory: {} });
         const params = getSearchParams(req);
-        const since = params.get('since') ? parseInt(params.get('since')!) : undefined;
+        const since = params.get('since') ? intParam(params, 'since', 0, 0, Number.MAX_SAFE_INTEGER) : undefined;
         return json(ctx.auditTrail.getStats(since));
       },
     },
@@ -4273,7 +4344,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.pause();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4281,7 +4352,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.resume();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4289,7 +4360,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.kill();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4297,7 +4368,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         if (!ctx.emergencyController) return error('Emergency controller not configured', 500);
         ctx.emergencyController.reset();
-        return json({ ok: true, state: ctx.emergencyController.getState() });
+        return emergencyAnswer(ctx.emergencyController);
       },
     },
 
@@ -4314,7 +4385,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
         if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           // Again once the body is in: a Kill may have landed while it was read.
           if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
           // Checked before anything is applied: a level that is not a number
@@ -4390,7 +4461,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
         try {
-          const body = await req.json() as { action?: ActionCategory; allow?: boolean; role_id?: string };
+          const body = await readJson(req) as { action?: ActionCategory; allow?: boolean; role_id?: string };
           if (!body.action) return error('Missing "action" field', 400);
           if (typeof body.allow !== 'boolean') return error('Missing "allow" boolean', 400);
           // During Kill only a Deny gets through: it is checked before every
@@ -4450,7 +4521,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
         if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
         try {
-          const body = await req.json() as { action: ActionCategory; tool_name: string };
+          const body = await readJson(req) as { action: ActionCategory; tool_name: string };
           if (ctx.emergencyController?.getState() === 'killed') return error(AUTHORITY_FROZEN_WHILE_KILLED, 409);
           if (!body.action) return error('Missing "action" field');
           // Only a suggestion the learner actually made can be accepted: this
@@ -4493,7 +4564,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         if (!ctx.learner) return error('Learning system not configured', 500);
         try {
-          const body = await req.json() as { action: ActionCategory; tool_name: string };
+          const body = await readJson(req) as { action: ActionCategory; tool_name: string };
           if (!body.action) return error('Missing "action" field');
           ctx.learner.resetPattern(body.action, body.tool_name ?? '');
           return json({ ok: true });
@@ -4528,7 +4599,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const params = getSearchParams(req);
-        const limit = parseInt(params.get('limit') ?? '50', 10);
+        const limit = intParam(params, 'limit', 50, 1, 500);
         const app = params.get('app') ?? undefined;
         return json(getRecentCaptures(limit, app));
       },
@@ -4599,7 +4670,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
-        const limit = parseInt(params.get('limit') ?? '20', 10);
+        const limit = intParam(params, 'limit', 20, 1, 500);
         return json(ctx.awarenessService.getSessionHistory(limit));
       },
     },
@@ -4609,7 +4680,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         if (!ctx.awarenessService) return error('Awareness service not running', 503);
         const params = getSearchParams(req);
-        const limit = parseInt(params.get('limit') ?? '20', 10);
+        const limit = intParam(params, 'limit', 20, 1, 500);
         const type = params.get('type') as SuggestionType | null;
         return json(ctx.awarenessService.getRecentSuggestionsList(limit, type ?? undefined));
       },
@@ -4636,8 +4707,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         const hidden = awarenessHistoryHidden(); if (hidden) return hidden;
         const params = getSearchParams(req);
-        const start = parseInt(params.get('start') ?? String(Date.now() - 24 * 60 * 60 * 1000), 10);
-        const end = parseInt(params.get('end') ?? String(Date.now()), 10);
+        const start = intParam(params, 'start', Date.now() - 24 * 60 * 60 * 1000, 0, Number.MAX_SAFE_INTEGER);
+        const end = intParam(params, 'end', Date.now(), 0, Number.MAX_SAFE_INTEGER);
         return json(getCapturesInRange(start, end));
       },
     },
@@ -4669,7 +4740,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.awarenessService) return error('Awareness service not available', 503);
         try {
           const params = getSearchParams(req);
-          const days = parseInt(params.get('days') ?? '7', 10) || 7;
+          const days = intParam(params, 'days', 7, 1, 365);
           const insights = ctx.awarenessService.getBehavioralInsights(days);
           return json(insights);
         } catch (err) {
@@ -4751,7 +4822,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const tag = url.searchParams.get('tag') ?? undefined;
           const health = url.searchParams.get('health') ?? undefined;
           const parent_id = url.searchParams.get('parent_id');
-          const limit = parseInt(url.searchParams.get('limit') ?? '100', 10);
+          const limit = intParam(url.searchParams, 'limit', 100, 1, 1000);
           const goals = require('../vault/goals.ts');
           return json(goals.findGoals({
             status: status as any,
@@ -4765,7 +4836,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = goalRecord(await req.json(), 'request');
+          const body = goalRecord(await readJson(req), 'request');
           const { mode, title, level = 'task', ...options } = body;
           if (mode !== undefined && mode !== 'quick' && mode !== 'propose' && mode !== 'create_from_proposal') return error('Unknown goal creation mode', 400);
 
@@ -4797,7 +4868,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json(goal, 201);
         } catch (err) {
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
-          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+          return errorFromException(err);
         }
       },
     },
@@ -4852,10 +4923,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/goals/reorder': {
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { id: string; sort_order: number }[];
+          const body = await readJson(req, { allowArray: true }) as { id: string; sort_order: number }[];
           getGoalApplication().reorderGoals(body);
           return json({ ok: true });
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return errorFromException(err);
+        }
       },
     },
 
@@ -4864,7 +4938,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const url = new URL(req.url);
           const type = url.searchParams.get('type') as any;
-          const limit = parseInt(url.searchParams.get('limit') ?? '10', 10);
+          const limit = intParam(url.searchParams, 'limit', 10, 1, 500);
           const goals = require('../vault/goals.ts');
           return json(goals.getRecentCheckIns(type ?? undefined, limit));
         } catch (err) { return error(`${err}`); }
@@ -4898,7 +4972,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const url = new URL(req.url);
           const id = url.pathname.split('/').pop()!;
-          const body = await req.json() as Record<string, unknown>;
+          const body = await readJson(req) as Record<string, unknown>;
           // Only a deadline that is being moved must be in the future: an overdue goal keeps its date while other fields change.
           if (body && typeof body === 'object' && body.deadline !== undefined && body.deadline !== require('../vault/goals.ts').getGoal(id)?.deadline) assertDeadlineNotPast(body.deadline);
           const updated = getGoalApplication().updateGoal(id, body);
@@ -4906,7 +4980,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json(updated);
         } catch (err) {
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
-          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+          return errorFromException(err);
         }
       },
       DELETE: (req: Request) => {
@@ -4948,7 +5022,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const id = new URL(req.url).pathname.split('/').at(-2)!;
-          const body = goalRecord(await req.json(), 'request');
+          const body = goalRecord(await readJson(req), 'request');
           goalKeys(body, ['score', 'reason', 'source', 'expected_updated_at'], 'request');
           if (body.source === 'daily_review') throw new GoalValidationError('source', 'Automatic goal reviews require a verified measurement-to-score mapping');
           if (body.source !== undefined && body.source !== 'user') throw new GoalValidationError('source', 'Manual score requests must use source user');
@@ -4960,7 +5034,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         } catch (err) {
           if (err instanceof GoalScoreConflict) return json({ error: err.message, code: 'SCORE_CONFLICT', goal: err.goal }, 409);
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
-          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+          return errorFromException(err);
         }
       },
     },
@@ -4969,14 +5043,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const id = new URL(req.url).pathname.split('/').at(-2)!;
-          const body = goalRecord(await req.json(), 'request');
+          const body = goalRecord(await readJson(req), 'request');
           goalKeys(body, ['status'], 'request');
           const updated = getGoalApplication().updateStatus(id, body.status as any);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
         } catch (err) {
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
-          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+          return errorFromException(err);
         }
       },
     },
@@ -4985,14 +5059,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const id = new URL(req.url).pathname.split('/').at(-2)!;
-          const body = goalRecord(await req.json(), 'request');
+          const body = goalRecord(await readJson(req), 'request');
           goalKeys(body, ['health'], 'request');
           const updated = getGoalApplication().updateHealth(id, body.health as any);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
         } catch (err) {
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
-          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+          return errorFromException(err);
         }
       },
     },
@@ -5003,7 +5077,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const url = new URL(req.url);
           const parts = url.pathname.split('/');
           const id = parts[parts.length - 2]!;
-          const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+          const limit = intParam(url.searchParams, 'limit', 50, 1, 500);
           const goals = require('../vault/goals.ts');
           return json(goals.getProgressHistory(id, limit));
         } catch (err) { return error(`${err}`); }
@@ -5111,7 +5185,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
         try {
           if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             target?: string;
             method?: string;
             params?: Record<string, unknown>;
@@ -5156,7 +5230,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             result: result === 'detached' ? null : result,
           });
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+          return err instanceof HttpError ? error(err.message, err.status) : json({ error: err instanceof Error ? err.message : String(err) }, 500);
         }
       },
     },
@@ -5210,7 +5284,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               403,
             );
           }
-          const body = await req.json() as { name?: string };
+          const body = await readJson(req) as { name?: string };
           if (!body.name) return error('Missing "name" field');
           const result = await ctx.sidecarManager.enrollSidecar(body.name);
           return json(result, 201);
@@ -5337,7 +5411,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         if (!ctx.siteBuilderService) return error('Site builder not available', 503);
         try {
-          const body = await req.json() as { name: string; template: string; gitAuthor?: { name: string; email: string; global: boolean } };
+          const body = await readJson(req) as { name: string; template: string; gitAuthor?: { name: string; email: string; global: boolean } };
           if (!body.name || !body.template) return error('name and template are required');
           const project = await ctx.siteBuilderService.projectManager.createProject(body.name, body.template, body.gitAuthor);
           return json(project, 201);
@@ -5398,7 +5472,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         if (!ctx.siteBuilderService) return error('Site builder not available', 503);
         const id = new URL(req.url).pathname.split('/')[4]!;
-        const limit = parseInt(getSearchParams(req).get('limit') ?? '100', 10);
+        const limit = intParam(getSearchParams(req), 'limit', 100, 1, 1000);
         const logs = ctx.siteBuilderService.devServerManager.getLogs(id, limit);
         return json({ logs });
       },
@@ -5434,7 +5508,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.siteBuilderService) return error('Site builder not available', 503);
         const id = new URL(req.url).pathname.split('/')[4]!;
         try {
-          const body = await req.json() as { path: string; content: string };
+          const body = await readJson(req) as { path: string; content: string };
           if (!body.path || body.content === undefined) return error('path and content are required');
           await ctx.siteBuilderService.projectManager.writeFile(id, body.path, body.content);
 
@@ -5472,7 +5546,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json() as { name: string };
+          const body = await readJson(req) as { name: string };
           if (!body.name) return error('name is required');
           await ctx.siteBuilderService.gitManager.createBranch(projectPath, body.name);
           return json({ ok: true, branch: body.name });
@@ -5489,7 +5563,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json() as { name: string };
+          const body = await readJson(req) as { name: string };
           if (!body.name) return error('name is required');
           await ctx.siteBuilderService.gitManager.switchBranch(projectPath, body.name);
           return json({ ok: true, branch: body.name });
@@ -5505,7 +5579,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const id = new URL(req.url).pathname.split('/')[4]!;
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
-        const limit = parseInt(getSearchParams(req).get('limit') ?? '50', 10);
+        const limit = intParam(getSearchParams(req), 'limit', 50, 1, 500);
         try {
           const commits = await ctx.siteBuilderService.gitManager.getLog(projectPath, limit);
           return json(commits);
@@ -5537,7 +5611,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json() as { message: string };
+          const body = await readJson(req) as { message: string };
           if (!body.message) return error('message is required');
           const commit = await ctx.siteBuilderService.gitManager.autoCommit(projectPath, body.message);
           if (!commit) return json({ ok: false, message: 'Nothing to commit' });
@@ -5555,7 +5629,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json() as { branch: string; strategy?: 'merge' | 'rebase' };
+          const body = await readJson(req) as { branch: string; strategy?: 'merge' | 'rebase' };
           if (!body.branch) return error('branch is required');
 
           const result = body.strategy === 'rebase'
@@ -5581,7 +5655,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         if (!ctx.siteBuilderService) return error('Site builder not available', 503);
         try {
-          const body = await req.json() as { token: string };
+          const body = await readJson(req) as { token: string };
           if (!body.token) return error('token is required');
           const gh = ctx.siteBuilderService.githubManager;
           gh.setToken(body.token);
@@ -5606,7 +5680,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async (req: Request) => {
         if (!ctx.siteBuilderService) return error('Site builder not available', 503);
         try {
-          const page = parseInt(getSearchParams(req).get('page') ?? '1', 10);
+          const page = intParam(getSearchParams(req), 'page', 1, 1, 1000);
           const repos = await ctx.siteBuilderService.githubManager.listUserRepos(page);
           return json(repos);
         } catch (err) {
@@ -5622,7 +5696,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json() as {
+          const body = await readJson(req) as {
             name?: string; description?: string; private?: boolean;
             existingRepo?: string; // "owner/repo" format
           };
@@ -5682,7 +5756,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
         if (!projectPath) return error('Project not found', 404);
         try {
-          const body = await req.json().catch(() => ({})) as { force?: boolean };
+          const body = await readJson(req, { optional: true }) as { force?: boolean };
           const result = await ctx.siteBuilderService.githubManager.push(projectPath, undefined, body.force);
           if (!result.success) return error(result.error ?? 'Push failed');
 

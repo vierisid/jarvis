@@ -20,6 +20,7 @@ import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 import { repinLiveDraft } from "./binding-pins";
 import { applyWebhookSecretRules, WebhookSecretError } from "../../runner/triggers/webhook-secret";
 import { withoutHiddenText } from "../../../vault/commitment-text";
+import { isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from "../../display-name";
 
 // eslint-disable-next-line no-control-regex
 const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
@@ -29,11 +30,14 @@ const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
  * and line or paragraph separators a space), well formed, without the
  * characters that reorder or hide text. The API refuses controls first
  * (`validDisplayName`); this holds the composer, the assistant's tools and
- * onboarding, which never throw over a name, to the same line. A no-op for an
- * ordinary name.
+ * onboarding, which never throw over a name, to the same line, and never
+ * store a blank one. A no-op for an ordinary name.
  */
 export function storedDisplayName(name: string): string {
-  return withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+  const line = withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+  // Nothing visible left (a composer or tool fallback that was itself blank):
+  // store the name the list would show anyway, never a blank row (#1379).
+  return isBlankWorkflowName(line) ? UNTITLED_WORKFLOW_NAME : line;
 }
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
@@ -374,6 +378,51 @@ export function getLatestDraft(flowId: string): FlowVersion | null {
     )
     .get(flowId);
   return row ? rowToFlowVersion(row) : null;
+}
+
+/**
+ * The version the workflow runs and is named by: the published one, else the
+ * latest draft (the same rule as the trigger manager and the workflow lists).
+ * A new draft starts as a copy of it. Not the newest row: publishing an older
+ * version again, or locking a newer one, leaves a newer row that does not run.
+ */
+export function getCurrentVersion(flowId: string): FlowVersion | null {
+  const flow = db().query<{ published_version_id: string | null }, [string]>(`SELECT published_version_id FROM flow WHERE id = ?`).get(flowId);
+  if (!flow) return null;
+  return flow.published_version_id ? getFlowVersion(flow.published_version_id) : getLatestDraft(flowId);
+}
+
+/**
+ * Throw away a draft that is not wanted (the way out of a draft that cannot
+ * be opened). Only a DRAFT: a locked version is history and the published
+ * one is what runs. A draft that runs have been made from, that an enabled
+ * flow with nothing published is running, or that is the flow's only version
+ * is kept, and the refusal says why.
+ */
+export function discardDraftVersion(flowId: string, versionId: string): void {
+  db().transaction(() => {
+    const row = db().query<FlowVersionRow, [string, string]>(`SELECT * FROM flow_version WHERE id = ? AND flow_id = ?`).get(versionId, flowId);
+    if (!row) throw new FlowVersionRequestError("version not found", 404);
+    if (row.state !== "DRAFT") {
+      throw new FlowVersionRequestError("Only a draft can be discarded. A published or locked version is kept as the workflow's history.", 409);
+    }
+    const flow = db().query<{ status: string; published_version_id: string | null }, [string]>(`SELECT status, published_version_id FROM flow WHERE id = ?`).get(flowId);
+    if (flow?.published_version_id === versionId) throw new FlowVersionRequestError("This version is the one running. Publish another version first.", 409);
+    const latestDraft = getLatestDraft(flowId);
+    if (flow?.status === "ENABLED" && !flow.published_version_id && latestDraft?.id === versionId) {
+      throw new FlowVersionRequestError("This draft is what the turned-on workflow runs. Turn the workflow off first, then discard the draft.", 409);
+    }
+    if (db().query(`SELECT 1 FROM flow_run WHERE flow_version_id = ? LIMIT 1`).get(versionId)) {
+      throw new FlowVersionRequestError("This draft has runs recorded against it, so it is kept.", 409);
+    }
+    // A workflow with no version left cannot be opened, edited or named; the
+    // way out of a workflow whose only version is broken is removing it.
+    if (!db().query(`SELECT 1 FROM flow_version WHERE flow_id = ? AND id <> ? LIMIT 1`).get(flowId, versionId)) {
+      throw new FlowVersionRequestError("This is the workflow's only version. Remove the workflow from All workflows instead.", 409);
+    }
+    db().run(`DELETE FROM flow_version WHERE id = ?`, [versionId]);
+    touchFlow(flowId);
+  }).immediate();
 }
 
 export function listVersions(flowId: string, limit = 50): FlowVersion[] {

@@ -158,6 +158,17 @@ test("failed enable exposes blocker and leaves Off, not Draft", async () => {
   expect(row("investor").textContent).toContain("Off");
   expect(row("investor").textContent).not.toContain("Draft");
 });
+test("a blocked enable shows its reason once and links to where it is fixed", async () => {
+  f.controller.retire();
+  f = makeManagementFixture("blocked enable");
+  await render();
+  await click("Enable Weekly investor update");
+  const text = row("investor").textContent ?? "";
+  expect(text.split("Connect Notion before enabling.")).toHaveLength(2);
+  await click("Open Connected workspace");
+  expect(shell.route.room).toBe("connected-workspace");
+});
+
 test("uncertain mutation exposes Check result instead of another Delete; matching result resolves once", async () => {
   f.setMode("lost response");
   await render();
@@ -196,6 +207,22 @@ test("read failures and missing live capability do not invent a zero-count empty
   expect(host.textContent).toContain("could not be loaded");
   expect(host.textContent).not.toContain("0 workflows");
   expect(host.textContent).not.toContain("No workflows in this list");
+});
+test("a blank-named workflow shows as Untitled and a broken row is reported without hiding the rest", async () => {
+  f.records.set("inbox", { ...f.records.get("inbox")!, name: "   " });
+  f.records.set("meeting", {
+    ...f.records.get("meeting")!,
+    name: undefined as unknown as string,
+  });
+  await render();
+  expect(host.textContent).not.toContain("could not be loaded");
+  expect(row("inbox").textContent).toContain("Untitled workflow");
+  expect(row("meeting")).toBeNull();
+  expect(row("investor")).toBeTruthy();
+  expect(host.textContent).toContain("One workflow could not be shown.");
+  // Not hidden silently: the broken row can be opened to repair it.
+  await click("Open the workflow that could not be shown");
+  expect(shell.route).toEqual({ room: "workflow", selection: { flowId: "meeting" } });
 });
 test("no removed date, subtitle, footer, global creation control or irreversible route appears", async () => {
   await render();

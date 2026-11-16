@@ -40,7 +40,7 @@ function normalizeType(t: string): WaitpointType {
 // `resume_date_time` is compared LEXICALLY by the scheduler, so it must be
 // canonical ISO-8601 UTC. Delay pieces send either `toISOString()` (delay-until)
 // or `toUTCString()` (delay-for, RFC-1123) — normalize both. An unparseable
-// value drops to undefined rather than persisting a never-due timer.
+// value drops to undefined, and a TIMER without one is refused (400).
 function normalizeResumeDateTime(raw?: string): string | undefined {
   if (!raw) return undefined;
   const d = new Date(raw);
@@ -72,13 +72,19 @@ export function createWaitpointsRoute(deps: WaitpointRouteDeps): RouteHandler {
     if (body.projectId !== undefined && body.projectId !== ctx.claims.projectId) {
       return err("projectId does not match this sandbox", 403);
     }
+    const type = normalizeType(body.type);
+    const resumeDateTime = normalizeResumeDateTime(body.resumeDateTime);
+    // A timer with no usable resume time would leave the run PAUSED forever.
+    if (type === "TIMER" && resumeDateTime === undefined) {
+      return err("a timer needs a valid resumeDateTime", 400);
+    }
     const wp = createWaitpoint({
       flowRunId: body.flowRunId,
       projectId: ctx.claims.projectId,
       stepName: body.stepName,
-      type: normalizeType(body.type),
+      type,
       version: body.version,
-      resumeDateTime: normalizeResumeDateTime(body.resumeDateTime),
+      resumeDateTime,
       responseToSend: body.responseToSend,
       workerHandlerId: body.workerHandlerId,
       httpRequestId: body.httpRequestId,

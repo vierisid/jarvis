@@ -3,6 +3,7 @@ import { workflowSafeguards } from '../../workflows/runtime/workflow-safeguards'
 import { decideRunRecovery, getRunRecovery } from '../../workflows/runtime/recovery';
 import { getWorkflowDb } from '../../workflows/db';
 import { assistantWebhookSecretRefusal } from '../../workflows/runner/triggers/webhook-secret';
+import { secretLiteralWarnings } from './secret-literals';
 import { redactFailedStepMessage, runAsShown, versionAsModelSees } from '../../workflows/runtime/step-credentials';
 import { resolveOnboardingOutcome } from '../../workflows/runtime/onboarding-service';
 import { onboardingResource } from '../../workflows/runtime/customer-onboarding';
@@ -103,6 +104,7 @@ import type {
 } from "./workflow-composer.ts";
 import { forCard } from "../../util/card-text.ts";
 import { wrapUntrusted } from "../../roles/untrusted.ts";
+import { workflowNameProblem } from "../../workflows/display-name.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -552,7 +554,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           //     short-circuits the silent-empty-flow failure mode the
           //     user reported. The error message walks the agent toward
           //     the right next call.
-          const name = requireString(params, "name");
+          const name = requireWorkflowName(params);
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
             const composed = await actCompose(name, description, deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps));
@@ -635,7 +637,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps)),
+            await actCompose(requireWorkflowName(params), requireString(params, "description"), deps, project, params["contract"], params["install_missing"] !== false, undefined, approvedInstalls(params, deps)),
             "a composed workflow and the composer's text",
           );
         default:
@@ -928,6 +930,18 @@ function requireFlowIn(project: string, params: Record<string, unknown>): FlowRo
     throw new Error("'flow' parameter is required (display name or id)");
   }
   return resolveFlow(project, ref);
+}
+
+/**
+ * `name` under the shared blank rule (`workflows/display-name.ts`): trimmed,
+ * never without a visible character. No length cap here yet: the read side
+ * (`FLOW_NAME_MAX_CHARS`) bounds what reaches the model, and its tests write
+ * long names through this tool.
+ */
+function requireWorkflowName(params: Record<string, unknown>): string {
+  const check = workflowNameProblem(params["name"], Infinity);
+  if (check.ok) return check.name;
+  throw new Error("'name' parameter is required and must be a non-empty string");
 }
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -1352,7 +1366,9 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   // Warnings, not a refusal: the draft may deliberately target a machine that
   // is not enrolled yet, and blocking someone's publish over a heuristic would
   // be worse than the mismatch it prevents.
-  const warnings = publishOsWarnings(target.trigger, deps);
+  // A key typed into a step is stored in plain text: said as it goes live, as
+  // the publish route says it (never a refusal; see secretLiteralWarnings).
+  const warnings = [...publishOsWarnings(target.trigger, deps), ...secretLiteralWarnings(target.trigger)];
   const report = contractRecheck(flow, target.trigger);
   const { flow: updated } = publishFlowVersion(flow.id, target.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));

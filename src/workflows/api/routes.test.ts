@@ -288,6 +288,70 @@ describe("#598: flow metadata is validated and bounded on the way in", () => {
     expect((await create({ displayName: "N".repeat(512) })).status).toBe(201);
   });
 
+  test("a whitespace-only displayName is refused and a padded one is stored trimmed", async () => {
+    expect((await create({ displayName: "   " })).status).toBe(400);
+    expect((await create({ displayName: "\t\n " })).status).toBe(400);
+    for (const invisible of ["\u200b\u200b", "\u202e", "\ufeff", "\u0000", "\ud800", " \u200d\u2060 "])
+      expect((await create({ displayName: invisible })).status).toBe(400);
+    expect((await create({ displayName: "a\u200bb" })).status).toBe(201);
+    const padded = await create({ displayName: "  Weekly digest  " });
+    expect(padded.status).toBe(201);
+    expect((padded.body as { version: { displayName: string } }).version.displayName).toBe("Weekly digest");
+
+    const id = await makeFlow();
+    const postVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+      );
+    expect((await postVersion({ displayName: "   " })).status).toBe(400);
+    const made = await postVersion({ displayName: " v2 " });
+    expect((made.body as { displayName: string }).displayName).toBe("v2");
+    const versionId = (made.body as { id: string }).id;
+    const patched = await callJson(
+      routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, { displayName: "   " }),
+    );
+    expect(patched.status).toBe(400);
+  });
+
+  test("a workflow already stored with a blank name still saves, and a rename heals it", async () => {
+    const id = await makeFlow();
+    const postVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+      );
+    const versionId = ((await postVersion({ displayName: "v" })).body as { id: string }).id;
+    const { getWorkflowDb } = await import("../db/index");
+    // As an install from before the rule holds it: no writer can store this now.
+    getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE flow_id = ?", ["   ", id]);
+    const patchVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+        reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, b),
+      );
+    // The editor sends the stored name back with every save: not a lockout.
+    const saved = await patchVersion({ displayName: "   " });
+    expect(saved.status).toBe(200);
+    expect((saved.body as { displayName: string }).displayName).toBe("Untitled workflow");
+    // A blank name the flow does not hold is still refused.
+    expect((await patchVersion({ displayName: "\u200b" })).status).toBe(400);
+    const renamed = await patchVersion({ displayName: "Named again" });
+    expect((renamed.body as { displayName: string }).displayName).toBe("Named again");
+    // The clone path (Edit on a published workflow) carries the stored name too.
+    getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE flow_id = ?", ["  ", id]);
+    const cloned = await postVersion({ displayName: "  " });
+    expect(cloned.status).toBe(201);
+    expect((cloned.body as { displayName: string }).displayName).toBe("Untitled workflow");
+    // Another flow's blank name lends nothing.
+    const other = await makeFlow();
+    expect((await callJson(
+      routes["/api/workflows/:id/versions"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${other}/versions`, { id: other }, { displayName: "  " }),
+    )).status).toBe(400);
+  });
+
   test("displayName is bounded on both version write routes too", async () => {
     const id = await makeFlow();
     const postVersion = (b: unknown) =>
@@ -765,6 +829,25 @@ describe("workflow API: versions", () => {
     expect(body.flow.status).toBe("ENABLED");
     expect(body.flow.publishedVersionId).toBe(versionId);
     expect(body.version.state).toBe("LOCKED");
+    // A workflow with nothing secret in it carries no warnings key at all.
+    expect(body.warnings).toBeUndefined();
+  });
+
+  test("POST .../publish still publishes a workflow with a key typed into a step, and says so without repeating the key", async () => {
+    const canary = "sk-qa4-canary-SECRET-9911";
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const flowId = createFlow().id;
+    createDraftVersion({ flowId, displayName: "v1", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "notify", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: `token ${canary}` } } } } as unknown as Record<string, unknown> });
+    const publish = routes["/api/workflows/:id/publish"]?.POST;
+    const { status, body } = await callJson(publish, reqWithParams("POST", `http://x/api/workflows/${flowId}/publish`, { id: flowId }));
+    expect(status).toBe(200);
+    expect(body.flow.status).toBe("ENABLED");
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings[0]).toContain('Step "notify"');
+    expect(body.warnings[0]).toContain("connection");
+    expect(JSON.stringify(body.warnings)).not.toContain(canary);
   });
 });
 
@@ -980,6 +1063,23 @@ describe("workflow API: runs", () => {
     const scoped = createWorkflowRoutes({ callerProjectId: () => "proj_other_recent" });
     const foreign = await callJson(scoped["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs"));
     expect(foreign).toEqual({ status: 200, body: { items: [] } });
+  });
+
+  test("Recently run names a workflow as every other list does: the published name wins over a draft's", async () => {
+    const { createFlow, setPublishedVersion } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const published = createDraftVersion({ flowId: flow.id, displayName: "Weekly digest",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    lockVersion(published.id);
+    setPublishedVersion(flow.id, published.id);
+    createDraftVersion({ flowId: flow.id, displayName: "Half-edited draft",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: published.id, status: "SUCCEEDED" });
+    const { body } = await callJson(routes["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs?limit=20"));
+    const row = (body as { items: { id: string; flowId: string; displayName: string }[] }).items.find(i => i.flowId === flow.id);
+    expect(row).toMatchObject({ id: run.id, displayName: "Weekly digest" });
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {

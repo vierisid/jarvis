@@ -64,6 +64,25 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   for a piece that includes a digest of its whole resolved input, not only the
   shortened copy the card shows (a body past 512 characters, a list past 25
   items).
+- **What the card shows.** The Needs you card of a governed piece action
+  (email, HTTP request, any verified piece) lists what will happen, read from
+  the effect's frozen arguments, and only while they are the arguments the
+  approval is bound to (the digest the effect boundary checks before it runs;
+  otherwise the section is left out). The primary target comes first
+  (recipients, method and URL, channel), then subject, a body excerpt,
+  attachment names and sizes and the other fields, at most 12, with the count
+  of fields not shown. Values are redacted as the frozen record redacts them,
+  and again with the same shared rules (`redactHttpInput` on any URL, the
+  piece's own redaction), so a rule added later covers an older record too.
+  Each value is untrusted text, reduced as any card value is (format, bidi and
+  control characters removed, whitespace collapsed to one line) and shown in
+  its own field under its label. Every recipient the record holds is listed,
+  and a value is cut only past 600 characters, above the record's own bound,
+  with "(shortened)" after its label. A body keeps up to 12 lines and 500
+  characters, framed as quoted text and marked "(beginning only)" when cut.
+  Headers and credentials are never listed. The one-line sentence on chat and
+  desktop cards names up to four target fields, primary target first, so a
+  recipient is never cut for a sender name.
 - **Permissions.** Each request records whom it was asked for (role, level,
   profile). When it runs, the same checks are made again as that agent: a deny
   override, a context rule or a revoked permission added since the card was
@@ -165,6 +184,26 @@ both say to raise the level.
 The controller is the one source of truth: the engine's copy of the state is
 updated on every change, and accepting a learning suggestion no longer writes
 it back, so a Kill survives a restart.
+
+A stop takes effect in memory before it is saved. If the save fails (a full
+disk), the stop stays in effect, the control answers `saved: false` with a
+plain `warning` saying it will not survive a restart, `/api/authority/status`
+reports `emergency_saved: false`, and the daemon retries the save every few
+seconds with the current state until it works.
+
+## When nothing can be saved
+
+A full disk (or a refused write) stops every write, not reads. The daemon
+records the first failed write and `/api/health` reports
+`storage: { writable: false, reason, message }`, which the dashboard shows as a
+banner ("Jarvis cannot save: the disk is full"). While storage is not writable
+the run worker stops claiming jobs and probes with one small write every 1 to
+10 seconds instead of retrying four times a second; queued runs wait and drain
+exactly once saving works again. A run that fails because it could not save
+marks storage the same way, so the worker starts no new run it could not
+record either (a claim alone can still fit on a nearly full disk). API errors caused by a refused write answer
+with the plain message and `code: "storage_full"` or `"storage_unwritable"`,
+never SQLite text.
 
 ## Outcomes stay distinct
 

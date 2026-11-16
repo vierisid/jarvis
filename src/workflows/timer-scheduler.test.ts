@@ -3,7 +3,7 @@ import { closeWorkflowDb, initWorkflowDb } from './db/index';
 import { createFlow } from './db/repos/flow';
 import { createDraftVersion } from './db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from './db/repos/flow-run';
-import { createWaitpoint, getWaitpoint } from './db/repos/waitpoint';
+import { createWaitpoint, getWaitpoint, listWaitpointsByFlowRun } from './db/repos/waitpoint';
 import { claimNextJob } from './db/repos/job-queue';
 import { TimerWaitpointScheduler } from './timer-scheduler';
 
@@ -29,6 +29,18 @@ function timerWaitpoint(runId: string, resumeIso: string) {
     resumeDateTime: resumeIso,
   });
 }
+
+describe('a timer waitpoint always has a resume time', () => {
+  test('createWaitpoint refuses a TIMER with none and stores nothing', () => {
+    const runId = pausedRun();
+    for (const resumeDateTime of [undefined, '', 'Invalid Date']) {
+      expect(() => createWaitpoint({ flowRunId: runId, projectId: 'p', stepName: 'wait', type: 'TIMER', resumeDateTime })).toThrow('valid resume time');
+    }
+    expect(listWaitpointsByFlowRun(runId, false)).toHaveLength(0);
+    // Other kinds of waitpoint are not timers.
+    expect(createWaitpoint({ flowRunId: runId, projectId: 'p', stepName: 'ask', type: 'MANUAL' }).resumeDateTime).toBeNull();
+  });
+});
 
 describe('TimerWaitpointScheduler', () => {
   const sched = new TimerWaitpointScheduler();

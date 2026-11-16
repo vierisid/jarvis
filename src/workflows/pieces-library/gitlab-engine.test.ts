@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
 import { initWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from "../db";
-import { createFlow } from "../db/repos/flow";
+import { createFlow, setFlowCodeStepsEnabled } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
@@ -404,6 +404,7 @@ test.skipIf(!gate)("published GitLab metadata, issue creation, refresh acknowled
       displayName: "GitLab qualification",
       trigger: { name: "trigger", type: "EMPTY", nextAction: read },
     });
+  setFlowCodeStepsEnabled(flow.id, true);
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
   runId = run.id;
   const worker = new Worker({
