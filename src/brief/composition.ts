@@ -5,6 +5,7 @@ import { walkFlowNodes } from '../workflows/db/flow-graph';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion } from '../workflows/db/repos/flow-version';
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer';
+import { AI_PROVIDER_NEEDED_CODE, AI_PROVIDER_NEEDED_MESSAGE } from './ai-provider-needed';
 import type { ComposeDeps } from '../actions/tools/workflow-composer';
 import { COMPOSITION_LIMITS as limits, type BriefCompositionJob, type BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
@@ -58,7 +59,9 @@ export class BriefCompositionProvider {
     this.interruptPending();
   }
 
-  configure(dependencies: () => ComposeDeps): void { this.dependencies = dependencies; }
+  private aiAvailable: (() => boolean) | null = null;
+  /** `aiAvailable` says whether any AI provider is saved; with none, a job is blocked with a plain message instead of failing mid-run. */
+  configure(dependencies: () => ComposeDeps, aiAvailable?: () => boolean): void { this.dependencies = dependencies; this.aiAvailable = aiAvailable ?? null; }
   readiness(): 'ready' | 'unavailable' {
     return !this.stopped && !this.recoveryNeeded && this.dependencies && this.currentDatabase() ? 'ready' : 'unavailable';
   }
@@ -189,6 +192,10 @@ export class BriefCompositionProvider {
       const timer = setTimeout(() => { timedOut = true; active.abort.abort(); }, this.timeoutMs);
       const owns = () => !this.stopped && this.currentDatabase() && this.active === active && this.row(row.id).state === 'running' && !active.abort.signal.aborted;
       try {
+        if (this.aiAvailable && !this.aiAvailable()) {
+          this.finish(row.id, 'blocked', { code: AI_PROVIDER_NEEDED_CODE, message: AI_PROVIDER_NEEDED_MESSAGE, details: [] });
+          continue;
+        }
         const deps = this.dependencies!();
         const selected = new CompositionIngredients(this.db, deps.pieceRegistry, this.projectId).resolve(JSON.parse(row.ingredients));
         if (selected.issues.length) {

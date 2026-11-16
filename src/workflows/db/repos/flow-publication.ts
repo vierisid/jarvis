@@ -3,7 +3,7 @@ import { getFlow, setPublishedVersion, updateFlowStatus, type FlowRow } from "./
 import { getFlowVersion, getLatestDraft, lockVersion, type FlowVersion } from "./flow-version";
 import { assertFlowVersionOwnership, FlowVersionRequestError } from "./flow-version-ownership";
 import { assertCodeStepsAllowed } from "./flow-code-steps";
-import { assertVersionReady } from './flow-readiness';
+import { assertVersionHasSteps, assertVersionReady } from './flow-readiness';
 
 /**
  * Publish an owned explicit version, or the latest draft, or with no draft the
@@ -36,6 +36,7 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // Publishing is a person accepting this version's bindings (Q-05):
     // `updateFlowStatus` below pins them, so they are not compared here.
     assertVersionReady(flowId, target.id, undefined, { acceptBindings: true });
+    assertVersionHasSteps(target.id);
     if (target.state !== "LOCKED") target = lockVersion(target.id);
     setPublishedVersion(flowId, target.id);
     updateFlowStatus(flowId, "ENABLED");

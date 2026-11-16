@@ -193,6 +193,13 @@ export class TriggerManager {
    */
   private readonly pollingInFlight: Set<string> = new Set();
   /**
+   * The latest schedule check per flow. The times a restart owes (the startup
+   * catch-up) run one after another through it: each is owed its own run, so a
+   * later one is not "stacked" behind the one before it. A time on an ordinary
+   * tick does not wait and still meets the in-flight guard.
+   */
+  private readonly scheduleBurst: Map<string, Promise<void>> = new Map();
+  /**
    * Pending ON_ENABLE retries, keyed by flow id. An engine acquire can fail
    * for reasons that have nothing to do with the flow (loaded host, engine
    * mid-restart), and without a retry the flow stays silently unregistered
@@ -1141,7 +1148,9 @@ export class TriggerManager {
       // A job left over from a replaced registration does nothing.
       if (this.subs.get(flowId)?.versionId !== versionId) return;
       const at = occurrence?.at ?? Date.now();
-      const skipped = this.overlapping(flowId, "trigger:cron");
+      // A later time of the startup catch-up is owed its own run: the one just
+      // queued before it is no reason to skip it.
+      const skipped = occurrence?.afterEarlier ? null : this.overlapping(flowId, "trigger:cron");
       if (skipped) {
         recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence?.key, scheduledFor: at,
           lateMs: occurrence?.lateMs ?? null, outcome: "skipped", detail: { reason: skipped } });
@@ -1184,15 +1193,34 @@ export class TriggerManager {
    * rejection (a workflow deleted mid-poll) used to take the daemon down.
    */
   private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence, pureSchedule = false, generation?: number): Promise<void> {
-    try {
-      await this.pollEngineTrigger(flowId, versionId, source, occurrence, pureSchedule, generation);
-    } catch (e) {
-      this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
-    }
+    const behind = pureSchedule && occurrence?.afterEarlier ? this.scheduleBurst.get(flowId) : undefined;
+    const poll = async (): Promise<void> => {
+      try {
+        let current = occurrence;
+        // A time that waited behind the check before it is as late as it is
+        // now, not as when it came due; past the grace window it is missed,
+        // never run late (Q-06), however long that check took.
+        if (behind && current) {
+          current = { ...current, lateMs: Date.now() - current.at };
+          if (current.lateMs > CRON_GRACE_MS) {
+            this.recordMissed(flowId, versionId, [current], "The check of the time before it was still running");
+            return;
+          }
+        }
+        await this.pollEngineTrigger(flowId, versionId, source, current, pureSchedule, generation, current?.afterEarlier === true);
+      } catch (e) {
+        this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
+      }
+    };
+    if (!pureSchedule) return poll();
+    const mine = behind ? behind.then(poll) : poll();
+    this.scheduleBurst.set(flowId, mine);
+    void mine.then(() => { if (this.scheduleBurst.get(flowId) === mine) this.scheduleBurst.delete(flowId); });
+    return mine;
   }
 
   private async pollEngineTrigger(flowId: string, versionId: string, source: string, occurrence: CronOccurrence | undefined,
-    pureSchedule: boolean, generation?: number): Promise<void> {
+    pureSchedule: boolean, generation?: number, followsInBurst = false): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
     // A scheduled time that does not run still leaves a row, so the ledger
@@ -1237,7 +1265,7 @@ export class TriggerManager {
       return;
     }
     const fireSource: FireSource = pureSchedule ? "schedule" : "poll";
-    if (pureSchedule) {
+    if (pureSchedule && !followsInBurst) {
       const skipped = this.overlapping(flowId, "trigger:engine");
       if (skipped) {
         recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence?.key,
