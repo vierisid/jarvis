@@ -44,7 +44,7 @@ import {
   type CronMissedSummary, type CronOccurrence,
 } from "./cron";
 import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
-import { webhookScheme } from "./webhook-secret";
+import { webhookScheme, webhookSecretProblem } from "./webhook-secret";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listAllFlows, type FlowRow } from "../../db/repos/flow";
 import {
@@ -91,6 +91,16 @@ const SCHEDULE_NOT_RUNNING = "The schedule could not be started, so the workflow
  * any webhook fire that slipped past the probe is dropped with a log line.
  */
 export const MAX_QUEUED_WEBHOOK_RUNS = 500;
+
+/**
+ * Queue priority of a scheduled run. Webhook and manual runs wait at 0, so a
+ * schedule's tick goes ahead of a backlog of them instead of being skipped
+ * behind it (a tick is skipped while the previous one has not started). The
+ * lead is bounded (PRIORITY_HEAD_START_MS): a run that has waited longer than
+ * that still goes first, so schedules cannot starve webhooks. Approval and
+ * timer continuations share this priority.
+ */
+export const SCHEDULE_RUN_PRIORITY = 1;
 
 /** The admission refusal for a flow that is off; a webhook sender is told so. */
 const TURNED_OFF = "The workflow is turned off.";
@@ -265,6 +275,13 @@ export class TriggerManager {
     ];
 
     this.webhooks.setTriggerCallback((flowId, payload, delivery, generation) => this.fire(flowId, payload, "webhook", delivery, generation));
+    // A delivery refused before it could fire still leaves a row, folded with its repeats.
+    this.webhooks.setRefusalCallback((flowId, code, reason) => {
+      const sub = this.subs.get(flowId);
+      if (!sub?.versionId) return;
+      try { recordBlocked({ flowId, flowVersionId: sub.versionId, source: "webhook", signature: JSON.stringify([sub.versionId, code]), detail: { reason, code } }); }
+      catch (e) { this.log(`flow ${flowId} (webhook) refused delivery could not be recorded: ${(e as Error).message}`); }
+    });
   }
 
   /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
@@ -549,8 +566,10 @@ export class TriggerManager {
   private registerWebhook(flowId: string, versionId: string, trigger: TriggerNode): void {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
+    // A secret that cannot be used is never read as "no secret": the route refuses every request.
+    const secretProblem = webhookSecretProblem(input) ?? undefined;
     const generation = workflowRemovalState(flowId).generation;
-    this.webhooks.register(flowId, secret, generation, submissionConfig(input), webhookScheme(input));
+    this.webhooks.register(flowId, secret, generation, submissionConfig(input), webhookScheme(input), secretProblem);
     this.subs.set(flowId, {
       generation,
       flowId,
@@ -1023,6 +1042,7 @@ export class TriggerManager {
         flowRunId: run.id,
         flowId,
         flowVersionId: versionId,
+        priority: opts.source === "schedule" ? SCHEDULE_RUN_PRIORITY : 0,
         // No auto-retry: trigger-fired runs often have side effects that
         // would duplicate on retry (e.g. notify, email, downstream API
         // calls). Surface the failure once; the trigger's next fire is
