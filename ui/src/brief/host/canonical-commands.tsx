@@ -12,7 +12,7 @@ import '../decisions/decisions.css';
 import './host.css';
 
 const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next step', reject_intent: 'Reject next step',
-  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', inspect: 'Inspect' };
+  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', mark_done: 'Mark done', not_doing: 'Not doing this', inspect: 'Inspect' };
 /**
  * A browser permission card's heading names what the call will do, from the
  * subject captured when the card was raised: the element a click lands on and
@@ -68,13 +68,13 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
     if (pending || !enabled || action === 'inspect') return;
     setPending(true);
     try {
-      const intent = action === 'accept_intent' || action === 'reject_intent';
-      const reason = intent ? await inputDialog('Reason for this decision', '', http.signal) : null;
+      const intent = action === 'accept_intent' || action === 'reject_intent' || action === 'mark_done' || action === 'not_doing';
+      const reason = intent ? await inputDialog(action === 'mark_done' ? 'What shows this is done?' : action === 'not_doing' ? 'Why are you not doing this?' : 'Reason for this decision', '', http.signal) : null;
       if (intent && !reason?.trim()) return;
       if (action === 'execute_once' && !await confirmDialog(`Execute this action once: ${row.title}?`)) return;
       const result = await http.json(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/resolve`, post({ revision: row.revision, action, ...(intent ? { reason } : {}) }));
       if (result.decisionId !== row.decisionId || typeof result.state !== 'string' || typeof result.revision !== 'string') throw Error();
-      setMessage(`Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; changed(); source.reload();
+      setMessage(action === 'mark_done' ? 'Marked done.' : action === 'not_doing' ? 'Dropped. You are not doing this step.' : `Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; changed(); source.reload();
     } catch { setMessage('Outcome is unconfirmed. Recheck the saved decision before making another choice.'); source.clear(); }
     finally { setPending(false); }
   };
@@ -86,7 +86,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
   const row = asks.find(r => r.decisionId === selected) ?? asking[0] ?? running[0];
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? plainDecisionTitle(r);
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
-  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
+  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once', 'mark_done'].includes(a));
   const repeats = pendingByWorkflow(asking);
   const choice = (item: QueuedDecision) => {
     const at = askedAt(item), note = isInProgress(item) ? null : siblingNote(item.review?.workflowName ? repeats.get(item.review.workflowName) : undefined);
@@ -94,7 +94,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
       aria-pressed={item.decisionId === row!.decisionId} disabled={pending} onClick={() => select(item.decisionId)}>
       <span><strong>{title(item)}</strong></span>
       <span className="brief-decision-recipient">{workflowLabel(item)}{at ? <> · <time dateTime={new Date(at).toISOString()}>{relativeTime(at)}</time></> : null}</span>
-      <span className="brief-decision-hint">{browserCardTitle(item)?.kind ?? (isInProgress(item) ? 'Approved. Waiting for the workflow to run it.' : asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
+      <span className="brief-decision-hint">{item.awarenessHeld ? 'Held while screen awareness is off.' : browserCardTitle(item)?.kind ?? (isInProgress(item) ? 'Approved. Waiting for the workflow to run it.' : asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
       {note && <span className="brief-decision-recipient">{note}</span>}
       <small>{item.decisionId === row!.decisionId ? 'Selected' : 'Review request'}</small>
     </button>;
@@ -110,7 +110,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
       <article className="brief-decision-paper" aria-label="Selected request">
         <header className="brief-decision-title"><h2 className="brief-type-hero-heading">{title(row)}</h2>
           {browserCardTitle(row) && <p className="brief-decision-subtitle">{browserCardTitle(row)!.kind}</p>}
-          <span className="brief-decision-badge">{actions.length ? 'Needs your review' : isInProgress(row) ? 'In progress' : row.state.replaceAll('_', ' ')}</span></header>
+          <span className="brief-decision-badge">{actions.includes('mark_done') ? 'Accepted' : actions.length ? 'Needs your review' : isInProgress(row) ? 'In progress' : row.state.replaceAll('_', ' ')}</span></header>
         <div className="brief-decision-context"><span>{workflowLabel(row)}{askedAt(row) ? <> · <time dateTime={new Date(askedAt(row)!).toISOString()}>{relativeTime(askedAt(row)!)}</time></> : null}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">
@@ -127,6 +127,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
             <dl className="brief-decision-values">{row.review.values.map(v => <React.Fragment key={v.name}>
               <dt>{v.name}{v.source === 'run_data' ? ' (from run data)' : v.source === 'agent' ? ' (chosen by the agent)' : ''}</dt>
               <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v.value}</dd></React.Fragment>)}</dl></>}
+          {row.awarenessHeld && <p role="note"><strong>{row.awarenessHeld}</strong></p>}
           <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : plainDecisionTitle(row)}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}
           {row.review?.toolName.startsWith('browser_') && <p>The browser uses a separate Jarvis profile. If the site asks you to sign in, complete sign-in in that browser before starting a new run.</p>}
