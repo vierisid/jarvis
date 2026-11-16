@@ -1282,27 +1282,46 @@ func lookSiblings(state *uiaState, walker *ole.IDispatch, found []lookFound, lin
 // It is the window in front, unless that is one of this program's own (the
 // notch has the keyboard while something is typed into it): then it is the
 // first window behind that is somebody else's.
-func platformNotchWindowRead() (map[string]any, error) {
-	var hwnd uintptr
-	var pid uint32
+// notchFrontWindow is the window the person is in: the one in front, or,
+// when that is one of Jarvis's own (the notch has the keyboard while
+// something is typed into it), the topmost window of another program.
+func notchFrontWindow() (hwnd uintptr, pid uint32) {
 	if fg := win32RootWindow(win32GetForegroundWindow()); fg != 0 && !ownWindow(fg) {
-		hwnd, pid = fg, win32GetWindowPid(fg)
-	} else {
-		for _, w := range enumTopWindows() {
-			if ownWindow(w.Hwnd) {
-				continue
-			}
-			if minimized, _, _ := procIsIconic.Call(w.Hwnd); minimized != 0 {
-				continue
-			}
-			// The desktop itself is not a window a person is "in".
-			if w.ClassName == "Progman" || w.ClassName == "WorkerW" || w.ClassName == "Shell_TrayWnd" {
-				continue
-			}
-			hwnd, pid = w.Hwnd, w.Pid
-			break
-		}
+		return fg, win32GetWindowPid(fg)
 	}
+	for _, w := range enumTopWindows() {
+		if ownWindow(w.Hwnd) {
+			continue
+		}
+		if minimized, _, _ := procIsIconic.Call(w.Hwnd); minimized != 0 {
+			continue
+		}
+		// The desktop itself is not a window a person is "in".
+		if w.ClassName == "Progman" || w.ClassName == "WorkerW" || w.ClassName == "Shell_TrayWnd" {
+			continue
+		}
+		return w.Hwnd, w.Pid
+	}
+	return 0, 0
+}
+
+func init() {
+	// The same window notch.window reads, as a place on the screen (notch_shot.go).
+	platformNotchFront = func() (lookRect, string, string, error) {
+		hwnd, pid := notchFrontWindow()
+		if hwnd == 0 || pid == 0 {
+			return lookRect{}, "", "", fmt.Errorf("no window of another program is open")
+		}
+		var rc w32Rect
+		if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); ok == 0 {
+			return lookRect{}, "", "", fmt.Errorf("the window could not be found on the screen")
+		}
+		return lookRect{int(rc.Left), int(rc.Top), int(rc.Right - rc.Left), int(rc.Bottom - rc.Top)}, processBaseName(pid), win32WindowTitle(hwnd), nil
+	}
+}
+
+func platformNotchWindowRead() (map[string]any, error) {
+	hwnd, pid := notchFrontWindow()
 	if hwnd == 0 || pid == 0 {
 		return nil, fmt.Errorf("no window of another program is open")
 	}

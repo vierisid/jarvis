@@ -1075,6 +1075,17 @@ func macWalk(e macElem, depth, deepest int, out *[]map[string]any, limit int, un
 	}
 }
 
+func init() {
+	// The same window notch.window reads, as a place on the screen (notch_shot.go).
+	platformNotchFront = func() (lookRect, string, string, error) {
+		win, ok := macWinFront()
+		if !ok || win.Pid == 0 {
+			return lookRect{}, "", "", fmt.Errorf("no window of another program is open")
+		}
+		return win.Rect, win.App, win.Title, nil
+	}
+}
+
 // platformNotchWindowRead reads the window the person is in: what it says of
 // itself, thing by thing, each with its place on the screen. What the program
 // has open on top of it (a menu) comes first: it is what the person is

@@ -985,9 +985,46 @@ listed under the invariants.
     walked to one click at a time (95). The
     window read is the one in front unless that is the notch itself (it has
     the keyboard while something is typed), then the first one behind it that
-    is somebody else's. When the window says nothing useful, or the model
-    finds no answer, the question runs as any other instruction. The read
-    runs beside the working line, so it can be stopped.
+    is somebody else's. The read runs beside the working line, so it can be
+    stopped.
+
+    **A window that says nothing about what is in it is looked at.** The
+    list above works where a program tells of its own buttons: OBS, Notepad,
+    a file window, Settings. A page in a browser, the many apps built on a
+    browser, a game, a remote desktop tell of nothing in them: there the
+    list holds the browser's own tabs and toolbar and nothing of the page.
+    The owner, 16 November 2026, with Instagram open in Chrome, asking where
+    to post: "it told me on the notch, but it should have pointed to it.
+    [...] Why does it only work on OBS and just a few others? It should work
+    everywhere." The log of that hour shows the model was given about
+    thirty things to choose from, all of them the browser's, and either
+    chose none (the answer came in words) or pointed at one of the
+    browser's own buttons. So:
+    - A window is blind (`pointBlind`) when the things it names, taken
+      together, reach over less than a third of it or lie on less than a
+      tenth of it. It leans towards blind: being called blind costs a
+      moment, not being called blind when it is costs a wrong answer first.
+    - A blind window, a window that cannot be read at all, and a window
+      whose list does not hold the thing, are shown to a model that sees
+      pictures. The desktop app sends a picture of the window with a ruler
+      on it (`notch.shot`, `sidecar/notch_shot.go`): numbers from 0 to 100
+      along the top and down the left side, a faint dotted line at every
+      ten. The model is given the list too, and takes a thing from the list
+      by its number when it is there: then the element's own rectangle is
+      used, as before.
+    - Otherwise it says where the thing is in the ruler's numbers. That
+      place is then shown close up, as large as it is on the screen and
+      twice that when it is narrow, and the model marks the thing's edges
+      there. The brain turns the numbers back into the screen's pixels: it
+      was told which part of the screen each picture shows. So a picture
+      made smaller is still exact to the screen, at any display scale.
+    - A place that is not found again close up is never pointed at: the
+      question then runs as any other instruction, in words.
+    - No picture is made where the desktop app looks away, or with watching
+      switched off. Only the window the person is in is ever shown, cut to
+      its display.
+    When neither the list nor the picture shows a way, the question runs as
+    any other instruction.
 86. **A dropped file is the page's to take, and never the browser's.** The
     page says to the brain that a file is over the notch, and sends a file
     that is let go as the body of one request to `/api/notch/drop`, which
@@ -1189,6 +1226,18 @@ What is not done, or not proven, in pass 9:
 - **A PDF that is only scanned pages has no text to read** and is refused as
   one: nothing is guessed from its pictures.
 - "Where is" is known by how a question begins, in English.
+- **Pointing by sight has not run on a real machine.** It is tested against
+  a stand-in for the desktop app and for the model. The ruler was drawn on a
+  copy of the owner's screen and looked at: places can be read off it. How
+  well the model the owner has set up reads a place off a picture is not
+  known, nor how long two looks take: a way found by sight asks the model
+  twice with a picture each time, where a way found in the list asks once
+  with words. A picture of the whole window in front goes to that model
+  when this happens; before, only the names of its buttons did.
+- **Pointing by sight is not exact the way an element's rectangle is.** The
+  ring is drawn round what a model marked on a close-up. It can be a few
+  pixels wide of the thing, and a click on the thing may then count as
+  beside it in a way of several clicks.
 
 ## Doing it in view
 
@@ -1729,6 +1778,7 @@ What is not done, or not proven, in pass 10:
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
+| brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |
 | brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away What the program has open on top of it (a menu, a dropped-down list) comes first in `elements`, counted in `popups`. |
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
