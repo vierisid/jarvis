@@ -20,6 +20,8 @@ import { MemoryExperience } from '../memory/detail/MemoryExperience';
 import { TodayLayout } from '../today/layout/TodayLayout';
 import { Outcomes } from '../today/outcomes/Outcomes';
 import { RecentActivity } from '../today/activity/RecentActivity';
+import { mergeActivity } from '../today/activity/model';
+import { recentRunsSource } from '../today/activity/read';
 import { GettingStarted, GettingStartedJourney } from '../today/getting-started/GettingStarted';
 import { GoalCard } from '../today/goal-card/GoalCard';
 import { useGoalHandoff } from '../today/goal-card/useGoalHandoff';
@@ -89,6 +91,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   } });
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const outcomes = reconciliation.projection(outcomesSource(timezone, (url, signal) => transport.json(url, { signal })));
+  const recentRuns = reconciliation.projection(recentRunsSource((url, signal) => transport.json(url, { signal })));
   const recommendations = reconciliation.projection<any>({ domains: ['goals', 'decisions'], capability: 'recommendations', read: async signal => {
     const value = await transport.json('/api/brief/recommendations', { signal });
     if (value !== null && (typeof value.recommendationId !== 'string' || typeof value.revision !== 'string' || !value.plan)) throw new ReadFailure('recommendation_unavailable');
@@ -102,6 +105,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
     const [operation, setOperation] = useState<DecisionOperation>();
+    const runs = useBriefProjection(recentRuns);
     const caps = host.capabilities(), goal = g.data?.find(row => row.goal.status === 'active')
       ?? g.data?.find(row => row.goal.status === 'draft');
     const selectedRec = goal?.goal.status === 'active' && rec.data?.plan?.outcome === 'recommend' && rec.data.plan.action.goal?.goalId === goal?.goal.goalId ? rec.data : null;
@@ -143,11 +147,12 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
           today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),
           chartMaxMinutes: Math.max(60, ...data.days.map(day => day.time?.value ?? 0)), goal: null,
           coverage: data.coverage.complete ? 'complete' : 'partial', basis: data.basis })) }} />,
-        activity: <RecentActivity mode="live" onOpen={shell.navigate} binding={{ source: 'live', capabilities: caps, state: view(outcome, data => data.outcomes.map(item => ({
-          activityId: item.outcomeId, title: 'Verified outcome', occurredAt: item.result.asOf,
-          timeLabel: new Date(item.result.asOf).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: data.window.timezone }),
-          detail: `${item.result.value} ${item.result.unit}`, destination: { room: 'needs-you' as const, selection: { workItemId: item.workItemId } },
-        }))) }} />,
+        activity: <RecentActivity mode="live" onOpen={shell.navigate} binding={{ source: 'live', state: mergeActivity(view(runs, rows => rows),
+          isBriefCapabilityEnabled(caps, 'outcomes') && isBriefCapabilityEnabled(caps, 'goalMeasurements') ? view(outcome, data => data.outcomes.map(item => ({
+            activityId: item.outcomeId, title: 'Verified outcome', occurredAt: item.result.asOf,
+            timeLabel: new Date(item.result.asOf).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', timeZone: data.window.timezone }),
+            detail: `${item.result.value} ${item.result.unit}`, destination: { room: 'needs-you' as const, selection: { workItemId: item.workItemId } },
+          }))) : { status: 'unsupported', reason: 'Outcome evidence is not available yet.' }) }} />,
         opportunities: <OpportunityStack mode="live" binding={{ source: 'live', scopeKey: scopeId, capabilities: caps,
           state: view(o, rows => rows.map(row => ({ proposal: row.proposal, title: row.title, observation: row.observation, automation: row.title, goalTitle: row.goalTitle ?? 'No linked goal', preparationReason: row.blockers[0] }))),
           onAction: async request => {
@@ -176,6 +181,6 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     memory: { ...BRIEF_ROOMS.memory, Body: Memory }, 'memory-detail': { ...BRIEF_ROOMS['memory-detail'], Body: Memory },
   };
   return { rooms, setup, goals, decisions, opportunities, memory, detail, ports,
-    refresh() { goalRead.refresh(); initialGoalRead.refresh(); decisionRead.refresh(); opportunityRead.refresh(); outcomes.refresh(); recommendations.refresh(); void goals.refresh(); void decisions.refresh(); void opportunities.refresh(); void memory.refresh(); },
+    refresh() { goalRead.refresh(); initialGoalRead.refresh(); decisionRead.refresh(); opportunityRead.refresh(); outcomes.refresh(); recentRuns.refresh(); recommendations.refresh(); void goals.refresh(); void decisions.refresh(); void opportunities.refresh(); void memory.refresh(); },
     retire() { setup.retire(); goals.retire(); decisions.retire(); opportunities.retire(); memory.retire(); detail.retire(); } };
 }

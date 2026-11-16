@@ -4,6 +4,8 @@ import type { Flow, FlowRun } from "../../../v2/rooms/workflows/useWorkflowsData
 export interface RecentWorkflow {
   flowId: string; versionId: string; runId: string; name: string;
   status: string; result: string; at: number; environment: "PRODUCTION" | "TESTING";
+  /** Only for a paused run: a person (approval, input) or a timer. */
+  waitingOn?: "person" | "timer" | "other"; resumeAt?: number;
 }
 export type RecentWorkflowBinding = BriefViewPort<readonly RecentWorkflow[]>;
 const LABELS: Record<string, { label: string; tone: string; result: string }> = {

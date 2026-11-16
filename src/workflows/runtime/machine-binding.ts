@@ -11,6 +11,7 @@ import { getWorkflowDb } from '../db';
 import { getFlowVersion } from '../db/repos/flow-version';
 import type { RunExecutionConfig } from '../db/repos/flow-run';
 import { walkFlowNodes } from '../db/flow-graph';
+import { forCard } from '../../util/card-text';
 import { workflowExpressionReferences } from './safe-expression';
 
 // A new daemon process cannot reuse local UI references or an old approval.
@@ -167,7 +168,16 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       }
       const manager = getSidecarManager();
       const sidecar = manager?.listSidecars().find(s => s.id === sidecarId);
-      if (!sidecar?.connected) machineBindingBlocked('WORKFLOW_MACHINE_OFFLINE', `Bound computer ${sidecarId} is offline or no longer enrolled.`);
+      if (!sidecar?.connected) {
+        // Say which computer by its name; the id means nothing to a person.
+        // The name is a device's own text: made safe for a card the way
+        // `uiCallComputer` shows it (#1314), and cut.
+        const label = forCard(sidecar?.name ?? machinePinForRun(ctx.runId)?.name ?? '', 80) || undefined;
+        machineBindingBlocked('WORKFLOW_MACHINE_OFFLINE', sidecar
+          ? `The computer this step uses is offline. Open the desktop app on ${label ?? 'that computer'}.`
+          : label ? `The computer this step uses (${label}) is no longer enrolled. Enroll it again or choose another computer.`
+            : 'The computer this step uses is no longer enrolled. Enroll it again or choose another computer.');
+      }
       if (!binding.sessionId || manager?.getConnectionSessionId(sidecarId) !== binding.sessionId) {
         machineBindingBlocked('WORKFLOW_SESSION_CHANGED', `The connection session for bound computer ${sidecarId} changed or cannot be verified.`);
       }
