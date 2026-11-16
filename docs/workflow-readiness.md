@@ -6,6 +6,19 @@ persisted graph. Trigger registration also checks existing enabled records at
 startup. Incomplete disabled drafts can still be saved. A submitted `valid`
 flag cannot mark a broken graph ready.
 
+A graph that is only a trigger is a valid draft but cannot be turned on: it
+would run to a green success having done nothing. Every enable path (publish,
+the HTTP status switch, the chat tool's enable and publish, the Brief workflow
+list) refuses it with the readiness 422 and one `NO_STEPS` issue on the trigger ("This workflow has no steps yet.
+Add at least one step after the trigger, then turn it on.") until at least one
+step follows the trigger. Readiness itself, runs and trigger registration still
+accept a trigger-only graph, so drafts, the editor and the composer are not
+affected, and a workflow already enabled with no steps keeps its state until it
+is turned off; turning it on again is then refused. The Brief workflow list
+shows such a workflow as blocked. A version write (create or patch) answers 400
+when `trigger` is present but is not an object; leaving it out still seeds the
+empty default.
+
 Run admission also compares the connections and computer a flow was enabled
 against with what they resolve to now. A replaced credential, a connection
 deleted and created again, a reconnected Google account or a computer no longer
