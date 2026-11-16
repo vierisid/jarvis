@@ -49,8 +49,11 @@ export function createWorkflowRooms(host: WorkflowHost) {
     reconcile: command => transport.json(`/api/brief/workflows/requests/${encodeURIComponent(command.requestId)}`),
   });
   const selections = new Map<string, { runs: WorkflowRunsController; context: WorkflowContextController }>();
-  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true) {
-    const key = JSON.stringify([flowId, versionId, editable]); let value = selections.get(key);
+  /** `superseded`: a locked version that is no longer the published one. Its runs and
+   * context stay readable and a pending request can still be checked, but no new run
+   * starts on it from here: a run opened from history must not re-run old steps. */
+  function controllers(flowId: string, versionId: string, editable: boolean, needsInput: boolean = true, superseded: boolean = false) {
+    const key = JSON.stringify([flowId, versionId, editable, superseded]); let value = selections.get(key);
     if (value) return value;
     const base = `/api/brief/workflows/${encodeURIComponent(flowId)}`;
     const scope = { scopeId, flowId, versionId };
@@ -68,7 +71,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
     const read = briefRunsPort(scope, transport.request);
     const runs = new WorkflowRunsController(scope, {
       list: read.list, detail: read.detail,
-      ...(!editable ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
+      ...(!editable ? { ...(!superseded ? { start: async (request: ManualRunRequest): Promise<ManualRunResult> => {
         const payload = needsInput ? await host.runInput() : {};
         if (payload === null || transport.signal.aborted || !isBriefCapabilityEnabled(host.capabilities(), 'workflowContext')) return { status: 'not_submitted', requestId: request.requestId };
         // Persist the identity before dispatch, or do not dispatch at all. One
@@ -88,7 +91,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
           return { status: 'rejected', requestId: request.requestId, message: 'No run started. Review workflow readiness and Authority, then try again.' };
         // Anything else is uncertain: the controller locks Run until an explicit check.
         return { status: 'uncertain', requestId: request.requestId };
-      }, reconcile: read.reconcile } : {}),
+      } } : {}), reconcile: read.reconcile } : {}),
     }, editable ? undefined : pending);
     // The journal is cleared only when this controller settles its own request: a
     // validated acceptance, a definite refusal, or a check that found no record.
@@ -126,7 +129,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
   }
   function Selected({ shell }: { shell: BriefShellPort }) {
     const { flowId, versionId, runId } = shell.route.selection;
-    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; inspection: InspectionSelection } | null>(null);
+    const [selection, setSelection] = useState<{ flowId: string; versionId: string; title: string; flow: Flow; editable: boolean; needsInput: boolean; supersededBy: string | null; inspection: InspectionSelection } | null>(null);
     const [error, setError] = useState(false), [revision, retry] = useState(0);
     useEffect(() => {
       const abort = new AbortController(); setSelection(null); setError(false);
@@ -141,14 +144,19 @@ export function createWorkflowRooms(host: WorkflowHost) {
         const params = new URLSearchParams({ versionId: version.id }); if (runId) params.set('runId', runId);
         const value = await transport.json(`/api/brief/workflows/${encodeURIComponent(flowId)}/inspection?${params}`, { signal: abort.signal });
         if (value.status !== 'ready' || value.data?.scopeId !== scopeId || value.data.flowId !== flowId || value.data.versionId !== version.id) throw new Error('Inspection unavailable');
-        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), inspection: value.data });
+        // A run opened from history carries the version it ran on (#1398); once another
+        // version is published that one is shown read only, never run or copied into a draft.
+        const published = typeof detail.published?.id === 'string' ? detail.published.id as string : null;
+        const supersededBy = version.state === 'LOCKED' && published && published !== version.id ? published : null;
+        if (!abort.signal.aborted) setSelection({ flowId, versionId: version.id, title: version.displayName, flow: detail.flow, editable: version.state === 'DRAFT', needsInput: needsManualRunInput(version.trigger), supersededBy, inspection: value.data });
       })().catch(() => { if (!abort.signal.aborted) setError(true); });
       return () => abort.abort();
     }, [flowId, versionId, runId, shell.route.room, revision]);
     if (!selection) return <section><h1 className="brief-type-room-title">Workflow</h1><p role="status">{error ? 'This workflow version is unavailable. Your selected IDs are retained.' : 'Loading workflow…'}</p>
       {error && <BriefButton onClick={() => retry(v => v + 1)}>Check again</BriefButton>}<BriefButton onClick={() => shell.navigate({ room: 'all-workflows', selection: {} })}>All workflows</BriefButton></section>;
-    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput);
-    const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities() };
+    const { runs, context } = controllers(selection.flowId, selection.versionId, selection.editable, selection.needsInput, !!selection.supersededBy);
+    const binding = { source: 'live' as const, scopeId, flowId: selection.flowId, versionId: selection.versionId, title: selection.title, capabilities: host.capabilities(),
+      ...(selection.supersededBy ? { supersededBy: selection.supersededBy } : {}) };
     if (shell.route.room === 'workflow-runs') return <WorkflowRunsRoom shell={shell} binding={{ ...binding, controller: runs }} />;
     if (shell.route.room === 'workflow-context') return <WorkflowContextRoom shell={shell} binding={{ ...binding, controller: context, runs,
       openSource: source => {
@@ -164,7 +172,7 @@ export function createWorkflowRooms(host: WorkflowHost) {
         setSelection(current => current?.flowId === selection.flowId && current.versionId === selection.versionId
           ? { ...current, flow: detail.flow } : current);
       },
-      ...(!selection.editable ? { run: async () => {
+      ...(selection.supersededBy ? {} : !selection.editable ? { run: async () => {
         await runs.start(); const state = runs.getSnapshot();
         if (state.submission === 'accepted' && state.selectedId) shell.navigate({ room: 'workflow-runs', selection: { flowId: selection.flowId, versionId: selection.versionId, runId: state.selectedId } });
         return { ok: state.submission === 'accepted', message: state.message };
