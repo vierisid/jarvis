@@ -119,7 +119,7 @@ const rowShown = (n: number, at: number): RawInteraction[] => [
   { action: 'press_keys', value: 'ctrl,v', ts: at + 3, app: 'excel', win: SHEET },
 ];
 
-function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved } = {}) {
+function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen' } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -142,6 +142,7 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
   const hands: NotchJobHands = {
     act(request) {
       sent.push(request);
+      if (request.do === 'pitch') return Promise.resolve(options.rows === 'unseen' ? { done: true, known: false } : { done: true, known: true, dy: request.dy as number });
       const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
       return Promise.resolve(answer);
     },
@@ -440,6 +441,16 @@ describe('the same thing shown twice', () => {
     await h.say('do three more');
     await settle();
     expect(h.sent.find((request) => request.do === 'click')).toMatchObject({ win: FILE, y: 200 + 22 * 11 });
+  });
+
+  test('where the rows cannot be seen it keeps what it learned, and does not offer to go on', async () => {
+    const h = harness({ left: 7, rows: 'unseen' });
+    await twoRows(h);
+    expect(h.said()).toBe('Learned it in 4 steps, done twice. I cannot see the rows clearly enough there to go on by myself.');
+    expect(h.line()).toMatchObject({ kind: 'say' });
+    expect(h.sent.filter((request) => request.do === 'click').length).toBe(0);
+    // The job is kept all the same.
+    expect(h.teach.row()).toMatchObject({ id: 'learned' });
   });
 
   test('too long after, it does not guess where the rows are now', async () => {

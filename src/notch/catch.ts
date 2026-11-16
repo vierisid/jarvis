@@ -19,7 +19,7 @@
  * not made again for the same job for ten minutes.
  */
 import type { NotchInbox } from './inbox.ts';
-import { newRoundsRun, roundsPlan, roundsWords, type NotchJobHands, type NotchJobs } from './jobs.ts';
+import { NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import type { NotchPart } from './protocol.ts';
 import {
   NOTCH_WATCH_KEPT, findRounds, parseWatchEvent, roundPlace, roundsApps, roundsCopy, roundsName, roundsSource, roundsThatFit, roundsToDo,
@@ -34,6 +34,8 @@ export const NOTCH_CATCH_QUIET_MS = 10 * 60_000;
 export const NOTCH_CATCH_FRESH_MS = 3 * 60_000;
 /** The most rounds counted ahead when counting what is left. */
 export const NOTCH_CATCH_COUNT_MOST = 200;
+/** How long a job whose rows could not be seen is not measured again. */
+export const NOTCH_CATCH_UNSEEN_MS = 60_000;
 
 export interface NotchCatchPort {
   onEvent(listener: (sidecarId: string, event: { event_type: string; payload: unknown }) => void): void;
@@ -65,9 +67,10 @@ export interface NotchCatch {
    * Takes over from where the person is, for `count` rounds, or for as many
    * as are left when no count is given. `none`: there is no round to go on
    * from. `nothing`: there is, and nothing is left of it. `how-many`: it
-   * cannot tell how many are left, so a number is needed. `busy`: another job runs.
+   * cannot tell how many are left, so a number is needed. `unseen`: the rows
+   * cannot be seen well enough to go on by itself. `busy`: another job runs.
    */
-  take(count: number | null): Promise<'started' | 'none' | 'nothing' | 'how-many' | 'busy'>;
+  take(count: number | null): Promise<'started' | 'none' | 'nothing' | 'how-many' | 'unseen' | 'busy'>;
   /** Forgets what was seen: a job of Jarvis's own ran, or a teaching began. */
   reset(): void;
   stop(): void;
@@ -81,7 +84,8 @@ export function countRequest(rounds: Rounds): Record<string, unknown> | null {
   if (!source || (source.dx === 0 && source.dy === 0)) return null;
   return {
     do: 'count', win: { id: source.win.id, pid: source.win.pid, w: source.win.w, h: source.win.h },
-    x: source.x, y: source.y, dx: source.dx, dy: source.dy, most: Math.min(NOTCH_CATCH_COUNT_MOST, roundsThatFit(rounds, NOTCH_CATCH_COUNT_MOST)),
+    x: Math.round(source.x), y: Math.round(source.y), dx: Math.round(source.dx), dy: Math.round(source.dy),
+    most: Math.min(NOTCH_CATCH_COUNT_MOST, roundsThatFit(rounds, NOTCH_CATCH_COUNT_MOST)),
   };
 }
 
@@ -91,6 +95,9 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
   const seen = new Map<string, WatchStep[]>();
   /** Jobs whose offer was turned down or left, and when. */
   const quiet = new Map<string, number>();
+  /** Jobs whose rows could not be seen when they were last measured, and when; and the ones being measured now. */
+  const unseen = new Map<string, number>();
+  const measuring = new Set<string>();
   let offer: { name: string; rounds: Rounds; sidecarId: string; left: number | null; counted: Promise<void> } | null = null;
   let stopped = false;
   let offers = 0;
@@ -178,10 +185,17 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
             return 'settled';
           }
           // From where the person is now: they may have done another since.
-          const latest = current(sidecarId);
-          if (!latest || roundsName(latest) !== name) {
+          const raw = current(sidecarId);
+          if (!raw || roundsName(raw) !== name) {
             home();
             await stage.say(['It is not where it was any more. Do one by hand and I will offer again.'], 4200, { mood: 'careful' });
+            return 'settled';
+          }
+          // Measured again, from that place: where each step lands has to be exact.
+          const latest = await sureRounds(raw, deps.hands);
+          if (!latest) {
+            home();
+            await stage.say([NOTCH_ROWS_NOT_SEEN], 4600, { mood: 'sorry' });
             return 'settled';
           }
           let count = await countLeft(latest);
@@ -235,7 +249,23 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     const declined = quiet.get(name);
     if (declined !== undefined && now() - declined < NOTCH_CATCH_QUIET_MS) return;
     if (quiet.size > 64) quiet.clear();
-    propose(sidecarId, rounds);
+    const missed = unseen.get(name);
+    if (measuring.has(name) || (missed !== undefined && now() - missed < NOTCH_CATCH_UNSEEN_MS)) return;
+    if (unseen.size > 64) unseen.clear();
+    // Before anything is offered: can the rows be seen there? Where they
+    // cannot, a click a few rows on would land in the wrong one, and nothing
+    // is offered at all.
+    measuring.add(name);
+    void sureRounds(rounds, deps.hands).then((sure) => {
+      measuring.delete(name);
+      if (stopped || offer || deps.jobs.busy() || deps.teaching?.()) return;
+      if (!sure) {
+        unseen.set(name, now());
+        log('[notch] a job done twice by hand was seen, and not offered: the rows could not be seen clearly enough to go on');
+        return;
+      }
+      propose(sidecarId, sure);
+    }, () => { measuring.delete(name); });
   });
 
   return {
@@ -257,8 +287,10 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
           // Nothing counted them and nothing will say they ran out: it does not guess.
           if (n === null && !roundsCopy(rounds)) return 'how-many';
         }
+        const sure = await sureRounds(rounds, deps.hands);
+        if (!sure) return 'unseen';
         if (offer) { deps.inbox.remove('catch'); offer = null; home(); }
-        return run(rounds, n) ? 'started' : 'busy';
+        return run(sure, n) ? 'started' : 'busy';
       }
       return 'none';
     },

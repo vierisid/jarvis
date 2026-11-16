@@ -85,6 +85,29 @@ describe('the same thing done twice, one place further along', () => {
     expect({ dx: to!.dx, dy: to!.dy }).toEqual({ dx: 0, dy: 21 });
   });
 
+  // Found by review before the first hand test: a cell is clicked anywhere along its width.
+  test('how far to the side the hand landed is the hand, not the job', () => {
+    const sideways = [
+      click(FILE, 120, 200), keys(FILE, 'ctrl,c'), click(SHEET, 300, 400), keys(SHEET, 'ctrl,v'),
+      click(FILE, 190, 222), keys(FILE, 'ctrl,c'), click(SHEET, 255, 420), keys(SHEET, 'ctrl,v'),
+    ];
+    const rounds = findRounds(sideways)!;
+    const [from, , to] = rounds.steps as Extract<RoundStep, { kind: 'click' }>[];
+    // It goes on straight down from where the last click was, not off to the side.
+    expect({ x: from!.x, dx: from!.dx, dy: from!.dy }).toEqual({ x: 190, dx: 0, dy: 22 });
+    expect({ x: to!.x, dx: to!.dx, dy: to!.dy }).toEqual({ x: 255, dx: 0, dy: 20 });
+    expect(roundPlace(to!, 9)).toEqual({ x: 255, y: 600 });
+  });
+
+  test('a place is whole pixels even when the rows are not a whole number of pixels apart', () => {
+    const rounds = findRounds([...row(0), ...row(1)])!;
+    const to = { ...(rounds.steps[2] as Extract<RoundStep, { kind: 'click' }>), dy: 26.25 };
+    expect(roundPlace(to, 1)).toEqual({ x: 300, y: 446 });
+    expect(roundPlace(to, 4)).toEqual({ x: 300, y: 525 });
+    // Nine rows on it is nine rows on, not nine times a rounded row.
+    expect(roundPlace(to, 9)).toEqual({ x: 300, y: 656 });
+  });
+
   test('a step that stays where it is stays, while another moves on', () => {
     // Pick the next file in a list, then press the same Delete button each time.
     const pick = (n: number): WatchStep[] => [click(FILE, 200, 100 + 30 * n), click(FILE, 800, 40), keys(FILE, 'enter')];
@@ -182,6 +205,15 @@ describe('what is not a round', () => {
 
   test('a place that moved a little, neither still nor on', () => {
     expect(findRounds([click(FILE, 120, 200), keys(FILE, 'ctrl,c'), click(FILE, 120, 206), keys(FILE, 'ctrl,c')])).toBeNull();
+  });
+
+  // Columns are not evenly wide: going on across by the same distance would land between cells.
+  test('a job that goes across a row, not down a list', () => {
+    const across = (n: number): WatchStep[] => [click(SHEET, 300 + 110 * n, 400), keys(SHEET, 'ctrl,v')];
+    expect(findRounds([...across(0), ...across(1)])).toBeNull();
+    // The same button pressed a little to the side is still the same button.
+    const button = (n: number): WatchStep[] => [click(FILE, 200, 100 + 30 * n), click(FILE, 800 + 15 * n, 40), keys(FILE, 'enter')];
+    expect(findRounds([...button(0), ...button(1)])?.steps[1]).toMatchObject({ kind: 'click', x: 815, y: 40, dx: 0, dy: 0 });
   });
 
   test('other keys, another window, other things held, or a window that changed size', () => {
