@@ -4709,6 +4709,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           modelReady: () => notchMailModelReady(agentService.getLLMManager()),
           waitMinutes: notchDemoState === 'open' ? Number(process.env.JARVIS_NOTCH_MAIL_WAIT_MINUTES) : undefined,
         }),
+        // Standing things (pass 11): an eye kept on a person's answer, and a
+        // chase until it is in. A chase waits a day or more between its two
+        // mails; a test brain may shorten that, so that it can be tried.
+        standing: {
+          ...(notchDemoState === 'open' && Number(process.env.JARVIS_NOTCH_CHASE_WAIT_MINUTES) >= 1 && Number(process.env.JARVIS_NOTCH_CHASE_WAIT_MINUTES) <= 1440
+            ? { chaseWaitMs: Math.floor(Number(process.env.JARVIS_NOTCH_CHASE_WAIT_MINUTES)) * 60_000 } : {}),
+        },
         // From anywhere, and the shape of the day (pass 8): the speaking rule
         // and the quiet hours, the calendar as a source, things held during a
         // call, the lines of the day, and a lost connection. The desktop app

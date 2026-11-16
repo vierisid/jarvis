@@ -70,6 +70,12 @@ export interface MailWatchDeps {
   files?(words: string): Promise<{ id: string; name: string; kind: string }[] | null>;
   /** Told whenever the replies that wait may have changed. */
   changed?(): void;
+  /**
+   * Told of every thread as it is read in full: what stands watch for a
+   * person's answer (../standing.ts) hears of it here, and no second reader
+   * of the mailbox is needed.
+   */
+  read?(threads: MailThread[]): void;
   /** Everything is stopped (the product's pause): nothing is looked at. */
   paused?(): boolean;
   /** Whether a model is set up. Without one no reply can be prepared, so nothing is looked at. */
@@ -263,6 +269,7 @@ export class MailWatch {
       const batch = order.slice(at, at + MAIL_READ_BATCH);
       const threads = await reader.read(batch);
       look.read += threads.length;
+      try { this.deps.read?.(threads); } catch { /* a listener's fault is not the mailbox's */ }
       const asking: { thread: MailThread; row: MailListed; last: MailThread['messages'][number] }[] = [];
       for (const read of threads) {
         const row = wanted.get(read.id)!;

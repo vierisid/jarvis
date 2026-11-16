@@ -681,6 +681,8 @@ export function createNotchSurface(
           shownCount = count;
           restMood = message.face && (NOTCH_MOODS as readonly string[]).includes(message.face) ? message.face : 'idle';
           front = notchWhereApp(message.where);
+          // An eye that was being kept is still kept: the brain remembers it for a page that comes back.
+          if (message.eye) nin.dataset.eye = 'eye'; else delete nin.dataset.eye;
           if (message.line) {
             edge.appear();
             showLine(structuredClone(message.line), true);

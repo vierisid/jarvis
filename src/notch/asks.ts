@@ -129,6 +129,11 @@ export interface NotchAsksDeps {
   side?: (text: string) => { did: string; run(): void } | null;
   /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
   learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
+  /**
+   * What stands (pass 11): the agents, what is chased until it is done, and
+   * what an eye is kept on. Each row leads to its list by its id.
+   */
+  standing?: { rows(): NotchBlock[]; open(stage: NotchStage, row: string): Promise<void> };
   /** Takes back what a job of today pasted: the Undo on its row in Home. */
   undoJob?: (jobId: string) => void;
   /** An approval this instruction's turn is waiting for should take the notch now. */
@@ -941,6 +946,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       const recent = last && last.answer && last.endedAt !== null && Date.now() - last.endedAt < NOTCH_LAST_ANSWER_MS ? last : null;
       const mailRow = deps.mail?.row() ?? null;
       const learnedRow = deps.learned?.row() ?? null;
+      const standingRows = deps.standing?.rows() ?? [];
       stage.put({
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
@@ -948,6 +954,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           ...(mailRow ? [mailRow] : []),
           ...(deps.see ? [deps.see.row()] : []),
           ...(learnedRow ? [learnedRow] : []),
+          ...standingRows,
           ...today,
           ...(deps.quiet ? [deps.quiet.note()] : []),
           { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }, ...(deps.quiet ? [deps.quiet.button()] : [])] },
@@ -974,6 +981,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
       if (answer.act === 'go' && answer.row === 'learned' && deps.learned) {
         await deps.learned.open(stage);
+        continue;
+      }
+      if (answer.act === 'go' && answer.row && deps.standing && standingRows.some((row) => row.kind === 'row' && row.id === answer.row)) {
+        await deps.standing.open(stage, answer.row);
         continue;
       }
       // Undo on a row of today: the taking back takes the notch from here.

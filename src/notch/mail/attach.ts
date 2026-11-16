@@ -17,17 +17,18 @@
  */
 import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from '../inbox.ts';
+import type { StandingMail } from '../standing.ts';
 import { firstWay } from '../ways.ts';
 import type { MailBrowser } from './browser.ts';
 import { browserCalendar } from './calendar.ts';
 import { browserDriveSearch } from './drive.ts';
-import { browserMailbox, type Mailbox } from './mailbox.ts';
+import { browserMailbox, type Mailbox, type MailStep } from './mailbox.ts';
 import { attachNotchMail, type NotchMail } from './notch.ts';
 import { googlePage } from './page.ts';
 import type { MailCalendarEvent, MailThink } from './proposer.ts';
 import { MailStore, type MailProposalRow } from './store.ts';
 import { MailTabTurn } from './tab.ts';
-import { mailFirstName } from './thread.ts';
+import { mailFirstName, type MailPerson, type MailThread } from './thread.ts';
 import { MailWatch, type MailLookKind, type MailReader } from './watch.ts';
 
 export const MAIL_GLANCE_MS = 60 * 1000;
@@ -75,10 +76,24 @@ export interface NotchMailLayer {
   monthDue(): boolean;
   /** The owner's calendar between two moments, by whichever way reaches it, or null. */
   calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>;
+  /** What an eye and a chase need of the mailbox (../standing.ts). */
+  standing: StandingMail;
   stop(): void;
 }
 
 const tokens = (row: MailProposalRow): string => `${(row.tokensIn + row.tokensOut).toLocaleString('en-GB')} tokens`;
+
+/** A name for an address nobody has given one to: what stands before the @, as a name is written. */
+const nameOfAddress = (address: string): string => {
+  const local = (address.split('@')[0] ?? '').split(/[._+-]/)[0] ?? '';
+  return local ? local.charAt(0).toUpperCase() + local.slice(1) : address;
+};
+
+/** Whether a person in a thread is the one a name asks for: a whole word of their name, or how their address begins. */
+const mailNamed = (person: MailPerson, asked: string): boolean => {
+  const words = person.name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return asked.split(/\s+/).every((part) => words.includes(part)) || person.address.split('@')[0] === asked.replace(/\s+/g, '.');
+};
 
 export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): NotchMailLayer {
   const now = deps.now ?? Date.now;
@@ -116,6 +131,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
       (error) => log(`[notch] mail on arrival failed: ${error instanceof Error ? error.message : String(error)}`),
     );
   };
+  const readListeners: ((threads: MailThread[]) => void)[] = [];
   const watch = new MailWatch({
     store,
     think: deps.think,
@@ -130,6 +146,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     calendar,
     files: async (words) => { const tab = page(); return tab ? turn.take(() => browserDriveSearch(tab, words, { most: 4 })) : null; },
     changed: () => { mail?.sync(); if (inGmail) speak(); else if (sweptOnce) mail?.speak(); },
+    read: (threads) => { for (const listener of readListeners) listener(threads); },
     paused: deps.paused,
     modelReady: deps.modelReady,
     now,
@@ -186,6 +203,47 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     look,
     monthDue: () => monthDue,
     calendar,
+    standing: {
+      onRead: (listener) => { readListeners.push(listener); },
+      owner: () => mailFirstName({ name: watch.name(), address: '' }),
+      look: async () => { await look('glance'); },
+      async find(who) {
+        const box = mailbox();
+        const reader = await box?.reader();
+        if (!box || !reader) throw new Error('the mailbox cannot be reached');
+        const owner = (await reader.owner()).toLowerCase();
+        const asked = who.trim().toLowerCase();
+        const byAddress = asked.includes('@');
+        // The newest thread with them, written by either side: a nudge goes where the talk already is.
+        const rows = await box.search(byAddress ? `{from:${asked} to:${asked}} newer_than:90d` : `{from:(${asked}) to:(${asked})} newer_than:90d`, 1);
+        for (const row of rows) {
+          const them = row.people.find((person) => person.address && person.address !== owner
+            && (byAddress ? person.address === asked : mailNamed(person, asked)));
+          if (them) return { name: them.name || nameOfAddress(them.address), address: them.address, thread: { id: row.id, subject: row.subject } };
+        }
+        // An address nobody has written from yet can still be written to. A name with no mail behind it cannot.
+        return byAddress ? { name: nameOfAddress(asked), address: asked, thread: null } : null;
+      },
+      async send(plan) {
+        const box = mailbox();
+        if (!box) return { ok: false, why: 'the mailbox cannot be reached' };
+        if (plan.thread) {
+          const since = now();
+          const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
+            const written = await session.write();
+            if (!written.ok) return written;
+            const sent = await session.send();
+            if (!sent.ok) { await session.discard(); return sent; }
+            // Read back: a mail that Gmail did not take is not called sent.
+            return (await session.sent(since)) === false ? { ok: false, why: 'Gmail does not show it as sent' } : { ok: true };
+          });
+          if (inThread.ok) return inThread;
+          // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
+          log(`[notch] a nudge could not be written in its thread, so it goes as a new mail`);
+        }
+        return box.write({ to: plan.address, subject: plan.subject, text: plan.text });
+      },
+    },
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },
   };
 }

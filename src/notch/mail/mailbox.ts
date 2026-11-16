@@ -43,9 +43,28 @@ export interface MailReplySession {
   sent(since: number): Promise<boolean | null>;
 }
 
+/** A new mail to one person. Short: it travels in the address that opens Gmail's writing window. */
+export interface MailNewPlan {
+  to: string;
+  subject: string;
+  text: string;
+}
+
+/** The longest a new mail's words may be. */
+export const MAIL_NEW_TEXT_MAX = 900;
+
 export interface Mailbox {
   /** The mailbox for reading, or null when the browser is not signed in to Google. */
   reader(): Promise<MailReader | null>;
+  /**
+   * Writes one new mail to one person and sends it, with the tab to itself.
+   * Nothing is sent unless the writing window holds exactly this mail, to
+   * exactly this person (page/compose-send.js). When it says no after the
+   * window opened, a draft may be left in Gmail: the reason says what failed.
+   */
+  write(plan: MailNewPlan): Promise<MailStep>;
+  /** The threads a search of the mailbox finds, newest first. */
+  search(query: string, pages?: number): Promise<MailListed[]>;
   /** Runs one reply from its first step to its last, with the tab to itself. */
   reply<T>(plan: MailReplyPlan, work: (session: MailReplySession) => Promise<T>): Promise<T>;
 }
@@ -102,6 +121,24 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
         throw error;
       }
     },
+    search: async (query, pages = 1) => (await gmailSearch(page, query, { pages, step: reading })).map((row) => listed(row)),
+    write: (plan) => turn.take(async () => {
+      try {
+        if (!/^[^\s<>,;"]+@[^\s<>,;"]+$/.test(plan.to) || !plan.subject.trim() || !plan.text.trim() || plan.text.length > MAIL_NEW_TEXT_MAX) {
+          return { ok: false, why: 'the mail is not one that can be sent this way' };
+        }
+        const part = encodeURIComponent;
+        await page.go('mail', `/mail/u/0/?view=cm&fs=1&tf=1&to=${part(plan.to)}&su=${part(plan.subject)}&body=${part(plan.text)}`);
+        const window = await page.run<{ subject?: number | null; body?: number | null; send?: boolean }>('shape-compose', { wait: 9000 });
+        if (window?.subject !== plan.subject.length || !window.body || !window.send) return { ok: false, why: 'the writing window did not open as expected' };
+        const sent = await page.run<{ sent?: boolean; why?: string }>('compose-send', { subject: plan.subject, to: plan.to });
+        // The writing window is left: the tab goes back to the list for whoever reads next.
+        await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
+        return sent?.sent ? { ok: true } : { ok: false, why: typeof sent?.why === 'string' && sent.why ? sent.why.slice(0, 200) : 'Gmail did not say it was sent' };
+      } catch (error) {
+        return { ok: false, why: (error instanceof Error ? error.message : String(error)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '(an address)').slice(0, 200) };
+      }
+    }, { first: true }),
     reply: (plan, work) => turn.take(async () => {
       const told = { do: '', thread: plan.thread, to: plan.to, cc: plan.cc, text: plan.text };
       // A step that throws (the page went away, the desktop app did not answer) is a step that did not
