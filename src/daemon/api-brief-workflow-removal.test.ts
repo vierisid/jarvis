@@ -51,6 +51,16 @@ test('authenticated contract prepares a complete list, removes, recovers request
     .toMatchObject({ status: 'accepted', item: { flowId, activation: 'DISABLED', versionId: c.versionId } });
   expect(getFlow(flowId)?.status).toBe('DISABLED');
 });
+test('the list route pages by limit and cursor, with no ceiling on the number of workflows, and refuses anything else', async () => {
+  for (let i = 0; i < 1100; i++) { const id = createFlow().id; createDraftVersion({ flowId: id, displayName: `Bulk ${i}`, trigger: { name: 'trigger', type: 'EMPTY', settings: {} } }); }
+  const first = await call(listPath, undefined, '?limit=200'); expect(first.status).toBe(200);
+  expect(first.body.data.items).toHaveLength(200); expect(first.body.data.total).toBe(1101); expect(typeof first.body.data.nextCursor).toBe('string');
+  const names: string[] = first.body.data.items.map((i: { name: string }) => i.name); let cursor: string | null = first.body.data.nextCursor;
+  while (cursor) { const page = await call(listPath, undefined, `?limit=200&cursor=${cursor}`); expect(page.status).toBe(200); names.push(...page.body.data.items.map((i: { name: string }) => i.name)); cursor = page.body.data.nextCursor; }
+  expect(names).toHaveLength(1101); expect(new Set(names).size).toBe(1101); expect(names.at(-1)).toBe('Fixture workflow');
+  for (const bad of ['?limit=0', '?limit=201', '?limit=x', '?cursor=abc', '?offset=1', '?limit=1&limit=2']) expect((await call(listPath, undefined, bad)).status).toBe(400);
+  expect((await call(listPath)).body.data.items).toHaveLength(100);
+});
 test('malformed, oversized, cross-scope, stale and conflicting commands do not mutate', async () => {
   const c = command();
   for (const value of [null, [], {}, { ...c, extra: true }, { ...c, activation: 'ENABLED' }, { ...c, action: 'purge' }, { ...c, versionId: undefined }, '{', new Uint8Array([0xff])]) {
