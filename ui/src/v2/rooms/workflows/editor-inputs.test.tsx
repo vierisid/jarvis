@@ -43,3 +43,18 @@ test('Escape dismisses the variable picker, keeps the settings open and returns 
   expect(closed).toBe(0);
   expect(document.activeElement).toBe(field);
 });
+
+test('a file field is a text field that takes an earlier step\'s output, not a JSON box', async () => {
+  const { SchemaInputs } = await import('./WorkflowEditor');
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+  const set: Array<[string, unknown]> = [];
+  const schema = { fields: [{ name: 'file', label: 'ZIP file', type: 'json' as const, sourceType: 'FILE', required: true }] };
+  await act(async () => root.render(<SchemaInputs schema={schema} input={{ file: '{{step_1}}' }} onSetInput={(k, v) => set.push([k, v])} />));
+  expect(host.querySelector('textarea')).toBeNull();
+  const box = host.querySelector('[role=textbox]') as HTMLElement;
+  expect(box.getAttribute('aria-label')).toBe('ZIP file');
+  expect(host.textContent).toContain('step_1');
+  // A value saved as an object keeps the JSON box so nothing is lost.
+  await act(async () => root.render(<SchemaInputs schema={schema} input={{ file: { fileName: 'a.zip', url: '/v1/step-files/x' } }} onSetInput={() => {}} />));
+  expect(host.querySelector('textarea')).not.toBeNull();
+});
