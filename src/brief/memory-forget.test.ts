@@ -17,6 +17,7 @@ import { saveUserProfile, getUserProfile, getUserProfileForPrompt } from '../vau
 import { formatUserProfileForPrompt } from '../user/profile';
 import { extractAndStore, extractGoalCompletion } from '../vault/extractor';
 import { LLMManager } from '../llm/manager';
+import { JarvisContextProviderAdapter } from '../workflows/adapters/context-provider';
 
 let dir: string, file: string, service: MemoryForget, flags: Record<string, string | undefined>;
 beforeEach(() => {
@@ -341,4 +342,50 @@ test('re-ingestion enriches existing scoped evidence with its durable replay ali
   expect(getFact(fact.id)?.evidence).toHaveLength(1);
   forget(fact.id); await extract();
   expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+});
+test('D-12: Forget removes every earlier version of a corrected fact from each read path', async () => {
+  const entity = createEntity('person', 'Ada');
+  const first = createFact(entity.id, 'pricing_note', 'Discount ZEBRAONE', { source: 'dashboard', confirmed: true });
+  const second = correctFact(first.id, 'Discount ZEBRATWO', 'Changed once');
+  const third = correctFact(second.id, 'Discount ZEBRATHREE', 'Changed twice');
+  const other = createFact(entity.id, 'works_at', 'Other company', { source: 'dashboard', confirmed: true });
+  const stream = new MemoryStream(getDb());
+  forget(third.id);
+  expect(findFacts({ subject_id: entity.id, includeSuperseded: true }).map(f => f.id)).toEqual([other.id]);
+  expect(getDb().query('SELECT * FROM fact_evidence WHERE fact_id IN (?, ?, ?)').all(first.id, second.id, third.id)).toEqual([]);
+  for (const id of [first.id, second.id]) {
+    expect(getFact(id)).toBeNull();
+    expect(JSON.stringify(stream.detail(id, true))).not.toContain('ZEBRA');
+    expect(stream.detail(id)).toEqual({ state: 'not_found' });
+  }
+  expect(JSON.stringify(await stream.read({ limit: 50 }))).not.toContain('ZEBRA');
+  expect(getKnowledgeForMessage('Ada Discount ZEBRAONE ZEBRATWO ZEBRATHREE')).not.toContain('ZEBRA');
+  const context = new JarvisContextProviderAdapter();
+  expect(JSON.stringify(await context.vaultSearch({ query: 'Ada' }))).not.toContain('ZEBRA');
+  expect(JSON.stringify(await context.vaultGetEntity(entity.id))).not.toContain('ZEBRA');
+  expect(getFact(other.id)?.object).toBe('Other company');
+  // What Forget keeps is content-free (replay suppression of earlier versions is the next test).
+  expect(JSON.stringify(getDb().query('SELECT * FROM memory_forget_suppressions').all())).not.toContain('ZEBRA');
+});
+test('D-12: a replay of an earlier version\'s automatic source cannot bring it back after Forget', () => {
+  const { fact, entity, options } = fixture();
+  const corrected = correctFact(fact.id, 'Helix', 'I switched editors');
+  forget(corrected.id);
+  expect(getFact(fact.id)).toBeNull();
+  // The same extraction input replayed must stay forgotten, like the chosen version's own source.
+  expect(() => createFact(entity.id, 'preferred_editor', 'PRIVATE Emacs', options)).toThrow(FactSuppressedError);
+  expect(findFacts({ subject_id: entity.id, predicate: 'preferred_editor', includeSuperseded: true })).toEqual([]);
+});
+test('D-12: Forget follows only supersession links, never shared text, entity or predicate', () => {
+  const ada = createEntity('person', 'Ada'), bob = createEntity('person', 'Bob');
+  const first = createFact(ada.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true });
+  const current = correctFact(first.id, 'Newer words', 'Changed');
+  const sameText = createFact(bob.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true });
+  const otherFirst = createFact(ada.id, 'works_at', 'Acme', { source: 'dashboard', confirmed: true });
+  const otherCurrent = correctFact(otherFirst.id, 'Globex', 'Moved');
+  const otherScope = createFact(ada.id, 'pricing_note', 'Shared words', { source: 'dashboard', confirmed: true, scope: 'EU' });
+  forget(current.id);
+  expect([first.id, current.id].map(getFact)).toEqual([null, null]);
+  for (const kept of [sameText, otherFirst, otherCurrent, otherScope]) expect(getFact(kept.id)?.object).toBe(kept.object);
+  expect(getFact(otherFirst.id)?.superseded_by).toBe(otherCurrent.id);
 });
