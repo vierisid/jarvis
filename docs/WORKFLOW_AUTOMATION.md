@@ -680,6 +680,16 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the
   failure. That step still gets `text`; it never gets `parsed`.
+- An empty reply (nothing, or only whitespace and characters that render as
+  nothing, such as a zero-width space) from a step with no JSON contract is
+  `EMPTY_AI_REPLY`, an `error` with effect `may_have_occurred` (the provider
+  processed the request, as for `INVALID_JSON_OUTPUT`): the step fails by
+  default, so later steps never run on an empty string, and with
+  `requireSuccess: false` it is data to route on. Any visible reply, however
+  short (`0`, `No`), is an answer. A step that asks for JSON keeps
+  `INVALID_JSON_OUTPUT` for an empty reply. Upgrading changes published
+  workflows: an Ask step that used to succeed with an empty reply now fails it
+  unless `Require valid output` is off.
 - `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
@@ -721,6 +731,16 @@ cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
+
+When the agent finishes but some of its tool calls failed, were denied or named
+a tool that is not available, the step keeps its outcome (published workflows
+that finish today keep finishing unless `Required tools` says otherwise), and
+its output adds `warning` (how many calls did not work and which tools, at most
+five named) and `toolErrors` (name and bounded, credential-redacted error text
+per failed call, at most ten). A tool name is the model's own and is clipped to
+one line of 64 characters. The
+agent's final message may read as success; these fields are where a person reading
+the run sees what was not done.
 
 ### Required nested workflow continuation
 
@@ -1325,6 +1345,10 @@ latest version and ran it. Now:
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,
   and the version's other steps keep their trees.
+- What a running CODE step may take (each CODE step is its own child process):
+  - **Time:** the flow's 10-minute timeout, and cancelling the run ends the child. Nothing shorter is imposed, so a `fetch` with no timeout of its own waits as long as the other side lets it.
+  - **Memory:** an address-space ceiling of 4 GiB per step on Linux (usable memory is lower: about 1.5 GB on Bun 1.3.11, more on newer Bun) (`ulimit -v`; `JARVIS_CODE_STEP_MEMORY_MB` in the daemon's environment changes it, `0` removes it). An allocation past it fails inside the step, and the step fails with "This CODE step ran out of memory: a step may use up to N MB". A process the step starts inherits the same ceiling, each on its own, so the ceiling stops a runaway, not a step written to get around it. macOS ignores that limit and Windows has no shell to set it, so there a step runs without a ceiling.
+  - **Output:** what the step prints is copied into the daemon log up to 64 KiB per stream, then one line says how many bytes were left out (the step still runs to the end). A failure message carries the last 64 KiB of each stream. A step's result is part of the run's data, which a run keeps up to 10 MB; a result past that fails the step with "This CODE step returned N MB of data, more than a run can keep (10 MB)". The step's own process measures what the step returns, so an over-size result is not handed to the engine.
 - Every version that ran a CODE step has a tree under
   `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
   and hourly unless its version is a flow's published version or current
