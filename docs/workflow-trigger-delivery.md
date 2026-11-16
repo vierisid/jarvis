@@ -68,6 +68,8 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 | Restart, republish or re-enable inside the firing minute | The same occurrence is a repeat, not a second run |
 | Clock stepped back | Nothing fires again; a correction of more than two minutes is logged and the schedule carries on from the new time |
 | The previous time's run has not started yet | Skipped, not stacked behind it |
+| Next time more than a year away (a leap day) | Registers and fires; the next time is looked for across one 400-year calendar cycle, so no schedule that can ever fire is cut off by the search |
+| Registration fails, or is given up after its retries | The workflow list reads it as blocked with the reason, not as on |
 | Readiness broken | One failed run, then one blocked row that counts the repeats |
 
 At startup each enabled schedule is checked for the times it was owed since it

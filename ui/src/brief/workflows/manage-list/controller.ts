@@ -37,7 +37,7 @@ const slot = (item: ManagedWorkflow): ManagementSlot => ({
 });
 /** Q-06: turning a workflow off stops its queued and waiting runs. Say so. */
 export const PAUSED_MESSAGE =
-  "Workflow paused. Its queued and waiting runs were stopped.";
+  "Workflow is off. Its queued and waiting runs were stopped.";
 /** One owner-scoped instance survives room/shell changes. Retire on logout or
  * owner replacement. An uncertain command can ONLY be cleared by reconciliation. */
 export class WorkflowManagementController {
@@ -303,7 +303,7 @@ export class WorkflowManagementController {
         phase: "idle",
         command: null,
         receipt: { ...result.receipt! },
-        message: "Workflow deleted. Undo restores it paused.",
+        message: "Workflow deleted. Undo restores it, switched off.",
       });
     else {
       if (this.state.read.status === "empty")
@@ -317,9 +317,9 @@ export class WorkflowManagementController {
         receipt: null,
         message:
           command.action === "restore"
-            ? "Restored, paused."
+            ? "Restored, switched off."
             : result.item!.activation === "ENABLED"
-              ? "Workflow enabled."
+              ? "Workflow is on."
               : PAUSED_MESSAGE,
       });
     }

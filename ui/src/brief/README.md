@@ -279,10 +279,23 @@ is unchanged.
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
   wheel input over the goal scrolls the room.
 - `today/figma-reference.json` records the source values.
-- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` and
-  `RecentActivity` take an `OutcomeBinding`; `outcomeView` passes it through only when `source` is
-  `"fixture"` in preview mode, or `"live"` with both the `outcomes` and `goalMeasurements` capabilities
-  enabled in live mode; anything else renders "unavailable". No live provider is wired yet.
+- Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` takes an
+  `OutcomeBinding`; `outcomeView` passes it through only when `source` is `"fixture"` in preview mode, or
+  `"live"` with both the `outcomes` and `goalMeasurements` capabilities enabled in live mode; anything else
+  renders "unavailable". `RecentActivity` takes a plain view binding of the matching source and does not
+  depend on those capabilities. No live provider is wired for Outcomes yet.
+- Today's Recent activity is built by `today/activity/model.ts` from one bounded read,
+  `GET /api/workflow-runs/recent?limit=5` (`today/activity/read.ts`): the latest production, top-level run of
+  each workflow in the caller's project, newest first. Test runs, single-step tests and subflow child runs are
+  never candidates, and a removed workflow is left out as the Workflows room leaves it out. The read costs one
+  index seek per workflow, not a pass over run history. It is a reconciliation projection over the `runs` and
+  `today` domains, so workflow events and the client's regular polling refresh it while Today is open.
+- A row is the workflow name (invisible and bidi control characters dropped, capped at 120 characters), a plain
+  status (Done, Failed, Running, Queued, Stopped, or a wait) and a local time, and opens `workflow` with the
+  flow, version and run ids. Only a run waiting on a person (approval or input request) says "Waiting for
+  you"; a run paused on a timer reads "Waiting until <time>", and any other pause reads "Waiting".
+  Verified outcomes may add rows but never decide whether the list is empty or unavailable. Rows carry
+  identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
   `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
@@ -599,8 +612,14 @@ run response). It sends no request.
 ## Workflow management
 
 - `workflows/manage-list/` is the D-21 All workflows list: the name opens the exact flow/version, the
-  Enabled/Paused switch and the bin are separate targets, and Delete confirms inside its own row.
-  Publication and readiness are secondary facts beside the switch; Draft is never a switch state.
+  On/Off switch and the bin are separate targets, and Delete confirms inside its own row.
+  `workflows/status-words.ts` is the one place server facts (ENABLED/DISABLED, published or draft,
+  readiness) become founder words, shared by the list and the workflow page: On or Off, plus at most
+  one note (Needs setup, Setup status unknown, Draft changes not live yet; while On, a draft that is
+  not live wins, since its setup gaps do not stop the running version). Published, Unpublished, Ready
+  and Paused are not shown. The one draft action is "Save and turn on" (publishing also turns the
+  workflow on).
+  Draft is never a switch state.
 - `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
   the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
   expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
@@ -877,11 +896,15 @@ actions only change local fixture state.
 
 ## Settings and Appearance
 
-- `account/settings/` is the D-30 Settings room: Appearance, Conversation (voice), Check-ins and
+- `account/settings/` is the D-30 Settings room: Appearance, AI provider, Conversation (voice), Check-ins and
   Workspace controls. Appearance is the existing `useTheme()` owner (`ui/src/v2/shell/useTheme.ts`,
   `jarvis-theme` in localStorage, `data-theme` on `<html>`); every mounted selector and the v2
   top-bar toggle follow the root attribute, and a change in another tab is picked up from its
   `storage` event by re-reading the stored value.
+- The AI provider row names the current provider and model from `GET /api/config/llm` (the response the
+  AI settings page uses; keys are never read or shown) and its action opens that page through the
+  `credentials` destination, so there is one place that edits it. A missing provider or key says so in
+  plain words. Hosted installs on Usejarvis AI show that, with no key prompt or action.
 - Voice saves only one of the listed canonical choices, revision-bound, and reports the saved value
   separately from live application (applied, restart required, failed, unconfirmed). A lost or
   failed save keeps the selection; Retry re-reads first and reports a conflict instead of
