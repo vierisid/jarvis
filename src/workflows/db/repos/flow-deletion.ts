@@ -28,7 +28,7 @@ import type { Database } from "bun:sqlite";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { getWorkflowDb } from "../index";
-import { workflowFileBase, workflowLogsBase } from "../../sandbox-api/config";
+import { legacyWorkflowLogsBase, workflowFileBase, workflowLogsBase } from "../../sandbox-api/config";
 import { effectDispatchInFlight, waitForEffectDispatches } from "../../runtime/effect-inflight";
 import { stopRunsOfDeletedFlow } from "./flow-turn-off";
 import { retireTerminalRunWaits } from "./run-cancellation";
@@ -145,7 +145,7 @@ export function addCounts(a: FlowDeleteCounts, b: FlowDeleteCounts): FlowDeleteC
 
 /** The engine's execution-state backups of these runs, kept beside the database. Throws on a disk fault. */
 export function removeRunFiles(runIds: readonly string[]): void {
-  for (const runId of runIds) if (safeId(runId)) rmSync(resolve(workflowLogsBase(), `${runId}.bin`), { force: true });
+  for (const runId of runIds) if (safeId(runId)) for (const base of new Set([workflowLogsBase(), legacyWorkflowLogsBase()])) rmSync(resolve(base, `${runId}.bin`), { force: true });
 }
 
 /** The disk copies of the flow's step files. Throws on a disk fault. */

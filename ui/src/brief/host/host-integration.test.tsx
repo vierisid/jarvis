@@ -234,6 +234,25 @@ test('notification permission renders the reviewed message, destination and occu
   transport.stop();
 });
 
+test('a governed email card lists its recipients, subject, body and attachments (G-1)', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:mail', revision: 'r', kind: 'permission', state: 'pending', title: 'send_email is above this agent\'s authority level',
+    review: { toolName: 'piece:smtp/send-email', reason: 'Permission required', workflowName: 'Invoices',
+      action: { fields: [{ label: 'To', value: 'alice@example.test' }, { label: 'Subject', value: 'Q4 invoice' }, { label: 'Bcc', value: 'secret@example.test' },
+        { label: 'Body', value: 'pay 1000 EUR\nthanks', text: true, cut: true }, { label: 'Attachments', value: 'invoice.pdf (21 bytes)' }], more: 2 } },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  const doc = host.querySelector('.brief-decision-document')!.textContent!;
+  for (const text of ['What will happen', 'To', 'alice@example.test', 'Subject', 'Q4 invoice', 'Bcc', 'secret@example.test', 'pay 1000 EUR', 'invoice.pdf (21 bytes)', '2 more fields are not shown.']) expect(doc).toContain(text);
+  // Each value in its own field under its label; the body framed as quoted text and marked as its beginning only.
+  const action = host.querySelector('.brief-decision-action')!;
+  expect([...action.querySelectorAll('dt')].map(dt => dt.textContent)).toEqual(['To', 'Subject', 'Bcc', 'Body (beginning only)', 'Attachments']);
+  const quoted = action.querySelectorAll('dd.brief-decision-quoted');
+  expect(quoted).toHaveLength(1);
+  expect(quoted[0]!.textContent).toBe('pay 1000 EUR\nthanks');
+  transport.stop();
+});
+
 // #1314 follow-up: a screen-derived permission held while screen awareness is off says so.
 test('a held permission says it is held while screen awareness is off, in the list and on the card', async () => {
   const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
@@ -391,6 +410,32 @@ test('a run id that no run has says the run was not found, not that the version 
     inspection = 503;
     await React.act(async () => root.render(<Room shell={shell('another-run')} />));
     expect(document.body.textContent).toContain('This workflow version is unavailable.');
+  } finally { rooms.retire(); transport.stop(); }
+});
+
+test('a missing run on a healthy draft says the run was not found and offers no discard', async () => {
+  const { createWorkflowRooms } = await import('./workflow-rooms');
+  const { makeCanvasFixture } = await import('../workflows/canvas/fixtures');
+  const { RUN_CAPABILITY } = await import('../workflows/runs/fixtures');
+  const fixture = makeCanvasFixture(), flowId = 'meeting', versionId = fixture.versionId;
+  const transport = createHostTransport((async (input: any, init: any = {}) => {
+    const path = String(input), version = fixture.snapshot().version;
+    if (path === '/api/workflows/meeting') return Response.json({ flow: { id: flowId }, latestDraft: version, published: null, uiMeta: fixture.snapshot().uiMeta });
+    if (path.endsWith('/versions/' + versionId)) return Response.json(version);
+    if (path.includes('/inspection?')) return Response.json({ code: 'not_found' }, { status: 404 });
+    return fixture.request(input, init);
+  }) as typeof fetch);
+  const rooms = createWorkflowRooms({ scopeId: 'scope', transport, capabilities: () => RUN_CAPABILITY,
+    storage: localStorage, dirty() {}, runInput: async () => null });
+  const shell = { mode: 'live', route: { room: 'workflow-runs', selection: { flowId, versionId, runId: 'no-such-run' } },
+    theme: 'dark', sidebar: 'expanded', chatOpen: false, navigate() {}, setTheme() {}, setSidebar() {}, setChatOpen() {} } as any;
+  const Room = rooms.rooms['workflow-runs']!.Body!;
+  try {
+    expect(fixture.snapshot().version.state).toBe('DRAFT');
+    await React.act(async () => root.render(<Room shell={shell} />));
+    expect(document.body.textContent).toContain('This run was not found.');
+    expect(document.body.textContent).not.toContain('you can throw it away');
+    expect([...document.querySelectorAll('button')].some(b => b.textContent?.includes('Discard this draft'))).toBe(false);
   } finally { rooms.retire(); transport.stop(); }
 });
 

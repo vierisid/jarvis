@@ -536,7 +536,7 @@ describe('every governed workflow card counts against its flow\'s budget (#1039)
     // Its continuation ran, but the step failed before it reached the boundary,
     // and the run went on and parked somewhere else: its record is still pending.
     getWorkflowDb().run("UPDATE workflow_job SET status = 'FAILED' WHERE flow_run_id = ?", [gone.id]);
-    createWaitpoint({ flowRunId: gone.id, projectId: DEFAULT_IDS.project, stepName: 'later', type: 'TIMER' });
+    createWaitpoint({ flowRunId: gone.id, projectId: DEFAULT_IDS.project, stepName: 'later', type: 'TIMER', resumeDateTime: new Date(Date.now() + 3_600_000).toISOString() });
     expect(listWorkflowEffects(gone.id).map((e) => e.status)).toEqual(['pending']);
     tick();
     expect(resumedRuns()).toEqual([gone.id, next.id]);
