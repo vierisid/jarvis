@@ -119,7 +119,7 @@ const rowShown = (n: number, at: number): RawInteraction[] => [
   { action: 'press_keys', value: 'ctrl,v', ts: at + 3, app: 'excel', win: SHEET },
 ];
 
-function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean } = {}) {
+function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean; window?: 'gone' } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -143,7 +143,7 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
     act(request) {
       sent.push(request);
       if (request.do === 'pitch') return Promise.resolve(options.rows === 'unseen' ? { done: true, known: false } : { done: true, known: true, dy: request.dy as number });
-      if (request.do === 'find') return Promise.resolve({ done: true, win: request.win as WatchWin });
+      if (request.do === 'find') return Promise.resolve(options.window === 'gone' ? { done: false, why: 'gone' } : { done: true, win: request.win as WatchWin });
       const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
       return Promise.resolve(answer);
     },
@@ -466,7 +466,7 @@ describe('the same thing shown twice', () => {
   });
 });
 
-describe('a job shown on a Mac, done again by place', () => {
+describe('a shown job is done again where it was done', () => {
   test('what was shown is kept as places: clicks, keys, and what a field held', () => {
     expect(teachPlaced([
       { action: 'click', ref: ref('File'), ts: 1, app: 'TextEdit', win: FILE, pt: { x: 40, y: 12 }, mods: 'cmd' },
@@ -512,7 +512,7 @@ describe('a job shown on a Mac, done again by place', () => {
     await settle();
     expect(h.ran).toEqual([]);
     expect(h.sent).toEqual([
-      { do: 'find', app: 'TextEdit', win: FILE },
+      { do: 'find', app: 'TextEdit', win: FILE, front: true },
       { do: 'click', win: FILE, x: 40, y: 12, hand: 0 },
       { do: 'keys', win: FILE, keys: 'cmd,s' },
       { do: 'home' },
@@ -520,13 +520,60 @@ describe('a job shown on a Mac, done again by place', () => {
     expect(h.said()).toBe('Done. 2 steps.');
   });
 
-  test('where buttons can be found again by name, the product\'s own replay is used', async () => {
+  // The owner's first "run it", 16 November 2026: a job shown in a sheet in a
+  // browser stopped at "0 of 12. I could not find the next thing to click".
+  // A field on a page has no name to be found by. Where it was typed is known.
+  test('on Windows too, when the window is there as it was: words typed into a page, and Enter', async () => {
     const h = harness({ byPlace: false });
+    await h.say('Watch me');
+    await h.does({ action: 'set_value', ref: ref(''), value: '12', ts: 1, app: 'chrome', win: SHEET });
+    await h.does({ action: 'press_keys', value: 'enter', ts: 2, app: 'chrome', win: SHEET });
+    await h.does({ action: 'set_value', ref: ref(''), value: '15', ts: 3, app: 'chrome', win: SHEET });
+    await h.does({ action: 'press_keys', value: 'enter', ts: 4, app: 'chrome', win: SHEET });
+    await h.reply('yes');
+    await settle();
+    await h.reply('no');
+    await h.pass(4000);
+    await h.say('run it');
+    await settle();
+    // Not through the replay that looks for each thing by its name.
+    expect(h.ran).toEqual([]);
+    expect(h.sent).toEqual([
+      // Asked first whether the window is there: that touches nothing.
+      { do: 'find', app: 'chrome', win: SHEET },
+      // Then for real, and brought forward: what is typed goes to whichever window is in front.
+      { do: 'find', app: 'chrome', win: SHEET, front: true },
+      { do: 'type', win: SHEET, text: '12' },
+      { do: 'keys', win: SHEET, keys: 'enter' },
+      { do: 'type', win: SHEET, text: '15' },
+      { do: 'keys', win: SHEET, keys: 'enter' },
+      { do: 'home' },
+    ]);
+    expect(h.said()).toBe('Done. 4 steps.');
+  });
+
+  test('with the window gone or another size, each thing is looked for by its name instead', async () => {
+    const h = harness({ byPlace: false, window: 'gone' });
     await shown(h);
     await h.say('run it');
     await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
-    expect(h.sent.some((request) => request.do === 'click')).toBe(false);
+    expect(h.sent.some((request) => request.do === 'click' || request.do === 'keys')).toBe(false);
+  });
+
+  test('a job with a step that has no place is done by name, where that can be done', async () => {
+    const h = harness({ byPlace: false });
+    await h.say('Watch me');
+    await h.does({ action: 'click', ref: ref('File'), ts: 1, app: 'Notepad' });
+    await h.reply('yes');
+    await settle();
+    await h.reply('no');
+    await h.pass(4000);
+    await h.say('run it');
+    await settle();
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+    // Nothing is pressed by place: the pointer only goes home when the job is over.
+    expect(h.sent.filter((request) => request.do !== 'pitch' && request.do !== 'home')).toEqual([]);
   });
 
   test('a job with a step that has no place says so, and does nothing', async () => {

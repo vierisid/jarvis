@@ -700,11 +700,22 @@ func notchActMac(act notchAct) (*RPCResult, error) {
 		same := func(win macWin) bool {
 			return absInt(win.Rect.W-act.Win.W) <= 2 && absInt(win.Rect.H-act.Win.H) <= 2
 		}
-		if win, refusal := macActWindow(act); refusal == nil && same(win) {
+		// front: it is also brought forward, for a job whose first step is a
+		// key or words to type: those go to whichever window is in front.
+		found := func(win macWin) (*RPCResult, error) {
+			if act.Front {
+				if front, ok := macWinFront(); !ok || front.ID != win.ID {
+					macActivate(win.Pid)
+					log.Printf("[notch] act: the window of a job was brought forward: %v", macActFront(win.ID))
+				}
+			}
 			return done(map[string]any{"win": macWatchWindow(win).payload(), "app": win.App})
 		}
+		if win, refusal := macActWindow(act); refusal == nil && same(win) {
+			return found(win)
+		}
 		if win, ok := macWinFind(act.App, act.Win.W, act.Win.H); ok {
-			return done(map[string]any{"win": macWatchWindow(win).payload(), "app": win.App})
+			return found(win)
 		}
 		return refuse(&notchActError{"gone", "no window of that program is there at that size"})
 

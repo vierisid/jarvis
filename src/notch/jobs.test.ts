@@ -360,7 +360,8 @@ describe('a shown job done again by place', () => {
     expect(progress).toEqual([1, 2, 3, 4]);
     expect(m.sent).toEqual([
       // The window is looked for once: the same program, the same size.
-      { do: 'find', app: 'TextEdit', win: EDIT },
+      // And it is brought forward: a key or words to type go to whichever window is in front.
+      { do: 'find', app: 'TextEdit', win: EDIT, front: true },
       { do: 'click', win: NOW, x: 40, y: 12, hand: 0 },
       { do: 'keys', win: NOW, keys: 'cmd,s' },
       { do: 'type', win: NOW, text: 'notes for Thursday' },
