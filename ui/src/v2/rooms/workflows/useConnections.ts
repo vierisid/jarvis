@@ -33,7 +33,16 @@ export interface ConnectionMeta {
    * OAuth2 rows only (#954): whether Jarvis refreshes the token and when it
    * expires (ms, null when the saved value does not say). No secret.
    */
-  oauth2?: { expiresAt: number | null; refreshable: boolean };
+  oauth2?: {
+    expiresAt: number | null;
+    refreshable: boolean;
+    /**
+     * Set when the row has refresh details but a refresh cannot work: the
+     * provider refused it, did not answer, or the token URL is an address
+     * this install never connects to.
+     */
+    refreshProblem?: { kind: "refused" | "unreachable" | "blocked"; message: string };
+  };
 }
 
 export interface JarvisSourceMeta {
