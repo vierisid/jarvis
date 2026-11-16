@@ -13,6 +13,8 @@ import {
   type AuthorityValues,
 } from "./model";
 
+const SAVED_VISIBLE_MS = 10_000;
+
 export interface AuthorityState {
   availability:
     "loading" | "ready" | "stale" | "error" | "unavailable" | "unsupported";
@@ -53,6 +55,8 @@ export class AuthorityController {
   private generation = 0;
   private abort?: AbortController;
   private navigationAbort?: AbortController;
+  /** When the last save was confirmed; background reads keep the confirmation visible briefly. */
+  private savedAt = 0;
   constructor(private port: AuthorityPort) {
     this.source = port.source;
     this.scopeId = port.scopeId;
@@ -190,6 +194,17 @@ export class AuthorityController {
           phase: "dirty",
           message: RETRY_MESSAGE,
         });
+      else if (
+        data &&
+        !discard &&
+        previous.phase === "saved" &&
+        Date.now() - this.savedAt < SAVED_VISIBLE_MS &&
+        previous.saved &&
+        sameValues(data, previous.saved)
+      )
+        // A background poll must not erase "Saved" the moment after a save; an
+        // explicit reload (discard) still reports that current settings loaded.
+        this.publish({ saved: data, availability: "ready" });
       else if (data)
         this.publish({
           saved: data,
@@ -239,6 +254,7 @@ export class AuthorityController {
       if (!op.current()) return;
       const data = "data" in result ? readSettings(result.data) : null;
       if (result.state === "confirmed" && data && matchesPatch(data, patch)) {
+        this.savedAt = Date.now();
         this.publish({
           saved: data,
           draft: structuredClone(data),
