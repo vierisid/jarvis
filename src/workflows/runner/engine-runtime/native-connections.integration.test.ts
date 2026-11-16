@@ -294,6 +294,7 @@ describe("native credential engine integration", () => {
       const flow = createFlow();
       const version = createDraftVersion({ flowId: flow.id, displayName: 'Native schedule', trigger: {
         name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: SCHEDULE, triggerName: 'cron_expression', input: { cronExpression: expression, timezone: 'UTC' } },
+        nextAction: { name: 'step_1', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'FALLBACK', branchName: 'Otherwise' }] }, children: [null] },
       } });
       const req = Object.assign(new Request('http://local/publish', { method: 'POST', body: '{}' }), { params: { id: flow.id } });
       const response = await createWorkflowRoutes()['/api/workflows/:id/publish']!.POST!(req);

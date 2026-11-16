@@ -1945,6 +1945,71 @@ describe('#961: the core HTTP piece is governed by method', () => {
     for (const u of ['https://hooks.slack.com:443/services/T1/B2/S3', 'https://acme.webhook.office.com/webhookb2/g/IncomingWebhook/S/o']) expect(url(url(u))).toBe(url(u));
   });
 
+  test('token-shaped path segments after a hook or key segment, on a hook host, and a bare token fragment are redacted; ordinary paths are kept', () => {
+    const url = (u: string) => String(redactHttpInput(request('GET', { url: u })).url);
+    const hidden: Array<[string, string]> = [
+      ['https://chat.example.test/hooks/xj4kq8n2b7m3c9p5r1t6', 'https://chat.example.test/hooks/[redacted]'],
+      ['https://rocket.example.test/hooks/65f1a2b3c4d5/Zx8Yw7Vu6Ts5Rq4Po3?x=1', 'https://rocket.example.test/hooks/[redacted]/[redacted]?x=1'],
+      ['https://hooks.zapier.com/hooks/catch/123456/abcdef1/', 'https://hooks.zapier.com/hooks/catch/123456/[redacted]/'],
+      ['https://hook.eu1.make.com/a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6', 'https://hook.eu1.make.com/[redacted]'],
+      ['https://maker.ifttt.com/trigger/evt/with/key/dXk3Lm9PqRsTuVwX', 'https://maker.ifttt.com/trigger/evt/with/key/[redacted]'],
+      ['https://n8n.example.test/webhook/550e8400-e29b-41d4-a716-446655440000', 'https://n8n.example.test/webhook/[redacted]'],
+      ['https://x.test/api/token/abcdefghijklmnopqrstuvwxyz', 'https://x.test/api/token/[redacted]'],
+      ['https://x.test\\hooks\\Ab12Cd34Ef', 'https://x.test\\hooks\\[redacted]'],
+      ['https://app.test/cb#eyJhbGciOiJIUzI1NiJ9abc123', 'https://app.test/cb#[redacted]'],
+      // A cut URL: the shortened last segment under a marker goes whatever its length.
+      ['https://x.test/hooks/ab... [40 more characters]', 'https://x.test/hooks/[redacted]... [40 more characters]'],
+      ['https://app.test/cb#eyJhbGciOiJIUz... [400 more characters]', 'https://app.test/cb#[redacted]... [400 more characters]'],
+      ['https://n8n.example.test/webhook-test/550e8400-e29b-41d4-a716-446655440000', 'https://n8n.example.test/webhook-test/[redacted]'],
+      ['https://chat.example.test/hooks/abc%3D%3Dxyz123', 'https://chat.example.test/hooks/[redacted]'],
+      ['https://app.test/cb#550e8400-e29b-41d4-a716-446655440000', 'https://app.test/cb#[redacted]'],
+      // A Zapier hook id may hold no digit; a padded base64 fragment is one token.
+      ['https://hooks.zapier.com/hooks/catch/123456/bqpxazk/', 'https://hooks.zapier.com/hooks/catch/123456/[redacted]/'],
+      ['https://app.test/cb#c2VjcmV0dG9rZW4xMjM0NQ==', 'https://app.test/cb#[redacted]'],
+      ['https://hooks.slack.com/services/T0123ABCD/B0123ABCD/XXXXxxxxXXXXxxxx1234#tok1234567890abcdef', 'https://hooks.slack.com/services/T0123ABCD/B0123ABCD/[redacted]#[redacted]'],
+    ];
+    for (const [raw, shown] of hidden) {
+      expect(url(raw)).toBe(shown);
+      expect(url(url(raw))).toBe(shown);
+    }
+    for (const kept of [
+      'https://api.github.com/repos/o/r/hooks/487652345/pings',
+      'https://example.test/users/550e8400-e29b-41d4-a716-446655440000/profile',
+      'https://api.example.test/v2/keys/list',
+      'https://api.example.test/oauth/token',
+      'https://docs.example.test/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit',
+      'https://app.test/page#section-2',
+      'https://app.test/#/settings/profile2',
+      'https://app.test/page#introduction',
+      'https://x.test/hooks/{{token}}',
+      // A key or token segment names only the one segment after it, and auth, sig or cookie segments name none.
+      'https://api.example.test/v1/auth/users/u123abc/roles',
+      'https://api.example.test/auth/v2beta1/login',
+      'https://api.example.test/sig/files/report2024.pdf',
+      'https://api.example.test/api/key/oauth2/callback',
+      'https://kms.example.test/v1/projects/p1/locations/l1/keyRings/ring-2/cryptoKeys/key-3',
+      'https://sso.example.test/auth/realms/realm1/protocol/openid-connect/token',
+      // Heading anchors.
+      'https://github.com/o/r#step-1-install-dependencies',
+      'https://docs.example.test/page#section-12-overview',
+      // Management APIs under a hooks segment, plural collections, env-style names, a name=value fragment.
+      'https://shop.example.test/admin/api/2024-01/webhooks/123456789.json',
+      'https://api.example.test/webhooks/wh_123/events',
+      'https://api.example.test/webhooks/endpoint1/test',
+      'https://api.example.test/v1/hooks/HookName2',
+      'https://api.github.com/repos/o/r/actions/secrets/MY_SECRET_2024',
+      'https://kms.example.test/keys/550e8400-e29b-41d4-a716-446655440000',
+      'https://app.test/doc#page=12',
+      'https://en.example.test/wiki/X#2022_FIFA_World_Cup',
+      // Word slugs after a hooks segment.
+      'https://api.typeform.com/forms/abc/webhooks/slack-notification-hook',
+      'https://docs.stripe.com/webhooks/signature-verification',
+    ]) expect(url(kept)).toBe(kept);
+    // Slack keeps its team and channel ids; only the secret goes.
+    expect(url('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/XXXXxxxxXXXXxxxx1234')).toBe('https://hooks.slack.com/services/T0123ABCD/B0123ABCD/[redacted]');
+    expect(url('https://hooks.slack.com/actions/T0123ABCD/1234567890123/AbCdEfGh1234')).toBe('https://hooks.slack.com/actions/T0123ABCD/1234567890123/[redacted]');
+  });
+
   test('a wide input whose projection loses the method is a tracked worst case on both sides', async () => {
     const wide = request('GET', Object.fromEntries(Array.from({ length: 45 }, (_, i) => [`a${String(i).padStart(2, '0')}`, i])));
     let sent: Record<string, any> = {};

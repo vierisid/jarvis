@@ -468,6 +468,11 @@ function createTables(db: Database): void {
   // agent, when the approved call runs. A row from before has none; it is
   // refused at execution and asked for again.
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN principal TEXT`); } catch {}
+  // Migration (#1314 follow-up): where the request came from. `screen` marks
+  // one raised by a screen-derived background turn, held while screen
+  // awareness is off (authority/approval-provenance.ts). Null on every other
+  // row, and on rows from before, which are not held.
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN provenance TEXT`); } catch {}
   // Migration: execution claim and receipt. The claim columns record that one
   // executor took the approved request before dispatch, so a second caller or
   // a restarted daemon cannot run it again. `execution_outcome` qualifies the
