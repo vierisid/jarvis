@@ -37,6 +37,7 @@ import { workflowFileBase } from "../config";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 import {
   createWorkflowFile,
+  deleteWorkflowFile,
   getWorkflowFile,
 } from "../../db/repos/workflow-file";
 import { flowOfClaims } from "./run-flow";
@@ -57,9 +58,18 @@ function isStrictlyWithin(child: string, parent: string): boolean {
   return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
 }
 
+/** Longest on-disk file name part. The file id and "__" are added in front, and
+ * most file systems stop at 255 bytes per name. */
+const MAX_NAME_LENGTH = 120;
+const MAX_EXTENSION_LENGTH = 16;
+
 function safeBasename(name: string): string {
-  const b = basename(name).replace(/[^A-Za-z0-9._-]/g, "_");
-  return b || "file";
+  const b = basename(name).replace(/[^A-Za-z0-9._-]/g, "_") || "file";
+  if (b.length <= MAX_NAME_LENGTH) return b;
+  // Cut the middle, not the end, so the file type survives.
+  const dot = b.lastIndexOf(".");
+  const ext = dot > 0 && b.length - dot <= MAX_EXTENSION_LENGTH ? b.slice(dot) : "";
+  return `${b.slice(0, MAX_NAME_LENGTH - ext.length)}${ext}`;
 }
 
 export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
@@ -114,10 +124,18 @@ export const stepFilesUploadRoute: RouteHandler = async (ctx: RouteContext) => {
 
   // Write to disk too so that fetch flows can stream from a path rather than
   // buffer-via-DB. The DB blob is the source of truth; the disk copy is a
-  // convenience for local-process file URLs.
+  // convenience for local-process file URLs. If the disk copy cannot be
+  // written the row is removed again, so no file is left that the step was
+  // told did not save, and the error never carries a path.
   const safeName = `${fileRow.id}__${safeBasename(fileName)}`;
-  // A new name: never follow or replace something already there.
-  writeFileSync(resolve(dir, safeName), buf, { flag: "wx" });
+  try {
+    // A new name: never follow or replace something already there.
+    writeFileSync(resolve(dir, safeName), buf, { flag: "wx" });
+  } catch (error) {
+    try { deleteWorkflowFile(fileRow.id); } catch { /* nothing more to undo */ }
+    console.error("[step-files] could not write file:", (error as NodeJS.ErrnoException).code ?? "unknown");
+    return err("The file could not be saved. Nothing was stored.", 500);
+  }
 
   return json({
     url: `/v1/step-files/${fileRow.id}`,

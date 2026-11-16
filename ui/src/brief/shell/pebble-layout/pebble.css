@@ -8,6 +8,7 @@
 .brief-root .brief-pebble-content { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 22px; }
 .brief-root .brief-pebble-companion-viewport { position: absolute; inset: 0; z-index: 1; overflow: clip; pointer-events: none; }
 .brief-root .brief-pebble-companion { position: absolute; top: 32px; right: 38px; min-width: 0; pointer-events: auto; transform: translateY(var(--pebble-work-scroll, 0px)); }
+.brief-root [data-pebble-layout="split"][data-pebble-open="false"] .brief-pebble-companion { top: var(--pebble-companion-top, 32px); }
 .brief-root [data-pebble-open="true"] .brief-pebble-companion { right: var(--pebble-inset); transform: none; max-height: max(152px, calc(100% - 280px)); overflow: auto; scrollbar-width: thin; }
 .brief-root [data-pebble-layout="single"] .brief-pebble-companion { right: var(--pebble-inset); }
 .brief-root [data-pebble-layout="single"][data-pebble-open="false"] .brief-pebble-companion { top: var(--pebble-companion-closed-top, 132px); }

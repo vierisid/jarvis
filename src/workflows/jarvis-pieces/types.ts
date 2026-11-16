@@ -164,6 +164,15 @@ export interface PieceAgentDelegateResult {
   outcome?: ActionOutcome;
   /** Agent task report, separate from tool execution. Kept across durable replay. */
   taskOutcome?: ActionOutcome;
+  /**
+   * Present when the delegation finished but some of its tool calls failed, were
+   * denied or were not available. The step still succeeds unless `requiredTools`
+   * says it must not: published workflows that finish today keep finishing. This
+   * is where a person reading the run sees that part of the work did not happen.
+   */
+  warning?: string;
+  /** The failed tool calls behind `warning`: name and (bounded) error text. */
+  toolErrors?: Array<{ name: string; error: string }>;
 }
 
 /**

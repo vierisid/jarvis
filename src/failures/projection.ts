@@ -21,6 +21,7 @@ import type { ActionFailure } from '../actions/action-outcome';
 import type { LLMErrorCode } from '../llm/provider';
 import { redactSecrets } from '../util/redact';
 import { boundedReceiptText } from '../roles/untrusted';
+import { AUTHORITY_REQUIREMENTS } from '../roles/authority';
 import { HUMAN_INPUT_PENDING_LIMIT } from '../workflows/runtime/human-input-contract';
 import { statusLabel } from './step-error';
 
@@ -139,6 +140,8 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
+  // A child call reused an invocation key for a different payload (for example a constant key in a loop); nothing was started.
+  INVOCATION_KEY_REUSED: { category: 'invalid_input', why: 'its invocation key was already used for different data. Include something that changes per item in the key', step: 'edit_and_run_again' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
   WORKFLOW_FACT_AMBIGUOUS: { category: 'missing_binding', why: 'memory holds conflicting values for a recipient it sends to', step: 'update_recipient' },
   SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION: { category: 'missing_binding', why: 'the Jarvis app on that computer is too old for this approved action', step: 'update_desktop_app' },
@@ -166,6 +169,39 @@ const APPROVAL_WHY: Record<string, string> = {
   APPROVAL_WITHDRAWN: 'its approval was withdrawn', APPROVAL_REQUIRED: 'it now needs approval',
   EFFECT_CHANGED_AFTER_REVIEW: 'what it would do changed after it was approved',
 };
+/** What an action does, for "needs a higher level". */
+const ASKED_ACTIONS: Record<string, { what: string; setting: string }> = {
+  send_email: { what: 'sending email', setting: 'Send email' },
+  send_message: { what: 'sending messages', setting: 'Send messages' },
+  make_payment: { what: 'making payments', setting: 'Make payments' },
+};
+/**
+ * Which Authority setting refused an action, from the refusal's own text
+ * (`Authority denied <tool>: <reason>`), in plain words. A reason it does not
+ * recognise reads as before.
+ */
+export function authorityWhy(message: string | undefined): string {
+  const text = message ?? '';
+  const level = /Authority level (\d+) is below required (\d+) for (\w+)/u.exec(text);
+  if (level) {
+    const asked = ASKED_ACTIONS[level[3]!];
+    const base = `your Authority level (${level[1]}) is below the ${level[2]} that ${asked?.what ?? level[3]!.replace(/_/gu, ' ')} needs`;
+    // A workflow step in these categories asks first instead (#953) only while
+    // its switch is On and the level clears writing data. The refusal does not
+    // say which switch was Off, so this names the condition, not the state.
+    return asked && Number(level[1]) >= AUTHORITY_REQUIREMENTS.write_data
+      ? `${base}. Jarvis asks you first only while ${asked.setting} is On in Authority settings: turn it On to be asked each time, or raise the level`
+      : `${base}. Raise the level in Authority settings`;
+  }
+  if (/Explicitly denied by override/u.test(text)) return 'a Deny override in your Authority settings blocks it. Remove the override to allow it';
+  const rule = /^Authority denied \S+: (.+)$/su.exec(text)?.[1]?.replace(/\s+/gu, ' ').trim();
+  // A role or agent profile's limit (`<label>: level cap ...`, `<label>: x is denied`) is not a rule the owner wrote.
+  const profileLimit = rule !== undefined && /: (level cap \d+ is below required \d+ for \w+|\w+ is denied)$/u.test(rule);
+  if (rule && !profileLimit && !/^(Authority|Denied|Temporarily|Explicitly|Workflow|Emergency)/u.test(rule) && rule.length <= 200) {
+    return `your Authority rule "${boundedReceiptText(redactSecrets(rule), 200).replace(/"/gu, "'")}" blocks it`;
+  }
+  return 'your Authority settings do not allow it';
+}
 /** A notification that was sent on no channel at all (the notify step's own outcome). */
 const DELIVERY_FAILED = 'DELIVERY_FAILED';
 /** Readiness issues that name a binding rather than invalid input. */
@@ -307,7 +343,7 @@ export function projectFailure(evidence: FailureEvidence, subject: FailureSubjec
         return build('approval_denied', 'none', `${s} did not run: ${APPROVAL_WHY[code]}.`, NOTHING, ['ask_again'], links, code, detail);
       }
       if (code === 'AUTHORITY_DENIED') {
-        return build('approval_denied', 'none', `${s} did not run: your Authority settings do not allow it.`, NOTHING,
+        return build('approval_denied', 'none', `${s} did not run: ${authorityWhy(o.message)}.`, NOTHING,
           ['review_authority'], links, code, detail);
       }
       if (code === 'EMERGENCY_STOPPED') {

@@ -612,6 +612,26 @@ describe("workflow API: flows", () => {
     expect(body).toMatchObject({ status: "ENABLED", metadata: { tag: "morning" } });
   });
 
+  test("PATCH /api/workflows/:id sets, clears and validates the minutes each run saves", async () => {
+    const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    const flowId = created.body.flow.id;
+    const patch = (body: unknown) => callJson(routes["/api/workflows/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${flowId}`, { id: flowId }, body));
+    expect(created.body.flow.timeSavedPerRun ?? null).toBeNull();
+    const set = await patch({ timeSavedPerRun: 12 });
+    expect(set.status).toBe(200);
+    expect(set.body).toMatchObject({ timeSavedPerRun: 12, estimatedTimeSavedPerRun: 1 });
+    for (const bad of [-1, 1441, 1.5, "12"]) {
+      const refused = await patch({ timeSavedPerRun: bad, metadata: { tag: "no" } });
+      expect(refused.status).toBe(400);
+    }
+    // A refused request wrote nothing, not even the valid metadata beside it.
+    const kept = await patch({ metadata: { tag: "ok" } });
+    expect(kept.body).toMatchObject({ timeSavedPerRun: 12, metadata: { tag: "ok" } });
+    expect((await patch({ timeSavedPerRun: 0 })).body).toMatchObject({ timeSavedPerRun: 0 });
+    expect((await patch({ timeSavedPerRun: null })).body).toMatchObject({ timeSavedPerRun: null });
+  });
+
   test("DELETE /api/workflows/:id removes the flow and cascades versions", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
@@ -769,6 +789,62 @@ describe("workflow API: runs", () => {
     expect(body.status).toBe("QUEUED");
     expect(body.triggeredBy).toBe("test");
     expect(queueStats().queued).toBe(1);
+  });
+
+  describe("manual-run cap", () => {
+    const OTHER_PROJECT = "proj_other_1394";
+
+    async function seedFlow(projectId?: string) {
+      const { createFlow } = await import("../db/repos/flow");
+      const { createDraftVersion } = await import("../db/repos/flow-version");
+      const flow = createFlow(projectId ? { projectId } : {});
+      const version = createDraftVersion({ flowId: flow.id, displayName: "v", trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } });
+      return { flowId: flow.id, versionId: version.id };
+    }
+
+    /** `n` waiting runs of the flow, as a start of `triggeredBy` leaves them. */
+    async function queueRuns(flowId: string, versionId: string, n: number, triggeredBy: string) {
+      const { getWorkflowDb } = await import("../db/index");
+      const { enqueue } = await import("../db/repos/job-queue");
+      const { createFlowRun } = await import("../db/repos/flow-run");
+      getWorkflowDb().transaction(() => {
+        for (let i = 0; i < n; i++) {
+          const run = createFlowRun({ flowId, flowVersionId: versionId, environment: "PRODUCTION", triggeredBy });
+          enqueue({ jobType: "RUN_FLOW", payload: { runId: run.id }, flowRunId: run.id, flowId, flowVersionId: versionId, maxAttempts: 1 });
+        }
+      })();
+    }
+
+    const start = (map: WorkflowRouteMap, flowId: string) => (map["/api/workflows/:id/run"]?.POST as (r: Request) => Promise<Response>)(
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/run`, { id: flowId }, {}) as Request);
+
+    test("refuses with a 429, Retry-After and a plain message once the owner's own runs reach the cap, and queues nothing", async () => {
+      const { MAX_QUEUED_MANUAL_RUNS } = await import("./routes");
+      const { flowId, versionId } = await seedFlow();
+      await queueRuns(flowId, versionId, MAX_QUEUED_MANUAL_RUNS - 1, "dashboard");
+      expect((await start(routes, flowId)).status).toBe(202);
+      const refused = await start(routes, flowId);
+      expect(refused.status).toBe(429);
+      expect(refused.headers.get("Retry-After")).toBe("30");
+      expect((await refused.json()).error).toBe(`${MAX_QUEUED_MANUAL_RUNS} runs you started are still waiting to start. Try again once some of them have run.`);
+      expect(queueStats().queued).toBe(MAX_QUEUED_MANUAL_RUNS);
+    });
+
+    test("a full webhook backlog does not refuse a run started by hand", async () => {
+      const { MAX_QUEUED_WEBHOOK_RUNS } = await import("../runner/triggers/manager");
+      const { flowId, versionId } = await seedFlow();
+      await queueRuns(flowId, versionId, MAX_QUEUED_WEBHOOK_RUNS + 50, "trigger:webhook");
+      expect((await start(routes, flowId)).status).toBe(202);
+    });
+
+    test("another project's waiting runs do not count against this one", async () => {
+      const { MAX_QUEUED_MANUAL_RUNS } = await import("./routes");
+      const mine = await seedFlow();
+      await queueRuns(mine.flowId, mine.versionId, MAX_QUEUED_MANUAL_RUNS, "dashboard");
+      expect((await start(routes, mine.flowId)).status).toBe(429);
+      const theirs = await seedFlow(OTHER_PROJECT);
+      expect((await start(createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT }), theirs.flowId)).status).toBe(202);
+    });
   });
 
   test("POST /:id/run leaves no run behind when the job cannot be written", async () => {
