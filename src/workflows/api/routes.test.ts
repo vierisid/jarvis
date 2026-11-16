@@ -1046,6 +1046,23 @@ describe("workflow API: runs", () => {
     expect(foreign).toEqual({ status: 200, body: { items: [] } });
   });
 
+  test("Recently run names a workflow as every other list does: the published name wins over a draft's", async () => {
+    const { createFlow, setPublishedVersion } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const published = createDraftVersion({ flowId: flow.id, displayName: "Weekly digest",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    lockVersion(published.id);
+    setPublishedVersion(flow.id, published.id);
+    createDraftVersion({ flowId: flow.id, displayName: "Half-edited draft",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: published.id, status: "SUCCEEDED" });
+    const { body } = await callJson(routes["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs?limit=20"));
+    const row = (body as { items: { id: string; flowId: string; displayName: string }[] }).items.find(i => i.flowId === flow.id);
+    expect(row).toMatchObject({ id: run.id, displayName: "Weekly digest" });
+  });
+
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
