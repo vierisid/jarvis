@@ -26,7 +26,7 @@ import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { zstdDecompress as zstdDecompressCallback } from "node:zlib";
-import { workflowLogsBase } from "../../sandbox-api/config";
+import { legacyWorkflowLogsBase, workflowLogsBase } from "../../sandbox-api/config";
 
 const zstdDecompress = promisify(zstdDecompressCallback);
 
@@ -75,8 +75,15 @@ export async function loadExecutionStateFromLog(
   try {
     compressed = await fs.readFile(path);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    // A run an earlier version backed up under ~/.jarvis keeps resuming.
+    if (opts.baseDir) return null;
+    try {
+      compressed = await fs.readFile(resolve(legacyWorkflowLogsBase(), `${runId}.bin`));
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw e2;
+    }
   }
   let raw: Buffer;
   try {
