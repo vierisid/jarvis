@@ -1,4 +1,5 @@
 /** Real worker, engine subprocess, authenticated API handlers and file-backed SQLite. No provider calls. */
+import { runFailure } from './run-failure';
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { dirname, join } from 'node:path';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
@@ -110,6 +111,8 @@ for (const kind of ['input', 'approval'] as const) test(`${kind}: two runs with 
   if (kind === 'approval') {
     // A rejection in one run is never reused by a later run.
     expect(respond(second, 'reject').status).toBe(200); await finish(); expect(getFlowRun(two.id)?.status).toBe('FAILED');
+    // The failed run reads as a rejection, not as an internal error to run again.
+    expect(runFailure(getFlowRun(two.id)!)).toMatchObject({ category: 'approval_denied', code: 'HUMAN_INPUT_REJECTED', outcome: 'Nothing after it ran.' });
     const three = await f.run('static'); expect(three.status).toBe('PAUSED'); expect(requestFor(three.id).status).toBe('pending');
     expect(respond(requestFor(three.id), 'approve').status).toBe(200); await finish(); expect(getFlowRun(three.id)?.status).toBe('SUCCEEDED');
   } else { expect(respond(second).status).toBe(200); await finish(); expect(getFlowRun(two.id)?.status).toBe('SUCCEEDED'); }

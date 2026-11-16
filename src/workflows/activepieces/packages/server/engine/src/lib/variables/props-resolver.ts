@@ -4,7 +4,7 @@ import { initCodeSandbox } from '../core/code/code-sandbox'
 import { FlowExecutorContext } from '../handler/context/flow-execution-context'
 import { createConnectionResolver } from '../piece-context/connection-resolver'
 import { utils } from '../utils'
-import { workflowInterpolationText } from '../../../../../../../runtime/safe-expression'
+import { absentReferenceError, workflowInterpolationText } from '../../../../../../../runtime/safe-expression'
 
 const VARIABLE_PATTERN = /\{\{(.*?)\}\}/g
 const CONNECTIONS = 'connections'
@@ -202,7 +202,7 @@ async function evalInScope(js: string, contextAsScope: Record<string, unknown>, 
             scriptContext: contextAsScope,
             functions,
         })
-        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')
+        if (result === undefined) throw absentReferenceError(js)
         return result
     }))
 

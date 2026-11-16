@@ -352,7 +352,8 @@ describe('LLM output contract through the real engine', () => {
     const reading = runFailure(run)!;
     expect(reading.effect).not.toBe('none');
     expect(reading.outcome).not.toContain(NOTHING_DONE);
-    expect(reading.detail).toContain('EMPTY_AI_REPLY');
+    // The detail is the step's own message (#1337), not the engine's JSON body with its code.
+    expect(reading.detail).toContain('answered with an empty reply');
   }, 60_000);
 
   test('required malformed JSON fails the step and nothing downstream runs', async () => {
