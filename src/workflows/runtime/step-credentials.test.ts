@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
 import { draftRevision } from '../../actions/tools/workflow-draft-update';
-import { credentialEditRefusal, redactFailedStepMessage, redactRunSteps, restoreRedactedCredentials, versionAsModelSees } from './step-credentials';
+import { credentialEditRefusal, redactFailedStepMessage, redactRunSteps, restoreRedactedCredentials, runAsShown, stepsAsShown, versionAsModelSees } from './step-credentials';
 
 const HTTP = '@activepieces/piece-http';
 const GRAPHQL = '@activepieces/piece-graphql';
@@ -153,6 +153,20 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
     expect(edit(withParse, (g) => { g.nextAction!.nextAction!.settings!.input!.method = 'PUT'; })).toBeNull();
   });
 
+  test('a hook token in the URL path is kept on a method edit and refused on a path edit; a URL with no hidden part stays editable', () => {
+    const hooked = graph(step('call', { input: { method: 'POST', url: 'https://chat.example.com/hooks/Zx8Yw7Vu6Ts5Rq4Po3', headers: {} } }));
+    const seen = versionAsModelSees({ trigger: hooked }).trigger as FlowTriggerNode;
+    expect(JSON.stringify(seen)).not.toContain('Zx8Yw7Vu6Ts5Rq4Po3');
+    const g = structuredClone(seen);
+    g.nextAction!.settings!.input!.method = 'PUT';
+    const restored = restoreRedactedCredentials(hooked, g);
+    expect(credentialEditRefusal(hooked, g, restored)).toBeNull();
+    expect(restored.nextAction!.settings!.input!.url).toBe('https://chat.example.com/hooks/Zx8Yw7Vu6Ts5Rq4Po3');
+    expect(edit(hooked, (h) => { h.nextAction!.settings!.input!.url = 'https://chat.example.com/hooks/[redacted]/x'; })).toMatch(/would store \[redacted\]/);
+    const plain = graph(step('call', { input: { method: 'GET', url: 'https://api.example.com/v1/auth/users/u123abc/roles', headers: {} } }));
+    expect(edit(plain, (h) => { h.nextAction!.settings!.input!.url = 'https://api.example.com/v1/auth/users/u123abc/perms'; })).toBeNull();
+  });
+
   test('replacing the step with one that holds none of the credentials is allowed', () => {
     expect(edit(saved, (g) => { g.nextAction!.settings = { pieceName: 'jarvis-notify', actionName: 'notify', input: { message: 'hi' } }; })).toBeNull();
   });
@@ -161,6 +175,125 @@ describe('a draft edit (credentialEditRefusal after restore)', () => {
 test('#1153 review: the model reads neither a webhook secret nor its scheme, which the save rules derive from whether the secret is stored', () => {
   const seen = versionAsModelSees({ trigger: { name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { secret: 'whsec-x', signature_scheme: 'timestamped', other: 1 } } } });
   expect((seen.trigger as FlowTriggerNode).settings!.input).toEqual({ secret: '[redacted]', other: 1 });
+});
+
+describe('what a run shows of webhook headers stored before the trigger withheld them', () => {
+  const webhookGraph = (...steps: FlowTriggerNode[]): FlowTriggerNode => {
+    const root = graph(...steps);
+    root.type = 'PIECE_TRIGGER' as FlowTriggerNode['type'];
+    root.settings = { pieceName: 'webhook', triggerName: 'catch_webhook', input: {} } as FlowTriggerNode['settings'];
+    return root;
+  };
+  const stored = () => ({
+    trigger: { output: { type: 'PIECE_TRIGGER', status: 'SUCCEEDED', input: {}, output: { order: 1, _webhook: { method: 'POST', url: 'https://x/api/webhooks/f', headers: {
+      authorization: 'Bearer sk-live-OLDSECRET99', cookie: 'session=COOKIESECRET', 'x-hub-signature-256': 'sha256=SIGSECRET1',
+      'x-custom': 'Basic dXNlcjpPTERTRUNSRVQ=', 'content-type': 'application/json', 'x-github-event': 'push', 'idempotency-key': 'idem-1' } } } } },
+    // A step that passed the header on, and one that echoed the whole trigger.
+    forward: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { note: 'auth was Bearer sk-live-OLDSECRET99' }, output: { echoed: 'sk-live-OLDSECRET99' } } },
+    echo: { output: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: { trigger: { _webhook: { headers: { Cookie: 'session=COOKIESECRET' } } } } } },
+  });
+  const LEAKS = ['OLDSECRET99', 'COOKIESECRET', 'SIGSECRET1', 'dXNlcjpPTERTRUNSRVQ='];
+
+  test('credential headers are withheld by name and shape wherever the run holds them, others kept, the stored value untouched', () => {
+    const steps = stored();
+    const before = JSON.stringify(steps);
+    const run = { steps, failedStep: { name: 'forward', displayName: 'Forward', errorMessage: 'rejected Bearer sk-live-OLDSECRET99' } };
+    const shown = runAsShown(run, webhookGraph(step('forward'), step('echo')));
+    const text = JSON.stringify(shown);
+    for (const leak of LEAKS) expect(text).not.toContain(leak);
+    expect(text).toContain('"content-type":"application/json"');
+    expect(text).toContain('"x-github-event":"push"');
+    expect(text).toContain('"idempotency-key":"idem-1"');
+    expect(text).toContain('"authorization":"[redacted]"');
+    expect(shown.failedStep.errorMessage).toBe('rejected [redacted]');
+    // Read side only: the caller's (stored) object is not rewritten.
+    expect(JSON.stringify(steps)).toBe(before);
+    expect(runAsShown(shown, webhookGraph(step('forward'), step('echo')))).toEqual(shown);
+  });
+
+  test('sample data copied from such a run is shown the same way, to the model and to the editor', async () => {
+    const { versionAsShown } = await import('../api/editor-version');
+    const trigger = webhookGraph(step('forward'));
+    const sampleData = Object.fromEntries(Object.entries(stored()).map(([name, value]) => [name, value.output]));
+    for (const seen of [versionAsModelSees({ trigger, sampleData }), versionAsShown({ trigger, sampleData })]) {
+      const text = JSON.stringify(seen.sampleData);
+      for (const leak of LEAKS) expect(text).not.toContain(leak);
+      expect(text).toContain('"x-github-event":"push"');
+    }
+  });
+});
+
+describe('what a run shows of a generated password', () => {
+  const CRYPTO = '@activepieces/piece-crypto';
+  const pw = (name: string): FlowTriggerNode => ({ name, type: 'PIECE',
+    settings: { pieceName: CRYPTO, actionName: 'generate-password', input: { length: 24, characterSet: 'alphanumeric' } } } as FlowTriggerNode);
+  const PASSWORD = 'Xq7RkP2mVz9LtB4nWc8Hs1Jd';
+
+  test('the generator output is withheld, and so is the password where a later step used it; the stored steps keep it', () => {
+    const steps = {
+      make_pw: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { length: 24, characterSet: 'alphanumeric' }, output: PASSWORD } },
+      create_user: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { body: { password: PASSWORD, name: 'Ann' } }, output: { ok: true } } },
+    };
+    const run = { steps, failedStep: { name: 'create_user', displayName: 'Create', errorMessage: `rejected ${PASSWORD}` } };
+    const shown = runAsShown(run, graph(pw('make_pw'), step('create_user')));
+    expect(JSON.stringify(shown)).not.toContain(PASSWORD);
+    expect((shown.steps.make_pw as { output: { output: unknown } }).output.output).toBe('[redacted]');
+    expect(JSON.stringify(shown.steps.create_user)).toContain('"name":"Ann"');
+    expect(shown.failedStep.errorMessage).toBe('rejected [redacted]');
+    // Stored as generated: the engine and a resumed run read the real value.
+    expect(steps.make_pw.output.output).toBe(PASSWORD);
+    expect(runAsShown(shown, graph(pw('make_pw'), step('create_user')))).toEqual(shown);
+  });
+
+  test('inside a loop and in sample data too; another piece with the same output is shown as it is', () => {
+    const loop = { name: 'each', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: pw('inner_pw') } as unknown as FlowTriggerNode;
+    const steps = { each: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: {}, output: { iterations: [
+      { inner_pw: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: PASSWORD } }] } },
+      other: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: 'not-a-secret-123456' } };
+    const shown = stepsAsShown(steps, graph(loop, step('other'))).steps;
+    expect(JSON.stringify(shown)).not.toContain(PASSWORD);
+    expect(JSON.stringify(shown)).toContain('not-a-secret-123456');
+    const seen = versionAsModelSees({ trigger: graph(pw('make_pw')), sampleData: { make_pw: { type: 'PIECE', status: 'SUCCEEDED', output: PASSWORD } } });
+    expect(JSON.stringify(seen)).not.toContain(PASSWORD);
+  });
+});
+
+describe('what else a run hides of its secrets, and what it leaves alone', () => {
+  const hook = (headers: Record<string, string>) => ({ trigger: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers } } } });
+  const shownText = (steps: Record<string, unknown>) => JSON.stringify(stepsAsShown(steps, graph()).steps);
+
+  test('URL-encoded forms, single cookie values and signatures without their prefix are hidden elsewhere', () => {
+    const text = shownText({ ...hook({ authorization: 'Bearer ab&c=d+e/f12', cookie: 'sid=COOKIEVAL123; theme=dark', 'x-hub-signature-256': 'sha256=abcdef0123456789' }),
+      later: { type: 'PIECE', status: 'SUCCEEDED', input: { url: `https://x.test/?t=${encodeURIComponent('ab&c=d+e/f12')}`, sid: 'COOKIEVAL123', sig: 'abcdef0123456789' }, output: {} } });
+    for (const leak of ['ab%26c%3Dd%2Be%2Ff12', 'COOKIEVAL123', 'abcdef0123456789']) expect(text).not.toContain(leak);
+  });
+
+  test('a timestamp, a number and a placeholder value are withheld in the headers but do not blank ordinary text', () => {
+    const text = shownText({ ...hook({ 'x-jarvis-timestamp': '1731325000', authorization: 'Bearer undefined', 'x-api-key': '123456789' }),
+      later: { type: 'PIECE', status: 'SUCCEEDED', input: { note: 'order 1731325000 placed, value undefined, id 123456789' }, output: {} } });
+    expect(text).toContain('order 1731325000 placed, value undefined, id 123456789');
+    expect(text).toContain('"x-jarvis-timestamp":"[redacted]"');
+  });
+
+  test('thousands of generated passwords in a loop are hidden in one pass', () => {
+    const loop = { name: 'each', type: 'LOOP_ON_ITEMS', settings: {}, firstLoopAction: { name: 'pw', type: 'PIECE',
+      settings: { pieceName: '@activepieces/piece-crypto', actionName: 'generate-password', input: {} } } } as unknown as FlowTriggerNode;
+    const iterations = Array.from({ length: 3000 }, (_, i) => ({ pw: { type: 'PIECE', status: 'SUCCEEDED', input: {}, output: `Pw${i}x7Kq9Lm2Zt` },
+      use: { type: 'PIECE', status: 'SUCCEEDED', input: { body: `password Pw${i}x7Kq9Lm2Zt for user ${i}` }, output: {} } }));
+    const started = performance.now();
+    const shown = JSON.stringify(stepsAsShown({ each: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: {}, output: { iterations } } }, graph(loop)).steps);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(shown).not.toMatch(/Pw\d+x7Kq9Lm2Zt/u);
+    expect(shown).toContain('password [redacted] for user 2999');
+  });
+});
+
+test('a run with nothing to hide is shown as the same objects, not a copy', () => {
+  // A secret elsewhere in the run, so the scrub does walk this step.
+  const steps = { trigger: { output: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { _webhook: { headers: { authorization: 'Bearer SOMESECRET99' } } } } },
+    call: { output: { type: 'PIECE', status: 'SUCCEEDED', input: { a: 1 }, output: { list: [1, 2], note: 'plain' } } } };
+  const shown = stepsAsShown(steps, graph()).steps as typeof steps;
+  expect(shown.call.output.output).toBe(steps.call.output.output);
 });
 
 describe('a zip step password (file-helper zipFiles and unzipFile)', () => {
