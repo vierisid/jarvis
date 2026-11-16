@@ -13,6 +13,7 @@ import type { OnboardingRuntime } from '../onboarding-next/runtime/runtime.ts';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage } from './approval-decision.ts';
+import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance.ts';
 import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
@@ -44,10 +45,11 @@ import { authorityConfigPatchError, isActionCategory } from '../authority/config
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity, listEntityNames } from '../vault/entities.ts';
 import { matchEntityByName } from './room-action-targets.ts';
-import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
+import { findFacts, createFact, FactInputError, FACT_TEXT_LIMIT } from '../vault/facts.ts';
+import { refuseVaultText, cleanVaultText, ENTITY_NAME_MAX_CHARS, FACT_PREDICATE_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
-import { listFlows } from '../workflows/db/repos/flow.ts';
+import { listAllFlows } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version.ts';
 
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
@@ -147,7 +149,7 @@ import { runWithOrigin } from '../llm/origin.ts';
 import { runWithAdmission } from '../llm/background-budget.ts';
 import { getGoalApplication, GoalScoreConflict } from '../goals/application-service.ts';
 import { readGoalEvents } from '../goals/event-delivery.ts';
-import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
+import { assertDeadlineNotPast, GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 import { approvalIntentFields } from '../authority/approval-delivery.ts';
@@ -512,6 +514,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             source?: string;
           };
           if (!body.name || typeof body.name !== 'string') return error('name is required', 400);
+          const badName = refuseVaultText(body.name, 'name', ENTITY_NAME_MAX_CHARS);
+          if (badName) return error(badName, 400);
+          // Nothing a person can see once the characters that hide text are gone.
+          if (!cleanVaultText(body.name, ENTITY_NAME_MAX_CHARS).trim()) return error('name is required', 400);
           if (!body.type || !VALID_ENTITY_TYPES.has(body.type)) {
             return error(`type must be one of: ${Array.from(VALID_ENTITY_TYPES).join(', ')}`, 400);
           }
@@ -604,6 +610,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (typeof source !== 'string' || !API_FACT_SOURCES.has(source)) {
             return error(`source must be one of: ${[...API_FACT_SOURCES].join(', ')}`, 400);
           }
+          if (typeof body.predicate !== 'string' || typeof body.object !== 'string') {
+            return error('predicate and object must be text', 400);
+          }
+          const badFact = refuseVaultText(body.predicate, 'predicate', FACT_PREDICATE_MAX_CHARS)
+            ?? refuseVaultText(body.object, 'object', FACT_TEXT_LIMIT, true);
+          if (badFact) return error(badFact, 400);
           const subject = getEntity(body.subject_id);
           if (!subject) return error(`Unknown subject_id: ${body.subject_id}`, 404);
           const fact = createFact(body.subject_id, body.predicate, body.object, {
@@ -640,6 +652,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.from_id || !body.to_id || !body.type) {
             return error('from_id, to_id, and type are required', 400);
           }
+          if (typeof body.type !== 'string') return error('type must be text', 400);
+          const badType = refuseVaultText(body.type, 'type', RELATIONSHIP_TYPE_MAX_CHARS);
+          if (badType) return error(badType, 400);
           const from = getEntity(body.from_id);
           const to = getEntity(body.to_id);
           if (!from) return error(`Unknown from_id: ${body.from_id}`, 404);
@@ -3693,6 +3708,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const enriched = rows.map((r) => ({
           ...r,
           execution_state: executionState(r),
+          // A screen-derived request while screen awareness is off: approving waits (#1314 follow-up).
+          held: r.status === 'pending' && approvalHeldByAwareness(r) ? AWARENESS_HELD_APPROVAL_MESSAGE : null,
           impact: impactFromCategory(r.action_category as ActionCategory),
           // `intent` is the joined sentence; since #792 `intent_action` and
           // `intent_reason` carry its two parts apart, so a card can show the
@@ -3951,7 +3968,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // display name lives on the latest version row (published, or draft
         // if there is no published yet), so we resolve per-flow.
         try {
-          const flows = listFlows(undefined, { limit: 100 });
+          const flows = listAllFlows();
           let added = 0;
           for (const f of flows) {
             if (added >= perType) break;
@@ -4636,16 +4653,64 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Turn screen awareness on or off. The same switch as the pebble
+     * long-press: it sets awareness.enabled live and persists it as the
+     * user's choice, then runs the awareness applier, which starts or stops
+     * the service, closes switched-off workflow cards and pushes the pebble
+     * glyph and the observer pause to every sidecar. Toggling only the service
+     * left the setting (and every guard that reads it: screen reads, history,
+     * held research) and the sidecar observers saying the opposite.
+     */
     '/api/awareness/toggle': {
       POST: async (req: Request) => {
-        if (!ctx.awarenessService) return error('Awareness service not available', 503);
+        // After a boot with awareness off there is no service yet: the
+        // awareness applier starts it when this turns awareness on. Without a
+        // settings coordinator only a running service can be switched.
+        if (!ctx.settingsReload && !ctx.awarenessService) return error('Awareness service not available', 503);
+        let body: unknown;
         try {
-          const body = await req.json() as { enabled: boolean };
-          ctx.awarenessService.toggle(body.enabled);
-          return json({ ok: true, enabled: body.enabled });
+          body = await req.json();
         } catch {
           return error('Invalid request body');
         }
+        // Only a real true or false. Screen watching must never start from a
+        // string like "false" that happens to be truthy.
+        const enabled = (body as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== 'boolean') return error('enabled must be true or false', 400);
+        const { persistAwarenessChoice } = await import('./user-settings.ts');
+        const setLive = () => {
+          const current = ctx.config.awareness;
+          if (typeof current === 'object' && current !== null) current.enabled = enabled;
+          else (ctx.config as { awareness?: unknown }).awareness = { enabled };
+        };
+        const apply = async () => {
+          if (ctx.settingsReload) return ctx.settingsReload.applyNow('awareness');
+          ctx.awarenessService?.toggle(enabled);
+          return null;
+        };
+        // Off fails closed, like desktop control: it takes effect now even if
+        // it cannot be saved. On is saved first and applied only once it is.
+        let saveFailure: unknown = null;
+        if (!enabled) {
+          setLive();
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+        } else {
+          try { persistAwarenessChoice(enabled); } catch (err) { saveFailure = err; }
+          if (saveFailure !== null) {
+            console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+            return error('Screen awareness could not be saved, so it was not turned on.', 500);
+          }
+          setLive();
+        }
+        const applyErr = await apply();
+        if (saveFailure !== null) {
+          console.error('[Awareness] Could not save awareness.enabled:', saveFailure);
+          return error('Screen awareness is off for now, but the choice could not be saved: it may come back on at the next restart or settings reload.', 500);
+        }
+        return json(applyErr
+          ? { ok: false, enabled, message: `Saved, but applying it failed: ${applyErr.error}` }
+          : { ok: true, enabled });
       },
     },
 
@@ -4702,6 +4767,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
 
           // Quick create (direct)
+          assertDeadlineNotPast(options.deadline);
           const goal = getGoalApplication().createGoal(title, level, options);
           return json(goal, 201);
         } catch (err) {
@@ -4808,6 +4874,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const url = new URL(req.url);
           const id = url.pathname.split('/').pop()!;
           const body = await req.json() as Record<string, unknown>;
+          // Only a deadline that is being moved must be in the future: an overdue goal keeps its date while other fields change.
+          if (body && typeof body === 'object' && body.deadline !== undefined && body.deadline !== require('../vault/goals.ts').getGoal(id)?.deadline) assertDeadlineNotPast(body.deadline);
           const updated = getGoalApplication().updateGoal(id, body);
           if (!updated) return error('Goal not found', 404);
           return json(updated);

@@ -75,7 +75,8 @@ export interface FlowBlock {
   kind: "readiness" | "runtime";
   /** One sentence: what happened (the Q-19 headline). */
   message: string;
-  runId: string;
+  /** Null when no run shows it (a called workflow or connection was deleted). */
+  runId: string | null;
   at: number;
 }
 
@@ -93,9 +94,18 @@ export interface FlowRun {
   failedStep: { name: string; displayName: string; errorMessage?: string } | null;
   /** Q-19: how a run that ended badly reads, the same sentence Today shows. */
   failure?: UserFailure | null;
+  /** Steps that failed in a run that still finished: each had "Continue on failure" on. */
+  continuedFailures?: Array<{ name: string; displayName: string }>;
   triggeredBy: string | null;
   created: number;
   updated: number;
+}
+
+/** What Runs says about a run that finished although a step failed, or null for any other run. */
+export function continuedFailureLabel(run: Pick<FlowRun, "status" | "continuedFailures">): string | null {
+  const failed = run.status === "SUCCEEDED" ? run.continuedFailures ?? [] : [];
+  if (failed.length === 0) return null;
+  return failed.length === 1 ? "Finished with a failed step" : `Finished with ${failed.length} failed steps`;
 }
 
 /**
@@ -305,6 +315,7 @@ export function useWorkflowsData() {
         const body = await safeJson(res);
         return { ok: false, message: body?.error ?? `delete failed: ${res.status}` };
       }
+      const deleted = await safeJson(res);
       nameCacheRef.current.delete(flowId);
       setRuns((prev) => {
         const next = { ...prev };
@@ -313,7 +324,7 @@ export function useWorkflowsData() {
       });
       void refresh();
       if (selectedFlowId === flowId) setSelectedFlowId(null);
-      return { ok: true, message: "Deleted" };
+      return { ok: true, message: typeof deleted?.warning === "string" ? `Deleted. ${deleted.warning}` : "Deleted" };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
@@ -413,9 +424,9 @@ export function useWorkflowsData() {
   };
 }
 
-async function safeJson(res: Response): Promise<{ error?: string } | null> {
+async function safeJson(res: Response): Promise<{ error?: string; warning?: string } | null> {
   try {
-    return (await res.json()) as { error?: string };
+    return (await res.json()) as { error?: string; warning?: string };
   } catch {
     return null;
   }

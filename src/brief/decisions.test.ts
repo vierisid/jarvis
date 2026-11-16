@@ -11,14 +11,18 @@ import { EmergencyController, setActiveEmergencyController } from '../authority/
 import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
 import type { ToolRegistry } from '../actions/tools/registry';
-import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem } from '../goals/work-items';
+import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem, setWorkBlocker, NEEDS_YOU_DONE_REF, NEEDS_YOU_NOT_DOING_REF } from '../goals/work-items';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, getFlowVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun, getFlowRun } from '../workflows/db/repos/flow-run';
+import { createWaitpoint } from '../workflows/db/repos/waitpoint';
+import { cancelFlowRun } from '../workflows/db/repos/run-cancellation';
 import { saveWorkflowEffect, getWorkflowEffect, claimWorkflowEffect, type WorkflowEffect } from '../workflows/db/repos/workflow-effect';
 import { WorkflowEffectBoundary, type EffectInvocation } from '../workflows/runtime/effect-boundary';
 import { resumeResolvedWorkflowEffects } from '../workflows/runtime/effect-approval-scheduler';
 import { DecisionQueue } from './decisions';
+import { runWithApprovalProvenance, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
+import { setScreenCaptureEnabledSource } from '../actions/tools/desktop-guard';
 
 let directory: string, file: string, queue: DecisionQueue, manager: ApprovalManager, executor: DeferredExecutor;
 let calls: number;
@@ -64,6 +68,43 @@ test('prior-day work survives reload; intent acceptance is not permission or ver
   expect(queue.get(item.decisionId)).toEqual(accepted);
   expect(getWorkItem(work.id).decision!.id).toBe(id);
   expect((await read()).items).toHaveLength(1);
+});
+
+test('an accepted manual step can be finished or dropped from the queue, and only a written word verifies it', async () => {
+  const done = createWorkItem({ title: 'Send the shortlist' }), dropped = createWorkItem({ title: 'Call the supplier' });
+  for (const w of [done, dropped]) decideWorkItem(w.id, { outcome: 'accepted', reason: 'Yes' });
+  const item = queue.get(`work:${done.id}`);
+  expect(item).toMatchObject({ state: 'ready', workStatus: 'ready' });
+  expect(item.supportedActions).toEqual(['mark_done', 'not_doing', 'inspect']);
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done' })).rejects.toMatchObject({ status: 400 });
+  // Words with nothing visible in them are the caller's to fix, not an unknown outcome (a 503).
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: '\u200e' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
+  expect(getWorkItem(done.id).status).toBe('ready');
+  const finished = await queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: 'Sent it to Anna' });
+  expect(finished).toMatchObject({ state: 'verified', workStatus: 'verified', supportedActions: ['inspect'] });
+  expect(getWorkItem(done.id).resultCheck).toMatchObject({ verdict: 'passed', checkedBy: 'user', summary: 'Sent it to Anna',
+    evidence: [{ ref: NEEDS_YOU_DONE_REF, description: 'Sent it to Anna' }] });
+  const other = queue.get(`work:${dropped.id}`);
+  await queue.resolve(other.decisionId, { revision: other.revision, action: 'not_doing', reason: 'Not worth it' });
+  // Not doing it never counts as done, and its ref keeps it apart from a failed attempt.
+  expect(getWorkItem(dropped.id)).toMatchObject({ status: 'failed', resultCheck: { verdict: 'failed', evidence: [{ ref: NEEDS_YOU_NOT_DOING_REF }] } });
+  expect((await read()).items).toHaveLength(0);
+});
+
+test('workflow work and blocked work are not offered a finish action', async () => {
+  const e = effect('succeeded');
+  const flowWork = createWorkItem({ title: 'Runs itself', mode: 'workflow', workflowId: e.flow.id, workflowVersionId: e.version.id });
+  decideWorkItem(flowWork.id, { outcome: 'accepted', reason: 'Yes' });
+  expect(queue.get(`work:${flowWork.id}`).supportedActions).toEqual(['inspect']);
+  const held = createWorkItem({ title: 'Waiting on someone' });
+  decideWorkItem(held.id, { outcome: 'accepted', reason: 'Yes' }); setWorkBlocker(held.id, { reason: 'Waiting' });
+  expect(queue.get(`work:${held.id}`).supportedActions).toEqual(['inspect']);
+  // A finish never settles a permission card or a proposal: the server refuses what it did not offer.
+  const card = queue.get(`approval:${approval('workflow').id}`), proposal = queue.get(`work:${createWorkItem({ title: 'Not yet accepted' }).id}`);
+  for (const target of [card, proposal]) for (const action of ['mark_done', 'not_doing'] as const) {
+    await expect(queue.resolve(target.decisionId, { revision: target.revision, action, reason: 'Done' })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
+  }
+  expect(queue.get(card.decisionId).approval?.status).toBe('pending');
 });
 
 test('approval, effect detail and run detail share one identity; no duplicate blocked work card', async () => {
@@ -349,6 +390,30 @@ test('Pause holds and Kill refuses a Brief approval: the card stays pending and 
   } finally { setActiveEmergencyController(null); }
 });
 
+// #1314 follow-up (owner decision 2026-11-11): a screen-derived request is held while screen awareness is off.
+test('a screen-derived card says it is held while screen awareness is off, waits on approve, and is approvable once it is back on', async () => {
+  let on = true; setScreenCaptureEnabledSource(() => on);
+  try {
+    const a = runWithApprovalProvenance('screen', () => approval());
+    const plain = approval();
+    expect(queue.get(`approval:${a.id}`).awarenessHeld).toBeUndefined();
+    on = false;
+    const item = queue.get(`approval:${a.id}`);
+    expect(item.awarenessHeld).toBe(AWARENESS_HELD_APPROVAL_MESSAGE);
+    expect(item.supportedActions).toContain('reject_permission');
+    expect(queue.get(`approval:${plain.id}`).awarenessHeld).toBeUndefined();
+    await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409, code: 'held' });
+    expect(manager.getRequest(a.id)!.status).toBe('pending'); expect(calls).toBe(0);
+    on = true;
+    const back = queue.get(`approval:${a.id}`);
+    // The switch changes the card, so an approve read while it was off is stale.
+    expect(back.revision).not.toBe(item.revision);
+    expect(back.awarenessHeld).toBeUndefined();
+    await queue.resolve(back.decisionId, { revision: back.revision, action: 'approve_permission' });
+    expect(calls).toBe(1);
+  } finally { setScreenCaptureEnabledSource(null); }
+});
+
 test('a click-only card is approvable from the Brief queue as a dashboard click (Q-08)', async () => {
   const a = manager.createRequest({ agentId: 'fixture', agentName: 'Fixture', toolName: 'fixture_tool', toolArguments: {},
     actionCategory: 'write_data', urgency: 'normal', reason: 'Install hooks', context: JSON.stringify({ confirm: 'always' }), executionMode: 'deferred' });
@@ -461,4 +526,84 @@ test('malformed frozen notification arguments are not projected', () => {
   }
   saveWorkflowEffect({ ...e.record, route: 'notify', toolName: 'workflow_notify', arguments: { message: 'Hi', channels: ['dashboard', 7, null] } });
   expect(queue.get(`approval:${a.id}`).review?.channels).toEqual(['dashboard']);
+});
+
+test('runs held behind a workflow\'s card limit are one grouped entry, not one raw recovery card each', async () => {
+  const flow = createFlow();
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Morning reminder', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
+  const raise = (run: { id: string; projectId: string }, approvalId: string | null, deferral?: WorkflowEffect['deferral'], waitpointId: string | null = null) =>
+    saveWorkflowEffect({ id: crypto.randomUUID(), runId: run.id, projectId: run.projectId, flowId: flow.id, versionId: version.id,
+      versionDigest: 'fixture', stepName: 'notify', executionPath: [], route: 'notify', toolName: 'workflow_notify', actionCategory: 'send_message',
+      requestDigest: 'fixture', arguments: {}, target: {}, provenance: {}, decision: 'approval_required', reason: 'fixture',
+      status: 'pending', approvalId, waitpointId, createdAt: Date.now(), ...(deferral ? { deferral } : {}) });
+  const cards: string[] = [];
+  for (let i = 0; i < 26; i++) {
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    if (i < 5) {
+      const a = manager.createRequest({ agentId: `workflow:${run.id}`, agentName: 'Workflow: Morning reminder', toolName: 'workflow_notify', toolArguments: {},
+        actionCategory: 'send_message', urgency: 'normal', reason: 'Notify', context: '', executionMode: 'workflow' });
+      raise(run, a.id); cards.push(`approval:${a.id}`);
+    } else {
+      const wait = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'notify', type: 'DEFER' });
+      raise(run, null, { budget: 'other', since: Date.now() }, wait.id);
+      updateRun(run.id, { status: 'PAUSED' });
+    }
+  }
+  const { items } = (await read());
+  const held = items.filter(item => item.kind === 'held');
+  expect(items.filter(item => item.kind === 'permission').map(item => item.decisionId).sort()).toEqual(cards.sort());
+  expect(items.filter(item => item.kind === 'recovery')).toEqual([]);
+  expect(held).toHaveLength(1);
+  expect(held[0]).toMatchObject({ decisionId: `held:${flow.id}`, held: { workflowName: 'Morning reminder', count: 21 }, supportedActions: ['inspect'],
+    title: '21 more runs of Morning reminder are waiting. Answer a request above to let the next one ask.' });
+  // The count rule: only the entries that ask the owner for something count; a held group never does.
+  expect(items.filter(item => item.kind !== 'held')).toHaveLength(5);
+  expect(queue.get(`held:${flow.id}`).held?.count).toBe(21);
+});
+
+/** `count` runs of one flow, each parked on its own DEFER with no card, as the effect boundary leaves them (#1039). */
+function heldRuns(count: number, createdAt = Date.now()) {
+  const flow = createFlow();
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Morning reminder', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
+  const runs = Array.from({ length: count }, (_, i) => {
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    const wait = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'notify', type: 'DEFER' });
+    saveWorkflowEffect({ id: crypto.randomUUID(), runId: run.id, projectId: run.projectId, flowId: flow.id, versionId: version.id,
+      versionDigest: 'fixture', stepName: 'notify', executionPath: [], route: 'notify', toolName: 'workflow_notify', actionCategory: 'send_message',
+      requestDigest: 'fixture', arguments: {}, target: {}, provenance: {}, decision: 'approval_required', reason: 'fixture',
+      status: 'pending', approvalId: null, waitpointId: wait.id, createdAt: createdAt + i, deferral: { budget: 'other', since: createdAt + i } });
+    updateRun(run.id, { status: 'PAUSED' });
+    return { run, wait };
+  });
+  return { flow, runs };
+}
+
+test('Kill does not turn a held group back into one raw row per run, and a held commitment run shows its work card again', async () => {
+  const { runs } = heldRuns(4);
+  const work = createWorkItem({ title: 'Held commitment' });
+  decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do this' });
+  getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [runs[0]!.run.id, work.id]);
+  expect((await read()).items.map(item => item.kind)).toEqual(['held']);
+  for (const { run } of runs) cancelFlowRun(run.id, { reason: 'Stopped by Kill' });
+  // Nothing was sent and nothing was asked: no row per stopped run (#1364's rule), and the work's result check is reachable.
+  expect((await read()).items.map(item => item.decisionId)).toEqual([`work:${work.id}`]);
+});
+
+test('a held group keeps one sort key as its oldest run is released, so a later page never repeats it', async () => {
+  const { flow, runs } = heldRuns(2, Date.now() - 60_000);
+  approval();
+  const first = await queue.read({ limit: 1 });
+  expect(first.data.items.map(item => item.decisionId)).toEqual([`held:${flow.id}`]);
+  // The oldest run is released and its step has not asked again yet: it no longer holds a place.
+  getDb().run('UPDATE waitpoint SET resumed_at = ? WHERE id = ?', [Date.now(), runs[0]!.wait.id]);
+  const rest = await queue.read({ limit: 100, cursor: first.data.nextCursor! });
+  expect(rest.data.items.map(item => item.decisionId)).not.toContain(`held:${flow.id}`);
+});
+
+test('recommending existing work whose run is held lands on the held group, not "no unresolved queue item"', () => {
+  const { flow, runs } = heldRuns(1);
+  const work = createWorkItem({ title: 'Held commitment' });
+  decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do this' });
+  getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [runs[0]!.run.id, work.id]);
+  expect(queue.recommendWork(work.id, false).decisionId).toBe(`held:${flow.id}`);
 });

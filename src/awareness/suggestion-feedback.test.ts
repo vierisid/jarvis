@@ -389,3 +389,29 @@ test('a held call that comes back as a thrown error still goes back to the queue
   const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
   expect(job).toMatchObject({ state: 'queued', attempts: 0 });
 });
+
+test('through heldComposition as the daemon builds it, awareness off and back on within one composition holds the job, unspent (#1314 follow-up)', async () => {
+  const { setScreenCaptureEnabledSource } = await import('../actions/tools/desktop-guard.ts');
+  const { heldComposition } = await import('./history-guard.ts');
+  let on = true; const sent: string[] = [];
+  setScreenCaptureEnabledSource(() => on);
+  try {
+    acceptSuggestion(proposal().id, acceptance);
+    // heldComposition as daemon/index.ts builds it: the composer swallows the
+    // refused call into ok:false, and awareness is on again before it returns.
+    const compose = heldComposition(() => ({ llm: { async chat(prompt: string) { sent.push(prompt); return 'ok'; } } }),
+      async (deps: { llm: { chat(prompt: string): Promise<string> } }) => {
+        await deps.llm.chat('while on');
+        on = false;
+        try { await deps.llm.chat('while off'); } catch { /* the composer reports it as a failure */ }
+        on = true;
+        return { ok: false, errors: ['LLM call failed'] } as never;
+      });
+    worker = new SuggestionComposer(compose);
+    worker.start(); await worker.idle();
+    expect(sent).toEqual(['while on']);
+    const job = getDb().query('SELECT state, attempts FROM suggestion_composition_jobs').get() as { state: string; attempts: number };
+    expect(job).toMatchObject({ state: 'queued', attempts: 0 });
+    expect(getDb().query('SELECT job_id FROM suggestion_composition_attempts').all()).toHaveLength(0);
+  } finally { setScreenCaptureEnabledSource(null); }
+});

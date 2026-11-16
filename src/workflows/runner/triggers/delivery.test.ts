@@ -33,7 +33,7 @@ import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { TriggerManager } from "./manager";
 import { scheduleZoneWarning } from "./schedule-zone";
 import { TIMESTAMPED_REPEAT_WINDOW_MS, WEBHOOK_TIMESTAMP_TOLERANCE_S } from "./webhook-secret";
-import { redactedHeaders, webhookDelivery } from "./webhook";
+import { redactedHeaders, webhookDelivery, WEBHOOK_OFF_LOOKUPS_PER_MINUTE, WORKFLOW_OFF_MESSAGE } from "./webhook";
 import { getScheduleWatch, setScheduleWatch } from "../../db/repos/trigger-fire";
 import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 import { createWaitpoint } from "../../db/repos/waitpoint";
@@ -398,6 +398,31 @@ describe("schedules, in Jarvis's configured time zone", () => {
     await d.stop();
   });
 
+  test("a restart runs the times still within the grace window at once, each late, and the next on-time tick is not swallowed", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    let d = await daemon(at("2026-10-07T09:33:20Z"));
+    d.tick(flowId, "2026-10-07T09:33:30Z");
+    finishAll(flowId);
+    await d.stop();
+    d = await daemon(at("2026-10-07T09:36:25Z")); // down three minutes; no tick is driven by hand
+    await settle();
+    // 09:34 is 145 s old and missed; 09:35 (85 s) and 09:36 (25 s) run, without waiting for a minute boundary.
+    expect(listFlowFires(flowId).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "queued"],
+      ["2026-10-07T09:35", "delayed"],
+      ["2026-10-07T09:34", "missed"],
+      ["2026-10-07T09:33", "completed"],
+    ]);
+    expect(runsOf(flowId)).toHaveLength(3);
+    finishAll(flowId);
+    d.tick(flowId, "2026-10-07T09:37:02Z");
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:37", lateMs: 2_000 });
+    expect(listFlowFires(flowId)[0]!.label).not.toBe("skipped");
+    expect(runsOf(flowId)).toHaveLength(4);
+    await d.stop();
+  });
+
   test("a long sleep lists the newest 100 missed times, counts the older ones in one row, and runs the one still due", async () => {
     setCronTimezone("UTC");
     const { flowId } = schedule("* * * * *");
@@ -694,6 +719,149 @@ describe("webhooks", () => {
     await d.stop();
   });
 
+  test("a workflow turned off says so, and an unknown id stays not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    const off = await post(d, flowId, "{}");
+    expect(off.status).toBe(404);
+    expect(await off.json()).toEqual({ error: expect.stringContaining("turned off") });
+    const unknown = await post(d, "no-such-flow", "{}");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("a turned-off flow that is not a webhook stays not found", async () => {
+    const { flowId } = schedule("0 9 * * *");
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("lookups for unregistered ids are bounded; past the budget the reply is not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    await d.manager.stop();
+    updateFlowStatus(flowId, "DISABLED");
+    for (let i = 0; i < WEBHOOK_OFF_LOOKUPS_PER_MINUTE; i++) await post(d, `made-up-${i}`, "{}");
+    expect(await (await post(d, flowId, "{}")).json()).toEqual({ error: "Webhook not found" });
+    await d.stop();
+  });
+
+  test("only a turned-off refusal says turned off; removed, changed or not listening answers not found", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    const reply = async (result: Record<string, unknown>) => {
+      d.manager.webhookManager().setTriggerCallback(() => result);
+      const res = await post(d, flowId, "{}");
+      return { status: res.status, body: await res.json() };
+    };
+    expect(await reply({ outcome: "blocked", reason: "The workflow was removed.", disabled: true }))
+      .toEqual({ status: 404, body: { error: "Webhook not found" } });
+    expect(await reply({ outcome: "blocked", reason: "The workflow is turned off.", disabled: true, turnedOff: true }))
+      .toEqual({ status: 404, body: { error: WORKFLOW_OFF_MESSAGE } });
+    await d.stop();
+  });
+
+  test("a registered webhook turned off before the refresh says so", async () => {
+    const { flowId } = webhook();
+    const d = await daemon(Date.now());
+    updateFlowStatus(flowId, "DISABLED"); // the route is still registered
+    const res = await post(d, flowId, "{}");
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe(WORKFLOW_OFF_MESSAGE);
+    await d.stop();
+  });
+
+  describe("body shapes", () => {
+    const FORM = { "Content-Type": "application/x-www-form-urlencoded" };
+    const capture = async (flowId: string, body: string, headers: Record<string, string>, query = "") => {
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const res = await d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}${query}`, { method: "POST", body, headers }));
+      await d.stop();
+      return { res, data: seen[0] };
+    };
+
+    test("a form post's fields are top-level fields, repeated names are arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "name=Ada+Lovelace&email=a%40b.co&tag=x&tag=y&tag=z", FORM);
+      expect(data).toMatchObject({ name: "Ada Lovelace", email: "a@b.co", tag: ["x", "y", "z"] });
+      expect(data!.body).toBeUndefined();
+      expect(data!._webhook.method).toBe("POST");
+    });
+
+    test("a multipart form's text fields are top-level fields", async () => {
+      const { flowId } = webhook();
+      const part = (name: string, value: string, file = "") => `--B\r\nContent-Disposition: form-data; name="${name}"${file ? `; filename="${file}"` : ""}\r\n\r\n${value}\r\n`;
+      const body = part("name", "Ada") + part("tag", "x") + part("tag", "y") + part("upload", "bytes", "a.txt") + "--B--\r\n";
+      const { data } = await capture(flowId, body, { "Content-Type": "multipart/form-data; boundary=B" });
+      expect(data).toMatchObject({ name: "Ada", tag: ["x", "y"] });
+      expect(data!.upload).toBeUndefined();
+    });
+
+    test("query parameters are parsed under _webhook.query, repeats as arrays", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, '{"n":1}', { "Content-Type": "application/json" }, "?source=ad&id=1&id=2&empty=");
+      expect(data!.n).toBe(1);
+      expect(data!._webhook.query).toEqual({ source: "ad", id: ["1", "2"], empty: "" });
+      const none = await capture(flowId, "{}", {});
+      expect(none.data!._webhook.query).toEqual({});
+    });
+
+    test("JSON objects, arrays and plain text keep their shapes", async () => {
+      const { flowId } = webhook();
+      expect((await capture(flowId, "[1,2]", { "Content-Type": "application/json" })).data!.body).toEqual([1, 2]);
+      expect((await capture(flowId, "hello", { "Content-Type": "text/plain" })).data!.body).toBe("hello");
+      expect((await capture(flowId, "a=1", { "Content-Type": "text/plain" })).data!.body).toBe("a=1");
+    });
+
+    test("a captured signed event sent again as a form is still a repeat", async () => {
+      const { flowId } = webhook({ secret: SECRET, signature_scheme: "timestamped" });
+      const d = await daemon(Date.now());
+      const body = '{"object":"event","id":"evt_1","a":"x&b=y"}';
+      const headers = await timestamped(SECRET, body);
+      const send = (type: string) => post(d, flowId, body, { ...headers, "Content-Type": type });
+      expect(await (await send("application/json")).json()).toMatchObject({ outcome: "started" });
+      expect(await (await send("application/x-www-form-urlencoded")).json()).toMatchObject({ outcome: "duplicate" });
+      expect(runsOf(flowId)).toHaveLength(1);
+      await d.stop();
+    });
+
+    test("a 1 MB form of one repeated name parses in linear time", async () => {
+      const { flowId } = webhook();
+      const repeats = 330_000; // "a=&" is 3 bytes: just under the 1 MB cap
+      const { res, data } = await capture(flowId, "a=&".repeat(repeats), FORM);
+      expect(res.status).toBe(200);
+      expect(data!.a).toHaveLength(repeats);
+    });
+
+    test("a field named __proto__ is data, not a prototype", async () => {
+      const { flowId } = webhook();
+      const { data } = await capture(flowId, "__proto__=x&a=1", FORM);
+      expect(Object.getPrototypeOf(data)).toBe(Object.prototype);
+      expect(Object.keys(data!)).toContain("__proto__");
+    });
+
+    test("a signed form post verifies over the raw body, and a changed body does not", async () => {
+      const { flowId } = webhook({ secret: SECRET });
+      const body = "name=Ada+Lovelace&tag=x&tag=y";
+      const d = await daemon(Date.now());
+      const seen: Record<string, any>[] = [];
+      d.manager.webhookManager().setTriggerCallback((_id, data) => { seen.push(data); return { outcome: "started", fireId: "f", runId: "r" }; });
+      const send = async (text: string, signedText: string) => d.manager.webhookManager().handleRequest(flowId, new Request(`http://localhost/api/webhooks/${flowId}`, { method: "POST", body: text, headers: { ...FORM, ...(await timestamped(SECRET, signedText)) } }));
+      expect((await send(body, body)).status).toBe(200);
+      expect(seen[0]).toMatchObject({ name: "Ada Lovelace", tag: ["x", "y"] });
+      expect((await send("name=Eve", body)).status).toBe(401);
+      await d.stop();
+    });
+  });
+
   test("a delivery refused by readiness is kept for a person, and its retries do not pile up failed runs", async () => {
     setEncryptionKey(Buffer.alloc(32, 0x62));
     const connection = upsertConnection({ externalId: "account", pieceName: "private-piece", displayName: "S", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "x" } });
@@ -821,6 +989,46 @@ describe("through the engine, as production runs triggers", () => {
     await d.stop();
   });
 
+  test("a leap-day schedule, more than a year from its next time, registers and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const f = schedule("0 0 29 2 *");
+    const d = await daemon(at("2026-11-11T12:00:00Z")); // 2028-02-29 is 475 days away
+    expect(d.manager.registrationProblem(f.flowId)).toBeNull();
+    expect(d.manager.list()).toEqual([expect.objectContaining({ flowId: f.flowId, kind: "cron" })]);
+    expect(d.cron.getJobs()[0]?.nextRun).toBe(at("2028-02-29T00:00:00Z"));
+    await d.poll(f.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(f.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("the schedule piece's leap-day schedule registers through the engine and fires on the day", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: p.enable, poll: () => [{ date: "leap" }] });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationState(p.flowId, p.versionId)).toBe("registered");
+    await d.poll(p.flowId, "2028-02-29T00:00:10Z");
+    expect(runsOf(p.flowId)).toHaveLength(1);
+    await d.stop();
+  });
+
+  test("a schedule that cannot be registered says why instead of reading as on", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    // The engine answers with a schedule that has no time to run (February 31).
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toContain("The schedule could not be started");
+    await d.stop();
+  });
+
+  test("a trigger whose schedule fails but whose webhook still delivers is not said to be not running", async () => {
+    const p = pieceSchedule("0 0 29 2 *", "UTC", true);
+    const { engine } = stubEngine({ enable: { listeners: [{ events: ["x"], identifierValue: "x" }], scheduleOptions: { cronExpression: "0 0 31 2 *", timezone: "UTC" } } });
+    const d = await daemon(at("2026-11-11T12:00:00Z"), engine);
+    expect(d.manager.registrationProblem(p.flowId)).toBeNull();
+    await d.stop();
+  });
+
   test("a schedule piece step left at its pre-filled UTC fires at Jarvis's wall time, and says so", async () => {
     setCronTimezone("Europe/Rome");
     const p = pieceSchedule("0 9 * * *", "UTC");
@@ -896,6 +1104,61 @@ describe("through the engine, as production runs triggers", () => {
       ["skipped", "America/New_York@2026-03-09T02:30"],
       ["delayed", "America/New_York@2026-03-08T02:30"],
     ]);
+    await d.stop();
+  });
+
+  test("an engine schedule restarted after downtime runs every time still owed, one after another, and then its next tick", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("* * * * *", "UTC");
+    const { engine } = stubEngine({ enable: p.enable, poll: async () => { await new Promise((r) => setTimeout(r, 1)); return [{}]; } });
+    let d = await daemon(at("2026-10-07T09:33:20Z"), engine);
+    await d.poll(p.flowId, "2026-10-07T09:33:30Z");
+    finishAll(p.flowId);
+    await d.stop();
+    d = await daemon(at("2026-10-07T09:36:25Z"), engine);
+    await settle();
+    await settle();
+    // 09:35 (85 s old) and 09:36 both run; neither is skipped as a check still running.
+    expect(listFlowFires(p.flowId).filter(f => f.scheduledFor! > at("2026-10-07T09:34:59Z")).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "queued"],
+      ["2026-10-07T09:35", "delayed"],
+    ]);
+    expect(runsOf(p.flowId)).toHaveLength(3);
+    finishAll(p.flowId);
+    await d.poll(p.flowId, "2026-10-07T09:37:02Z");
+    expect(runsOf(p.flowId)).toHaveLength(4);
+    expect(listFlowFires(p.flowId).some(f => f.label === "skipped")).toBe(false);
+    await d.stop();
+  });
+
+  test("an engine catch-up time that waited past its grace window behind the check before it is missed, not run late", async () => {
+    setCronTimezone("UTC");
+    const p = pieceSchedule("* * * * *", "UTC");
+    let release: () => void = () => {};
+    let gated = false;
+    const { engine } = stubEngine({ enable: p.enable, poll: async () => {
+      if (gated) await new Promise<void>((resolve) => { release = resolve; });
+      return [{}];
+    } });
+    let d = await daemon(at("2026-10-07T09:33:20Z"), engine);
+    await d.poll(p.flowId, "2026-10-07T09:33:30Z");
+    finishAll(p.flowId);
+    await d.stop();
+    gated = true;
+    d = await daemon(at("2026-10-07T09:36:25Z"), engine);
+    await settle();
+    // The check for 09:35 hangs until 09:38:30, when 09:36 is 150 s old.
+    setSystemTime(new Date(at("2026-10-07T09:38:30Z")));
+    gated = false;
+    release();
+    await settle();
+    const fires = listFlowFires(p.flowId).filter(f => f.scheduledFor! > at("2026-10-07T09:34:59Z"));
+    expect(fires.map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "missed"],
+      ["2026-10-07T09:35", "delayed"],
+    ]);
+    expect(fires[0]!.lateMs).toBe(150_000);
+    expect(runsOf(p.flowId)).toHaveLength(2);
     await d.stop();
   });
 
@@ -1101,6 +1364,29 @@ describe("Pause and Kill (Q-08)", () => {
     again.tick(flowId, "2026-10-07T09:01:10Z");
     expect(runsOf(flowId)).toHaveLength(0);
     await again.stop();
+  });
+
+  test("paused at a restart, the times the catch-up owes are skipped and shown, and none runs late after Resume", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    const controller = emergency();
+    let d = await daemon(at("2026-10-07T09:33:20Z"));
+    d.tick(flowId, "2026-10-07T09:33:30Z");
+    finishAll(flowId);
+    await d.stop();
+    controller.pause();
+    d = await daemon(at("2026-10-07T09:36:25Z"));
+    await settle();
+    expect(runsOf(flowId)).toHaveLength(1);
+    expect(listFlowFires(flowId).slice(0, 2).map(f => [f.dedupeKey, f.label])).toEqual([
+      ["2026-10-07T09:36", "skipped"],
+      ["2026-10-07T09:35", "skipped"],
+    ]);
+    controller.resume();
+    d.tick(flowId, "2026-10-07T09:37:02Z");
+    expect(runsOf(flowId)).toHaveLength(2);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ dedupeKey: "2026-10-07T09:37" });
+    await d.stop();
   });
 
   test("a webhook while paused is told to retry later, and its retry after Resume runs", async () => {

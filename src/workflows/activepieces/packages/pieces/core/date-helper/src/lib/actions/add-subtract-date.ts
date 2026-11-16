@@ -5,6 +5,7 @@ import {
    getCorrectedFormat,
   optionalTimeFormats,
   parseDate,
+  formatDate,
   timeFormat,
   timeFormatDescription,
   timeParts,
@@ -12,6 +13,7 @@ import {
 } from '../common';
 import { z } from 'zod';
 import { propsValidation } from '@activepieces/pieces-common';
+import { quote } from '../../../../../../../../runtime/date-parse';
 
 export const addSubtractDateAction = createAction({
   name: 'add_subtract_date',
@@ -118,14 +120,29 @@ export const addSubtractDateAction = createAction({
     }
 
     if (timeZone) {
-      return { result: AfterDate.tz(timeZone).format(outputFormat) };
+      return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };
     } else {
-      return { result: AfterDate.format(outputFormat) };
+      return { result: formatDate(AfterDate, outputFormat) };
     }
   },
 });
 
 function addSubtractTime(date: Date, expression: string, timeZone?: string): dayjs.Dayjs {
+  // === JARVIS PATCH: an expression that is not one or more "+/- number unit" terms fails ===
+  // Anything else used to be skipped term by term, so "banana" changed nothing
+  // and a misspelt unit was ignored, while the step reported success. Any
+  // whitespace is dropped (the upstream line below only drops spaces and line
+  // breaks), and the refusal quotes a short one-line cut, as date-parse does.
+  const given = String(expression ?? '');
+  expression = given.replace(/\s/g, '');
+  if (!/^(?:[+-]*\d+(?:year|month|day|hour|minute|second)s?)+$/i.test(expression)) {
+    throw new Error(
+      `The expression ${quote(given)} could not be read. Use terms of a sign, a number and a unit, such as "+ 1 day" or "+ 1 year - 3 month". The units are year, month, day, hour, minute and second.`
+    );
+  }
+  // "+ {{n}} day" with a negative n reads "+-3day": a run of signs is one sign.
+  expression = expression.replace(/[+-]{2,}/g, (signs) => (signs.split('-').length % 2 === 0 ? '-' : '+'));
+  // === END JARVIS PATCH ===
   // remove all the spaces and line breaks from the expression
   expression = expression.replace(/(\r\n|\n|\r)/gm, '').replace(/ /g, '');
   const parts = expression.split(/(\+|-)/);
@@ -161,7 +178,8 @@ function addSubtractTime(date: Date, expression: string, timeZone?: string): day
   }
   
   // Create timezone-aware dayjs object if timezone is provided
-  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);
+  // Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.
+  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);
   
   for (let i = 0; i < numbers.length; i++) {
     let val = units[i].toLowerCase();
@@ -197,5 +215,10 @@ function addSubtractTime(date: Date, expression: string, timeZone?: string): day
       }
     }
   }
+  // === JARVIS PATCH: a result outside the range a date can hold fails ===
+  if (!dayjsDate.isValid()) {
+    throw new Error('The expression moves the date outside the range a date can hold. Use a smaller number.');
+  }
+  // === END JARVIS PATCH ===
   return dayjsDate;
 }

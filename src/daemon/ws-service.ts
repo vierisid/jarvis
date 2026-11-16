@@ -6,12 +6,13 @@
  */
 
 import type { ServerWebSocket } from 'bun';
+import { AI_PROVIDER_NEEDED_CODE, AI_PROVIDER_NEEDED_MESSAGE } from '../brief/ai-provider-needed.ts';
 import { withMemoryRecall } from '../vault/memory-use-context.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { CommitmentExecutor } from './commitment-executor.ts';
-import type { ChannelService } from './channel-service.ts';
+import type { BroadcastDelivery, ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import { splitIntoSentences, type STTProvider, type TTSProvider } from '../comms/voice.ts';
@@ -707,6 +708,12 @@ export class WebSocketService implements Service {
     }
   }
 
+  /** True when no AI provider is saved at all, e.g. the AI step was skipped.
+   * Unreadable state counts as "has one" so a glitch never blocks chat. */
+  private hasNoAiProvider(): boolean {
+    try { return this.agentService.getLLMManager().getProviderNames().length === 0; } catch { return false; }
+  }
+
   /**
    * Set directory for serving pre-built dashboard files.
    * Must be called before start().
@@ -902,12 +909,14 @@ export class WebSocketService implements Service {
    * Used by EventReactor for immediate event reactions.
    * Urgent notifications are also pushed to all external channels.
    */
-  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low'): void {
+  broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low', delivery?: Pick<BroadcastDelivery, 'shouldContinue'>): void {
     this.broadcastNotificationToDashboard(text, priority);
 
     // Legacy proactive notifications intentionally fan out to external channels.
+    // `delivery.shouldContinue` stops that copy's sends and retries once its
+    // sender may no longer send (screen-derived help, #1314 follow-up).
     if (priority === 'urgent' && this.channelService) {
-      this.channelService.broadcastToAll(`[URGENT] ${text}`).catch(err =>
+      this.channelService.broadcastToAll(`[URGENT] ${text}`, undefined, delivery?.shouldContinue ? { shouldContinue: delivery.shouldContinue } : undefined).catch(err =>
         console.error('[WSService] Channel broadcast error:', err)
       );
     }
@@ -1104,8 +1113,15 @@ export class WebSocketService implements Service {
    * Used for awareness suggestions and other unsolicited voice notifications.
    * Resolves how many clients were sent audio: 0 when it was skipped or no
    * audio was synthesized, so a caller never reports silence as spoken.
+   *
+   * `shouldContinue` is asked before speaking starts, before each sentence
+   * and before each audio chunk is sent (#1314 follow-up): a caller whose
+   * permission to speak can lapse mid-message (screen-derived help once
+   * awareness is turned off) stops there, and the clients get tts_end.
    */
-  async broadcastProactiveVoice(text: string): Promise<number> {
+  async broadcastProactiveVoice(text: string, options: { shouldContinue?: () => boolean } = {}): Promise<number> {
+    const proceed = () => !options.shouldContinue || options.shouldContinue();
+    if (!proceed()) return 0;
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
       return 0;
@@ -1158,9 +1174,11 @@ export class WebSocketService implements Service {
       const { splitIntoSentences } = await import('../comms/voice.ts');
       for (const sentence of splitIntoSentences(text)) {
         checkpointExecution();
+        if (!proceed()) break;
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
             checkpointExecution();
+            if (!proceed()) break;
             // Send binary audio to the target clients
             for (const ws of owned()) {
               try {
@@ -1353,7 +1371,8 @@ export class WebSocketService implements Service {
   private async routeMessage(msg: WSMessage, ws: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     if (['brief_chat_send', 'brief_chat_cancel', 'brief_chat_subscribe', 'brief_chat_unsubscribe'].includes(msg.type)) {
       if (!this.briefChat) return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'unsupported', message: 'Conversation chat is unsupported.' }, id: msg.id, timestamp: Date.now() };
-      if (this.isSetupMode() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'setup_required', message: 'Finish first-run setup before chatting.' }, id: msg.id, timestamp: Date.now() };
+      if (this.isSetupMode() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'setup_required', message: 'Setup is not finished. Reload this page to finish it, then try again.' }, id: msg.id, timestamp: Date.now() };
+      if (this.hasNoAiProvider() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: AI_PROVIDER_NEEDED_CODE, message: AI_PROVIDER_NEEDED_MESSAGE }, id: msg.id, timestamp: Date.now() };
       const wasScoped = this.briefChat.transport.hasClient(ws);
       await this.briefChat.transport.handle(msg, ws, this.briefChat.capabilities);
       if (!wasScoped && this.briefChat.transport.hasClient(ws)) {
@@ -1601,6 +1620,17 @@ export class WebSocketService implements Service {
             message: 'Finish first-run setup before chatting with Jarvis.' } }, msg.id ? { requestId: msg.id } : {}),
           code: 'setup_required',
         },
+        id: msg.id,
+        timestamp: Date.now(),
+      };
+    }
+    // Setup was saved without an AI provider (the AI step was skipped). Refuse
+    // before anything is persisted or a task is created for a turn no model can answer.
+    if (this.hasNoAiProvider()) {
+      return {
+        type: 'error',
+        payload: chatErrorPayload({ source: 'action', outcome: { status: 'blocked', code: 'AI_PROVIDER_REQUIRED', effect: 'not_started',
+          message: AI_PROVIDER_NEEDED_MESSAGE } }, msg.id ? { requestId: msg.id } : {}),
         id: msg.id,
         timestamp: Date.now(),
       };
@@ -2666,7 +2696,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (llm.getProviderNames().length === 0) {
       this.wsServer.sendToClient(ws, {
         type: 'interview_error',
-        payload: { message: 'No LLM configured. Finish setup first.' },
+        payload: { message: 'Jarvis needs an AI provider before the interview can run. Skip it for now and add one in AI settings.' },
         timestamp: Date.now(),
       });
       return;
@@ -2870,6 +2900,18 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         "Finish first-run setup before talking to me.",
         requestId,
       );
+      return;
+    }
+    // Setup is done but no AI provider was saved: the classifier and the chat
+    // fall-through cannot run. Window control stays available, as above.
+    if (this.hasNoAiProvider()) {
+      const winCtrlPre = matchWindowControl(trimmed);
+      if (winCtrlPre) {
+        this.broadcastWindowControl(winCtrlPre, requestId);
+        this.broadcastAssistantAck(ackForWindowControl(winCtrlPre), requestId);
+        return;
+      }
+      this.broadcastAssistantAck(AI_PROVIDER_NEEDED_MESSAGE, requestId);
       return;
     }
 

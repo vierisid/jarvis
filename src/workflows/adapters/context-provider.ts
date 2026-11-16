@@ -38,7 +38,7 @@ import type { ScreenCaptureRow } from "../../awareness/types";
 
 export class JarvisContextProviderAdapter implements PieceContextProvider {
   async vaultSearch(input: VaultSearchInput): Promise<VaultEntitySnapshot[]> {
-    const query: { type?: EntityType; nameContains?: string } = {};
+    const query: { type?: EntityType; nameContains?: string; excludeInternal: boolean } = { excludeInternal: true };
     if (input.type !== undefined) query.type = input.type;
     if (input.query !== undefined) query.nameContains = input.query;
     const entities = findEntities(query);

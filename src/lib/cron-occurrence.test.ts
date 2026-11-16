@@ -20,6 +20,55 @@ function job(expression: string, startIso: string) {
 }
 
 describe("CronScheduler occurrences", () => {
+  test("a schedule resumed from a watch runs the times owed at once, not at the next interval, and a stale registration does not", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // 09:35 is 85 s old and 09:36 is 25 s old: both run now, the later one marked as following.
+    expect(fired).toEqual([
+      { at: at("2026-10-07T09:35:00Z"), key: "2026-10-07T09:35", lateMs: 85_000 },
+      { at: at("2026-10-07T09:36:00Z"), key: "2026-10-07T09:36", lateMs: 25_000, afterEarlier: true },
+    ]);
+    scheduler.cancelAll();
+    const cancelled: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => cancelled.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    scheduler.cancel("j");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(cancelled).toEqual([]);
+  });
+
+  test("the first evaluation of a resumed schedule is its catch-up, whoever runs it, and the deferred one then repeats nothing", async () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:36:25Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o), { dueAfter: at("2026-10-07T09:34:25Z") });
+    // Another timer (a shared ticker, a test) evaluates the job before the deferred catch-up does.
+    scheduler.runDue("j", at("2026-10-07T09:36:25Z"));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.afterEarlier ?? false])).toEqual([["2026-10-07T09:35", false], ["2026-10-07T09:36", true]]);
+    // Ordinary ticks after it mark nothing.
+    scheduler.runDue("j", at("2026-10-07T09:37:01Z"));
+    expect(fired[2]).toEqual({ at: at("2026-10-07T09:37:00Z"), key: "2026-10-07T09:37", lateMs: 1_000 });
+  });
+
+  test("a catch-up across the spring-forward jump marks the shifted minute as following the time before it", async () => {
+    setCronTimezone("America/New_York");
+    // 2026-03-08 02:00 EST jumps to 03:00 EDT (07:00Z). 02:00 does not exist and fires once right after the jump.
+    setSystemTime(new Date(at("2026-03-08T07:01:30Z")));
+    scheduler = new CronScheduler();
+    const fired: CronOccurrence[] = [];
+    scheduler.schedule("j", "0 2,3 * * *", (o) => fired.push(o), { dueAfter: at("2026-03-08T06:59:30Z") });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(fired.map((o) => [o.key, o.shifted ?? false, o.afterEarlier ?? false])).toEqual([
+      ["2026-03-08T03:00", false, false],
+      ["2026-03-08T02:00", true, true],
+    ]);
+  });
+
   test("each fires once, named by its wall-clock minute in the configured zone", () => {
     setCronTimezone("Asia/Kolkata");
     const { fired, tick } = job("0 9 * * *", "2026-10-07T03:29:00Z");
@@ -84,5 +133,110 @@ describe("CronScheduler occurrences", () => {
     tick("2026-10-07T09:02:30Z"); // asleep through 09:00
     expect(fired).toEqual([]);
     expect(missed).toEqual([{ at: at("2026-10-07T09:00:00Z"), key: "2026-10-07T09:00", lateMs: 150_000 }]);
+  });
+});
+
+describe("CronScheduler tick cadence", () => {
+  // Runs the scheduler's real interval on a simulated clock: whatever period it
+  // asked setInterval for is the period the clock advances by.
+  function simulate(expression: string, startIso: string, endIso: string, startOffsetMs = 0) {
+    let clock = at(startIso) + startOffsetMs;
+    const realSetInterval = globalThis.setInterval;
+    let periodMs = 0;
+    let beat: (() => void) | null = null;
+    (globalThis as any).setInterval = (fn: () => void, ms: number) => { periodMs = ms; beat = fn; return 0 as any; };
+    const fired: CronOccurrence[] = [];
+    try {
+      scheduler = new CronScheduler(() => clock);
+      scheduler.schedule("j", expression, (o) => fired.push(o));
+    } finally { globalThis.setInterval = realSetInterval; }
+    for (const end = at(endIso); clock < end; clock += periodMs) beat!();
+    return { fired, periodMs };
+  }
+
+  test("a time starts within two seconds of its minute whatever the registration offset", () => {
+    setCronTimezone("UTC");
+    for (const offset of [0, 7_000, 25_000, 29_000]) {
+      const { fired } = simulate("0 9 * * *", "2026-10-07T08:59:00Z", "2026-10-07T09:01:00Z", offset);
+      expect(fired.map(o => o.key)).toEqual(["2026-10-07T09:00"]);
+      expect(fired[0]!.lateMs).toBeLessThanOrEqual(2_000);
+    }
+  });
+
+  test("consecutive minute fires do not drift", () => {
+    setCronTimezone("UTC");
+    const { fired } = simulate("*/1 * * * *", "2026-10-07T08:59:00Z", "2026-10-07T09:20:00Z", 17_000);
+    // The first is the registration minute, run on registration by design.
+    const after = fired.slice(1);
+    expect(after.length).toBeGreaterThanOrEqual(20);
+    expect(Math.max(...after.map(o => o.lateMs))).toBeLessThanOrEqual(2_000);
+  });
+});
+
+describe("CronScheduler ticker", () => {
+  // Counts the intervals the scheduler holds open, without letting any run.
+  function counting() {
+    const realSet = globalThis.setInterval;
+    const realClear = globalThis.clearInterval;
+    const live = new Map<number, () => void>();
+    let next = 1;
+    (globalThis as any).setInterval = (fn: () => void) => { live.set(next, fn); return next++ as any; };
+    (globalThis as any).clearInterval = (handle: number) => { live.delete(handle); };
+    return { live, restore: () => { globalThis.setInterval = realSet; globalThis.clearInterval = realClear; } };
+  }
+
+  test("many schedules share one timer, which stops with the last of them", () => {
+    setCronTimezone("UTC");
+    const timers = counting();
+    try {
+      scheduler = new CronScheduler(() => at("2026-10-07T08:59:30Z"));
+      for (let i = 0; i < 50; i++) scheduler.schedule(`j${i}`, `${i % 60} * * * *`, () => {});
+      expect(timers.live.size).toBe(1);
+      for (let i = 0; i < 49; i++) scheduler.cancel(`j${i}`);
+      expect(timers.live.size).toBe(1);
+      scheduler.cancel("j49");
+      expect(timers.live.size).toBe(0);
+      scheduler.schedule("again", "* * * * *", () => {});
+      expect(timers.live.size).toBe(1);
+      scheduler.cancelAll();
+      expect(timers.live.size).toBe(0);
+    } finally { timers.restore(); }
+  });
+
+  test("one pass ticks every job and skips one cancelled earlier in the pass", () => {
+    setCronTimezone("UTC");
+    let clock = at("2026-10-07T08:59:30Z");
+    const timers = counting();
+    const fired: string[] = [];
+    try {
+      scheduler = new CronScheduler(() => clock);
+      scheduler.schedule("a", "0 9 * * *", () => { fired.push("a"); scheduler!.cancel("b"); });
+      scheduler.schedule("b", "0 9 * * *", () => fired.push("b"));
+      scheduler.schedule("c", "0 9 * * *", () => fired.push("c"));
+      const [beat] = Array.from(timers.live.values());
+      clock = at("2026-10-07T09:00:01Z");
+      beat!();
+      expect(fired).toEqual(["a", "c"]);
+    } finally { timers.restore(); }
+  });
+
+  test("after a laptop sleep the first tick on waking runs the time still in grace and reports the rest", () => {
+    setCronTimezone("UTC");
+    let clock = at("2026-10-07T07:00:00Z");
+    const timers = counting();
+    const fired: CronOccurrence[] = [];
+    const missed: CronOccurrence[] = [];
+    try {
+      scheduler = new CronScheduler(() => clock);
+      scheduler.schedule("j", "0 * * * *", (o) => fired.push(o), { onMissed: (m) => missed.push(...m) });
+      const [beat] = Array.from(timers.live.values());
+      clock = at("2026-10-07T07:00:01Z"); beat!();
+      // Asleep from 07:00:01 until 10:01:30; the timer resumes with the host.
+      clock = at("2026-10-07T10:01:30Z"); beat!();
+      clock = at("2026-10-07T10:01:31Z"); beat!();
+      expect(fired.map((o) => o.key)).toEqual(["2026-10-07T07:00", "2026-10-07T10:00"]);
+      expect(fired[1]!.lateMs).toBe(90_000);
+      expect(missed.map((o) => o.key)).toEqual(["2026-10-07T08:00", "2026-10-07T09:00"]);
+    } finally { timers.restore(); }
   });
 });

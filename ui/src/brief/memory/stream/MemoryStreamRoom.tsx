@@ -11,6 +11,8 @@ import { MemoryController } from "./controller";
 import {
   dateGroup,
   usageLabel,
+  sourceWords,
+  basisWords,
   type MemoryFilters,
   type MemoryItem,
 } from "./model";
@@ -246,14 +248,14 @@ function ConnectedMemory({ binding }: { binding: MemoryBinding }) {
                       </span>
                       <span className="brief-memory-meta">
                         <span>
-                          {row.sourceSummary.labels.join(" · ") ||
+                          {row.sourceSummary.labels.map(sourceWords).join(" · ") ||
                             "Source not recorded"}
                         </span>
                         <span>{usageLabel(row)}</span>
                       </span>
                       <span className="brief-memory-qualification">
                         {row.scope && <span>Scope: {row.scope}</span>}
-                        <span>{row.basis}</span>
+                        <span>{basisWords(row.basis)}</span>
                         {row.status === "contested" && <span>Contested</span>}
                         {(row.validity.from !== null ||
                           row.validity.to !== null) && (
