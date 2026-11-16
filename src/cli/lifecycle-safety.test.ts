@@ -44,6 +44,23 @@ async function startUnrelatedListener(): Promise<{ pid: number; port: number }> 
   return { pid: child.pid, port: Number.parseInt(new TextDecoder().decode(value).trim(), 10) };
 }
 
+/**
+ * A listener that holds `lockPath` open the way the daemon holds its lock, so
+ * the lock half of the ownership check passes; the tests below stand in for the
+ * command half. `ignoreSigterm` makes it survive SIGTERM.
+ */
+async function startLockHoldingListener(lockPath: string, ignoreSigterm = false): Promise<{ pid: number; port: number }> {
+  const script = `
+    require('node:fs').openSync(process.env.TEST_LOCK_PATH, 'w');
+    ${ignoreSigterm ? 'process.on("SIGTERM", () => {});' : ''}
+    const s = Bun.serve({ port: 0, fetch: () => new Response("x") }); console.log(s.port); setInterval(() => {}, 1000);
+  `;
+  const child = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'ignore', env: { ...process.env, TEST_LOCK_PATH: lockPath } });
+  children.push(child);
+  const { value } = await child.stdout.getReader().read();
+  return { pid: child.pid, port: Number.parseInt(new TextDecoder().decode(value).trim(), 10) };
+}
+
 describe('ensurePortReleased leaves unrelated listeners alone', () => {
   test('an unrelated process on the port is reported, not signalled', async () => {
     const { pid, port } = await startUnrelatedListener();
@@ -60,10 +77,11 @@ describe('ensurePortReleased leaves unrelated listeners alone', () => {
     expect(await res.text()).toBe('x');
   });
 
-  test('a listener proven to be ours is still cleared', async () => {
-    const { pid, port } = await startUnrelatedListener();
+  test('a listener proven to be ours (command and lock) is still cleared', async () => {
+    const lockPath = join(SANDBOX, 'ours.pid');
+    const { pid, port } = await startLockHoldingListener(lockPath);
 
-    const result = await ensurePortReleased(port, process.pid, async (p) => p === pid);
+    const result = await ensurePortReleased(port, { lockPath, isOwnCommand: async (p) => p === pid });
 
     expect(result.terminated.length + result.forced.length).toBe(1);
     expect(result.foreign).toEqual([]);
@@ -73,20 +91,16 @@ describe('ensurePortReleased leaves unrelated listeners alone', () => {
 
 describe('ensurePortReleased before SIGKILL', () => {
   test('proves the pid is still ours again, so a pid reused during the wait is not killed', async () => {
-    const child = Bun.spawn(
-      ['bun', '-e', 'process.on("SIGTERM", () => {}); const s = Bun.serve({ port: 0, fetch: () => new Response("x") }); console.log(s.port); setInterval(() => {}, 1000);'],
-      { stdout: 'pipe', stderr: 'ignore' },
-    );
-    children.push(child);
-    const { value } = await child.stdout.getReader().read();
-    const port = Number.parseInt(new TextDecoder().decode(value).trim(), 10);
+    const lockPath = join(SANDBOX, 'reused.pid');
+    const child = await startLockHoldingListener(lockPath, true);
     let asked = 0;
 
     // Ours when first looked at, someone else's by the time SIGTERM has been ignored.
-    const result = await ensurePortReleased(port, process.pid, async (p) => p === child.pid && ++asked === 1);
+    const result = await ensurePortReleased(child.port, { lockPath, isOwnCommand: async (p) => p === child.pid && ++asked === 1 });
 
     expect(asked).toBe(2);
     expect(result.forced).toEqual([]);
+    expect(result.stuck.map((l) => [l.pid, l.reason])).toEqual([[child.pid, 'stopped-being-ours']]);
     expect(() => process.kill(child.pid, 0)).not.toThrow();
   }, 10_000);
 });

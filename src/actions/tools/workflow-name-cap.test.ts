@@ -4,15 +4,15 @@ import { createFlow, listFlows } from '../../workflows/db/repos/flow';
 import { createDraftVersion, getFlowVersion, getLatestDraft } from '../../workflows/db/repos/flow-version';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { sampleCatalog } from '../../workflows/runtime/test-fixtures';
-import { WORKFLOW_NAME_MAX_CHARS } from '../../workflows/api/display-name';
+import { FLOW_DISPLAY_NAME_MAX_CHARS } from '../../workflows/display-name';
 import { createManageWorkflowTool } from './manage-workflow';
 import type { ComposerLlmClient } from './workflow-composer';
 
-// manage_workflow holds workflow and step names to the dashboard routes' cap
-// (validDisplayName in workflows/api/routes.ts).
-const atCap = 'n'.repeat(WORKFLOW_NAME_MAX_CHARS);
-const overCap = 'n'.repeat(WORKFLOW_NAME_MAX_CHARS + 1);
-const refused = `is ${WORKFLOW_NAME_MAX_CHARS + 1} characters; the limit is ${WORKFLOW_NAME_MAX_CHARS}`;
+// manage_workflow holds workflow and step names to the one cap every name
+// write uses (FLOW_DISPLAY_NAME_MAX_CHARS in workflows/display-name.ts).
+const atCap = 'n'.repeat(FLOW_DISPLAY_NAME_MAX_CHARS);
+const overCap = 'n'.repeat(FLOW_DISPLAY_NAME_MAX_CHARS + 1);
+const refused = `is ${FLOW_DISPLAY_NAME_MAX_CHARS + 1} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`;
 
 const catalog = sampleCatalog();
 const unwrap = (raw: unknown) => JSON.parse(String(raw).split('\n').slice(2, -1).join('\n'));
@@ -21,7 +21,7 @@ beforeEach(() => { initWorkflowDb(':memory:'); configureWorkflowReadiness({ piec
 afterEach(() => closeWorkflowDb());
 
 test('the cap is the one the dashboard routes use', () => {
-  expect(WORKFLOW_NAME_MAX_CHARS).toBe(512);
+  expect(FLOW_DISPLAY_NAME_MAX_CHARS).toBe(512);
 });
 
 describe('create', () => {
@@ -35,6 +35,12 @@ describe('create', () => {
   test('accepts a name at the cap', async () => {
     expect(unwrap(await tool.execute({ action: 'create', name: atCap, empty: true })).name).toBe(atCap.slice(0, 200));
     expect(listFlows()).toHaveLength(1);
+  });
+
+  test('refuses a blank name and saves nothing', async () => {
+    await expect(tool.execute({ action: 'create', name: '', empty: true })).rejects.toThrow('non-empty string');
+    await expect(tool.execute({ action: 'create', name: ' \u200b ', empty: true })).rejects.toThrow('non-empty string');
+    expect(listFlows()).toHaveLength(0);
   });
 });
 
@@ -91,9 +97,10 @@ describe('update', () => {
     return { flow, version, base: { action: 'update', flow: flow.id, version_id: version.id, expected_revision: page.revision } };
   }
 
-  test('refuses a workflow name over the cap, accepts one at it', async () => {
+  test('refuses a workflow name over the cap or blank, accepts one at it', async () => {
     const { version, base } = await draft();
     await expect(tool.execute({ ...base, patches: [], name: overCap })).rejects.toThrow(refused);
+    await expect(tool.execute({ ...base, patches: [], name: '   ' })).rejects.toThrow(`at most ${FLOW_DISPLAY_NAME_MAX_CHARS} characters`);
     expect(unwrap(await tool.execute({ ...base, patches: [], name: atCap })).changed).toBe(true);
     expect(getFlowVersion(version.id)!.displayName).toBe(atCap);
   });

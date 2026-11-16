@@ -366,7 +366,7 @@ test('recall caps the evidence ledger so a repeated assertion cannot grow the pr
   expect(large).toContain('"evidence_count":200');
   // Which of the equally recent rows is shown is not fixed (a tight loop shares
   // a millisecond), but the count is: three, out of two hundred recorded.
-  expect(JSON.parse(large.slice(large.indexOf('evidence: ') + 'evidence: '.length))).toHaveLength(3);
+  expect(JSON.parse(large.slice(large.indexOf('evidence: ') + 'evidence: '.length).split('\n')[0]!)).toHaveLength(3);
   expect(large).not.toContain('conversation:0"');
 });
 
