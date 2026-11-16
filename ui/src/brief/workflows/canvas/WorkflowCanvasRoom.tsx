@@ -15,6 +15,7 @@ import {
   type WorkflowRequest,
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
+import { TimeSavedPerRun } from "./TimeSavedPerRun";
 import "./canvas.css";
 import { workflowStatusWords, WORKFLOW_SAVE_ACTION } from "../status-words";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
@@ -303,6 +304,8 @@ function CanvasHeader({
         <p><strong>This workflow was deleted in another tab or window.</strong> Your edits are still here but cannot be saved to it. Copy anything you want to keep, then go back to All workflows.</p>
         <BriefButton size="sm" onClick={() => { discard(); window.setTimeout(() => shell.navigate({ room: "all-workflows", selection: {} }), 50); }}>Discard edits and go to All workflows</BriefButton>
       </div>}
+      {binding.permissions && <TimeSavedPerRun key={`time-${binding.flowId}`} flow={binding.permissions} request={binding.request as typeof fetch}
+        onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Time saved could not be refreshed. Reopen this workflow to check.')); }} />}
       {binding.permissions && <details className="brief-canvas-setup" open={hasCode || undefined}>
         <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
         <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}
