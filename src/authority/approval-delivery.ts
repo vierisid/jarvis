@@ -3,6 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
+import { approvalHeldByAwareness } from './approval-provenance.ts';
 import { APPROVAL_SHORT_ID_LENGTH, approvalChannelIntentFromContext, approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
@@ -1124,13 +1125,18 @@ export type ApprovalBroadcaster = {
 };
 
 export type ChannelSender = {
-  /** `delivery.approvalCard`: the one send path allowed a retry after a timeout or drop (owner decision, Q-19). */
-  broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean }): Promise<void>;
+  /**
+   * `delivery.approvalCard`: the one send path allowed a retry after a timeout or drop (owner decision, Q-19).
+   * `delivery.shouldContinue`: asked before each send and retry; false stops it (#1314 follow-up).
+   */
+  broadcastToAll(text: string, options?: SendOptions, delivery?: { approvalCard?: boolean; shouldContinue?: () => boolean }): Promise<void>;
 };
 
 export class ApprovalDelivery {
   private broadcaster: ApprovalBroadcaster | null = null;
   private channelSender: ChannelSender | null = null;
+  /** Screen-derived requests held before any card went out, delivered on resumeHeld(). */
+  private held = new Set<string>();
 
   setBroadcaster(broadcaster: ApprovalBroadcaster): void {
     this.broadcaster = broadcaster;
@@ -1143,7 +1149,21 @@ export class ApprovalDelivery {
   /**
    * Deliver an approval request to all appropriate channels.
    */
-  async deliver(request: ApprovalRequest): Promise<void> {
+  async deliver(request: ApprovalRequest, again = false): Promise<void> {
+    // A request raised from what was on the screen is held while screen
+    // awareness is off (#1314 follow-up): no card goes anywhere, and one
+    // being sent stops before its next send or retry. It stays pending and
+    // is delivered when awareness is back on (resumeHeld).
+    if (approvalHeldByAwareness(request)) {
+      this.held.add(request.id);
+      return;
+    }
+    // Set when the switch stopped a send: read after the send, since awareness
+    // may be back on by then (off and on again while the card was going out).
+    let stopped = false;
+    const stillDeliverable = request.provenance === 'screen'
+      ? { shouldContinue: () => { const go = !approvalHeldByAwareness(request); if (!go) stopped = true; return go; } } : {};
+
     // Always push to dashboard via WebSocket
     this.broadcaster?.broadcastApprovalRequest(request);
 
@@ -1152,10 +1172,33 @@ export class ApprovalDelivery {
     if (this.channelSender) {
       try {
         const card = approvalChannelCard(request);
-        await this.channelSender.broadcastToAll(card.text, { literal: true }, { approvalCard: true });
+        await this.channelSender.broadcastToAll(card.text, { literal: true }, { approvalCard: true, ...stillDeliverable });
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }
+      // Awareness went off while the card was going out and a channel send was
+      // stopped: it goes out again on resume, or now if awareness is already
+      // back on (a duplicate card over a lost one, as for approval-card
+      // retries, Q-19).
+      if (stopped || approvalHeldByAwareness(request)) {
+        // Once: a switch flapping during every send must not loop.
+        if (approvalHeldByAwareness(request) || again) this.held.add(request.id);
+        else await this.deliver(request, true);
+      }
+    }
+  }
+
+  /**
+   * Deliver the cards held while screen awareness was off, now that it is
+   * back on: each one still pending, read again so a request decided or
+   * expired meanwhile is not shown. One still held stays held.
+   */
+  async resumeHeld(getRequest: (id: string) => ApprovalRequest | null): Promise<void> {
+    const ids = [...this.held];
+    this.held.clear();
+    for (const id of ids) {
+      const request = getRequest(id);
+      if (request?.status === 'pending') await this.deliver(request);
     }
   }
 }

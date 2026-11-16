@@ -7,7 +7,7 @@ import type { GoalEvent } from './events.ts';
 import { GoalEventDelivery, queueGoalEvent } from './event-delivery.ts';
 import { calculateGoalHealth } from './health.ts';
 import { validateProposal, planProposal } from './proposal.ts';
-import { enumeration, invalid, number, record, keys, text, validateGoalFields, GOAL_LEVELS } from './validation.ts';
+import { enumeration, goalTitle, invalid, number, record, keys, text, validateGoalFields, GOAL_LEVELS } from './validation.ts';
 import { validateReviewScores, saveGoalReviewRecord, type GoalReviewBundle } from './review-evidence.ts';
 import { countedObservationIds, hasObservations, latestObservation, ledgerEvidence, MAX_COUNTED, MAX_ENTRIES_PER_GOAL, receiptMeasurement,
   sourceBacks, subjectKey, validateCountedDefinition, validateObservationCommand, type ObservationEntry, type ObservationReceipt } from './observations.ts';
@@ -50,7 +50,7 @@ export class GoalApplicationService {
   }
   createGoal(title: unknown, level: unknown, options?: Parameters<typeof vault.createGoal>[2]): Goal {
     return this.transaction(() => {
-      const goal = vault.createGoal(text(title, 'goal.title'), enumeration(level, GOAL_LEVELS, 'goal.level'), options);
+      const goal = vault.createGoal(goalTitle(title), enumeration(level, GOAL_LEVELS, 'goal.level'), options);
       queueGoalEvent({ type: 'goal_created', goalId: goal.id, data: { title, level, parent_id: goal.parent_id }, timestamp: goal.created_at }, terminal(goal.status) ? goal : undefined);
       return goal;
     });
