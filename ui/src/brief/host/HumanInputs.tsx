@@ -10,7 +10,9 @@ type HumanInputQueue = { requests: HumanRequest[]; error: string; refresh(): Pro
   /** Every pending request the server holds, listed or not. */
   pendingTotal?: number;
   /** Lists 50 more pending requests; absent once the list holds as many as the server will page (`HUMAN_INPUT_LIST_MAX`). */
-  showMore?(): void };
+  showMore?(): void;
+  /** False until the first read succeeds (or while the capability is off): an unread queue is not an empty one. */
+  loaded?: boolean };
 /** Pending requests asked for at first, and added by each "Show more": a list of a thousand is read a page at a time. */
 export const HUMAN_INPUT_PAGE = 50;
 /**
@@ -19,7 +21,7 @@ export const HUMAN_INPUT_PAGE = 50;
  */
 export function useHumanInputQueue(http: HostTransport, enabled = true): HumanInputQueue {
   const [requests, setRequests] = useState<HumanRequest[]>([]), [error, setError] = useState('');
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null), [unavailable, setUnavailable] = useState<string[]>([]), [loaded, setLoaded] = useState(!enabled);
   const [pendingTotal, setPendingTotal] = useState<number | undefined>(), [limit, setLimit] = useState(HUMAN_INPUT_PAGE);
   const active = useRef(true), reading = useRef(false), again = useRef(false), wanted = useRef(HUMAN_INPUT_PAGE);
   wanted.current = limit;
@@ -54,14 +56,14 @@ export function useHumanInputQueue(http: HostTransport, enabled = true): HumanIn
       if (active.current) {
         setRequests([...value.requests, ...recovered]); setHistoryCursor(value.historyCursor ?? null);
         setPendingTotal(Number.isSafeInteger(value.pendingTotal) ? value.pendingTotal : undefined);
-        setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError('');
+        setUnavailable(previous => previous.length === gone.length && previous.every((id, i) => id === gone[i]) ? previous : gone); setError(''); setLoaded(true);
       }
     } catch { if (active.current && !http.signal.aborted) setError('Workflow requests could not be refreshed. Reconnect and check again.'); }
     finally { reading.current = false; if (again.current) { again.current = false; void refresh(); } }
   };
   useEffect(() => {
-    if (!enabled) { setRequests([]); setPendingTotal(undefined); setError(''); return; }
-    active.current = true; void refresh();
+    if (!enabled) { setRequests([]); setPendingTotal(undefined); setError(''); setLoaded(true); return; }
+    active.current = true; setLoaded(false); void refresh();
     const timer = setInterval(() => { if (document.visibilityState !== 'hidden') void refresh(); }, 5000);
     const focus = () => void refresh(); window.addEventListener('focus', focus);
     const shown = () => { if (document.visibilityState === 'visible') void refresh(); }; document.addEventListener('visibilitychange', shown);
@@ -71,10 +73,22 @@ export function useHumanInputQueue(http: HostTransport, enabled = true): HumanIn
   const showMore = limit < HUMAN_INPUT_LIST_MAX ? () => {
     wanted.current = Math.min(wanted.current + HUMAN_INPUT_PAGE, HUMAN_INPUT_LIST_MAX); setLimit(wanted.current); void refresh();
   } : undefined;
-  return { requests, error, refresh, historyCursor, unavailable, pendingTotal, showMore };
+  return { requests, error, refresh, historyCursor, unavailable, pendingTotal, showMore, loaded };
 }
 export const HumanInputsContext = createContext({ pending: 0 });
 export const useHumanInputCount = () => useContext(HumanInputsContext).pending;
+/**
+ * Everything waiting in Needs you that Today's own reads cannot see: workflow input requests, voice
+ * confirmations, unread messages from workflows, and live approvals while the decisions list is off. null while any of it is unknown
+ * (socket down, input queue unread or failing), so Today never shows an all-clear by default.
+ */
+export const OwnerAttentionContext = createContext<number | null>(null);
+export const useOwnerAttention = () => useContext(OwnerAttentionContext);
+export function ownerAttentionCount(live: { connected: boolean; inputsKnown: boolean; inputs: number; stored: number; clarifiers: number; repeatBacks: number; approvals: number; decisionsListed: boolean }): number | null {
+  if (!live.connected || !live.inputsKnown) return null;
+  // Live approvals reach Needs you through the decisions list when that capability is on; only count them here otherwise.
+  return live.inputs + live.stored + live.clarifiers + live.repeatBacks + (live.decisionsListed ? 0 : live.approvals);
+}
 export function HumanInputForm({ request, http, changed, focused = false, recoveryOnly = false, onAnswers }: {
   request: HumanRequest; http: HostTransport; changed(): Promise<void>; focused?: boolean; recoveryOnly?: boolean;
   /** Told what this card holds in memory, so the inbox can tell an unsent answer from an empty card. */
