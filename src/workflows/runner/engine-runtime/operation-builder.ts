@@ -200,6 +200,42 @@ export function buildExtractPieceMetadataOperation(
   };
 }
 
+export interface ExecutePropertyOptions {
+  pieceName: string;
+  pieceVersion: string;
+  /** The action or trigger that owns the property. */
+  actionOrTriggerName: string;
+  propertyName: string;
+  /** Values of the other properties, as the editor would send them. */
+  input: Record<string, unknown>;
+  projectId?: string;
+  platformId: string;
+  engineToken: string;
+  internalApiUrl: string;
+  publicApiUrl?: string;
+  timeoutInSeconds?: number;
+}
+
+/** Ask the engine what a dynamic property (or dropdown) resolves to for `input`. */
+export function buildExecutePropertyOperation(opts: ExecutePropertyOptions): EngineOperationEnvelope {
+  return {
+    operationType: "EXECUTE_PROPERTY",
+    operation: {
+      piece: { pieceName: opts.pieceName, pieceVersion: opts.pieceVersion },
+      propertyName: opts.propertyName,
+      actionOrTriggerName: opts.actionOrTriggerName,
+      input: opts.input,
+      sampleData: {},
+      projectId: opts.projectId,
+      platformId: opts.platformId,
+      engineToken: opts.engineToken,
+      internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
+      publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
+      timeoutInSeconds: opts.timeoutInSeconds ?? CONTROL_OPERATION_TIMEOUT_S,
+    },
+  };
+}
+
 export type TriggerHookType =
   | "ON_ENABLE"
   | "ON_DISABLE"
