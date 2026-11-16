@@ -141,6 +141,9 @@ test("all thirteen current categories are readable with distinct on/off semantic
   expect(host.textContent).toContain(
     "Off uses the authority level and other rules: overrides, context rules and the approval asked after Jarvis reads outside content still apply.",
   );
+  expect(host.textContent).toContain(
+    "a matching Deny rule always wins over any Allow, whatever order they were added in.",
+  );
   expect(host.querySelector('[role="tablist"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Add a rule|Oct 12|always require/i);
 });
@@ -163,6 +166,54 @@ test("keyboard steps and Home/End agree with restored canonical values after exp
   expect(fixture.current().default_level).toBe(10);
   await render({}, binding(), "remounted");
   expect(slider().value).toBe("10");
+});
+test("the Saved confirmation survives the background refresh that follows a save", async () => {
+  await render();
+  await key("ArrowRight");
+  await click("Save changes");
+  expect(button("Saved")).toBeTruthy();
+  await React.act(async () => {
+    await fixture.controller.refresh();
+    await settle();
+  });
+  expect(host.textContent).toContain("Changes saved and checked.");
+  expect(button("Saved")).toBeTruthy();
+});
+test("the Saved hold ends after its window, on an explicit reload, or when values changed elsewhere", async () => {
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    const backgroundRefresh = () =>
+      React.act(async () => {
+        await fixture.controller.refresh();
+        await settle();
+      });
+    const saveOnce = async () => {
+      await key("ArrowRight");
+      await click("Save changes");
+      expect(fixture.controller.snapshot().phase).toBe("saved");
+    };
+    await render();
+    await saveOnce();
+    now += 10_001;
+    await backgroundRefresh();
+    expect(fixture.controller.snapshot().phase).toBe("clean");
+    expect(host.textContent).toContain("Current settings loaded.");
+
+    await saveOnce();
+    await click("Reload settings");
+    expect(fixture.controller.snapshot().phase).toBe("clean");
+    expect(host.textContent).toContain("Current settings loaded.");
+
+    await saveOnce();
+    fixture.change({ default_level: 1 });
+    await backgroundRefresh();
+    expect(fixture.controller.snapshot().phase).toBe("clean");
+    expect(slider().value).toBe("1");
+  } finally {
+    Date.now = realNow;
+  }
 });
 test("pointer position stays continuous until release and focus refresh cannot interrupt a clean drag", async () => {
   await render();

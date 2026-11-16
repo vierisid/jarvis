@@ -220,6 +220,7 @@ function BoundRuns({
                 <strong>{run.label}</strong>
                 <time>{date(run.startedAt)}</time>
                 <Status status={run.status} />
+                {run.note && <span className="brief-runs-row-note">{run.note}</span>}
               </button>
             ))}
             {state.history.status !== "ready" && (
@@ -319,7 +320,7 @@ function RunDocument({ run }: { run: RunDetail }) {
       </h3>
       <dl className="brief-run-metadata">
         <dt>Trigger</dt>
-        <dd>{run.trigger ?? "Not recorded"}</dd>
+        <dd>{run.trigger ?? "Unknown"}</dd>
         <dt>Started</dt>
         <dd>{date(run.startedAt)}</dd>
         <dt>Run ID</dt>

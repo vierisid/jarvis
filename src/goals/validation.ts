@@ -1,4 +1,5 @@
 import type { GoalLevel } from './types.ts';
+import { NOT_ONE_LINE, NOT_TEXT } from '../vault/commitment-text.ts';
 
 export const GOAL_LEVELS = ['objective', 'key_result', 'milestone', 'task', 'daily_action'] as const;
 export const TIME_HORIZONS = ['life', 'yearly', 'quarterly', 'monthly', 'weekly', 'daily'] as const;
@@ -20,7 +21,22 @@ export function keys(value: Record<string, unknown>, allowed: readonly string[],
 }
 export function text(value: unknown, path: string, required = true, max = 20000): string {
   if (typeof value !== 'string' || (required && !value.trim()) || value.length > max) invalid(path, 'must be a valid string');
+  // The rule a task's text is stored under (vault/commitment-text.ts): C0 and C1 controls and DEL
+  // are refused, and a lone surrogate is not text. Tab and line breaks stay for descriptions;
+  // a title is one line, so it refuses them and the Unicode line and paragraph separators too.
+  if (!value.isWellFormed()) invalid(path, 'must be a valid string');
+  if ((/(^|\.)title$/.test(path) ? NOT_ONE_LINE : NOT_TEXT).test(value)) invalid(path, 'must not contain control characters');
   return value;
+}
+/** The longest goal title, so a goal still reads as a title on every screen. */
+export const MAX_GOAL_TITLE = 200;
+export function goalTitle(value: unknown, path = 'goal.title'): string {
+  if (typeof value === 'string' && value.length > MAX_GOAL_TITLE) invalid(path, `must be ${MAX_GOAL_TITLE} characters or fewer`);
+  return text(value, path);
+}
+/** A new or moved deadline cannot already be over. Checked where a person sets it, not on stored goals. */
+export function assertDeadlineNotPast(deadline: unknown, now = Date.now(), path = 'goal.deadline'): void {
+  if (typeof deadline === 'number' && deadline < now) invalid(path, 'has already passed; pick today or a later date');
 }
 export function enumeration<T extends string>(value: unknown, values: readonly T[], path: string): T {
   if (typeof value !== 'string' || !values.includes(value as T)) invalid(path, `must be one of ${values.join(', ')}`);
@@ -73,7 +89,7 @@ export function validateGoalFields(input: unknown, mode: 'create' | 'update'): R
     if (item === undefined) continue;
     const path = `goal.${key}`;
     switch (key) {
-      case 'title': text(item, path); break;
+      case 'title': goalTitle(item, path); break;
       case 'description': case 'success_criteria': text(item, path, false); break;
       case 'time_horizon': enumeration(item, TIME_HORIZONS, path); break;
       case 'status': enumeration(item, GOAL_STATUSES, path); break;

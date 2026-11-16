@@ -14,9 +14,27 @@ import { FlowVersionRequestError } from "./flow-version-ownership";
 import { apId } from "../ids";
 import { touchFlow } from "./flow";
 import { assertLiveDraftReady, graphReadiness } from './flow-readiness';
+import { withResolvedPropertySchemas } from "../../runtime/dynamic-property-schemas";
+import { workflowReadinessServices } from "./readiness-services";
 import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 import { repinLiveDraft } from "./binding-pins";
 import { applyWebhookSecretRules, WebhookSecretError } from "../../runner/triggers/webhook-secret";
+import { withoutHiddenText } from "../../../vault/commitment-text";
+
+// eslint-disable-next-line no-control-regex
+const NAME_BREAKS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
+/**
+ * A workflow name as every writer stores it: one line (each run of controls
+ * and line or paragraph separators a space), well formed, without the
+ * characters that reorder or hide text. The API refuses controls first
+ * (`validDisplayName`); this holds the composer, the assistant's tools and
+ * onboarding, which never throw over a name, to the same line. A no-op for an
+ * ordinary name.
+ */
+export function storedDisplayName(name: string): string {
+  return withoutHiddenText(String(name).toWellFormed().replace(NAME_BREAKS, " "));
+}
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -256,6 +274,11 @@ function rowToFlowVersion(row: FlowVersionRow): FlowVersion {
   };
 }
 
+/** Fill the saved schema of each dynamic property (HTTP body, auth fields, zip password) for its current values. */
+function resolvedSchemas<T>(trigger: T): T {
+  return withResolvedPropertySchemas(trigger, workflowReadinessServices()?.pieces);
+}
+
 /**
  * A Webhook trigger's signing secret as it may be saved (#1153): a created or
  * changed secret meets the length floor and is timestamped; one a Webhook
@@ -291,10 +314,19 @@ function latestTrigger(flowId: string): unknown {
   return row ? JSON.parse(row.trigger) : null;
 }
 
+/** A trigger is the root step object; a string, number, array or null is not a graph. */
+function assertTriggerShape(trigger: unknown): void {
+  if (trigger === undefined) return;
+  if (trigger === null || typeof trigger !== 'object' || Array.isArray(trigger)) {
+    throw new FlowVersionRequestError('trigger must be an object describing the first step of the workflow', 400);
+  }
+}
+
 export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion {
+  assertTriggerShape(input.trigger);
   const id = apId();
   const ts = now();
-  const trigger = webhookSecretRules(input.flowId, latestTrigger(input.flowId), input.trigger ?? {});
+  const trigger = resolvedSchemas(webhookSecretRules(input.flowId, latestTrigger(input.flowId), input.trigger ?? {}));
   // A new draft becomes the LATEST draft, which is the version an ENABLED
   // flow with nothing published actually runs. See the gate's own comment.
   assertCodeStepsAllowedForLiveDraft(input.flowId, trigger);
@@ -307,7 +339,7 @@ export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion 
     [
       id,
       input.flowId,
-      input.displayName,
+      storedDisplayName(input.displayName),
       JSON.stringify(trigger),
       input.schemaVersion ?? LATEST_SCHEMA_VERSION,
       input.updatedBy ?? null,
@@ -364,7 +396,8 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     throw new FlowVersionRequestError(
       `version ${id} is LOCKED and cannot be edited; create a new draft to change it`, 409);
   }
-  if (patch.trigger !== undefined) patch = { ...patch, trigger: webhookSecretRules(existing.flow_id, JSON.parse(existing.trigger), patch.trigger) };
+  assertTriggerShape(patch.trigger);
+  if (patch.trigger !== undefined) patch = { ...patch, trigger: resolvedSchemas(webhookSecretRules(existing.flow_id, JSON.parse(existing.trigger), patch.trigger)) };
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
   if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);
@@ -373,7 +406,7 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
 
   const next: FlowVersionRow = {
     ...existing,
-    display_name: patch.displayName ?? existing.display_name,
+    display_name: patch.displayName !== undefined ? storedDisplayName(patch.displayName) : existing.display_name,
     trigger: patch.trigger ? JSON.stringify(patch.trigger) : existing.trigger,
     // A client-supplied valid=true is not evidence. This is a cached authoring
     // result only; activation always recompiles against current bindings.
@@ -655,6 +688,9 @@ export function setSampleInputEntry(
  */
 export const SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES = 256 * 1024;
 
+/** The engine's own step record types: a step output carrying one of these is the record, not what the step returned. */
+const STEP_RECORD_TYPES = new Set(["PIECE", "CODE", "LOOP_ON_ITEMS", "ROUTER", "PIECE_TRIGGER", "EMPTY"]);
+
 /**
  * Merge step outputs from a successful run into the version's sampleData
  * map, but only for cells that are currently empty. Designed to be called
@@ -701,10 +737,21 @@ export function mergeRunOutputsIntoSampleData(
     // Pull the inner `output` field if this is a wrapped StepOutput,
     // otherwise treat the value itself as the output (defensive against
     // schema variants).
-    const output =
+    let output =
       raw && typeof raw === "object" && !Array.isArray(raw) && "output" in (raw as Record<string, unknown>)
         ? (raw as { output: unknown }).output
         : raw;
+    // A run records each step as `{ output: StepOutput }`, and the StepOutput
+    // (`{ type, status, input, output }`) holds what the step returned. The
+    // sample is what the step returned, which is what a test feeds to later steps.
+    if (
+      output && typeof output === "object" && !Array.isArray(output)
+      && STEP_RECORD_TYPES.has(String((output as Record<string, unknown>).type))
+      && typeof (output as Record<string, unknown>).status === "string"
+      && "output" in (output as Record<string, unknown>)
+    ) {
+      output = (output as { output: unknown }).output;
+    }
     if (!output || typeof output !== "object" || Array.isArray(output)) {
       skipped.push({ stepName, reason: "output not a plain object" });
       continue;

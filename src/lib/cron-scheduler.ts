@@ -31,6 +31,11 @@ export type CronOccurrence = {
   lateMs: number;
   /** The named minute did not exist because clocks jumped forward; it fires once, right after the jump. */
   shifted?: true;
+  /**
+   * Set on the later times of the startup catch-up: each is owed its own run,
+   * so the one delivered just before it is no reason to skip it as stacked.
+   */
+  afterEarlier?: true;
 };
 
 /** Missed occurrences older than the newest `CRON_MISSED_LISTED`, counted rather than listed. */
@@ -159,6 +164,17 @@ function parseField(field: string, min: number, max: number): number[] {
 export function validateCronExpression(expression: string): void {
   if (parseEveryExpression(expression) === null) parseExpression(expression);
 }
+
+/**
+ * How far ahead the next time of a schedule is looked for: one Gregorian
+ * cycle, 400 years, which is a whole number of weeks. Calendar dates and
+ * weekdays repeat exactly every cycle, so an expression with no time inside it
+ * never fires, and one that has a time has it inside it however rare it is
+ * (a leap day is up to 8 years apart, a leap day that must be a Monday up to
+ * 40). Both nextRun paths use this one bound.
+ */
+const CRON_LOOKAHEAD_DAYS = 146_097;
+const CRON_LOOKAHEAD_MS = CRON_LOOKAHEAD_DAYS * 24 * 60 * 60_000;
 
 /**
  * Parse a full 5-field cron expression into its component arrays.
@@ -315,6 +331,15 @@ function matchesWall(parsed: ParsedCron, wc: WallClock): boolean {
   return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && matchesDay(parsed, wc);
 }
 
+/**
+ * The wall-clock hour (0 to 23) of `date` in the owner's configured timezone,
+ * or this machine's when none is set. Authority time-range rules read this, so
+ * a hosted brain on a UTC machine still applies them on the owner's clock.
+ */
+export function ownerWallClockHour(date: Date, zone: string | null = cronTimezone): number {
+  return wallClockIn(date, zone).hour;
+}
+
 /** Scheduled local minute, independent of when its worker eventually executes. */
 export function cronWallTimeKey(date: Date, zone: string | null = cronTimezone): string {
   return wallKey(wallClockIn(date, zone));
@@ -365,6 +390,24 @@ function zoneFormatter(zone: string): Intl.DateTimeFormat {
     weekday: 'short',
     year: 'numeric',
   });
+}
+
+/**
+ * Whole days nextRun can jump past from a day `wc` that does not match,
+ * without stepping over one that might: to two days before the next day of
+ * the month the expression names, or before the next month when this month
+ * is not named. Two days of slack keep a jump of that many 24-hour spans on
+ * or before the target's eve even where a zone moved its date line (Samoa
+ * skipped a whole day); `startOfNextLocalDay` and the loop do the rest day by
+ * day. Without it a far search walks every day of the 400-year bound.
+ */
+function daysPassedOver(parsed: ParsedCron, wc: WallClock): number {
+  const monthDays = new Date(Date.UTC(wc.year, wc.month, 0)).getUTCDate();
+  // LW falls on one of the last three days of the month.
+  const target = !parsed.months.includes(wc.month) ? monthDays + 1
+    : parsed.lastWeekday ? monthDays - 2
+    : Math.min(parsed.daysOfMonth.find((d) => d > wc.dom) ?? monthDays + 1, monthDays + 1);
+  return Math.max(0, target - wc.dom - 2);
 }
 
 /** Local calendar date as a single comparable number (yyyymmdd). */
@@ -492,7 +535,7 @@ export class CronScheduler {
    * Calculate the next execution time for a cron expression.
    * @param expression - 5-field cron expression
    * @param from - start searching from this date (default: now)
-   * @returns Date of next execution, or null if none found within 1 year
+   * @returns Date of next execution, or null if it never fires (see CRON_LOOKAHEAD_DAYS)
    */
   static nextRun(expression: string, from: Date = new Date(), limitMs?: number, zone: string | null = cronTimezone, dstPolicy?: CronDstPolicy): Date | null {
     validateCronDstPolicy(dstPolicy);
@@ -506,10 +549,8 @@ export class CronScheduler {
       start.setSeconds(0, 0);
       start.setMinutes(start.getMinutes() + 1);
 
-      // Search up to 1 year ahead (minute-by-minute is too slow; step by minute smartly)
-      const limit = new Date(from);
-      limit.setFullYear(limit.getFullYear() + 1);
-      if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
+      // Search one 400-year cycle ahead (minute-by-minute is too slow; step by minute smartly)
+      const limit = new Date(Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER));
 
       const candidate = new Date(start);
 
@@ -589,13 +630,13 @@ export class CronScheduler {
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
-      const limit = Math.min(from.getTime() + 366 * 24 * 60 * 60_000, limitMs ?? Number.MAX_SAFE_INTEGER);
+      const limit = Math.min(from.getTime() + CRON_LOOKAHEAD_MS, limitMs ?? Number.MAX_SAFE_INTEGER);
       let guard = 0;
 
       while (ts < limit && ++guard < 600_000) {
         const wc = wallClock(new Date(ts), zone);
         if (!matchesDay(parsed, wc)) {
-          ts = startOfNextLocalDay(ts, zone);
+          ts = startOfNextLocalDay(ts + daysPassedOver(parsed, wc) * 86_400_000, zone);
           continue;
         }
         if (!hours.includes(wc.hour)) {
@@ -698,7 +739,13 @@ export class CronScheduler {
       if (handledOrder.length > 1_024) handled.delete(handledOrder.shift()!);
     };
 
+    // A schedule resumed from a stored watch (`dueAfter`) owes the times since
+    // then. Its first evaluation, whichever timer or caller runs it, is the
+    // startup catch-up: the later times it delivers are marked `afterEarlier`.
+    let resuming = options.dueAfter !== undefined;
     const tick = (nowMs: number): void => {
+      const catchUp = resuming;
+      resuming = false;
       const current = Math.floor(nowMs / 60_000);
       if (current <= evaluatedThrough) {
         // Same minute again, or a small step back: nothing new is due. A clock
@@ -733,20 +780,19 @@ export class CronScheduler {
           console.error(`[CronScheduler] Job "${id}" missed-occurrence handler threw:`, err);
         }
       }
-      for (const occurrence of due) {
+      let delivered = 0;
+      const deliver = (occurrence: CronOccurrence): void => {
         remember(occurrence.key);
-        run(occurrence);
-      }
+        run(catchUp && delivered++ > 0 ? { ...occurrence, afterEarlier: true } : occurrence);
+      };
+      for (const occurrence of due) deliver(occurrence);
       // A minute that clocks skipped when they jumped forward fires once,
       // right after the jump. Only while ticking normally: a jump during a
       // long stall is part of what was missed.
       if (dstPolicy !== 'skip_missing_first_repeated' && current - from <= 2) {
         for (let minute = from + 1; minute <= current; minute++) {
           const shifted = skippedOccurrence(parsed, minute * 60_000, zone);
-          if (shifted && !handled.has(shifted.key)) {
-            remember(shifted.key);
-            run({ ...shifted, lateMs: nowMs - shifted.at });
-          }
+          if (shifted && !handled.has(shifted.key)) deliver({ ...shifted, lateMs: nowMs - shifted.at });
         }
       }
       // The next run is for display; work it out only when something fired.
@@ -754,15 +800,24 @@ export class CronScheduler {
       if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs), undefined, zone, dstPolicy)?.getTime() ?? nowMs;
     };
 
-    this.jobs.set(id, {
+    const job: CronJob = {
       id,
       expression,
       callback,
       lastRun: null,
       nextRun: nextRun.getTime(),
       tick,
-    });
+    };
+    this.jobs.set(id, job);
     this.ticker ??= setInterval(() => this.tickAll(), CRON_TICK_MS);
+
+    // Run the times a resumed schedule owes now, not at the next tick, or
+    // one near the end of its grace window ages out first. Deferred so the
+    // caller finishes registering the job before its callback runs; a job
+    // cancelled or replaced meanwhile does nothing.
+    if (resuming) {
+      setTimeout(() => { if (this.jobs.get(id) === job) tick(this.now()); }, 0);
+    }
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
   }

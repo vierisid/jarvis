@@ -7,9 +7,15 @@ export type DecisionReference =
   | { kind: 'work_item'; id: string }
   | { kind: 'effect'; id: string; runId: string; status: EffectStatus };
 export type DecisionAction = 'accept_intent' | 'reject_intent' | 'approve_permission' | 'reject_permission'
-  | 'execute_once' | 'close_without_running' | 'inspect';
+  | 'execute_once' | 'close_without_running' | 'mark_done' | 'not_doing' | 'inspect';
 export interface QueuedDecision extends BriefDecision {
-  kind: 'intent' | 'permission' | 'recovery';
+  kind: 'intent' | 'permission' | 'recovery' | 'held';
+  /**
+   * Only on `held`: runs of one workflow waiting behind its approval-card
+   * limit. There is nothing to decide for them, so they never count as things
+   * that need the owner; the title is the plain sentence to show.
+   */
+  held?: { workflowName: string; count: number };
   title: string;
   state: 'deferred' | ApprovalExecutionState | NonNullable<BriefDecision['workStatus']> | EffectStatus;
   /** These are separate facts. A permission grant or committed effect is not a verified result. */
@@ -19,6 +25,8 @@ export interface QueuedDecision extends BriefDecision {
   review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[]; fallback?: 'desktop';
     /** #1314: a reviewed browser/desktop workflow card: the computer, the window, and every value with where it came from. */
     computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }> };
+  /** Set while approving waits on a switch: a screen-derived request while screen awareness is off (#1314 follow-up). */
+  awarenessHeld?: string;
   placement: number;
   createdAt: number;
 }

@@ -62,12 +62,14 @@ in that schedule's zone (`2026-11-01T01:30`), which is the occurrence's identity
 | On time, or up to two minutes late | Runs; lateness over a minute shows as delayed. In normal conditions a time starts within about a second of its minute (the scheduler checks every second) |
 | Later than two minutes (host asleep, process stalled, Jarvis off) | Recorded as missed, not run |
 | A long sleep | The time still within two minutes runs; the newest 100 missed are listed, older ones counted in one row, back seven days |
-| Restart within two minutes after a time | Runs, late, once |
+| Restart within two minutes after a time | Runs at startup, late, once. Several times still owed (a one-minute schedule down for a few minutes) all run at startup, one after another, none skipped as stacked; one left waiting more than two minutes behind the check before it is missed |
 | Autumn hour that happens twice | Its minutes fire once |
 | Minute skipped by the spring-forward jump | Fires once, right after the jump, saying why |
 | Restart, republish or re-enable inside the firing minute | The same occurrence is a repeat, not a second run |
 | Clock stepped back | Nothing fires again; a correction of more than two minutes is logged and the schedule carries on from the new time |
 | The previous time's run has not started yet | Skipped, not stacked behind it |
+| Next time more than a year away (a leap day) | Registers and fires; the next time is looked for across one 400-year calendar cycle, so no schedule that can ever fire is cut off by the search |
+| Registration fails, or is given up after its retries | The workflow list reads it as blocked with the reason, not as on |
 | Readiness broken | One failed run, then one blocked row that counts the repeats |
 
 At startup each enabled schedule is checked for the times it was owed since it
@@ -75,8 +77,8 @@ was last watched: the newest 100 are listed as missed, older ones counted in one
 row, back seven days. The watch is kept across restarts and cleared when the
 workflow is turned off, switched to another trigger, or refused at
 registration, so that time is never reported as missed. The live schedule
-starts where the check stopped, two minutes back, so a time in between runs
-late rather than being lost; one the previous process already ran is a repeat.
+starts where the check stopped, two minutes back, and looks at once rather than
+at its next check, so a time in between runs late rather than being lost; one the previous process already ran is a repeat.
 In a chosen zone the occurrence's identity also names the zone
 (`America/New_York@2026-10-07T09:00`), so after a person picks a zone, its
 09:00 is not taken for a repeat of 09:00 in Jarvis's zone the same day.
@@ -129,6 +131,12 @@ Signatures and delivery identity are checked on the raw request before this.
 A workflow that read one of these headers now gets `[redacted]`: authenticate
 the sender with the webhook secret, and keep a credential a step needs in a
 connection, not in the request.
+
+Runs recorded before this kept those headers in clear. They are not rewritten:
+the run history, the run list, `manage_workflow get_run` and a version's sample
+data (to the dashboard and to the assistant) show them by the same rule as
+`[redacted]` when read, and also hide the same values where a later step of
+that run repeated them (`runAsShown` in `runtime/step-credentials.ts`).
 
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
