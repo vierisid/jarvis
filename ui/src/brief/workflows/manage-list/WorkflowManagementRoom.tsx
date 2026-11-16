@@ -329,6 +329,9 @@ function BoundManagement({
                 row={r}
                 store={store}
                 open={() => open(r.item)}
+                openConnections={() =>
+                  shell.navigate({ room: "connected-workspace", selection: {} })
+                }
                 remove={() => void store.remove(r.item.flowId)}
                 restoreFocus={restoreFocus}
               />
@@ -416,12 +419,14 @@ function WorkflowRow({
   row: r,
   store,
   open,
+  openConnections,
   remove,
   restoreFocus,
 }: {
   row: ManagementSlot;
   store: WorkflowManagementController;
   open: () => void;
+  openConnections: () => void;
   remove: () => void;
   restoreFocus: (id: string, target: "undo" | "open" | "bin") => void;
 }) {
@@ -489,6 +494,21 @@ function WorkflowRow({
                 {words.note === "Needs setup"
                   ? (w.readiness.reason ?? words.note)
                   : words.note}
+                {w.readiness.state === "blocked" && w.readiness.fix && (
+                  <>
+                    {" "}
+                    <BriefButton
+                      size="sm"
+                      onClick={() =>
+                        w.readiness.fix!.kind === "connections"
+                          ? openConnections()
+                          : open()
+                      }
+                    >
+                      {w.readiness.fix.label}
+                    </BriefButton>
+                  </>
+                )}
               </p>
             )}
           </div>
@@ -556,7 +576,11 @@ function WorkflowRow({
                 ? r.command?.action === "activation"
                   ? "Updating status…"
                   : "Waiting for confirmation…"
-                : r.message}
+                : !r.confirming &&
+                    w.readiness.state === "blocked" &&
+                    r.message === w.readiness.reason
+                  ? ""
+                  : r.message}
             </span>
             {r.phase === "uncertain" && (
               <BriefButton

@@ -136,6 +136,20 @@ test('permission cards preserve selection and settle only the selected request o
   transport.stop();
 });
 
+test('with nothing chosen, the first request a person can answer is selected, not an inspect-only row before it (G-10)', async () => {
+  const dead = { decisionId: 'effect:dead', revision: 'r1', kind: 'recovery', state: 'dispatching', title: 'Dispatching effect', supportedActions: ['inspect'] };
+  const live = { decisionId: 'approval:live', revision: 'r2', kind: 'permission', state: 'pending', title: 'Send the report', supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  const http = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  await React.act(async () => root.render(<Commands.PendingDecisions http={http} read={async () => [dead as any, live as any]} enabled changed={() => {}} />));
+  expect(host.querySelectorAll('.brief-decision-choice')).toHaveLength(2);
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Send the report');
+  expect(button('Grant permission')).toBeTruthy();
+  // Choosing the inspect-only row still opens it.
+  await React.act(async () => (host.querySelector('[aria-pressed="false"]') as HTMLButtonElement).click());
+  expect(host.querySelector('[aria-pressed="true"]')?.textContent).toContain('Dispatching effect');
+  http.stop();
+});
+
 const permissionRows = () => ['one', 'two'].map(id => ({ decisionId: 'approval:' + id, revision: 'revision-' + id, kind: 'permission',
   title: 'Review ' + id + '. This action needs review.', state: 'pending', review: { toolName: 'browser_navigate', reason: 'Approval required' },
   supportedActions: ['approve_permission', 'reject_permission', 'inspect'] }));
@@ -231,6 +245,25 @@ test('notification permission renders the reviewed message, destination and occu
   expect(host.textContent).toContain('Daily priorities'); expect(host.textContent).toContain('What is blocking you?');
   expect(host.textContent).toContain('dashboard'); expect(host.textContent).toContain('If no dashboard is open: desktop notification');
   expect(host.querySelector('time')?.dateTime).toBe('2026-11-04T08:00:00.000Z');
+  transport.stop();
+});
+
+test('a governed email card lists its recipients, subject, body and attachments (G-1)', async () => {
+  const transport = createHostTransport((async () => Response.json({})) as unknown as typeof fetch);
+  const row = { decisionId: 'approval:mail', revision: 'r', kind: 'permission', state: 'pending', title: 'send_email is above this agent\'s authority level',
+    review: { toolName: 'piece:smtp/send-email', reason: 'Permission required', workflowName: 'Invoices',
+      action: { fields: [{ label: 'To', value: 'alice@example.test' }, { label: 'Subject', value: 'Q4 invoice' }, { label: 'Bcc', value: 'secret@example.test' },
+        { label: 'Body', value: 'pay 1000 EUR\nthanks', text: true, cut: true }, { label: 'Attachments', value: 'invoice.pdf (21 bytes)' }], more: 2 } },
+    supportedActions: ['approve_permission', 'reject_permission', 'inspect'] };
+  await React.act(async () => root.render(<Commands.PendingDecisions http={transport} read={async () => [row as any]} enabled changed={() => {}} />));
+  const doc = host.querySelector('.brief-decision-document')!.textContent!;
+  for (const text of ['What will happen', 'To', 'alice@example.test', 'Subject', 'Q4 invoice', 'Bcc', 'secret@example.test', 'pay 1000 EUR', 'invoice.pdf (21 bytes)', '2 more fields are not shown.']) expect(doc).toContain(text);
+  // Each value in its own field under its label; the body framed as quoted text and marked as its beginning only.
+  const action = host.querySelector('.brief-decision-action')!;
+  expect([...action.querySelectorAll('dt')].map(dt => dt.textContent)).toEqual(['To', 'Subject', 'Bcc', 'Body (beginning only)', 'Attachments']);
+  const quoted = action.querySelectorAll('dd.brief-decision-quoted');
+  expect(quoted).toHaveLength(1);
+  expect(quoted[0]!.textContent).toBe('pay 1000 EUR\nthanks');
   transport.stop();
 });
 
