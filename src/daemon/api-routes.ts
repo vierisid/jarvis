@@ -50,7 +50,7 @@ import { findFacts, createFact, FactInputError, FACT_TEXT_LIMIT } from '../vault
 import { refuseVaultText, cleanVaultText, ENTITY_NAME_MAX_CHARS, FACT_PREDICATE_MAX_CHARS, RELATIONSHIP_TYPE_MAX_CHARS } from '../vault/input-limits.ts';
 import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
-import { listFlows } from '../workflows/db/repos/flow.ts';
+import { listAllFlows } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version.ts';
 
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
@@ -3971,7 +3971,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // display name lives on the latest version row (published, or draft
         // if there is no published yet), so we resolve per-flow.
         try {
-          const flows = listFlows(undefined, { limit: 100 });
+          const flows = listAllFlows();
           let added = 0;
           for (const f of flows) {
             if (added >= perType) break;
