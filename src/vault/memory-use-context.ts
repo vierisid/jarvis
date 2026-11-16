@@ -5,6 +5,7 @@ import type { Database } from 'bun:sqlite';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context';
 import { defangDelimiters } from '../roles/untrusted';
+import { MEMORY_TAINT_SOURCE } from './fact-trust';
 import type { LLMMessage } from '../llm/provider';
 import type { PackedRecall } from './recall-context';
 import { assertCurrentMemoryFacts, getMemoryUsageLedger, memoryDigest, MEMORY_USE_LIMITS, MemoryUsageError,
@@ -44,6 +45,18 @@ export function capturePackedMemory(packed: PackedRecall): void {
   if (capture.target && process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') getMemoryUsageLedger().record(capture.target, packed.selected, 'selected');
   capture.packs.set(key, packed);
 }
+/**
+ * The taint source to add to a turn that was handed memory the owner did not
+ * enter themselves (model extraction, imports, workflows, agents, connectors,
+ * files). Null when nothing like that reached this execution scope. The turn
+ * then gates side-effecting tools exactly as it does after a clipboard read.
+ */
+export function memoryTaintSource(): string | null {
+  const capture = current();
+  if (!capture) return null;
+  for (const pack of capture.packs.values()) if (pack.outside) return MEMORY_TAINT_SOURCE;
+  return null;
+}
 /** Fence all memory dependencies before provider or tool entry, including derived requests. */
 export function assertCurrentMemoryContext(): void {
   const capture = current();
@@ -66,6 +79,12 @@ export function assertCurrentMemoryContext(): void {
   assertNoForgottenMemory(capture.db, refs.map(ref => ref.factId));
   assertCurrentMemoryFacts(capture.db, refs);
 }
+/** A pack reaches a prompt whole, or as its trusted part (possibly defanged) followed by its framed block verbatim. */
+function suppliedIn(content: string, pack: PackedRecall): boolean {
+  if (content.includes(pack.text) || content.includes(defangDelimiters(pack.text))) return true;
+  const plain = pack.plain ?? pack.text;
+  return !!pack.framed && content.includes(pack.framed) && (content.includes(plain) || content.includes(defangDelimiters(plain)));
+}
 /** The packer owns the manifest; whole-block matching only establishes actual
  * supply to the provider adapter, never receipt, reliance or successful action. */
 export function recordMemoryHandoff(messages: readonly LLMMessage[]): void {
@@ -75,7 +94,7 @@ export function recordMemoryHandoff(messages: readonly LLMMessage[]): void {
   const system = messages.filter(m => m.role === 'system' && typeof m.content === 'string');
   const refs = new Map<string, PackedRecall['included'][number]>();
   for (const pack of capture.packs.values()) {
-    if (pack.text && system.some(m => (m.content as string).includes(pack.text) || (m.content as string).includes(defangDelimiters(pack.text)))) {
+    if (pack.text && system.some(m => suppliedIn(m.content as string, pack))) {
       for (const ref of pack.included) refs.set(`${ref.factId}:${ref.sourceRevision}`, ref);
     }
   }

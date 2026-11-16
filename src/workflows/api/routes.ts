@@ -4,6 +4,7 @@ import { readBoundedText } from '../../util/bounded-body.ts';
 import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
+import { FLOW_DISPLAY_NAME_MAX_CHARS, isBlankWorkflowName, UNTITLED_WORKFLOW_NAME } from '../display-name';
 import { restoreShownSample, runAsShown, runScrubber, scrubValue } from '../runtime/step-credentials';
 import type { FlowRun } from '../db/repos/flow-run';
 import type { FlowTriggerNode } from '../db/repos/flow-version';
@@ -105,7 +106,7 @@ import {
   listWaitpointsByFlowRun,
 } from "../db/repos/waitpoint";
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
-import { stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { stopRunsOfRevokedCodeSteps, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
 import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
 import { claimContinuation } from "../runtime/continuation";
@@ -122,11 +123,12 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { enabledWorkflowsUsingConnection, rotationSentence, type ConnectionDependent } from "../db/repos/connection-dependents";
 import { refuseConnectionFields } from "./connection-input";
 import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
-import type { PieceLookup } from "../runtime/piece-catalog";
+import { userPieces, type PieceLookup } from "../runtime/piece-catalog";
 import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
@@ -586,8 +588,9 @@ async function readWriteBody(
 }
 
 /**
- * Ceiling on a version's `displayName`, which is what `manage_workflow`'s
- * `summarizeFlow` reports as a flow's `name` (#598).
+ * Ceiling on a version's `displayName` (`FLOW_DISPLAY_NAME_MAX_CHARS` in
+ * `../display-name.ts`), which is what `manage_workflow`'s `summarizeFlow`
+ * reports as a flow's `name` (#598).
  *
  * `name` is the half of #598 that is easy to wave through, because a workflow
  * name looks operator-written. It is not: this route family let a caller write
@@ -601,38 +604,46 @@ async function readWriteBody(
  * dashboard may reasonably carry a longer name than the prompt wants to spend
  * tokens on, and the two caps answer different questions.
  */
-const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
-
 /**
- * The caller's `displayName`, or the refusal. Same shape as
+ * The caller's `displayName`, trimmed, or the refusal. Same shape as
  * `readWriteBody`, and it returns the NARROWED string so a caller cannot
- * validate and then pass the unnarrowed value on.
+ * validate and then pass the unnarrowed value on. The blank rule and the cap
+ * live in `../display-name.ts`, shared with the model tools, the stored form
+ * (`storedDisplayName`) and the Brief list.
+ *
+ * A name with no visible character (whitespace, controls, zero-width or bidi
+ * format characters, lone surrogates) is refused like an empty one: it renders
+ * as a blank row, and the All workflows page used to fail to load while one
+ * existed. A name is one line of plain text: a control character in it (NUL, a
+ * bell, an escape, a line break, C1, the line and paragraph separators) breaks
+ * lists and logs, and a lone surrogate is not text. The rule a task's text is
+ * stored under (vault/commitment-text.ts). Refused as a plain 400.
  *
  * `flowId` names the flow a version route writes to. A name that flow already
- * stores is let through the character rule, so a workflow named before the
- * rule existed can still be saved: the editor sends the current name with
- * every save, and refusing it would lock the workflow until it was renamed.
+ * stores is let through both rules, so a workflow named before they existed
+ * can still be saved: the editor sends the current name with every save, and
+ * refusing it would lock the workflow until it was renamed. A carried blank
+ * name is stored as "Untitled workflow", the name the list already shows.
  */
 function validDisplayName(raw: unknown, flowId?: string): { name: string } | { error: Response } {
-  if (typeof raw !== "string" || raw.length === 0) {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  const stored = () => !!flowId && nameStoredOnFlow(flowId, typeof raw === "string" ? raw : "");
+  if (isBlankWorkflowName(name)) {
+    if (typeof raw === "string" && stored()) return { name: UNTITLED_WORKFLOW_NAME };
     return { error: err("displayName is required and must be a non-empty string") };
   }
-  if (raw.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
+  if (name.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
     return {
       error: err(
-        `displayName is ${raw.length} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`,
+        `displayName is ${name.length} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`,
         413,
       ),
     };
   }
-  // A name is one line of plain text: a control character in it (NUL, a bell,
-  // an escape, a line break, C1, the line and paragraph separators) breaks
-  // lists and logs, and a lone surrogate is not text. The rule a task's text is
-  // stored under (vault/commitment-text.ts). Refused as a plain 400.
-  if ((!raw.isWellFormed() || NOT_ONE_LINE.test(raw)) && !(flowId && nameStoredOnFlow(flowId, raw))) {
+  if ((!name.isWellFormed() || NOT_ONE_LINE.test(name)) && !stored()) {
     return { error: err("displayName cannot contain control characters") };
   }
-  return { name: raw };
+  return { name };
 }
 
 function nameStoredOnFlow(flowId: string, name: string): boolean {
@@ -745,6 +756,12 @@ export interface CreateWorkflowRoutesOptions {
   /** Where a workflow HTTP step may connect; the read list refuses a host it can never reach. Absent: private ranges are allowed, the rest is not. */
   egressPolicy?: EgressPolicy;
   recoveryAuthority?: AuthorityEngine;
+  /**
+   * Called after a connection's key was replaced while enabled workflows run
+   * on it. Those workflows refuse their runs until published again, so the
+   * daemon tells the owner now instead of at the next failed fire.
+   */
+  onConnectionReplaced?: (change: { connectionId: string; displayName: string; workflows: ConnectionDependent[]; message: string }) => void;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
   /**
@@ -953,7 +970,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: () =>
         trapErrors(() => {
           if (!opts.pieceRegistry) return ok([]);
-          const list = opts.pieceRegistry.list().map((p) => ({
+          const list = userPieces(opts.pieceRegistry.list()).map((p) => ({
             name: p.name,
             displayName: p.displayName,
             description: p.description,
@@ -1364,6 +1381,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Resolved inside the caller's project, as the routes below (#692).
+    // What saving a new key would do: the enabled workflows that run on this
+    // connection stop until each is published again. The Rotate form reads it.
+    "/api/workflows/connections/:id/rotation-impact": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const existing = getConnectionInProject(callerProject(req), id);
+          if (!existing) return err("connection not found", 404);
+          const workflows = enabledWorkflowsUsingConnection(callerProject(req), existing.externalId);
+          return ok({ workflows, message: rotationSentence(workflows) });
+        }),
+    },
+
     // Both resolve `:id` inside the caller's project (#692), the same project
     // the GET lists and the POST writes. They found the row by bare id, so an
     // id from another project was reachable here while invisible to the list.
@@ -1461,6 +1492,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             ...(status ? { status } : {}),
           });
           if (!merged) return err("connection not found", 404);
+          // A different key advances the credential generation, and every
+          // enabled workflow that runs on this connection then refuses its
+          // runs until it is published again (docs/workflow-binding-pins.md).
+          // Say so to the caller, and tell the owner once.
+          const replaced = merged.credentialGeneration !== current.credentialGeneration;
+          const pausedWorkflows = replaced ? enabledWorkflowsUsingConnection(callerProject(req), merged.externalId) : [];
+          const notice = rotationSentence(pausedWorkflows, "after");
+          if (notice) {
+            try { opts.onConnectionReplaced?.({ connectionId: merged.id, displayName: merged.displayName, workflows: pausedWorkflows, message: notice }); }
+            catch (e) { console.error("[workflow-api] connection replaced notice failed:", e); }
+          }
           return ok({
             id: merged.id,
             externalId: merged.externalId,
@@ -1469,6 +1511,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             pieceName: merged.pieceName,
             status: merged.status,
             updated: merged.updated,
+            ...(notice ? { pausedWorkflows, notice } : {}),
           });
         }),
     },
@@ -1966,9 +2009,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             const named = validDisplayName(body.displayName, scopedFlow(req, id) ? id : undefined);
             if ("error" in named) return named.error;
             // The NARROWED value goes on, so this cannot validate one string
-            // and forward another. Identical today because the validator
-            // transforms nothing; the point is that it stays true if it ever
-            // does.
+            // and forward another: the validator trims, and maps a carried
+            // blank name to "Untitled workflow".
             versionPatch.displayName = named.name;
           }
           const v = withOwnedFlowVersion(id, versionId, () => {
@@ -2157,11 +2199,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (typeof body.enabled !== "boolean") {
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
           }
-          // Revoking does NOT stop a run already in flight or unpublish the
-          // version; it takes the permission away from the next publish,
-          // enable or run, which is the same authoring-time boundary the
-          // grant itself lives on.
-          return ok(serializeFlow(setFlowCodeStepsEnabled(id, body.enabled, "user")));
+          // Revoking does not unpublish the version. It takes the permission
+          // away from the next publish, enable or run and from every later
+          // fire (the trigger manager reads it when a delivery arrives, and
+          // the refresh below drops the subscription), and it stops the
+          // flow's queued, waiting and executing runs of a version with a
+          // CODE step (#1426). The write and the stop are synchronous with no
+          // await between them, and every run reads the grant again just
+          // before the engine is sent the flow, so no run slips between them.
+          const saved = setFlowCodeStepsEnabled(id, body.enabled, "user");
+          if (!body.enabled) stopRunsOfRevokedCodeSteps(id);
+          refreshTrigger(id);
+          return ok(serializeFlow(saved));
         }),
     },
 

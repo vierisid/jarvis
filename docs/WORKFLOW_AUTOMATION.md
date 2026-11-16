@@ -544,11 +544,13 @@ Three things about #598 are load bearing beyond the frame itself:
 - **Both caller-written fields are capped at both ends.** On the way in, the
   write routes reject a `metadata` that is not an object, carries a top-level
   `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
-  `displayName` that is not a non-empty string or exceeds 512 characters, or
+  `displayName` that is not a string with a visible character (it is trimmed)
+  or exceeds 512 characters, or
   that holds a control character, a line or paragraph separator or a lone
   surrogate (a name the flow already stores is let through, so a workflow
   named before that rule can still be saved; every writer stores a name on one
-  line without the bidi controls, `storedDisplayName`). All of
+  line without the bidi controls and never blank, `storedDisplayName`; the
+  blank rule is `workflows/display-name.ts`). All of
   that is close to free, because no shipped caller writes `metadata` at all (the
   dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
   state in `flow_version_ui_meta`) and no real workflow name is that long. A
@@ -1193,7 +1195,7 @@ A global switch would be the wrong shape: turning CODE on for one automation
 would turn it on for every flow composed afterwards, which is the thing the
 gate exists to prevent.
 
-The refusal happens at AUTHORING time, never per execution:
+The refusal happens at AUTHORING time, never per execution of a flow that holds the grant (a flow published with the grant can only be refused at fire time after its owner revokes it, below):
 
 - `POST /api/workflows/:id/publish` and `manage_workflow publish` refuse with
   403 and change nothing -- the version is not locked, not attached, and the
@@ -1223,9 +1225,11 @@ The refusal happens at AUTHORING time, never per execution:
   later. A published flow always carries the grant, so this can only ever
   decline a flow that was never publishable.
 
-Nothing is refused per execution. That was the flaw in the allowlist cut from
-#459: it refused at run time, so a cron- or webhook-triggered flow published
-successfully and then failed on every fire with nobody there to read why.
+Nothing that holds the grant is refused per execution. That was the flaw in
+the allowlist cut from #459: it refused at run time, so a cron- or
+webhook-triggered flow published successfully and then failed on every fire
+with nobody there to read why. The one per-execution refusal is the owner's
+own revoke, below.
 
 The message names what was refused, which step caused it, and the call that
 grants the permission. A CODE step is found wherever it is -- the walker in
@@ -1245,11 +1249,39 @@ with `{"enabled": false}`. Every other flow -- including one holding an
 unpublished CODE draft -- starts at OFF.
 
 Revoking with `{"enabled": false}` takes the permission away from the next
-publish, enable, run or draft write, and from the next trigger registration --
-so a live schedule keeps firing until the daemon restarts or the flow is
-refreshed, and then stops. It does not unpublish the version and it does not
-stop a run already in flight. Disabling the flow is what stops a schedule
-immediately. The grant is not handed back later: the upgrade backfill is keyed
+publish, enable, run or draft write, and from the next trigger registration.
+It also takes effect for a flow that is already published and enabled: the
+trigger manager reads the grant again every time a webhook, event or scheduled
+time arrives, so none of them starts a run once it is revoked, and the grant
+route refreshes the flow's registration so the subscription is dropped
+(granting again registers it). A refused delivery runs nothing and leaves a
+`blocked` row in the delivery record with `code: "CODE_STEPS_NOT_ENABLED"` and
+a plain reason; repeats fold into one counted row; a webhook sender is answered
+as for a workflow that is not active (404); an event source is not polled.
+
+A revoke also reaches runs that are already past their trigger (#1426):
+
+- The grant route stops the flow's queued, waiting (paused) and executing runs
+  of a version with a CODE step, each with the reason "CODE steps stopped
+  being allowed for this workflow, so this run was stopped." and a `stopped`
+  lifecycle row (`code: "CODE_STEPS_NOT_ENABLED"`). An executing run's engine
+  is stopped through the run fence. A run on a version without a CODE step is
+  left alone. A warm engine parked for the flow is retired, so nothing a CODE
+  step left running in its process group outlives the revoke.
+- The RUN_FLOW worker reads the grant again before it starts or continues a
+  run, from any source (trigger, manual or test-step run, Brief, chat, a
+  parent workflow's child run, a continuation), and the engine executor reads
+  it once more synchronously just before it sends the flow, after the CODE
+  sources are written and their packages installed. A refused run fails with
+  a readiness refusal (`WORKFLOW_NOT_READY`, issue code
+  `CODE_STEPS_NOT_ENABLED`) naming the CODE steps; nothing runs, and an email
+  or attachment it was started for keeps no claim.
+- The write and the stop happen with no await between them, so a run either
+  read the grant before the revoke (and is stopped by it) or reads it after
+  (and is refused).
+
+It does not unpublish the version. Granting again stops nothing and lets new
+runs and deliveries through; a run the revoke stopped stays stopped. The grant is not handed back later: the upgrade backfill is keyed
 on the columns being introduced, so a revoked permission stays revoked across
 restarts. The other side of that key is that a build rolled back below this
 version and then rolled forward again will not re-grandfather a flow published
@@ -2018,13 +2050,14 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
 | GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
-| GET | `/api/workflows/pieces` | Engine-extracted catalog |
+| GET | `/api/workflows/pieces` | Engine-extracted catalog, without the engine's test fixtures (`piece-jarvis-test`, `piece-jarvis-validate`): they are built and loaded for the engine's own tests and by any workflow that already names one, but are not offered in the piece picker, the Brief ingredient list, the connected-workspace list or the composer. The Validate plumbing step reports the connection's token only as `[redacted]` plus a short `accessTokenFingerprint`, never the token, since step output is kept in run history |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
 | POST | `/api/workflows/connections` | Create a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }`. An existing `(pieceName, externalId)` is a 409 that points to Rotate: adding never replaces a saved key |
-| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
+| GET | `/api/workflows/connections/:id/rotation-impact` | The enabled workflows that run on the connection and a sentence saying they stop until published again if a new key is saved: `{ workflows, message }` (`message` null when none do) |
+| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. A different key answers with `pausedWorkflows` and `notice` naming the enabled workflows it pauses until they are published again. 404 for an id outside the default project, the same as for an id that does not exist |
 | DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
@@ -2068,8 +2101,8 @@ empty or whitespace-only body reads as `{}`.
 
 | Route | Body cap | Other limits |
 |---|---|---|
-| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
-| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
+| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, trimmed, never empty or without a visible character (400), at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
+| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` trimmed, never empty or without a visible character (400), at most 512 characters (413); a blank name the flow already stores (an install from before the rule) is saved as `Untitled workflow` instead of refused. `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
 | `POST /api/workflows/:id/code-steps` | 262,144 bytes | `enabled` must be a boolean (400) |
@@ -2157,6 +2190,7 @@ Notable behaviors a contributor should know:
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
 - Unsaved edits are never dropped silently. In the Brief editor a copy of them is kept in the browser tab (session storage, never shared storage, since a draft may hold secrets) shortly after each change, and a reload puts them back when the draft has not changed since (same editor revision); a save or a discard clears the copy. Credentials typed into a step (any settings key naming a secret, password, token, API key, Authorization header or the like, such as the webhook signing secret or HTTP auth) are never written into the copy: a restore takes them back from the saved draft, and says to enter again any typed since the last save (`edit-copy.ts`). A copy made from an older revision is dropped on opening, and the editor says it was not restored. If the session ends while edits are unsaved, the page stays on screen with a banner to reload and sign in again instead of the reconnect page; the reconnect page returns once nothing is unsaved. A failed save says why in words and keeps the "Unsaved changes" label: offline, timed out, session ended, or the workflow was deleted elsewhere (the editor then offers to discard and go back to All workflows, and cannot save). The legacy editor asks before the X button discards unsaved edits, as Escape does, and the browser asks before the tab is closed or reloaded.
+- "Add next step" opens the node chooser at once. Choosing Loop, If or Router for a blank placeholder (no piece, action or inputs) turns that placeholder into the control-flow step in place, keeping its name, a display name the person typed, and what follows it; for a step that already has settings the control-flow step lands as a loose node instead, because swapping would drop them. In the legacy editor Enter or Space on a focused node does what a click does: an unconfigured step opens the chooser, any other step opens its settings, and while a run is overlaid it opens that step's run detail. So the whole path works from the keyboard; after a pick, or Escape on the chooser, focus returns to the step.
 - "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
