@@ -78,7 +78,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   const { scopeId, transport, reconciliation } = host;
   const setup = new GettingStartedJourney(transport, host.storage, scopeId);
   const ports = createDomainPorts(scopeId, transport, host.storage);
-  const goals = new GoalsController(ports.goals), decisions = new DecisionsController('live', scopeId, { ...ports.decisions, read: async () => { const result = await ports.decisions.read(); if (result.status !== 'ready') return result; const data = result.data.filter(row => row.actions.length > 0); return data.length ? { status: 'ready', data } : { status: 'empty' }; } }),
+  const goals = new GoalsController(ports.goals, () => goalRead.refresh()), decisions = new DecisionsController('live', scopeId, { ...ports.decisions, read: async () => { const result = await ports.decisions.read(); if (result.status !== 'ready') return result; const data = result.data.filter(row => row.actions.length > 0); return data.length ? { status: 'ready', data } : { status: 'empty' }; } }),
     opportunities = new OpportunitiesController('live', scopeId, ports.opportunities), memory = new MemoryController(ports.memory);
   const detail = new MemoryDetailController(ports.detail, () => { void memory.refresh(); });
   const goalRead = reconciliation.projection(source<readonly GoalPath[]>(['goals'], 'goalMeasurements', ports.goals.read));
