@@ -136,6 +136,39 @@ export const expressionPatches = {
     ["    this.status = status;\n    this.responseBody = responseBody;\n  }\n",
       "    this.status = status;\n    this.responseBody = responseBody;\n    // === JARVIS PATCH: see above ===\n    this.hasResponse = err?.response !== undefined && err?.response !== null;\n    this.code = typeof err?.code === 'string' ? err.code : undefined;\n    // Not enumerable: the client logs this error, and a header can carry a cookie.\n    Object.defineProperty(this, 'responseHeaders', { value: err?.response?.headers, enumerable: false });\n    // === END JARVIS PATCH ===\n  }\n"],
   ],
+  // Convert JSON to CSV keeps every column, not only the first row's. Registered so a
+  // vendor sync re-applies it; `core-csv-piece.test.ts` covers it.
+  "packages/pieces/core/csv/src/lib/actions/convert-json-to-csv.ts": [
+    [
+      "    return stringify(flattened, {\n      header: true,\n      delimiter: delimiter_type,\n    });",
+      '    // === JARVIS PATCH: the header is every key of every row ===\n' +
+      '    // Upstream took the header from the first row, so a column only a later row\n' +
+      '    // had was dropped, with its values, and the step still succeeded. Keys are\n' +
+      '    // listed in first-seen order; a row without a key gets an empty cell.\n' +
+      '    // Cells are read as own properties and handed over by position: given an\n' +
+      '    // object row, csv-stringify resolves a column like `tags.0` as a path, so a\n' +
+      '    // row whose `tags` is the string "foo" would get "f", and a row without\n' +
+      '    // `toString` would read the prototype\'s function and fail the step.\n' +
+      '    const isRow = (row: unknown): row is Record<string, unknown> =>\n' +
+      '      row !== null && typeof row === \'object\' && !Array.isArray(row);\n' +
+      '    const columns = [...new Set(flattened.flatMap((row) => (isRow(row) ? Object.keys(row) : [])))];\n' +
+      '    if (columns.length > 0) {\n' +
+      '      const cells = flattened.map((row) =>\n' +
+      '        isRow(row) ? columns.map((key) => (Object.prototype.hasOwnProperty.call(row, key) ? row[key] : undefined)) : row,\n' +
+      '      );\n' +
+      '      return stringify(cells, {\n' +
+      '        header: true,\n' +
+      '        delimiter: delimiter_type,\n' +
+      '        columns,\n' +
+      '      });\n' +
+      '    }\n' +
+      '    return stringify(flattened, {\n' +
+      '      header: true,\n' +
+      '      delimiter: delimiter_type,\n' +
+      '    });\n' +
+      '    // === END JARVIS PATCH ==='
+    ],
+  ],
   "packages/pieces/core/sftp/src/lib/common.ts": [
     ["        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n      }",
       "        rejectUnauthorized: !(allow_unauthorized_certificates ?? false),\n        ...servername,\n      }"],
@@ -288,9 +321,39 @@ export const expressionPatches = {
   "packages/server/engine/src/lib/handler/piece-executor.ts": [
     ["import { ActionContext, backwardCompatabilityContextUtils, ", "import { helpScoutEngineProps } from \"../../../../../../../runtime/managed-help-scout-inputs\"\nimport { zoomEngineProps } from \"../../../../../../../runtime/managed-zoom-inputs\"\nimport { gitlabEngineProps } from \"../../../../../../../runtime/managed-gitlab-inputs\"\nimport { pipedriveEngineProps } from \"../../../../../../../runtime/managed-pipedrive-inputs\"\nimport { wrikeEngineProps } from \"../../../../../../../runtime/managed-wrike-inputs\"\nimport { mondayEngineProps } from \"../../../../../../../runtime/managed-monday-inputs\"\nimport { webflowEngineProps } from \"../../../../../../../runtime/managed-webflow-inputs\"\nimport { ActionContext, backwardCompatabilityContextUtils, "],
     ["\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings)\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n", "\n        stepOutput.input = censoredInput\n\n        const { processedInput, errors } = await propsProcessor.applyProcessorsAndValidators(resolvedInput, helpScoutEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? zoomEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? gitlabEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pipedriveEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? wrikeEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? webflowEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? mondayEngineProps(action.settings.pieceName, action.settings.actionName, resolvedInput) ?? pieceAction.props, piece.auth, pieceAction.requireAuth, action.settings.propertySettings, { apiUrl: constants.internalApiUrl, engineToken: constants.engineToken })\n        if (Object.keys(errors).length > 0) {\n            throw new Error(JSON.stringify(errors, null, 2))\n        }\n"],
+    ["import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'", "import { continuableFailure } from '../../../../../../../runtime/piece-effect-guard'\nimport { continueIfFailureHandler, refusedDispatches, runWithExponentialBackoff } from '../helper/error-handling'"],
+    ["const executeAction: ActionHandler<PieceAction> = async ({ action, executionState, constants }) => {\n    const stepStartTime = performance.now()", "const executeAction: ActionHandler<PieceAction> = async ({ action, executionState, constants }) => {\n    const stepStartTime = performance.now()\n    // Jarvis: whether the dispatch check refused this step, and whether it let\n    // it run (see refusedDispatches and continuableFailure).\n    let dispatchRefused = false\n    let dispatched = false"],
+    ["        const governance = await authorizePieceDispatch(dispatchParams)\n", "        const governance = await authorizePieceDispatch(dispatchParams).catch((error: unknown) => {\n            // === JARVIS PATCH: a refused dispatch is never continued past ===\n            dispatchRefused = true\n            // === END JARVIS PATCH ===\n            throw error\n        })\n        dispatched = true\n"],
+    ["        return executionState\n            .upsertStep(action.name, failedStepOutput)\n            .setVerdict({\n                status: FlowRunStatus.FAILED, failedStep: {\n                    name: action.name,\n                    displayName: action.displayName,\n                    message: utils.formatError(executionStateError),\n                },\n            })\n    }", "        const failedContext = executionState\n            .upsertStep(action.name, failedStepOutput)\n            .setVerdict({\n                status: FlowRunStatus.FAILED, failedStep: {\n                    name: action.name,\n                    displayName: action.displayName,\n                    message: utils.formatError(executionStateError),\n                },\n            })\n        // === JARVIS PATCH: a refused dispatch is never continued past ===\n        // A Jarvis step that heard a refusal from inside its run is one too.\n        if (dispatchRefused || (dispatched && !continuableFailure(action.settings.pieceName, executionStateError))) refusedDispatches.add(failedContext)\n        return failedContext\n        // === END JARVIS PATCH ===\n    }"],
+  ],
+  "packages/server/engine/src/lib/handler/code-executor.ts": [
+    ["import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'", "import { continueIfFailureHandler, refusedDispatches, runWithExponentialBackoff } from '../helper/error-handling'"],
+    ["const executeAction: ActionHandler<CodeAction> = async ({ action, executionState, constants }) => {\n    const stepStartTime = performance.now()", "const executeAction: ActionHandler<CodeAction> = async ({ action, executionState, constants }) => {\n    const stepStartTime = performance.now()\n    // Jarvis: set when the dispatch check refused this step (see refusedDispatches).\n    let dispatchRefused = false"],
+    ["            input: {},\n        })\n        if ('dispatch' in admission", "            input: {},\n        }).catch((error: unknown) => {\n            // === JARVIS PATCH: a refused dispatch is never continued past ===\n            dispatchRefused = true\n            // === END JARVIS PATCH ===\n            throw error\n        })\n        if ('dispatch' in admission"],
+    ["        return executionState\n            .upsertStep(action.name, failedStepOutput)\n            .setVerdict({ status: FlowRunStatus.FAILED, failedStep: {\n                name: action.name,\n                displayName: action.displayName,\n                message: utils.formatError(executionStateError),\n            } })\n    }", "        const failedContext = executionState\n            .upsertStep(action.name, failedStepOutput)\n            .setVerdict({ status: FlowRunStatus.FAILED, failedStep: {\n                name: action.name,\n                displayName: action.displayName,\n                message: utils.formatError(executionStateError),\n            } })\n        // === JARVIS PATCH: a refused dispatch is never continued past ===\n        if (dispatchRefused) refusedDispatches.add(failedContext)\n        return failedContext\n        // === END JARVIS PATCH ===\n    }"],
+  ],
+  "packages/server/engine/src/lib/helper/error-handling.ts": [
+    ["export async function continueIfFailureHandler(", "// === JARVIS PATCH: a refused dispatch is never continued past ===\n// A step the daemon would not admit or authorize (denied, held for Kill, not\n// approved) did not run. \"Continue on failure\" is for a step that ran and\n// failed; it must not turn a refusal of Authority into a step to move past.\n// The executors add the failed context they return when the refusal came from\n// the dispatch check or, for a step that asks Jarvis from inside its run (a\n// Jarvis piece, an approval), from there (piece-effect-guard continuableFailure).\nexport const refusedDispatches = new WeakSet<FlowExecutorContext>()\n// === END JARVIS PATCH ===\n\nexport async function continueIfFailureHandler("],
+    ["        continueOnFailure &&\n        isNil(constants.stepNameToTest)\n    ) {", "        continueOnFailure &&\n        !refusedDispatches.has(executionState) &&\n        isNil(constants.stepNameToTest)\n    ) {"],
   ],
   "packages/server/engine/src/lib/variables/processors/types.ts": [
     ["export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n) => OUTPUT\n", "export type ProcessorFn<INPUT = any, OUTPUT = any> = (\n    property: PieceProperty,\n    value: INPUT,\n    fileContext?: { apiUrl: string; engineToken: string },\n) => OUTPUT\n"],
+  ],
+  // Date Helper: every date-reading action parses through runtime/date-parse.ts,
+  // an instant in the zone setting (or UTC), not a wall clock in the daemon's zone.
+  "packages/pieces/core/date-helper/src/lib/common/index.ts": [
+    ["import duration from 'dayjs/plugin/duration';", "import duration from 'dayjs/plugin/duration';\nimport { parseDateInstant } from '../../../../../../../../runtime/date-parse';"],
+    ["export function parseDate(date: string, format: string): dayjs.Dayjs {\n  const correctedFormat = getCorrectedFormat(format);\n  \n  // Try strict parsing with the provided format\n  let djs = apDayjs(date, correctedFormat, true);\n  \n  // If strict parsing fails, try lenient parsing (useful for formats that native parser handles well)\n  if (!djs.isValid()) {\n    djs = apDayjs(date, correctedFormat, false);\n  }\n  \n  // If still invalid, try without format (native parser fallback)\n  if (!djs.isValid()) {\n    djs = apDayjs(date);\n  }\n  \n  if (!djs.isValid()) {\n    throw new Error(`Failed to parse the date: ${date} with format: ${correctedFormat}`);\n  }\n  return djs;\n}\n", "// === JARVIS PATCH: one instant-based parser for every Date Helper action ===\n// The upstream parser read the text in the process zone, accepted text that\n// did not match the format, and rolled impossible dates over. The parse lives\n// in runtime/date-parse.ts (see its header for the rules). `zone` is where a\n// wall time with no offset is read; actions without a zone setting read UTC.\nexport function parseDate(date: string, format: string, zone = 'UTC'): dayjs.Dayjs {\n  // Always a UTC-mode value: its parts are UTC, and `.tz()` on it converts the real instant.\n  return apDayjs.utc(parseDateInstant(date, getCorrectedFormat(format), zone));\n}\n\n/** Format an instant. `X` is formatted from the instant: the upstream plugin reads a shifted clock for a zoned value. */\nexport function formatDate(date: dayjs.Dayjs, format: string): string {\n  return format === 'X' ? String(date.unix()) : date.format(format);\n}\n// === END JARVIS PATCH ===\n"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/format-date.ts": [
+    ["  getCorrectedFormat,\n} from '../common';", "  getCorrectedFormat,\n  formatDate,\n} from '../common';"],
+    ["  const parsedDate = parseDate(inputDate, inputFormat);\n  \n  return parsedDate.tz(inputTimeZone, true).tz(outputTimeZone).format(outputFormat);\n}", "  // Jarvis: the input is read as an instant (an offset in the text wins over the\n  // From Time Zone), then shown in the To Time Zone.\n  const parsedDate = parseDate(inputDate, inputFormat, inputTimeZone);\n\n  return formatDate(parsedDate.tz(outputTimeZone), outputFormat);\n}"],
+  ],
+  "packages/pieces/core/date-helper/src/lib/actions/add-subtract-date.ts": [
+    ["  parseDate,\n", "  parseDate,\n  formatDate,\n"],
+    ["let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs(date);", "// Jarvis: without a zone the date is worked in UTC, not the daemon's own zone.\n  let dayjsDate = timeZone ? apDayjs(date).tz(timeZone) : apDayjs.utc(date);"],
+    ["return { result: AfterDate.tz(timeZone).format(outputFormat) };", "return { result: formatDate(AfterDate.tz(timeZone), outputFormat) };"],
+    ["return { result: AfterDate.format(outputFormat) };", "return { result: formatDate(AfterDate, outputFormat) };"],
   ],
 } as const;
 

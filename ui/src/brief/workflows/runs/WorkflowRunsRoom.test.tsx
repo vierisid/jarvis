@@ -119,6 +119,15 @@ test("redacted fields do not leak and inspection treats arbitrary markup as text
   expect(text()).toContain("<img src=x");
   expect(text()).toContain("Email approval");
 });
+test("a run that went on past a failed step says so in the list", async () => {
+  fixture.records.get("meeting-run-002")!.note =
+    "Finished with a failed step: Send the email";
+  await render();
+  const row = button("Open Run 002");
+  expect(row.textContent).toContain("Succeeded");
+  expect(row.textContent).toContain("Finished with a failed step: Send the email");
+  expect(button("Open Run 003").textContent).not.toContain("Finished with");
+});
 test("missing deep-linked run never falls back to latest", async () => {
   shell = {
     ...shell,
