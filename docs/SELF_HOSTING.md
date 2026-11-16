@@ -38,27 +38,37 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
-Port cleanup never stops a program that is not Jarvis. With no daemon holding
-the lock, `jarvis stop` still looks at the port, but it signals a listener only
-if that process holds this data folder's lock file open, which the daemon does
+`jarvis stop` never stops a program that is not this Jarvis. With a daemon
+holding the lock, it signals the PID its lock file names only once that process
+is shown to hold the lock, before SIGTERM and again before SIGKILL. A daemon in
+a Docker container writes its own PID there (1), which is a different process
+outside the container, so from the host it is refused rather than signalled:
+stop it with `docker stop`. Inside the container (`docker exec <c> jarvis
+stop`) it is the daemon, and stopping it stops the container.
+
+With no daemon holding the lock, `jarvis stop` still looks at the port, but it
+signals a listener only when both are true: its command line is this install's
+`jarvis`, and it holds this data folder's lock file open, which the daemon does
 for its whole life. On Linux that is also recognised after the lock file, or
 the whole data folder, was deleted under it, but only when `jarvis stop` can
-read the daemon's open files: as root, or with
-`daemon.allow_process_inspection` set (the daemon otherwise hides them).
-With a daemon holding the lock, `jarvis stop` signals the PID its lock file
-names only once that process is shown to hold the lock, before SIGTERM and
-again before SIGKILL. A daemon in a Docker container writes its own PID there
-(1), which is a different process outside the container, so from the host it
-is refused rather than signalled: stop it with `docker stop`. Inside the
-container (`docker exec <c> jarvis stop`) it is the daemon, and stopping it
-stops the container.
-Any other listener is left running and named, with the command to see what it
-is (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>`
-on Windows). The same rule applies after a normal stop: if another program
-holds the port once the daemon has exited, `jarvis stop` and `jarvis restart`
-report the port as still occupied and exit with an error instead of freeing it.
-A program run by another user may not show up at all without root; `sudo lsof
--nP -iTCP:<port> -sTCP:LISTEN` shows it.
+read the daemon's open files: as root, or with `daemon.allow_process_inspection`
+set (the daemon otherwise hides them). Anything else on the port is left
+running and named (program and PID), with the command to see what it is (`lsof
+-nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>` on
+Windows). That includes another program, and a Jarvis from this install running
+for a different data folder. Such a listener does not make `jarvis stop` fail;
+it fails, and says the port is still occupied, only when this data folder's own
+daemon is still on the port. A program run by another user may not show up at
+all without root; `sudo lsof -nP -iTCP:<port> -sTCP:LISTEN` shows it. `--port
+N` and `--port=N` both work, and a `--port` with no usable value is an error
+rather than the default.
+
+`jarvis restart` starts the daemon the way the running one was started:
+detached or not, with the same `--port`, `--data-dir`, `--no-open`,
+`--no-local-tools` and `--system-config`. It reads that from `jarvis.launch.json`
+next to the lock file. Flags you pass to `restart` replace the recorded ones.
+`jarvis start -d` reports success only once the daemon answers on its port; if
+the port is taken it says so and exits non-zero.
 
 **Access is JWT-only by default.** There is no shared password or token. You
 enroll devices:
@@ -449,7 +459,7 @@ path and a `/proc/self/root/...` spelling all land on the same verdict:
   `/etc/default/*`, `/etc/sysconfig/*`, `/etc/environment` and
   `~/.config/environment.d/*`. Closing `/proc` while leaving the unit readable
   would have been cosmetic.
-- a `jarvis export` archive, which holds all of the above verbatim.
+- a `jarvis export` archive, which holds the key material above verbatim.
 
 Your own files are untouched: documents, logs, `~/.gitconfig`, `~/.config`,
 project files and `~/.jarvis/logs` all read as before, and `~/.jarvis` is still
@@ -900,6 +910,33 @@ environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
 
+### Backup and restore
+
+`jarvis export --out jarvis-backup.tar` is the backup. It is complete by
+default: the database, the keys that decrypt it (the workflow encryption key,
+the saved AI provider keys, device signing keys, Google tokens) and the list of
+apps you installed from the Library. `--full` is accepted and means the same.
+Because it holds plaintext keys, the archive file is written with mode 0600
+(and a folder created for it with 0700). Keep it as private as the data
+directory, and encrypt it before it leaves the machine.
+
+The installed apps themselves are not in the archive, only the list. On the
+first start after a restore Jarvis installs them again, which needs internet.
+
+`jarvis export --no-secrets` leaves every key out, for an archive you want to
+share. It cannot be restored into a working install when it holds saved
+workflow connections.
+
+`jarvis restore jarvis-backup.tar` needs the brain stopped. Before it touches
+anything it checks the archive. It refuses, and changes nothing, when the
+archive holds saved connections that neither its own key nor, for an archive
+without a key, the key already on this machine opens. `--allow-missing-keys`
+overrides that for a key you supply another way. It also refuses an
+installed-apps list that the Library could not have written. When it finishes it says what came back and what you still have
+to do, such as adding AI provider keys, connecting devices again, or reinstalling
+Library apps your workflows use that the backup did not list. Run logs and
+uploaded files are not part of the archive.
+
 ### Workflow credential encryption
 
 Workflow connection credentials (`app_connection.value`) are encrypted with
@@ -911,7 +948,7 @@ truth: `src/workflows/db/encryption.ts`.
 What this protects: a database file or archive that travels without the key.
 It does not protect against anyone who can read the data directory, since on a
 default install the key sits beside the database. Losing the key is
-unrecoverable. `jarvis export --full` includes the key file; a key supplied only
+unrecoverable. `jarvis export` includes the key file; a key supplied only
 through the environment is never captured, so escrow it separately.
 
 New writes use the row-bound `enc1a:` envelope: the ciphertext authenticates
