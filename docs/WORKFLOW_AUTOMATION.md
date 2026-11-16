@@ -31,7 +31,7 @@ The runtime guarantees:
 What it deliberately is NOT:
 
 - Not multi-tenant. One daemon, one user. No projects table: every row carries the constant `DEFAULT_IDS.project` (`jrv_proj_default`).
-- Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
+- Not distributed. The job queue is SQLite-backed. The daemon runs up to 3 workflow runs at once (`JARVIS_WORKFLOW_CONCURRENCY`, 1 to 8), each in its own engine process. Runs of one workflow never overlap and keep their queue order, and so do runs of workflows whose graph may use the project-wide store (a store step with `COLLECTION` scope, or a scope chosen from data), because append, add_to_list and remove_from_list read, change and write back as separate calls. A long loop therefore holds up only its own workflow and such store users. A continuation (an approval, an answer, a due timer) is claimed ahead of runs that have not started. A run still waiting for a worker says so in its Runs detail: "Waiting for another workflow run to finish (N ahead)."
 - Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
 ## Upgrade notes
