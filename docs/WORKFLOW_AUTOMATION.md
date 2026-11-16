@@ -680,6 +680,16 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the
   failure. That step still gets `text`; it never gets `parsed`.
+- An empty reply (nothing, or only whitespace and characters that render as
+  nothing, such as a zero-width space) from a step with no JSON contract is
+  `EMPTY_AI_REPLY`, an `error` with effect `may_have_occurred` (the provider
+  processed the request, as for `INVALID_JSON_OUTPUT`): the step fails by
+  default, so later steps never run on an empty string, and with
+  `requireSuccess: false` it is data to route on. Any visible reply, however
+  short (`0`, `No`), is an answer. A step that asks for JSON keeps
+  `INVALID_JSON_OUTPUT` for an empty reply. Upgrading changes published
+  workflows: an Ask step that used to succeed with an empty reply now fails it
+  unless `Require valid output` is off.
 - `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
@@ -721,6 +731,16 @@ cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
 instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
+
+When the agent finishes but some of its tool calls failed, were denied or named
+a tool that is not available, the step keeps its outcome (published workflows
+that finish today keep finishing unless `Required tools` says otherwise), and
+its output adds `warning` (how many calls did not work and which tools, at most
+five named) and `toolErrors` (name and bounded, credential-redacted error text
+per failed call, at most ten). A tool name is the model's own and is clipped to
+one line of 64 characters. The
+agent's final message may read as success; these fields are where a person reading
+the run sees what was not done.
 
 ### Required nested workflow continuation
 
@@ -1325,6 +1345,10 @@ latest version and ran it. Now:
   entries, four steps at the step caps (#1154): an install that would take the
   version past that is refused like one over the step cap, naming the step,
   and the version's other steps keep their trees.
+- What a running CODE step may take (each CODE step is its own child process):
+  - **Time:** the flow's 10-minute timeout, and cancelling the run ends the child. Nothing shorter is imposed, so a `fetch` with no timeout of its own waits as long as the other side lets it.
+  - **Memory:** an address-space ceiling of 4 GiB per step on Linux (usable memory is lower: about 1.5 GB on Bun 1.3.11, more on newer Bun) (`ulimit -v`; `JARVIS_CODE_STEP_MEMORY_MB` in the daemon's environment changes it, `0` removes it). An allocation past it fails inside the step, and the step fails with "This CODE step ran out of memory: a step may use up to N MB". A process the step starts inherits the same ceiling, each on its own, so the ceiling stops a runaway, not a step written to get around it. macOS ignores that limit and Windows has no shell to set it, so there a step runs without a ceiling.
+  - **Output:** what the step prints is copied into the daemon log up to 64 KiB per stream, then one line says how many bytes were left out (the step still runs to the end). A failure message carries the last 64 KiB of each stream. A step's result is part of the run's data, which a run keeps up to 10 MB; a result past that fails the step with "This CODE step returned N MB of data, more than a run can keep (10 MB)". The step's own process measures what the step returns, so an over-size result is not handed to the engine.
 - Every version that ran a CODE step has a tree under
   `~/.jarvis/workflow-codes/<versionId>/`. The daemon removes a tree at start
   and hourly unless its version is a flow's published version or current
@@ -2029,7 +2053,7 @@ empty or whitespace-only body reads as `{}`.
 
 | Route | Body cap | Other limits |
 |---|---|---|
-| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400) |
+| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400). PATCH also takes `timeSavedPerRun`, a whole number of minutes from 0 to 1440 or null (400 otherwise): the minutes one successful run adds to Today's time saved, else an estimate from the steps |
 | `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
 | `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused (409) |
 | `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
@@ -2121,6 +2145,8 @@ Notable behaviors a contributor should know:
 - Editor state is owned by `useWorkflowEditor.ts`; tree algebra (insert/delete/wire branches) is a pure module at `tree.ts` with its own test file.
 - LOOP body and ROUTER branches render as indented sub-graphs on the canvas. The tree-aware auto-layout distributes router branches symmetrically around the parent.
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
+- A file field (a piece property of type FILE) is a text field like any other: it takes an earlier step's stored file, such as `{{step_1.url}}` from Create file (a `/v1/step-files/<id>` path, readable only by runs of the same flow), or a link, which is fetched only when its host is on the flow's read list. The engine's file processor takes a string, so a reference to Create file's whole output object (`{{step_1}}`) resolves to no file and a required file field fails the run. It is never a JSON box unless the saved value is already an object.
+- The HTTP and GraphQL steps' Headers and Query params are optional (`required: false` in the vendored piece, registered in `scripts/activepieces-expression-patch.ts`); a step with only a method and a URL is ready.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
 - Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
 - "Test this step" tests what is on screen: unsaved edits are saved to the draft first (the run API tests the latest saved draft; a failed save stops the test before it runs), then the step runs and the editor waits for the run and shows the step's result next to the button: passed with what the step returned, or failed with the plain reason, or the readiness issues that refused the test. A passing run fills the step's sample output only when that cell is empty, with what the step returned (not the engine's step record); a pinned sample is never replaced.
