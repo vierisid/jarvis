@@ -25,6 +25,8 @@ export interface QueuedDecision extends BriefDecision {
   review?: { toolName: string; reason: string; target?: string; origin?: string; element?: string; workflowName?: string; requestedAt?: number; message?: string; channels?: string[]; fallback?: 'desktop';
     /** #1314: a reviewed browser/desktop workflow card: the computer, the window, and every value with where it came from. */
     computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }> };
+  /** Set while approving waits on a switch: a screen-derived request while screen awareness is off (#1314 follow-up). */
+  awarenessHeld?: string;
   placement: number;
   createdAt: number;
 }

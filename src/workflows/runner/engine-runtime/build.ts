@@ -386,6 +386,9 @@ export const PATCHED_VENDOR_SOURCES = [
   'server/engine/src/lib/handler/piece-executor.ts',
   // Jarvis: a CODE step asks the daemon about Pause and Kill before it runs (Q-08).
   'server/engine/src/lib/handler/code-executor.ts',
+  // Jarvis: engine console output withholds failed-request bodies and headers.
+  'server/engine/src/lib/worker-socket.ts',
+  '../../runtime/engine-console-redaction.ts',
   // Jarvis: "Continue on failure" never goes past a refused step (#1338).
   'server/engine/src/lib/helper/error-handling.ts',
   "server/engine/src/lib/helper/piece-loader.ts",
