@@ -87,6 +87,14 @@ const DEFERRED = `e.status = 'pending' AND e.approval_id IS NULL AND json_valid(
 const LIVE_DEFERRAL = `EXISTS (SELECT 1 FROM waitpoint w WHERE w.id = e.waitpoint_id AND w.type IN ('DEFER','HOLD')
   AND (w.resumed_at IS NULL OR EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = e.run_id AND j.job_type = 'RUN_FLOW'
     AND j.status IN ('QUEUED','RUNNING') AND json_extract(j.payload, '$.waitpointId') = w.id)))`;
+/**
+ * A run held behind its flow's card budget, as the Brief queue reads it: a
+ * waiting step (`DEFERRED`) that still holds its place (`LIVE_DEFERRAL`) in a
+ * run that can still act. `sr` is the run's `flow_run` row. Such a run has no
+ * card and nothing for the owner to decide, so the queue groups it per
+ * workflow instead of listing it (`brief/decisions.ts`).
+ */
+export const HELD_RUN_EFFECT = `${DEFERRED} AND ${LIVE_DEFERRAL} AND sr.status IN ${LIVE}`;
 const FLOW = `json_extract(e.record, '$.flowId')`;
 const BUDGET = `json_extract(e.record, '$.deferral.budget')`;
 const SINCE = `json_extract(e.record, '$.deferral.since')`;
