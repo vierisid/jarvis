@@ -22,27 +22,35 @@
       }
     })();
   </script>
-  <title>Unauthorized</title>
+  <title>Your Jarvis session has ended</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
       font-family: system-ui;
       display: flex;
       justify-content: center;
       align-items: center;
-      height: 100vh;
+      min-height: 100vh;
       margin: 0;
+      padding: 24px;
+      box-sizing: border-box;
       background: #111;
-      color: #ccc;
+      color: #ddd;
     }
-    .box { text-align: center }
-    h1 { font-size: 4rem; margin: 0; color: #666 }
-    p { margin-top: 1rem }
+    main { max-width: 34rem; line-height: 1.55 }
+    h1 { font-size: 1.5rem; margin: 0 0 1rem; color: #fff }
+    p { margin: 0 0 1rem }
+    code { background: #222; padding: 2px 6px; border-radius: 4px; color: #fff }
+    small { color: #999 }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h1>401</h1>
-    <p>Access requires a valid token.</p>
-  </div>
+  <main>
+    <h1>Your Jarvis session has ended</h1>
+    <p>Reloading will not bring it back. Your saved work is safe.</p>
+    <p>To continue, open Jarvis again from the Jarvis desktop app.</p>
+    <p>If you run Jarvis on your own server and the desktop app cannot connect, run <code>jarvis enroll "my-desktop"</code> on the server and paste the token it prints into the desktop app.</p>
+    <small>Error 401: access needs a valid session.</small>
+  </main>
 </body>
 </html>
