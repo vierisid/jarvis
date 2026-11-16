@@ -1,8 +1,10 @@
 /** D21's presentation seam, with additive F20 recovery and execution state. */
+/** Where a person goes to clear a blocker: the Connected workspace room, or the workflow itself. */
+export interface WorkflowFix { kind: 'connections' | 'workflow'; label: string }
 export interface ManagedWorkflow {
   flowId: string; versionId: string | null; revision: string; name: string; description: string; trigger: string;
   activation: 'ENABLED' | 'DISABLED'; publication: 'published' | 'unpublished';
-  readiness: { state: 'ready' | 'blocked' | 'unknown'; reason: string | null };
+  readiness: { state: 'ready' | 'blocked' | 'unknown'; reason: string | null; fix?: WorkflowFix | null };
   latestRun: { runId: string; label: string } | null;
 }
 export interface RemovalReceipt {
@@ -14,7 +16,7 @@ export interface WorkflowManageCommand {
 }
 export type WorkflowManageResult = Pick<WorkflowManageCommand, 'scopeId' | 'flowId' | 'requestId' | 'action'> & (
   { status: 'accepted'; item?: ManagedWorkflow; receipt?: RemovalReceipt }
-  | { status: 'rejected'; message: string; code: string }
+  | { status: 'rejected'; message: string; code: string; fix?: WorkflowFix }
 );
 /** #1096: a person's purge of a restored workflow, or of a removed one whose Undo expired. */
 export interface WorkflowPurgeCommand {
