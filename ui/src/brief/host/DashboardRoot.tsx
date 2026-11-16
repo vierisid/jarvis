@@ -187,7 +187,7 @@ function SessionEndedBanner() {
 }
 function Workspace({ host, route, retained, open, setOpen, reveal, shellRef, message, sessionEnded, children, beforeNavigate }: { host: DashboardOwner; route: BriefRoute; retained: RoomKey | null; open: boolean; setOpen(value: boolean): void; sessionEnded: boolean;
   reveal: React.MutableRefObject<(id: string) => void>; shellRef: React.MutableRefObject<BriefShellPort | null>; message: string; children?: ReactNode; beforeNavigate?(): Promise<boolean> }) {
-  const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false }); useBriefProjection(host.refresh);
+  const owner = useBriefConversation(), billing = useBilling({ refreshOnMount: false, enabled: host.descriptor().installMode === 'hosted' }); useBriefProjection(host.refresh);
   const profile = useSyncExternalStore(host.account.profile.subscribe, host.account.profile.snapshot, host.account.profile.snapshot);
   const notices = useNotificationCenter(owner);
   const toast = useReminderToast(notices.items);
