@@ -219,6 +219,21 @@ describe("manage_workflow tool", () => {
       expect(detail).toContain('"ok":true');
     });
 
+    test("get_run withholds old webhook credential headers and a generated password the stored run still holds", async () => {
+      const created = (await call("create", { name: "hooked", empty: true })) as { id: string };
+      const draft = getLatestDraft(created.id)!;
+      updateDraftVersion(draft.id, { trigger: { name: "trigger", type: "EMPTY", displayName: "Start", settings: {}, valid: true,
+        nextAction: { name: "make_pw", type: "PIECE", displayName: "Password", valid: true,
+          settings: { pieceName: "@activepieces/piece-crypto", pieceVersion: "0.1.0", actionName: "generate-password", input: { length: 20 } } } } as never });
+      const runId = createFlowRun({ flowId: created.id, flowVersionId: draft.id }).id;
+      updateRun(runId, { steps: {
+        trigger: { output: { type: "EMPTY", status: "SUCCEEDED", input: {}, output: { _webhook: { headers: { "x-api-key": "OLD-KEY-SECRET-77", "user-agent": "hook/1" } } } } },
+        make_pw: { output: { type: "PIECE", status: "SUCCEEDED", input: { length: 20 }, output: "GENpw4Secret7Value9xy" } } } });
+      const detail = JSON.stringify(await call("get_run", { run_id: runId }));
+      for (const secret of ["OLD-KEY-SECRET-77", "GENpw4Secret7Value9xy"]) expect(detail).not.toContain(secret);
+      expect(detail).toContain("hook/1");
+    });
+
     test("an update that writes the redacted view back keeps the stored credentials; one that strands the marker is refused", async () => {
       configureWorkflowReadiness({ pieces: new PieceCatalog([...sampleCatalog().list(),
         { name: "@activepieces/piece-http", displayName: "HTTP", description: "", actions: { send_request: { name: "send_request", displayName: "Send", description: "" } } }]) });
