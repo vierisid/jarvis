@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  NOTCH_ROUND_MAX_MS, findRounds, parseWatchEvent, roundPlace, roundsApps, roundsCopy, roundsName, roundsSource, roundsThatFit, roundsToDo, watchKeysOk,
+  NOTCH_ROUND_MAX_MS, carryExact, findRounds, parseWatchEvent, roundPlace, roundsApps, roundsCopy, roundsName, roundsSource, roundsThatFit, roundsToDo, watchKeysOk,
   type RoundStep, type WatchStep, type WatchWin,
 } from './rounds.ts';
 
@@ -163,6 +163,34 @@ describe('a round is a circle', () => {
     // A job that copies nothing has no such step.
     const ticks = findRounds([click(SHEET, 40, 300), click(SHEET, 40, 324), click(SHEET, 40, 348)])!;
     expect(roundsToDo(ticks, 4)).toBe(4);
+  });
+});
+
+describe('distances that were measured, carried on to where the person is now', () => {
+  const exact = (rounds: ReturnType<typeof findRounds>, file: number, sheet: number) => ({
+    ...rounds!, steps: rounds!.steps.map((step) => (step.kind === 'click' ? { ...step, dy: step.win === FILE ? file : sheet } : step)),
+  });
+
+  test('a round further on, or a step further on, keeps what was measured', () => {
+    const measured = exact(findRounds([...row(0), ...row(1)]), 22.4, 24.5);
+    // Another whole round by hand.
+    const again = carryExact(measured, findRounds([...row(0), ...row(1), ...row(2)])!)!;
+    expect(again.steps.map((step) => (step.kind === 'click' ? [step.y, step.dy] : step.keys))).toEqual([[244, 22.4], 'ctrl,c', [440, 24.5], 'ctrl,v']);
+    // One click further: the round now begins at another step, and each distance still goes to its own place.
+    const turned = carryExact(measured, findRounds([...row(0), ...row(1), click(FILE, 120, 244)])!)!;
+    expect(turned.steps.map((step) => (step.kind === 'click' ? [step.win.id, step.dy] : step.keys))).toEqual(['ctrl,c', [SHEET.id, 24.5], 'ctrl,v', [FILE.id, 22.4]]);
+  });
+
+  test('another job, or a hand that now goes another way, does not', () => {
+    const measured = exact(findRounds([...row(0), ...row(1)]), 22.4, 24.5);
+    const cut = findRounds([click(FILE, 120, 200), keys(FILE, 'ctrl,x'), click(SHEET, 300, 400), keys(SHEET, 'ctrl,v'),
+      click(FILE, 120, 222), keys(FILE, 'ctrl,x'), click(SHEET, 300, 420), keys(SHEET, 'ctrl,v')])!;
+    expect(carryExact(measured, cut)).toBeNull();
+    // The same steps, but now every other row: what was measured was one row.
+    const skipping = findRounds([click(FILE, 120, 200), keys(FILE, 'ctrl,c'), click(SHEET, 300, 400), keys(SHEET, 'ctrl,v'),
+      click(FILE, 120, 244), keys(FILE, 'ctrl,c'), click(SHEET, 300, 440), keys(SHEET, 'ctrl,v')])!;
+    expect(carryExact(measured, skipping)).toBeNull();
+    expect(carryExact(measured, findRounds([click(SHEET, 40, 300), click(SHEET, 40, 324), click(SHEET, 40, 348)])!)).toBeNull();
   });
 });
 
