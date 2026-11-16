@@ -6,6 +6,7 @@ import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { getFlowRun } from '../workflows/db/repos/flow-run';
 import { runFailure } from '../workflows/runtime/run-failure';
+import { forCard } from '../util/card-text';
 import { continuedFailureHeadline, continuedFailures } from '../workflows/runtime/continued-failures';
 import { getRunRecovery } from '../workflows/runtime/recovery';
 import { bindingDrift, runConnectionBindingViews, type BindingDrift } from '../workflows/db/repos/binding-pins';
@@ -24,6 +25,34 @@ const missing = (reason: string): InspectionState<never> => ({ status: 'unavaila
 const states: Record<string, InspectionRunStatus> = { QUEUED: 'queued', RUNNING: 'running', PAUSED: 'paused',
   SUCCEEDED: 'succeeded', STOPPED: 'cancelled' };
 const status = (v: string): InspectionRunStatus => Object.hasOwn(states, v) ? states[v]! : (['FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE'].includes(v) ? 'failed' : 'uncertain');
+/** Who started the run, in words a person reads. `triggeredBy` is the run's own record (every writer sets a
+ * short tag; see POST /:id/run). A run with no tag falls back to the workflow's trigger: one with no
+ * trigger can only be started by hand. Anything else is "Unknown", never a guess. Only the kind of
+ * starter is shown: never a person, a guest or a webhook sender. */
+function runTriggerLabel(triggeredBy: string | null, trigger: Record<string, unknown> | undefined): string {
+  if (triggeredBy === 'trigger:cron') return 'Schedule';
+  if (triggeredBy === 'trigger:webhook') return 'Webhook';
+  if (triggeredBy === 'trigger:event') return 'Jarvis event';
+  if (triggeredBy === 'trigger:engine') return 'App trigger';
+  if (triggeredBy && ['brief_manual', 'dashboard', 'dashboard:test-from-here', 'editor:run'].includes(triggeredBy)) return 'Started by you';
+  if (triggeredBy?.startsWith('assistant:')) return 'Started by Jarvis';
+  if (triggeredBy === 'workflow:run_workflow') return 'Another workflow';
+  if (triggeredBy?.startsWith('work_item:')) return 'Accepted work proposal';
+  if (!triggeredBy && trigger?.type === 'EMPTY') return 'Started by you';
+  return 'Unknown';
+}
+const STEP_TITLE_MAX = 120;
+/** The workflow's own name for each step, from the version the run used. Not run data, so it is not
+ * redacted, but it is free text (a drafted workflow's names can come from the model): `forCard` drops
+ * invisible and bidi control characters and caps it, as for every other label a person reads. */
+function stepDisplayNames(nodes: Record<string, unknown>[] | null): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const n of nodes ?? []) {
+    const title = typeof n.displayName === 'string' ? forCard(n.displayName, STEP_TITLE_MAX) : '';
+    if (title && typeof n.name === 'string') names.set(n.name, title);
+  }
+  return names;
+}
 /** "Finished with a failed step: <name>" for a SUCCEEDED run that continued past failed steps, else null. */
 function continuedNote(runId: string): string | null {
   const run = getFlowRun(runId), failed = run ? continuedFailures(run) : [];
@@ -350,7 +379,7 @@ export class WorkflowContext {
     // A run that recorded more than can be read here (it hit the size Jarvis keeps for one run)
     // still shows its status and failure; only its step data is left out.
     const tooLarge = omit || row.size > LIMIT.sourceBytes;
-    const steps = tooLarge ? undefined : boundedJson(row.steps), entries: Array<[string, unknown, string]> = [];
+    const steps = tooLarge ? undefined : boundedJson(row.steps), entries: Array<[string, unknown, string, string]> = [], titles = stepDisplayNames(nodes);
     if (steps !== undefined && !object(steps)) throw new WorkflowInspectionError('record_unavailable', 503);
     let stepsOmitted = false; const loopsOmitted: string[] = [];
     const pending: Array<{ path: string; label: string; value: unknown }> = [{ path: '', label: '', value: steps }];
@@ -368,7 +397,7 @@ export class WorkflowContext {
         // A run with more steps than a page can show is shown in part, never refused: the
         // step list, statuses and failure stay readable, and the note says what is left out.
         if (entries.length >= LIMIT.rows) { stepsOmitted = true; continue; }
-        entries.push([label, step, path]);
+        entries.push([label, step, path, (part.label === '' && titles.get(name)) || `Step ${label}`]);
         if (object(step) && step.type === 'LOOP_ON_ITEMS' && object(step.output) && Array.isArray(step.output.iterations)) {
           const iterations = step.output.iterations, shown = shownIterations(iterations);
           if (shown.length < iterations.length) loopsOmitted.push(`Showing ${shown.length} of ${iterations.length} iterations of ${label}.`);
@@ -401,9 +430,9 @@ export class WorkflowContext {
         outcome: failure.outcome, next: failure.next, code: failure.code } : null,
       recovery: recovery ? { state: recovery.state, reason: recovery.reason, needsAttention: recovery.needsAttention,
         canReplay: false as const, newRunRequired: true as const } : null,
-      trigger: null, finishedAt: r.finish_time,
-      steps: entries.map(([name, raw, path]) => { const s = object(raw) ? raw : {};
-        return { id: `step-${path}`, title: `Step ${name}`, description: failure && name === run.failedStep?.name
+      trigger: runTriggerLabel(run.triggeredBy, nodes?.[0]), finishedAt: r.finish_time,
+      steps: entries.map(([name, raw, path, title]) => { const s = object(raw) ? raw : {};
+        return { id: `step-${path}`, title, description: failure && name === run.failedStep?.name
           ? [failure.headline, failure.outcome, ...failure.next.map(n => n.label)].join(' ') : 'Recorded step input and output.',
           status: typeof s.status === 'string' ? status(s.status) : 'uncertain',
           fields: [inspectionValue('Input', s.input), inspectionValue('Output', s.output)] }; }),
