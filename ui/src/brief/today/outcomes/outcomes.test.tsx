@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import { BriefCapabilities } from "../../../../../src/brief/capabilities";
-import { outcomeView, qualifiedTime, progressBand, formatNumber, weekTime, type OutcomeBinding, type OutcomeSummary } from "./model";
+import { outcomeView, qualified, qualifiedTime, progressBand, formatNumber, weekTime, type OutcomeBinding, type OutcomeSummary } from "./model";
 import { outcomeFixture, activityFixture, fixtureMeasurement } from "../preview/outcomeFixtures";
 import type { BriefRoute } from "../../contracts";
 import type { BriefMeasurement } from "../../../../../src/brief/contracts";
@@ -192,7 +192,7 @@ test("empty and unavailable activity never invent events or expose preview rows 
 
 test("a measurement without a recognised qualification never renders as a figure", async () => {
   const data = readyData();
-  const unqualified = { ...fixtureMeasurement(90, "minutes", null), qualification: "estimated" } as unknown as BriefMeasurement;
+  const unqualified = { ...fixtureMeasurement(90, "minutes", null), qualification: "inferred" } as unknown as BriefMeasurement;
   data.today = unqualified; data.week = unqualified;
   data.goal!.progress = { ...fixtureMeasurement(6), qualification: "inferred" } as unknown as BriefMeasurement;
   await render({ source: "fixture", state: { status: "ready", data } });
@@ -208,4 +208,38 @@ test("activity renders owner-supplied markup as literal text", async () => {
   expect(host.querySelector("img, b, i")).toBeNull();
   expect(host.querySelector("strong")!.textContent).toBe(hostile);
   expect(host.querySelector("time")!.textContent).toBe("<i>09:00</i>");
+});
+
+test("run-derived time is estimated: it renders with its plain-words basis and never qualifies a goal figure", async () => {
+  const estimate = (value: number) => ({ ...fixtureMeasurement(value, "minutes", null), qualification: "estimated" as const });
+  expect(qualifiedTime(estimate(36))).toBe(true); expect(qualified(estimate(6))).toBe(false);
+  const data = readyData();
+  data.today = estimate(36); data.week = estimate(120); data.todayBasis = "3 runs x about 12 min. Estimated from the workflow's steps.";
+  data.weekBasis = "10 runs x 12 min. You set the minutes per run.";
+  data.days = data.days.map(day => day.current ? { ...day, time: estimate(36), basis: data.todayBasis } : day);
+  data.goal!.progress = estimate(6);
+  await render({ source: "fixture", state: { status: "ready", data } });
+  expect(text()).toContain("saved today · estimated"); expect(text()).toContain("Progress not measured yet");
+  const bar = host.querySelector<HTMLButtonElement>('button[aria-label^="Today:"]')!;
+  expect(bar.getAttribute("aria-label")).toBe("Today: 36 min saved · estimated. 3 runs x about 12 min. Estimated from the workflow's steps.");
+  const evidence = host.querySelector("details")!.textContent!;
+  expect(evidence).toContain("Today: 3 runs x about 12 min. Estimated from the workflow's steps.");
+  expect(evidence).toContain("This week: 10 runs x 12 min. You set the minutes per run.");
+  expect(evidence).toContain("TodayEstimated · "); expect(evidence).toContain("This weekEstimated · "); expect(evidence).toContain("Today: 36 min · estimated");
+});
+
+test("a day with no runs is an empty zero bar, a future day is blank, and labels stay short", async () => {
+  const zero = { ...fixtureMeasurement(0, "minutes", null), qualification: "estimated" as const };
+  const data = readyData();
+  data.days = [{ id: "d1", label: "Mon", title: "Monday, 9 November 2026", current: false, time: zero, basis: "No time saved." },
+    { id: "d2", label: "Tue", title: "Tuesday, 10 November 2026", current: true, time: { ...zero, value: 5, baseline: 5 }, basis: "1 run x 5 min. You set the minutes per run." },
+    { id: "d3", label: "Wed", title: "Wednesday, 11 November 2026", current: false, time: null, future: true }];
+  data.today = zero;
+  await render({ source: "fixture", state: { status: "ready", data } });
+  expect(text()).toContain("0min"); expect(text()).not.toContain("Not enough evidence yet");
+  const bars = [...host.querySelectorAll<HTMLButtonElement>(".brief-outcome-bar-target")];
+  expect(bars.map(b => b.getAttribute("aria-label"))).toEqual(["Monday, 9 November 2026: No time saved",
+    "Tuesday, 10 November 2026: 5 min saved · estimated. 1 run x 5 min. You set the minutes per run.", "Wednesday, 11 November 2026: not yet"]);
+  expect(bars[0]!.querySelector(".brief-outcome-bar-unknown")).toBeNull(); expect(bars[2]!.querySelector(".brief-outcome-bar-unknown")).toBeNull();
+  expect(bars.map(b => b.querySelector(".brief-type-utility")!.textContent)).toEqual(["Mon", "Tue", "Wed"]);
 });
