@@ -431,8 +431,10 @@ const DATA_DIR_SENSITIVE_ENTRIES = new Set([
   'google-tokens.json',
   // Installed workflow pieces, which shadow the shared copy; the desktop
   // bridge the daemon launches; install.sh's daemon checkout; the PID
-  // `jarvis stop` signals.
-  'pieces', 'sidecar', 'daemon', 'jarvis.pid',
+  // `jarvis stop` signals; the launch record `jarvis restart` replays (it names
+  // the --system-config and --data-dir the next daemon starts with, and
+  // whether it keeps --no-local-tools).
+  'pieces', 'sidecar', 'daemon', 'jarvis.pid', 'jarvis.launch.json',
 ]);
 
 function isSensitiveDataEntry(relInDataDir: string): boolean {
@@ -1061,9 +1063,11 @@ function ownUnitNames(): string[] {
  */
 function isEnvDefinitionFile(s: string): boolean {
   // A `jarvis export` archive holds .secrets.key, the workflow key, the
-  // sidecar keypair and google-tokens.json verbatim (cli/backup.ts:112), and
-  // they are ASCII, so a plain text read of the tar prints them.
-  return /(?:^|\/)jarvis-(?:export|backup)-[^/]*\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
+  // sidecar keypair and google-tokens.json verbatim (cli/backup.ts
+  // SECRET_ENTRIES, in every archive by default), and they are ASCII, so a
+  // plain text read of the tar prints them. Covers the default name
+  // (jarvis-export-<time>.tar) and the README's `--out jarvis-backup.tar`.
+  return /(?:^|\/)jarvis-(?:export|backup)(?:-[^/]*)?\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
 }
 
 /**

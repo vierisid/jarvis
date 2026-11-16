@@ -49,6 +49,11 @@ checks at dispatch.
 }
 ```
 
+The report may also carry `warnings`: a saved option that cannot apply, such as
+"Retry on failure" on a step that acts outside Jarvis (`RETRY_UNAVAILABLE`), or
+"Continue on failure" on a step that asks a person (`CONTINUE_UNAVAILABLE`). A
+warning never changes `ready`; the flow runs as if the option were off.
+
 Rejected activation returns HTTP 422 with `code: "WORKFLOW_NOT_READY"`, a
 readable `error`, and this same report. Wrong-parent versions retain the
 ownership contract's 4xx response. Publication validates before locking or
@@ -69,7 +74,8 @@ Nested workflows must resolve by stable ID to a ready version without cycles.
 Required or supplied dynamic properties need a saved property schema. Preflight
 validates known nested values against it, and the engine receives the same schema
 for action and trigger execution. Missing schemas, unknown property types and
-unresolved nested dynamic schemas block activation. The daemon supplies the live catalog, tool and role inventories.
+unresolved nested dynamic schemas block activation. Jarvis saves the schema
+itself for the properties it can resolve (see below). The daemon supplies the live catalog, tool and role inventories.
 An unavailable inventory is an error for nodes that require it.
 
 References may use earlier outputs, the trigger, and the containing loop's
@@ -187,15 +193,31 @@ does not silently become an empty string, including inside larger text.
 Graphs refused include invalid schedules, unknown/forward/sibling references,
 missing required inputs, missing/ambiguous/wrong-piece connections, invalid child
 workflow bindings and supplied/required DYNAMIC inputs without a saved supported
-property schema. The Jarvis editor exposes those fields as JSON inputs but does
-not resolve or save their property schemas, so reopening the field will not
-repair this refusal. Leave the workflow disabled until its piece schema is
-available. A maintainer can save a verified schema in the draft graph at
-`settings.propertySettings.<field>.schema` through
-`PATCH /api/workflows/:id/versions/:versionId` with the complete updated `trigger`,
-then inspect that version's readiness report before publishing. Preserve the
-piece's required fields and types; an invented empty schema or a `valid` flag is
-not a repair.
+property schema.
+
+A dynamic property takes its shape from another property: the HTTP step's Body
+from Body Type, its Authentication Fields from Authentication, the zip steps'
+Password options from Use password. Every write of a draft (the editor, the
+composer, the assistant and the API) saves the schema for the step's current
+values at `settings.propertySettings.<field>.schema`, so a person who fills
+these fields can publish without writing JSON. The schemas come from the engine:
+when the piece catalog is built, the engine resolves each dynamic property of
+the HTTP, file-helper and GraphQL pieces for every value its refreshers can take
+(a dropdown option, a checkbox, or unset), and the catalog keeps the results
+(`dynamic-property-schemas.ts`). Changing the type replaces the schema on the
+next save. A value filled in at run time (`{{...}}`) cannot be resolved and
+keeps whatever schema is saved. Pieces outside that list are not resolved,
+because resolving runs the piece's own code, which for a service piece needs a
+connection and the network. Their dynamic fields still need a verified schema
+saved by a maintainer through `PATCH /api/workflows/:id/versions/:versionId`
+with the complete updated `trigger`, then a look at that version's readiness
+report. Preserve the piece's required fields and types; an invented empty
+schema or a `valid` flag is not a repair.
+
+A flow saved before this, or one whose catalog entry could not be resolved, is
+refused with a message that says to save the step again after choosing its
+options. Credentials in these fields stay redacted wherever Jarvis shows a flow
+or its runs; the saved schema holds field definitions, never values.
 
 Sunday accepts both 0 and 7, including ranges and steps. Native schedule hooks
 use the same parser as preflight and the daemon scheduler, including bounded
