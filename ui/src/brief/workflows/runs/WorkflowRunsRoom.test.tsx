@@ -109,6 +109,19 @@ test("one inline document follows selection through all shell combinations", asy
         expect(host.querySelector('[role="dialog"]')).toBeNull();
       }
 });
+test("a run opens with the version it ran on, not the version on screen", async () => {
+  const opened: Array<Record<string, string | undefined>> = [];
+  const navigate = shell.navigate;
+  shell = { ...shell, navigate: (route) => { opened.push({ ...route.selection }); navigate(route); } };
+  await render();
+  const older = [...fixture.records.values()].find((r) => r.versionId !== RUN_SCOPE.versionId)!;
+  expect(older.versionId).toBe("meeting-v2");
+  await React.act(async () => host.querySelector<HTMLButtonElement>(`button[title="${older.runId}"]`)!.click());
+  expect(opened.at(-1)).toMatchObject({ runId: older.runId, versionId: "meeting-v2" });
+  const current = [...fixture.records.values()].find((r) => r.versionId === RUN_SCOPE.versionId)!;
+  await React.act(async () => host.querySelector<HTMLButtonElement>(`button[title="${current.runId}"]`)!.click());
+  expect(opened.at(-1)).toMatchObject({ runId: current.runId, versionId: RUN_SCOPE.versionId });
+});
 test("redacted fields do not leak and inspection treats arbitrary markup as text", async () => {
   fixture.records.get("meeting-run-012")!.steps[1]!.fields[0]!.value =
     '<img src=x onerror="window.privateValue=1">';
