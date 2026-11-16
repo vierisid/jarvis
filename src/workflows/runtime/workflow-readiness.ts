@@ -32,6 +32,7 @@ import {managedTrelloIssue} from './managed-trello';
 import {managedSlackIssue} from './managed-slack';
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../lib/cron-scheduler';
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
+import { canContinuePastStep, canRetryStep, CONTINUE_UNAVAILABLE_MESSAGE, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
 import { emptyInput, inputIssue } from './input-validation';
 import { formFields } from './human-input-contract';
@@ -62,6 +63,12 @@ export interface WorkflowReadiness {
   runtimeChecks: RuntimeCheck[];
   /** Missing user configuration accepted only during disabled-draft composition. */
   setupIssues?: ReadinessIssue[];
+  /**
+   * A saved option that cannot apply (Retry on failure on a step that acts
+   * outside Jarvis). Not a refusal: the flow runs as if the option were off,
+   * so a flow that already saved it keeps running.
+   */
+  warnings?: ReadinessIssue[];
 }
 export interface ReadinessContext {
   pieces?: PieceLookup;
@@ -132,7 +139,7 @@ function staticInput(value: unknown): { known: boolean; value: unknown } {
  * Siblings remain isolated, and loop-body outputs stay within their loop.
  */
 export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}): WorkflowReadiness {
-  const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [], setupIssues: ReadinessIssue[] = [];
+  const issues: ReadinessIssue[] = [], runtimeChecks: RuntimeCheck[] = [], setupIssues: ReadinessIssue[] = [], warnings: ReadinessIssue[] = [];
   const seen = new Set<unknown>(), names = new Set<string>();
   // Every node inside a loop body: a refund step there would propose once per iteration for one ticket.
   const refundLoopBodies = new Set<unknown>();
@@ -290,6 +297,14 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
     const input = settings.input === undefined ? {} : settings.input;
     if (!object(input)) issue(node, 'settings.input', 'INPUT_TYPE', 'Expected an input object');
     const pieceName = typeof settings.pieceName === 'string' ? settings.pieceName : '';
+    if (!root && (type === 'PIECE' || type === 'CODE') && settings.errorHandlingOptions?.retryOnFailure?.value === true
+      && !(type === 'PIECE' && canRetryStep(pieceName)) && warnings.length < 100) {
+      warnings.push({ node, path: 'settings.errorHandlingOptions.retryOnFailure', code: 'RETRY_UNAVAILABLE', message: RETRY_UNAVAILABLE_MESSAGE });
+    }
+    if (!root && type === 'PIECE' && settings.errorHandlingOptions?.continueOnFailure?.value === true
+      && !canContinuePastStep(pieceName, settings.actionName) && warnings.length < 100) {
+      warnings.push({ node, path: 'settings.errorHandlingOptions.continueOnFailure', code: 'CONTINUE_UNAVAILABLE', message: CONTINUE_UNAVAILABLE_MESSAGE });
+    }
     // Any auth that names the managed account, not only the two exact spellings:
     // a binding with text around it must not skip the action allowlist.
     if (pieceName === '@activepieces/piece-mailchimp' && object(input)
@@ -709,7 +724,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   }
   visit(trigger, new Set(), true);
   if (context.preview && !previewFound) issue(context.preview.stepName, 'graph', 'PREVIEW_STEP', 'The selected preview step does not exist');
-  return { ready: issues.length === 0, issues, runtimeChecks, ...(setupIssues.length ? { setupIssues } : {}) };
+  return { ready: issues.length === 0, issues, runtimeChecks, ...(setupIssues.length ? { setupIssues } : {}), ...(warnings.length ? { warnings } : {}) };
 }
 
 /**

@@ -231,9 +231,14 @@ describe('evidence snapshots', () => {
 
   test('bounds context, preserves other goals and discloses omissions including escaped text', () => {
     const noisyText = '\u0001'.repeat(10_000);
-    const many = Array.from({ length: 21 }, () => vault.createGoal(noisyText, 'task', {
-      status: 'active', success_criteria: noisyText,
-    }));
+    // Goal text is limited on write now (200 character titles, no control characters). A goal saved
+    // before those limits can still hold such text, so it is written straight to the table to keep
+    // the bundle bound tested.
+    const many = Array.from({ length: 21 }, () => {
+      const goal = vault.createGoal('Noisy goal', 'task', { status: 'active' });
+      getDb().query('UPDATE goals SET title = ?, success_criteria = ? WHERE id = ?').run(noisyText, noisyText, goal.id);
+      return { ...goal, title: noisyText, success_criteria: noisyText };
+    });
     for (const g of many) for (let i = 0; i < 8; i++) {
       vault.addProgressEntry(g.id, 'auto_detected', 0, 0, noisyText, 'awareness');
     }
