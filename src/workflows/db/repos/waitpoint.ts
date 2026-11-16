@@ -110,7 +110,23 @@ function rowToWaitpoint(row: WaitpointRow): Waitpoint {
   };
 }
 
+/** Thrown when a timer would park a run with no usable resume time. */
+export class TimerWithoutResumeTimeError extends Error {
+  constructor() {
+    super("A timer needs a valid resume time. The run was not paused.");
+    this.name = "TimerWithoutResumeTimeError";
+  }
+}
+
+/** The scheduler only wakes a TIMER whose resume time is a real date, so a TIMER without one would be PAUSED forever. */
+export function assertTimerResumeTime(type: WaitpointType, resumeDateTime: string | undefined | null): void {
+  if (type === "TIMER" && (!resumeDateTime || Number.isNaN(Date.parse(resumeDateTime)))) {
+    throw new TimerWithoutResumeTimeError();
+  }
+}
+
 export function createWaitpoint(input: CreateWaitpointInput): Waitpoint {
+  assertTimerResumeTime(input.type, input.resumeDateTime);
   assertRunNotCanceled(input.flowRunId);
   const id = apId();
   const created = Date.now();

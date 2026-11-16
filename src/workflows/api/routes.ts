@@ -11,6 +11,7 @@ import type { FlowTriggerNode } from '../db/repos/flow-version';
 import type { BriefCapabilities } from '../../brief/capabilities';
 import { requireWorkflowContext } from '../../brief/workflow-context-routes';
 import { WorkflowInspectionError } from '../../brief/inspection-values';
+import { secretLiteralWarnings } from '../../actions/tools/secret-literals.ts';
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -39,6 +40,7 @@ import { WorkflowInspectionError } from '../../brief/inspection-values';
  * `initWorkflowDb(...)` before routes serve traffic.
  */
 
+import { getRunHistoryKeep, isRunHistoryKeep, countRunsToPrune, pruneRunHistory, runHistorySummary, RUN_HISTORY_KEEP_VALUES, setRunHistoryKeep } from "../db/repos/run-retention";
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
@@ -62,7 +64,9 @@ import {
 } from "../db/repos/flow";
 import {
   createDraftVersion,
+  discardDraftVersion,
   getFlowVersion,
+  getCurrentVersion,
   getLatestDraft,
   listVersions,
   lockVersion,
@@ -80,7 +84,9 @@ import { normalizeReadHosts, readHostsOfRow } from "../db/read-hosts";
 import { LOCAL_ADDRESS_REFUSAL, localHostRefusal } from "../runtime/http-approval";
 import type { EgressPolicy } from "../runtime/http-egress";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
+import { refuseDraftGraph } from "./draft-graph";
 import {
+  cloneFlowVersionUiMeta,
   getFlowVersionUiMeta,
   uiMetaRefusal,
   upsertFlowVersionUiMeta,
@@ -1668,6 +1674,37 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // How long finished runs are kept, and how much history there is now.
+    // GET answers with the setting and the size; `?keep=90d` also says how many
+    // finished runs that choice would delete (for the confirmation before it is
+    // saved). PATCH saves the choice, and a shorter one starts a clean-up now.
+    // The default and the only silent value is "forever".
+    "/api/workflows/run-history": {
+      GET: (req) =>
+        trapErrors(async () => {
+          const summary = await runHistorySummary();
+          const url = new URL(req.url);
+          const asked = url.searchParams.get("keep");
+          if (asked !== null && !isRunHistoryKeep(asked)) return err(`keep must be one of: ${RUN_HISTORY_KEEP_VALUES.join(", ")}`, 400);
+          return ok({
+            keep: getRunHistoryKeep(), options: RUN_HISTORY_KEEP_VALUES, runs: summary.runs, oldestAt: summary.oldestAt,
+            bytes: summary.bytes, dataBytes: summary.dataBytes, logBytes: summary.logBytes,
+            ...(asked ? { wouldRemoveRuns: countRunsToPrune(asked) } : {}),
+          });
+        }),
+      PATCH: (req) =>
+        trapErrors(async () => {
+          const read = await readWriteBody(req, 1024);
+          if ("error" in read) return read.error;
+          const keep = read.body.keep;
+          if (!isRunHistoryKeep(keep)) return err(`keep must be one of: ${RUN_HISTORY_KEEP_VALUES.join(", ")}`, 400);
+          setRunHistoryKeep(keep);
+          // Applied now rather than at the next daily sweep, in the background.
+          if (keep !== "forever") void pruneRunHistory(keep).catch((e) => console.error("[Retention] Run history sweep failed:", e));
+          return ok({ keep });
+        }),
+    },
+
     // Read-only upgrade audit using the same inventory and compiler as activation.
     "/api/workflows/readiness": {
       GET: (req) => trapErrors(() => {
@@ -1883,10 +1920,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             expectedRevision?: unknown;
           };
           if (!scopedFlow(req, id)) return err("flow not found", 404);
+          // A new draft starts as a copy of the version the workflow runs: the
+          // published one, else its latest draft (the version every list names
+          // it by). Never the newest row: after an older version is published
+          // again, or a newer one is only locked, the newest is not what runs.
+          // A client that sends only a name used to get an empty draft, which
+          // then could not be published.
+          const source = getCurrentVersion(id);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
-          const named = validDisplayName(body.displayName, id);
+          const named = validDisplayName(body.displayName ?? source?.displayName, id);
           if ("error" in named) return named.error;
+          if (body.trigger !== undefined) {
+            const shape = refuseDraftGraph(body.trigger);
+            if (shape) return err(shape);
+          }
           // `uiMeta` is checked BEFORE the insert, not after (#632). There is
           // no transaction around the two writes below, so a malformed `uiMeta`
           // checked inside `upsertFlowVersionUiMeta` would have created the
@@ -1911,12 +1959,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                 throw new FlowVersionRequestError("This workflow changed in another tab or conversation. Your edits are still here. Copy anything you want to keep, then discard and reload the latest draft before saving.", 409);
               }
             }
+            // The copy is of the version read above; one published or
+            // drafted since then is not silently copied in its place.
+            if ((body.trigger === undefined || body.displayName === undefined) && (getCurrentVersion(id)?.id ?? null) !== (source?.id ?? null)) {
+              throw new FlowVersionRequestError("This workflow changed while the draft was being made. Try again.", 409);
+            }
             const created = createDraftVersion({
               flowId: id,
               displayName: named.name,
-              trigger: body.trigger,
+              trigger: body.trigger ?? source?.trigger,
             });
             if (body.uiMeta) upsertFlowVersionUiMeta(created.id, body.uiMeta);
+            else if (body.trigger === undefined && source) cloneFlowVersionUiMeta(source.id, created.id);
             return created;
           }).immediate();
           // An enabled flow with nothing published runs its latest draft: its
@@ -1972,6 +2026,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // (`ui/src/v2/rooms/workflows/useWorkflowEditor.ts` sends exactly
           // `displayName`, `trigger` and `uiMeta`).
           const versionPatch: UpdateDraftVersionInput = {};
+          if (body.trigger !== undefined && body.trigger !== null) {
+            // The basic shape and size, in plain words: a string, a list or
+            // another tool's export used to be saved, and the draft then
+            // could not be opened.
+            const shape = refuseDraftGraph(body.trigger);
+            if (shape) return err(shape);
+          }
           if (body.trigger !== undefined) versionPatch.trigger = body.trigger;
           // Checked rather than cast, for the reason #598 gave for `metadata`:
           // these are `JSON.stringify`'d straight into columns that
@@ -2031,6 +2092,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    "/api/workflows/:id/versions/:versionId/discard": {
+      // The way out of a draft that cannot be opened: throws the draft away.
+      // Only a draft; the published version and locked history are kept.
+      POST: (req) =>
+        trapErrors(() => {
+          const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
+          withOwnedFlowVersion(id, versionId, () => discardDraftVersion(id, versionId));
+          refreshTrigger(id);
+          return ok({ discarded: true, versionId });
+        }),
+    },
+
     "/api/workflows/:id/versions/:versionId/readiness": {
       GET: (req) => trapErrors(() => {
         const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
@@ -2049,7 +2123,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // here so future readers know that's by design.
           const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
-          return ok(osWarnings.length > 0 ? { ...versionAsShown(locked), osWarnings } : versionAsShown(locked));
+          const warnings = secretLiteralWarnings(locked.trigger);
+          return ok({ ...versionAsShown(locked), ...(osWarnings.length > 0 ? { osWarnings } : {}), ...(warnings.length ? { warnings } : {}) });
         }),
     },
 
@@ -2273,7 +2348,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          return ok({ flow: serializeFlow(flow), version: versionAsShown(version) });
+          // A key typed into a step is stored in plain text and copied into every run.
+          // Said at the moment it goes live; never a refusal (see secretLiteralWarnings).
+          const warnings = secretLiteralWarnings(version.trigger);
+          return ok({ flow: serializeFlow(flow), version: versionAsShown(version), ...(warnings.length ? { warnings } : {}) });
         }),
     },
 
@@ -2456,7 +2534,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const runs = listRecentRunSummaries(callerProject(req), limit);
           return ok({ items: runs.map(run => {
             const flow = getFlow(run.flowId);
-            const version = getLatestDraft(run.flowId) ?? (flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+            // Named as every other list names a workflow: its published version, else its latest draft.
+            const version = (flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null) ?? getLatestDraft(run.flowId);
             return { ...run, displayName: version?.displayName ?? run.flowId };
           }) });
         }),
