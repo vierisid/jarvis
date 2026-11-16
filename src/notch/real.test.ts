@@ -330,7 +330,13 @@ describe('doing it in view, put together (pass 10)', () => {
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       jobs: {
         db: getDb(), noClock: true,
-        hands: { act: async (request) => { sent.push(request); return request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true }; } },
+        hands: {
+          act: async (request) => {
+            sent.push(request);
+            if (request.do === 'pitch') return { done: true, known: true, dy: request.dy as number };
+            return request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
+          },
+        },
         watchPort: { onEvent(listener) { onWatch = listener; } },
         count: async () => 2,
         hold: () => {},

@@ -107,6 +107,7 @@ export function notchJobDeps(options: NotchJobOptions): NonNullable<NotchRealDep
       ...(number(raw.ms) !== undefined ? { ms: number(raw.ms) } : {}),
       ...(number(raw.left) !== undefined ? { left: number(raw.left) } : {}),
       ...(typeof raw.known === 'boolean' ? { known: raw.known } : {}),
+      ...(number(raw.dy) !== undefined ? { dy: number(raw.dy) } : {}),
       ...(typeof raw.app === 'string' ? { app: appSaid(raw.app) } : {}),
       ...(win && typeof win.id === 'string' && number(win.pid) && number(win.w) && number(win.h)
         ? { win: { id: win.id, pid: number(win.pid)!, w: number(win.w)!, h: number(win.h)! } } : {}),

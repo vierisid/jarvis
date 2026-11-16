@@ -430,6 +430,44 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		log.Printf("[notch] act: counted what is left: %d (could tell: %v)", left, known)
 		return done(map[string]any{"known": known, "left": left})
 
+	case "pitch":
+		// How far apart the rows really are at a place, read from the screen
+		// (watchPitch). A number leaves this function, and nothing else.
+		hands := notchActHands()
+		hwnd, rect, refusal := notchActWindowNow(act)
+		if refusal != nil {
+			return refuse(refusal)
+		}
+		unknown := map[string]any{"known": false, "dy": 0}
+		win, _ := watchWindowOf(hwnd)
+		if hands == nil || notchLookAway(notchAppKey(win.App), win32WindowTitle(hwnd)) != "" {
+			return done(unknown)
+		}
+		at, err := notchActPlace(act, rect)
+		if err != nil {
+			return refuse(err.(*notchActError))
+		}
+		strip := watchStrip(rect, at, float64(act.Dy))
+		shot, _ := hands.Snapshot(strip).(*lookShot)
+		if strip.empty() || shot == nil || len(shot.pixels) < shot.w*shot.h*4 {
+			return done(unknown)
+		}
+		pixels := make([]uint32, shot.w*shot.h)
+		for i := range pixels {
+			// The copy is blue, green, red, and a fourth byte that is not looked at.
+			pixels[i] = uint32(shot.pixels[i*4+2])<<16 | uint32(shot.pixels[i*4+1])<<8 | uint32(shot.pixels[i*4])
+		}
+		exact, ok := watchPitch(watchProfile(pixels, shot.w, shot.h), float64(act.Dy))
+		if !ok {
+			log.Printf("[notch] act: no rows could be seen at that place")
+			return done(unknown)
+		}
+		if act.Dy < 0 {
+			exact = -exact
+		}
+		log.Printf("[notch] act: the rows there are %.2f pixels apart a step (the hand went %d)", exact, act.Dy)
+		return done(map[string]any{"known": true, "dy": exact})
+
 	case "click":
 		var hwnd uintptr
 		rect := lookRect{}
@@ -542,5 +580,5 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 			"shape": clipShapeOf(act.Text).payload(),
 		})
 	}
-	return nil, fmt.Errorf("notch.act: do must be click, keys, copy, paste, hand, home, front or count")
+	return nil, fmt.Errorf("notch.act: do must be click, keys, copy, paste, hand, home, front, count or pitch")
 }

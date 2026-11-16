@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +137,7 @@ func TestNotchActTakesOnlyWhatAStepCanBe(t *testing.T) {
 		{"do": "home"},
 		{"do": "front"},
 		actParams("count", map[string]any{"x": float64(300), "y": float64(420), "dy": float64(22), "most": float64(60)}),
+		actParams("pitch", map[string]any{"x": float64(300), "y": float64(420), "dy": float64(-22)}),
 	}
 	for _, params := range good {
 		if _, err := parseNotchAct(params); err != nil {
@@ -382,5 +384,151 @@ func TestCountingSaysWhenItCannotTell(t *testing.T) {
 	nothing := func(k int) (lookThing, bool) { return lookThing{}, false }
 	if _, known := watchCountLeft(nothing, 50); known {
 		t.Fatal("nothing there at all, and it says it knows")
+	}
+}
+
+// A strip of a sheet as the screen shows it: white rows with a grey line
+// between them, `pitch` pixels apart. The pitch need not be a whole number:
+// at 125% and 150% display scaling it is not.
+func gridProfile(height int, pitch float64, phase float64) []float64 {
+	profile := make([]float64, height)
+	for y := range profile {
+		profile[y] = 250
+		// How near this pixel row is to a grid line.
+		off := math.Mod(float64(y)+phase, pitch)
+		if off < 1 {
+			profile[y] = 250 - 60*(1-off)
+		} else if pitch-off < 1 {
+			profile[y] = 250 - 60*(1-(pitch-off))
+		}
+	}
+	return profile
+}
+
+// The fault this measuring exists for: two clicks by hand on two rows are
+// not one row apart, and going on by their distance lands in the wrong row.
+func TestTheRealDistanceBetweenRowsIsFoundFromTheScreenNotFromTheHand(t *testing.T) {
+	for _, pitch := range []float64{20, 21, 24, 26.25, 31.5, 17.5} {
+		profile := gridProfile(int(pitch*20), pitch, 3)
+		// The hand was up to seven pixels out, either way.
+		for _, wobble := range []float64{-7, -3, 0, 4, 7} {
+			got, ok := watchPitch(profile, pitch+wobble)
+			if !ok {
+				t.Fatalf("rows %.2f apart, clicks %.2f apart: no rows were seen", pitch, pitch+wobble)
+			}
+			if math.Abs(got-pitch) > 0.06 {
+				t.Fatalf("rows %.2f apart, clicks %.2f apart: measured %.3f", pitch, pitch+wobble, got)
+			}
+			// Twenty rows on, the click is still in its row: less than a quarter of a row out.
+			if drift := math.Abs(got-pitch) * 20; drift > pitch/4 {
+				t.Fatalf("rows %.2f apart: twenty rows on it is %.1f pixels out", pitch, drift)
+			}
+			// What going on by the hand's own distance would have done.
+			if wobble == 7 && (pitch+wobble)*20-pitch*20 < pitch {
+				t.Fatalf("the test is too easy: the hand's own distance would have stayed in the row")
+			}
+		}
+	}
+}
+
+func TestSkippingRowsIsAWholeNumberOfThem(t *testing.T) {
+	profile := gridProfile(21*30, 21, 0)
+	// Every other row, and every third.
+	for rows, clicks := range map[float64]float64{2: 45, 3: 60} {
+		got, ok := watchPitch(profile, clicks)
+		if !ok || math.Abs(got-rows*21) > 0.2 {
+			t.Fatalf("clicks %.0f apart on rows 21 apart: got %.2f, %v; want %.0f rows", clicks, got, ok, rows)
+		}
+	}
+	// Going up is the same distance.
+	if got, ok := watchPitch(profile, -19); !ok || math.Abs(got-21) > 0.1 {
+		t.Fatalf("going up: got %.2f, %v", got, ok)
+	}
+}
+
+func TestWhereNoRowsCanBeSeenItSaysSo(t *testing.T) {
+	blank := make([]float64, 500)
+	for i := range blank {
+		blank[i] = 255
+	}
+	if _, ok := watchPitch(blank, 22); ok {
+		t.Fatal("a blank strip has rows")
+	}
+	// A picture: bright and dark with no evenness to it.
+	noise := make([]float64, 500)
+	seed := uint32(7)
+	for i := range noise {
+		seed = seed*1664525 + 1013904223
+		noise[i] = float64(seed >> 24)
+	}
+	if got, ok := watchPitch(noise, 22); ok {
+		t.Fatalf("a strip with no rows in it was measured as rows %.2f apart", got)
+	}
+	// Too short a strip to be sure of.
+	if _, ok := watchPitch(gridProfile(60, 21, 0), 21); ok {
+		t.Fatal("three rows were enough to measure by")
+	}
+	// What the person did does not fit the rows that are there: half a row on.
+	if got, ok := watchPitch(gridProfile(40*20, 40, 0), 60); ok {
+		t.Fatalf("a row and a half was taken for a whole number of rows: %.2f", got)
+	}
+	// A hand that barely moved is not a step.
+	if _, ok := watchPitch(gridProfile(400, 21, 0), 3); ok {
+		t.Fatal("three pixels were taken for a step")
+	}
+}
+
+func TestLinesOfWritingAreRowsToo(t *testing.T) {
+	// No grid: line after line of writing, each a darker band with a gap under it. The lines differ.
+	const pitch = 19
+	profile := make([]float64, pitch*24)
+	seed := uint32(3)
+	for line := 0; line < 24; line++ {
+		seed = seed*1664525 + 1013904223
+		ink := 120 + float64(seed>>27) // each line is a little darker or lighter than the next
+		for y := 0; y < pitch; y++ {
+			v := 255.0
+			if y >= 4 && y < 15 {
+				v = ink
+			}
+			profile[line*pitch+y] = v
+		}
+	}
+	got, ok := watchPitch(profile, 24)
+	if !ok || math.Abs(got-pitch) > 0.1 {
+		t.Fatalf("lines of writing 19 apart: got %.2f, %v", got, ok)
+	}
+}
+
+func TestAStripIsReadAsHowBrightEachRowIs(t *testing.T) {
+	// Two pixel rows of three: white, then mid grey.
+	pixels := []uint32{0xffffff, 0xffffff, 0xffffff, 0x808080, 0x808080, 0x808080}
+	got := watchProfile(pixels, 3, 2)
+	if len(got) != 2 || math.Abs(got[0]-255) > 0.01 || math.Abs(got[1]-128) > 0.01 {
+		t.Fatalf("got %v", got)
+	}
+	if watchProfile(pixels, 4, 2) != nil || watchProfile(nil, 0, 0) != nil {
+		t.Fatal("a strip that is not there was read")
+	}
+}
+
+func TestTheStripStaysInsideTheWindow(t *testing.T) {
+	win := lookRect{100, 50, 800, 600}
+	// Going down: a little above the click, a long way below it.
+	down := watchStrip(win, lookPoint{400, 200}, 21)
+	if down.Y != 200-4*21 || down.Y+down.H != 200+16*21 || down.X != 310 || down.W != 180 {
+		t.Fatalf("going down: %+v", down)
+	}
+	// Near the edges it is cut to the window.
+	corner := watchStrip(win, lookPoint{120, 620}, 21)
+	if corner.X != 100 || corner.Y+corner.H != 650 || corner.W != 110 {
+		t.Fatalf("near the corner: %+v", corner)
+	}
+	up := watchStrip(win, lookPoint{400, 500}, -21)
+	if up.Y != 500-16*21 || up.Y+up.H != 500+4*21 {
+		t.Fatalf("going up: %+v", up)
+	}
+	if got := watchStrip(win, lookPoint{2000, 2000}, 21); !got.empty() {
+		t.Fatalf("a place outside the window: %+v", got)
 	}
 }

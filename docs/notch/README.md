@@ -1312,6 +1312,28 @@ Code: `src/notch/rounds.ts` (telling a repeated round from shapes),
     on the clipboard afterwards: putting the person's own back risks a slow
     program pasting that instead.
 
+110. **Where each step lands is measured on the screen, not taken from the
+    hand.** Two clicks by hand on two rows are never exactly one row apart:
+    the hand lands a few pixels higher in one row and lower in the next, and
+    anywhere along a cell's width. Going on by that distance drifts into the
+    wrong row within a few rows. So a round only goes down or up a list (how
+    far to the side the hand landed is the hand, not the job; a job that
+    goes across is not a round, because columns are not evenly wide), and
+    before anything is offered the desktop app measures how far apart the
+    rows really are at each place a round touches (`watchPitch`): it finds
+    the distance at which a strip of the screen is most like itself, which
+    the lines of a grid and line after line of writing both give, to a
+    fraction of a pixel, in any program, asking the program nothing. A
+    number leaves the desktop app and no pixel does. Where the rows cannot
+    be seen, or what was measured does not fit what the hand did, nothing is
+    offered at all, and "run it" says so: a row pasted one line off is worse
+    than no help. It is measured again at the yes, from where the person is
+    by then. Found by review before the first hand test, 16 November 2026.
+111. **A shortcut held down is one shortcut.** A key that is held repeats
+    itself, and Ctrl + C three times in one round and once in the next would
+    not look like the same job. A shortcut is told when it goes down and not
+    again until it has come up.
+
 What is not done, or not proven, in pass 10:
 
 - **None of it has run on a real machine.** The brain's side is tested end
@@ -1324,6 +1346,16 @@ What is not done, or not proven, in pass 10:
   from one moment to the next, or scrolls between rounds, will be clicked in
   the wrong place, and only the window's size is checked. A job stops at the
   edge of its window: it does not scroll.
+- **Measuring rows from the screen is tested on made-up strips, not on a
+  real program.** It finds rows 17.5 to 31.5 pixels apart to within a
+  twentieth of a pixel when the clicks were up to seven pixels out, and lines
+  of writing with no grid. How often a real sheet or list gives it a strip it
+  can read is not known. Rows of uneven height cannot be measured, and there
+  nothing is offered.
+- **A settings change used to cut the desktop app's recorder off from the
+  brain until the next connection** (the events were sent on a cancelled
+  context). Found by reading while building this, and fixed in
+  `reloadConfig`; not caught happening.
 - **How the hooks behave left in all day is not measured.** They do a few
   table lookups a click and nothing else, but Windows removes a hook that
   answers slowly, and eight hours of it is pass 13's soak.
@@ -1545,7 +1577,7 @@ What is not done, or not proven, in pass 10:
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
 | brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
-| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place, `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. One at a time |
+| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place, `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
 | brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
 | brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |

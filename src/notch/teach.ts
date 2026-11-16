@@ -25,7 +25,7 @@ import type { NotchCatch } from './catch.ts';
 import { countRequest } from './catch.ts';
 import type { NotchInbox } from './inbox.ts';
 import {
-  newRoundsRun, roundsPlan, roundsWords,
+  NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds,
   type NotchJobEnd, type NotchJobHands, type NotchJobPlan, type NotchJobs, type NotchRunOptions,
 } from './jobs.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -428,9 +428,17 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     const where = saved.apps.length ? `in ${saved.apps.slice(0, 2).join(' and ')}` : 'on your screen';
     const row = store.add(saved.skill, what ?? `${saved.steps} steps ${where}`, saved.steps);
     log(`[notch] a job was shown and saved: ${saved.steps} step(s)`);
-    const rounds = findRounds(teachShapes(interactions));
-    if (rounds && now() - rounds.at < NOTCH_TEACH_FRESH_MS) {
-      // The same thing done twice: the rest of it is there to do now.
+    const shown = findRounds(teachShapes(interactions));
+    if (shown && now() - shown.at < NOTCH_TEACH_FRESH_MS) {
+      const times = shown.shown === 2 ? 'twice' : `${shown.shown} times`;
+      const size = shown.steps.length === 1 ? '1 step' : `${shown.steps.length} steps`;
+      // The same thing done twice. Going on needs each step to land exactly: the rows are measured on the screen.
+      const rounds = await sureRounds(shown, deps.hands);
+      if (!rounds) {
+        await stage.say(['Learned it in ', em(size), ', done ', em(times), '. ', NOTCH_ROWS_NOT_SEEN], 6000, { mood: 'careful' });
+        return;
+      }
+      // The rest of it is there to do now.
       fresh = { rounds, learned: row.id };
       const left = await countLeft(rounds);
       const per = rounds.steps.length;
@@ -571,6 +579,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     if (took === 'started') return;
     if (took === 'nothing') { tell(['Nothing is left to do there.'], 'look'); return; }
     if (took === 'how-many') { tell(['Tell me how many: "do the next nine".']); return; }
+    if (took === 'unseen') { tell([NOTCH_ROWS_NOT_SEEN], 'sorry', 4600); return; }
     if (took === 'busy') { tell(['I am in the middle of something else.']); return; }
     if (fresh) {
       // It was the same thing done twice, and too long ago: the windows may have moved on since.

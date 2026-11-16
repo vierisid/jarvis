@@ -49,6 +49,9 @@ const (
 
 	vkReturnRec = 0x0D
 	vkTabRec    = 0x09
+
+	wmKeyUpRec    = 0x0101
+	wmSysKeyUpRec = 0x0105
 )
 
 // kbdllHookStruct: WH_KEYBOARD_LL callback payload.
@@ -122,6 +125,11 @@ type recorderHook struct {
 	watchTyped atomic.Bool
 	// How the worker is reached from outside the callbacks.
 	events chan recorderEvent
+	// The key of the last shortcut that went down and has not come up. A
+	// shortcut held a moment too long repeats itself, and Ctrl + C three
+	// times in one round and once in the next would not look like the same
+	// job. Touched only by the keyboard callback.
+	heldChord uint32
 
 	// downSite is the site sampled at the last left-button press, handed to
 	// the click event emitted at the release. It is not synchronised, and
@@ -390,6 +398,11 @@ func installInputHooks() error {
 	})
 
 	keyboardProc := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam uintptr) uintptr {
+		if nCode >= 0 && (wParam == wmKeyUpRec || wParam == wmSysKeyUpRec) {
+			if ks := (*kbdllHookStruct)(unsafe.Pointer(lParam)); ks.VkCode == h.heldChord {
+				h.heldChord = 0
+			}
+		}
 		if nCode >= 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
 			ks := (*kbdllHookStruct)(unsafe.Pointer(lParam))
 			rec, watch := h.recording.Load(), h.watching.Load()
@@ -402,7 +415,15 @@ func installInputHooks() error {
 				// named key or a shortcut is a step and is named; a key that
 				// types is "typing", and which key it was goes no further than
 				// this line (notch_watch.go).
-				kind, spec := watchKey(ks.VkCode, hookMods())
+				mods := hookMods()
+				kind, spec := watchKey(ks.VkCode, mods)
+				if kind == watchKeyStep && (mods.Ctrl || mods.Alt || mods.Win) {
+					if ks.VkCode == h.heldChord {
+						// The same shortcut, still held: it was told when it went down.
+						kind = watchKeyNone
+					}
+					h.heldChord = ks.VkCode
+				}
 				switch kind {
 				case watchKeyStep:
 					if rec && (ks.VkCode == vkReturnRec || ks.VkCode == vkTabRec) && h.typed.Swap(false) {

@@ -54,6 +54,8 @@ export interface NotchActResult {
   /** A count of what is left: how many, and whether it could be told at all. */
   left?: number;
   known?: boolean;
+  /** Rows measured on the screen: how far one step really is, when `known`. */
+  dy?: number;
 }
 
 export interface NotchJobHands {
@@ -235,6 +237,39 @@ export function actRefusal(why: string | undefined): string {
 }
 
 const winRequest = (win: WatchWin): Record<string, unknown> => ({ id: win.id, pid: win.pid, w: win.w, h: win.h });
+
+/**
+ * Makes every step down a list exact, or says it cannot.
+ *
+ * Two clicks by hand on two rows are never exactly one row apart: the hand
+ * lands a few pixels higher in one and lower in the next. Going on by that
+ * distance drifts, and a few rows on the click is in the wrong row. So before
+ * Jarvis goes on, the desktop app measures how far apart the rows really are
+ * at each place, from the screen itself (sidecar: watchPitch), and that is
+ * the distance used.
+ *
+ * Null when the rows cannot be seen for one of the places, or what was
+ * measured does not agree with what the hand did. Then Jarvis does not take
+ * the job over at all: a row pasted one line off is worse than no help.
+ */
+export async function sureRounds(rounds: Rounds, hands: NotchJobHands): Promise<Rounds | null> {
+  const steps: RoundStep[] = [];
+  for (const step of rounds.steps) {
+    if (step.kind !== 'click' || step.dy === 0) { steps.push(step); continue; }
+    let got: NotchActResult | null = null;
+    try {
+      got = await hands.act({ do: 'pitch', win: winRequest(step.win), x: Math.round(step.x), y: Math.round(step.y), dy: Math.round(step.dy) });
+    } catch { got = null; }
+    const dy = got?.done && got.known === true && typeof got.dy === 'number' && Number.isFinite(got.dy) ? got.dy : null;
+    // The same way as the hand went, and within most of a row of how far it went.
+    if (dy === null || Math.sign(dy) !== Math.sign(step.dy) || Math.abs(dy) < 6 || Math.abs(dy - step.dy) > Math.abs(dy) / 2) return null;
+    steps.push({ ...step, dy });
+  }
+  return { ...rounds, steps };
+}
+
+/** What is said when the rows cannot be seen well enough to go on by itself. */
+export const NOTCH_ROWS_NOT_SEEN = 'I cannot see the rows clearly enough there to go on by myself.';
 
 /**
  * Does rounds until they are done, there is nothing left, it is asked to

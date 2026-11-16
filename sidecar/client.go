@@ -566,6 +566,11 @@ func (c *SidecarClient) reloadConfig() {
 		newCtx, cancel := context.WithCancel(c.obsCtx)
 		c.obsCancel = cancel
 		StartObservers(newCtx, c.config, c.availableCaps, c.sendFn)
+		// The recorder and the notch's own watching send on the observers'
+		// context. The old one was just cancelled: left with it, everything
+		// they tell after a change of settings would be dropped without a
+		// word, until the next connection.
+		setRecorderSender(newCtx, c.sendFn)
 	}
 
 	// Send capabilities update so the brain updates its capabilities list

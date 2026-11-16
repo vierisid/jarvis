@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { NotchInbox } from './inbox.ts';
 import {
-  NOTCH_ROUND_FINISH_MS, NotchJobStore, attachNotchJobs, newRoundsRun, roundsPlan, roundsWords, runRounds, undoPuts,
+  NOTCH_ROUND_FINISH_MS, NotchJobStore, attachNotchJobs, newRoundsRun, roundsPlan, roundsWords, runRounds, sureRounds, undoPuts,
   type NotchActResult, type NotchJobHands, type NotchPut, type RoundsRun,
 } from './jobs.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
@@ -150,6 +150,52 @@ describe('doing the rest of a job the person began', () => {
       { win: SHEET, x: 300, y: 440, rows: 1, cols: 2, hash: 'h:a\t1', hand: 1 },
       { win: SHEET, x: 300, y: 460, rows: 1, cols: 2, hash: 'h:b\t2', hand: 1 },
     ]);
+  });
+});
+
+describe('making each step exact before going on', () => {
+  const measured = (answers: Record<string, NotchActResult | null | 'throws'>): { hands: NotchJobHands; asked: Record<string, unknown>[] } => {
+    const asked: Record<string, unknown>[] = [];
+    return {
+      asked,
+      hands: {
+        act: async (request) => {
+          asked.push(request);
+          const answer = answers[(request.win as WatchWin).id];
+          if (answer === 'throws') throw new Error('no answer');
+          return answer ?? null;
+        },
+      },
+    };
+  };
+
+  test('each place that moves on is measured on the screen, and what was measured is what is used', async () => {
+    const m = measured({ [FILE.id]: { done: true, known: true, dy: 22.4 }, [SHEET.id]: { done: true, known: true, dy: 24.5 } });
+    const sure = (await sureRounds(shown(), m.hands))!;
+    expect(m.asked).toEqual([
+      { do: 'pitch', win: FILE, x: 120, y: 222, dy: 22 },
+      { do: 'pitch', win: SHEET, x: 300, y: 420, dy: 20 },
+    ]);
+    expect(sure.steps.map((step) => (step.kind === 'click' ? step.dy : null))).toEqual([22.4, null, 24.5, null]);
+    // A step that stays where it is needs no measuring.
+    expect(sure.steps[1]).toEqual(shown().steps[1]!);
+  });
+
+  test('where the rows cannot be seen, or what was measured does not fit what the hand did, there is no going on', async () => {
+    const seen: NotchActResult = { done: true, known: true, dy: 22 };
+    for (const sheet of [
+      { done: true, known: false } as NotchActResult,
+      { done: false, why: 'gone' } as NotchActResult,
+      { done: true, known: true } as NotchActResult,                 // no distance in the answer
+      { done: true, known: true, dy: -20 } as NotchActResult,        // the other way
+      { done: true, known: true, dy: 61 } as NotchActResult,         // three times what the hand did
+      { done: true, known: true, dy: 2 } as NotchActResult,          // no row is two pixels high
+      { done: true, known: true, dy: Number.NaN } as NotchActResult,
+      null, 'throws' as const,
+    ]) {
+      const m = measured({ [FILE.id]: seen, [SHEET.id]: sheet });
+      expect(await sureRounds(shown(), m.hands)).toBeNull();
+    }
   });
 });
 

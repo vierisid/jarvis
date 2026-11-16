@@ -14,7 +14,7 @@ const text = (parts: NotchPart[] | undefined): string => (parts ?? []).map((part
 const FILE: WatchWin = { id: '0x1a', pid: 100, w: 900, h: 700 };
 const SHEET: WatchWin = { id: '0x2b', pid: 200, w: 1200, h: 800 };
 
-function harness(options: { left?: number | null; paused?: () => boolean; teaching?: () => boolean } = {}) {
+function harness(options: { left?: number | null; paused?: () => boolean; teaching?: () => boolean; rows?: 'unseen' | number } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   let toCatch: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -40,6 +40,10 @@ function harness(options: { left?: number | null; paused?: () => boolean; teachi
     act(request) {
       sent.push(request);
       const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
+      // The rows as the screen shows them: seen, and exactly as far apart as the hand went, unless a test says otherwise.
+      if (request.do === 'pitch') {
+        return Promise.resolve(options.rows === 'unseen' ? { done: true, known: false } : { done: true, known: true, dy: typeof options.rows === 'number' ? options.rows : (request.dy as number) });
+      }
       if (request.do === 'home' || request.do === 'hand') return Promise.resolve(answer);
       return new Promise((resolve) => { waiting.push(() => resolve(answer)); });
     },
@@ -85,8 +89,13 @@ describe('catching a job the person does twice by hand', () => {
     await h.pass(500);
     expect(h.said()).toBe('I can take it from here. 6 left.');
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'take over', unasked: true });
-    // The baton: Jarvis's pointer comes up beside the person's own.
-    expect(h.sent[0]).toEqual({ do: 'hand', beside: true, hand: 0 });
+    // First the rows were measured on the screen, at both places the round touches.
+    expect(h.sent.slice(0, 2)).toEqual([
+      { do: 'pitch', win: FILE, x: 120, y: 222, dy: 22 },
+      { do: 'pitch', win: SHEET, x: 300, y: 420, dy: 20 },
+    ]);
+    // Then the baton: Jarvis's pointer comes up beside the person's own.
+    expect(h.sent[2]).toEqual({ do: 'hand', beside: true, hand: 0 });
     // What it counted from: the place in the file the rows come from, and how far each is from the last.
     expect(h.counted[0]).toMatchObject({ do: 'count', win: FILE, x: 120, y: 222, dx: 0, dy: 22 });
     // The log says how much was seen, and nothing of where.
@@ -102,7 +111,7 @@ describe('catching a job the person does twice by hand', () => {
     await h.reply('yes');
     await settle();
     expect(h.line()).toMatchObject({ kind: 'work', steps: 3, done: 0 });
-    const steps = h.sent.filter((request) => request.do !== 'hand' && request.do !== 'home');
+    const steps = h.sent.filter((request) => request.do !== 'hand' && request.do !== 'home' && request.do !== 'pitch');
     expect(steps[0]).toEqual({ do: 'click', win: FILE, x: 120, y: 244, hand: 0 });
     await h.answer(12);
     await settle();
@@ -170,6 +179,41 @@ describe('catching a job the person does twice by hand', () => {
     expect(h.said()).toBe('I can take it from here.');
     await h.reply('yes');
     expect(h.said()).toBe('Nothing left to do there.');
+    expect(h.jobs.busy()).toBe(false);
+  });
+});
+
+describe('where each step lands', () => {
+  // Found by review before the first hand test: two clicks by hand are never exactly one row apart.
+  test('it goes on by how far apart the rows really are, not by how far the hand went', async () => {
+    // The hand went 22 and 20. On the screen the rows are 24.5 apart in both windows.
+    const h = harness({ left: 9, rows: 24.5 });
+    h.row(0);
+    h.row(1);
+    await settle();
+    await h.pass(500);
+    await h.reply('yes');
+    await settle();
+    await h.answer(36);
+    const into = h.sent.filter((request) => request.do === 'click' && (request.win as WatchWin).id === SHEET.id).map((request) => request.y);
+    // 420 + 24.5 each time, to the nearest pixel. By the hand's own 20 the ninth would be at 600: nearly two rows off.
+    expect(into).toEqual([445, 469, 494, 518, 543, 567, 592, 616, 641]);
+  });
+
+  test('where the rows cannot be seen it offers nothing, and does not keep measuring', async () => {
+    const h = harness({ left: 6, rows: 'unseen' });
+    h.row(0);
+    h.row(1);
+    await settle();
+    await h.pass(500);
+    expect(h.line()).toBeNull();
+    expect(h.logs).toEqual(['[notch] a job done twice by hand was seen, and not offered: the rows could not be seen clearly enough to go on']);
+    const measured = h.sent.length;
+    h.row(2);
+    await settle();
+    expect(h.sent.length).toBe(measured);
+    // Asked for by voice, it says why not.
+    expect(await h.catcher.take(9)).toBe('unseen');
     expect(h.jobs.busy()).toBe(false);
   });
 });
