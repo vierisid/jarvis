@@ -40,6 +40,15 @@ export type AuthorityConfig = {
   emergency_state: 'normal' | 'paused' | 'killed';
 };
 
+/**
+ * The reason a governed category asks, when nothing more specific (an
+ * override, a context rule, a profile, the level) spoke. A caller that words
+ * its own card reason replaces only this one, never a reason a person wrote.
+ */
+export function governedActionReason(actionCategory: ActionCategory): string {
+  return `${actionCategory} is a governed action requiring user approval`;
+}
+
 export type AuthorityDecision = {
   allowed: boolean;
   requiresApproval: boolean;
@@ -209,7 +218,7 @@ export class AuthorityEngine {
       return {
         allowed: true,
         requiresApproval: true,
-        reason: `${actionCategory} is a governed action requiring user approval`,
+        reason: governedActionReason(actionCategory),
         actionCategory,
       };
     }

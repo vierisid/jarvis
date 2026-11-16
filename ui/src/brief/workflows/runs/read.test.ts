@@ -208,3 +208,10 @@ test("a not-recorded check re-reads history at once, so a run that did land is o
   expect(history.status === "ready" && history.data.items).toHaveLength(1);
   controller.retire();
 });
+
+test("a run's note about a failed step it went on past survives the port", async () => {
+  const page = { items: [{ scopeId: "p", flowId: "f", runId: "r1", versionId: "v", label: "Run r1", status: "succeeded", startedAt: null, createdAt: 1, note: "Finished with a failed step: Send" }], nextCursor: null, total: null };
+  const port = briefRunsPort({ scopeId: "p", flowId: "f", versionId: "v" }, async () => Response.json({ status: "ready", data: page }));
+  const read = await port.list(null, signal());
+  expect(read.status === "ready" && read.data.items[0]!.note).toBe("Finished with a failed step: Send");
+});

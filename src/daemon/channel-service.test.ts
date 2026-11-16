@@ -692,6 +692,38 @@ describe("Q-19: one retry after a timeout, for approval cards only", () => {
     expect(whatsapp.calls).toEqual([["wa-chat", "hello"]]);
   });
 
+  // #1314 follow-up: a screen-derived suggestion sent while awareness is
+  // turned off. The sender's check is asked before each attempt.
+  test("a broadcast whose sender stops is not retried and is not reported as a delivery failure", async () => {
+    let allowed = true;
+    class RateLimitedOnce extends TimeoutOnceAdapter {
+      override async sendMessage(...args: unknown[]): Promise<void> {
+        this.calls.push(args);
+        allowed = false;
+        if (this.calls.length === 1) throw rateLimitError(1);
+      }
+    }
+    const adapter = new RateLimitedOnce(0);
+    const { svc, failures } = await setup(adapter);
+    await svc.broadcastToAll("screen help", undefined, { shouldContinue: () => allowed });
+    expect(adapter.calls).toEqual([["chat-1", "screen help"]]);
+    expect(failures).toEqual([]);
+    // Stopped before the first attempt: nothing is sent at all.
+    await svc.broadcastToAll("screen help", undefined, { shouldContinue: () => false });
+    expect(adapter.calls).toHaveLength(1);
+  });
+
+  test("sendWithRetry asks the sender before every attempt, the first included", async () => {
+    const { sleeps, sleep } = makeSleepRecorder();
+    const adapter = new ScriptedAdapter([rateLimitError(), rateLimitError()]);
+    let answers = 0;
+    const res = await sendWithRetry(adapter, "u", "x", { sleep, shouldContinue: () => ++answers < 2 });
+    expect(res).toMatchObject({ ok: false, attempts: 1, held: true, mayHaveArrived: false });
+    expect(sleeps).toEqual([]);
+    expect(await sendWithRetry(new ScriptedAdapter([]), "u", "x", { sleep, shouldContinue: () => false }))
+      .toMatchObject({ ok: false, attempts: 0, held: true });
+  });
+
   test("sendWithRetry resends a request that may have arrived only within uncertainRetries", async () => {
     const { sleep } = makeSleepRecorder();
     const plain = new TimeoutOnceAdapter(1);
