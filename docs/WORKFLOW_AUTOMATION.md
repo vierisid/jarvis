@@ -59,6 +59,13 @@ Practical consequences:
   context rule on `read_data` with the condition `tool_name` set to
   `workflow_notify` and the effect `require_approval`. A repeated
   `idempotencyKey` is deduplicated before any approval is asked.
+  A card for such a notice that an earlier version created (when every notify
+  was a governed send) and parked is not retired and not approved for the owner:
+  it stays a waiting card until answered. Approved, the step delivers once and
+  the run continues; denied, it ends as denied. The recorded effect is moved to
+  the new category only when the request, the workflow version and the tool are
+  unchanged and its frozen channels are still only the owner's own, so any
+  other change after the card was made is still refused as a changed effect.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
 - A tool that fails reports a typed outcome rather than a result that happens to
@@ -944,7 +951,9 @@ HTTP request specifics:
   Found.` plus `It said:` and the first 300 characters of the reply in quotes,
   redacted by the same credential rules as the card and the receipt, with frame
   delimiters defanged (the reply is the server's text, never Jarvis's own
-  words); `The request timed out after 2 seconds.` for the step's own timeout
+  words). A reply that is a web page is never quoted as markup: the sentence
+  says `It sent a web page titled "..."`, or quotes the text a reader would see
+  when it has no title; `The request timed out after 2 seconds.` for the step's own timeout
   (never shown as a server 500); `Could not reach api.example.com.` only when
   no connection was made (the name did not resolve, or the address refused or
   could not be routed to). Any other failure with no answer (a reset, a TLS or
@@ -1366,6 +1375,11 @@ ternaries, and `flattenNestedKeys(data, path)`.
 Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
 (`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
 
+A step may have any name the readiness check allows, including `toString`,
+`valueOf` or `hasOwnProperty`. The engine finds a step among the steps the run
+recorded (`ownStep`), never among `Object.prototype`'s members; only
+`__proto__`, `prototype`, `constructor` and `connections` stay reserved.
+
 An unsupported expression now **fails the step loudly** instead of silently
 resolving to an empty string, and the error quotes the expression that failed.
 Flows that relied on a JavaScript method in an input need the value reshaped
@@ -1416,7 +1430,15 @@ threshold); without one, including rows saved before #954, on first use.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
-  "Expired".
+  "Expired". Having the refresh details is not proof that a refresh works, so a
+  row that carries them but whose refresh is known to fail says so instead
+  (`oauth2.refreshProblem` on the connections list): "Refresh failed:
+  reconnect" when the provider or the network policy refused it; "Refresh
+  blocked: reconnect" when the token URL is an IP address this install never
+  connects to, known without trying; "Refresh failing:
+  provider not answering" when the provider did not answer. The refusal is
+  remembered in memory until the value changes or a refresh succeeds, so a
+  restart forgets it until the next use. A named host is not guessed at.
 - `jarvis:*` connections are not refreshed here: their own source does that
   (`GoogleAuth`, through the control plane on hosted).
 - Bun 1.3.8-1.3.10 cannot verify the token endpoint's certificate for its host
@@ -1963,7 +1985,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
-| POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
+| POST | `/api/workflows/connections` | Create a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }`. An existing `(pieceName, externalId)` is a 409 that points to Rotate: adding never replaces a saved key |
 | PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
 | DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
