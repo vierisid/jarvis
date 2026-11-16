@@ -38,6 +38,19 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
+`jarvis stop` only signals a process it can prove is this Jarvis: the daemon
+holding its lock, or a leftover process whose command line is this install's
+`jarvis`. Anything else listening on the port is named (program and PID) and
+left running. `--port N` and `--port=N` both work, and a `--port` with no usable
+value is an error rather than the default.
+
+`jarvis restart` starts the daemon the way the running one was started:
+detached or not, with the same `--port`, `--data-dir`, `--no-open`,
+`--no-local-tools` and `--system-config`. It reads that from `jarvis.launch.json`
+next to the lock file. Flags you pass to `restart` replace the recorded ones.
+`jarvis start -d` reports success only once the daemon answers on its port; if
+the port is taken it says so and exits non-zero.
+
 **Access is JWT-only by default.** There is no shared password or token. You
 enroll devices:
 
@@ -60,6 +73,10 @@ panel has been closed for 4 hours while that device's sidecar is connected, or
 an absolute 12-hour cap. A sleeping or offline machine accrues no idle time at
 all, so closing the lid over lunch does not cost you your open windows, and
 neither does a brain restart - sessions are persisted.
+A browser that arrives after its session ended gets a plain page saying so,
+with the way back: open Jarvis again from the desktop app, or mint a fresh
+device token with `jarvis enroll`. API and WebSocket callers still get a JSON
+`401`.
 
 The only public (unauthenticated) routes are `/health`, `/sidecar/connect`,
 the JWKS endpoint (`/api/sidecars/.well-known/jwks.json`), and
