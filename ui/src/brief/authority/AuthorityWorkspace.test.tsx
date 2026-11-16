@@ -141,6 +141,9 @@ test("all thirteen current categories are readable with distinct on/off semantic
   expect(host.textContent).toContain(
     "Off uses the authority level and other rules: overrides, context rules and the approval asked after Jarvis reads outside content still apply.",
   );
+  expect(host.textContent).toContain(
+    "a matching Deny rule always wins over any Allow, whatever order they were added in.",
+  );
   expect(host.querySelector('[role="tablist"]')).toBeNull();
   expect(host.textContent).not.toMatch(/Add a rule|Oct 12|always require/i);
 });
@@ -350,9 +353,35 @@ test("live emergency banner changes while edits stay visible and unsaved", async
       host.textContent?.includes("Emergency stop is active: tools are refused"),
     ).toBe(state === "killed");
     expect(slider().value).toBe("10");
-    expect(button("Save changes").disabled).toBe(false);
+    // Kill freezes these settings: the edit stays visible, but cannot be saved until Reset.
+    expect(button("Save changes").disabled).toBe(state === "killed");
+    expect(slider().disabled).toBe(state === "killed");
+    expect(
+      host.textContent?.includes("Settings cannot be changed until you reset."),
+    ).toBe(state === "killed");
     expect(fixture.writes).toHaveLength(0);
   }
+});
+test("Send email Off below the level it needs says workflow emails will be blocked, not sent without asking", async () => {
+  await render();
+  const note = () => host.textContent ?? "";
+  expect(note()).not.toContain("will be blocked");
+  await click("Send email");
+  expect(note()).toContain(
+    "Send email is Off and your level (3) is below the 7 it needs, so workflow steps that send email will be blocked, not sent without asking, unless an override or rule allows them. Turn Send email On to be asked first, or raise the level.",
+  );
+  // Below the level writing data needs, turning the switch On would not make Jarvis ask.
+  await key("Home");
+  expect(note()).toContain(
+    "Send email is Off and your level (1) is below the 7 it needs",
+  );
+  expect(note()).toContain("Raise the level to at least 3 for Jarvis to ask first.");
+  expect(note()).not.toContain("Turn Send email On");
+  await click("Send email");
+  expect(note()).not.toContain("will be blocked");
+  await key("End");
+  await click("Send email");
+  expect(note()).not.toContain("will be blocked");
 });
 test("discard retry remains an explicit alternative without displaying Saved", async () => {
   fixture.controller.retire();
