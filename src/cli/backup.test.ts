@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
 import { cmdExport, cmdRestore, EXPORT_FORMAT, type ExportManifest } from './backup.ts';
 import { acquireLockAt } from '../daemon/pid.ts';
 import { getSecret, setSecrets } from '../vault/keychain.ts';
+import { assertEncryptionKeyForStoredCredentials } from '../workflows/db/index.ts';
 import {
   decryptBoundJson,
   encryptBoundJson,
@@ -78,8 +79,6 @@ function seedDataDir(dataDir: string): void {
   }
   db.close();
 
-  mkdirSync(join(dataDir, 'pieces', 'my-piece'), { recursive: true });
-  Bun.write(join(dataDir, 'pieces', 'my-piece', 'index.ts'), 'export const piece = 1;\n');
   mkdirSync(join(dataDir, 'content'), { recursive: true });
   Bun.write(join(dataDir, 'content', 'note.md'), '# hello\n');
   Bun.write(join(dataDir, 'realtime-budget.json'), '{"spent":0}\n');
@@ -107,6 +106,17 @@ let root: string;
 let dataDir: string;
 let prevHome: string | undefined;
 let prevSecretsDir: string | undefined;
+let prevPiecesDir: string | undefined;
+let piecesDir: string;
+
+/** Two installed library apps; the packages themselves are not in the archive. */
+const PIECES_MANIFEST_JSON = JSON.stringify({
+  version: 1,
+  pieces: [
+    { id: 'gmail', npmPackage: '@activepieces/piece-gmail', versionRange: '0.12.3', resolvedVersion: '0.12.3', installedAt: 1 },
+    { id: 'clickup', npmPackage: '@activepieces/piece-clickup', versionRange: '0.3.0', resolvedVersion: '0.3.0', installedAt: 2 },
+  ],
+});
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'jarvis-backup-test-'));
@@ -118,6 +128,14 @@ beforeEach(() => {
   // than assuming data_dir, and must never reach the real ~/.jarvis store.
   prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
   process.env.JARVIS_SECRETS_DIR = dataDir;
+  // Installed pieces live under piecesBaseDir(), NOT under data_dir. Pin it so
+  // a test can never read or write the real ~/.jarvis/pieces.
+  prevPiecesDir = process.env.JARVIS_PIECES_DIR;
+  piecesDir = join(root, 'pieces-home');
+  process.env.JARVIS_PIECES_DIR = piecesDir;
+  mkdirSync(join(piecesDir, 'node_modules', 'big'), { recursive: true });
+  writeFileSync(join(piecesDir, 'node_modules', 'big', 'index.js'), 'x');
+  writeFileSync(join(piecesDir, 'installed.json'), PIECES_MANIFEST_JSON);
 });
 
 afterEach(() => {
@@ -125,14 +143,16 @@ afterEach(() => {
   else process.env.JARVIS_HOME = prevHome;
   if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
   else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+  if (prevPiecesDir === undefined) delete process.env.JARVIS_PIECES_DIR;
+  else process.env.JARVIS_PIECES_DIR = prevPiecesDir;
   rmSync(root, { recursive: true, force: true });
 });
 
 describe('jarvis export', () => {
-  test('default export curates user data and EXCLUDES secrets + config + logs', async () => {
+  test('--no-secrets curates user data and EXCLUDES secrets + config + logs', async () => {
     const { out, io } = capture();
     const archive = join(root, 'default.tar');
-    expect(await cmdExport(['--out', archive], io)).toBe(0);
+    expect(await cmdExport(['--out', archive, '--no-secrets'], io)).toBe(0);
 
     const summary = JSON.parse(out.at(-1)!) as { path: string; sizeBytes: number; files: string[] };
     expect(summary.path).toBe(archive);
@@ -157,7 +177,37 @@ describe('jarvis export', () => {
     expect(debris).toEqual([]);
   });
 
-  test('--full additionally includes the OS-level secrets and the keychain pair', async () => {
+  test('the DEFAULT export is complete: keys, keychain and the installed-apps list', async () => {
+    const { io } = capture();
+    const archive = join(root, 'default-full.tar');
+    expect(await cmdExport(['--out', archive], io)).toBe(0);
+    const entries = await tarEntries(archive);
+    for (const e of ['workflow-encryption.key', '.secrets.enc', '.secrets.key', 'sidecar-keys', 'google-tokens.json', 'pieces']) {
+      expect(entries).toContain(e);
+    }
+    const extractTo = join(root, 'default-extracted');
+    mkdirSync(extractTo);
+    expect(await Bun.spawn(['tar', '-xf', archive, '-C', extractTo]).exited).toBe(0);
+    // The manifest only, never the installed packages.
+    expect(readFileSync(join(extractTo, 'pieces', 'installed.json'), 'utf8')).toBe(PIECES_MANIFEST_JSON);
+    expect(existsSync(join(extractTo, 'pieces', 'node_modules'))).toBe(false);
+    expect((JSON.parse(readFileSync(join(extractTo, 'manifest.json'), 'utf8')) as ExportManifest).full).toBe(true);
+  });
+
+  test('the archive file is 0600, with or without secrets, and a looser existing file is tightened', async () => {
+    const a = join(root, 'out', 'nested', 'a.tar');
+    expect(await cmdExport(['--out', a], capture().io)).toBe(0);
+    expect(statSync(a).mode & 0o777).toBe(0o600);
+    // The directory made for it is private too.
+    expect(statSync(join(root, 'out', 'nested')).mode & 0o077).toBe(0);
+
+    const b = join(root, 'b.tar');
+    writeFileSync(b, 'old', { mode: 0o644 });
+    expect(await cmdExport(['--out', b, '--no-secrets'], capture().io)).toBe(0);
+    expect(statSync(b).mode & 0o777).toBe(0o600);
+  });
+
+  test('--full still works and means the default', async () => {
     const { io } = capture();
     const archive = join(root, 'full.tar');
     expect(await cmdExport(['--out', archive, '--full'], io)).toBe(0);
@@ -180,6 +230,9 @@ describe('jarvis export', () => {
     rmSync(join(dataDir, '.secrets.key'), { force: true });
     const elsewhere = join(root, 'elsewhere');
     mkdirSync(elsewhere, { recursive: true });
+    // The secrets dir holds the workflow key too: without it the archive could
+    // not unlock the seeded connection and restore would refuse.
+    writeFileSync(join(elsewhere, 'workflow-encryption.key'), `${WORKFLOW_KEY_HEX}\n`, { mode: 0o600 });
     process.env.JARVIS_SECRETS_DIR = elsewhere;
     setSecrets({ 'llm.provider.openai.api_key': 'sk-elsewhere' });
 
@@ -213,6 +266,8 @@ describe('jarvis export', () => {
 
     expect(await Bun.file(join(readAt, '.secrets.enc')).text()).toBe('ALREADY-HERE\n');
     expect(err.join('\n')).toContain('warning: the restored keychain stayed in');
+    // Not "complete" without saying the keys are not where they are read from.
+    expect(err.join('\n')).toContain('Still to do: The restored AI provider keys are in');
   });
 
   test('a symlinked entry is dereferenced: the archive holds real data', async () => {
@@ -242,7 +297,7 @@ describe('jarvis export', () => {
   });
 
   test('missing entries are skipped, not fatal', async () => {
-    rmSync(join(dataDir, 'pieces'), { recursive: true });
+    rmSync(join(piecesDir, 'installed.json'));
     rmSync(join(dataDir, 'realtime-budget.json'));
     const { out, io } = capture();
     const archive = join(root, 'sparse.tar');
@@ -560,6 +615,172 @@ describe('jarvis restore', () => {
   test('usage error without an archive argument', async () => {
     const { io } = capture();
     expect(await cmdRestore([], io)).toBe(2);
+  });
+});
+
+/** What a fresh instance sees: an empty data dir and an empty pieces dir. */
+function freshInstance(): void {
+  rmSync(dataDir, { recursive: true });
+  mkdirSync(dataDir, { recursive: true });
+  rmSync(piecesDir, { recursive: true });
+}
+
+describe('restore completeness', () => {
+  test('a DEFAULT export restores into an install that can start: the boot key check passes', async () => {
+    const archive = join(root, 'd.tar');
+    expect(await cmdExport(['--out', archive], capture().io)).toBe(0);
+    freshInstance();
+    const { err, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(0);
+
+    const db = new Database(join(dataDir, 'jarvis.db'), { readonly: true });
+    try {
+      // The exact guard the daemon runs at boot ("Refusing to start with a
+      // freshly generated key"). It threw for every default archive before.
+      expect(() => assertEncryptionKeyForStoredCredentials(db)).not.toThrow();
+    } finally {
+      db.close();
+    }
+    expect(err.join('\n')).toContain('1 saved connection(s) with their key');
+    expect(err.join('\n')).toContain('Restore complete.');
+    expect(statSync(join(dataDir, 'jarvis.db')).mode & 0o777).toBe(0o600);
+  });
+
+  test('installed library apps survive a restore (the list comes back, packages reinstall on boot)', async () => {
+    const archive = join(root, 'p.tar');
+    expect(await cmdExport(['--out', archive], capture().io)).toBe(0);
+    freshInstance();
+    const { out, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(0);
+    expect(readFileSync(join(piecesDir, 'installed.json'), 'utf8')).toBe(PIECES_MANIFEST_JSON);
+    // Never planted in data_dir, where nothing reads it.
+    expect(existsSync(join(dataDir, 'pieces'))).toBe(false);
+    const summary = JSON.parse(out.at(-1)!) as { apps: number; files: string[] };
+    expect(summary.apps).toBe(2);
+    expect(summary.files).toContain('pieces');
+  });
+
+  test('an archive without the workflow key is refused on an install with no key, and nothing changes', async () => {
+    const archive = join(root, 'nk.tar');
+    expect(await cmdExport(['--out', archive, '--no-secrets'], capture().io)).toBe(0);
+    // A fresh install with a database of its own but no workflow key.
+    freshInstance();
+    const fresh = new Database(join(dataDir, 'jarvis.db'), { create: true });
+    fresh.exec('CREATE TABLE marker (x INTEGER)');
+    fresh.close();
+    const before = readFileSync(join(dataDir, 'jarvis.db'));
+    const { err, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(1);
+    const text = err.join('\n');
+    expect(text).toContain('restore failed:');
+    expect(text).toContain('1 saved connection but not the key');
+    expect(text).toContain('Nothing was changed');
+    expect(text).not.toContain('Restore complete');
+    expect(readFileSync(join(dataDir, 'jarvis.db')).equals(before)).toBe(true);
+  });
+
+  test('a key-less archive restored over the SAME install is accepted: the key already there opens it', async () => {
+    // The in-place case: a --no-secrets archive (or one older than the key
+    // moving into the archive) put back on the machine that made it. The key
+    // stays where it is and opens every connection, so refusing would be wrong.
+    const archive = join(root, 'same.tar');
+    expect(await cmdExport(['--out', archive, '--no-secrets'], capture().io)).toBe(0);
+    const { err, out, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(0);
+    expect(err.join('\n')).toContain('opened by the key already on this machine');
+    expect(readFileSync(join(dataDir, 'workflow-encryption.key'), 'utf8').trim()).toBe(WORKFLOW_KEY_HEX);
+    const db = new Database(join(dataDir, 'jarvis.db'), { readonly: true });
+    try {
+      expect(() => assertEncryptionKeyForStoredCredentials(db)).not.toThrow();
+    } finally {
+      db.close();
+    }
+    expect((JSON.parse(out.at(-1)!) as { connections: number }).connections).toBe(1);
+  });
+
+  test('a key-less archive is refused when the key on this machine is a different one', async () => {
+    const archive = join(root, 'other.tar');
+    expect(await cmdExport(['--out', archive, '--no-secrets'], capture().io)).toBe(0);
+    writeFileSync(join(dataDir, 'workflow-encryption.key'), `${Buffer.alloc(32, 0x22).toString('hex')}\n`, { mode: 0o600 });
+    const before = readFileSync(join(dataDir, 'jarvis.db'));
+    const { err, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(1);
+    expect(err.join('\n')).toContain('the key on this machine does not unlock 1 of them');
+    expect(readFileSync(join(dataDir, 'jarvis.db')).equals(before)).toBe(true);
+  });
+
+  test('an installed-apps list the Library could not have written is refused, nothing changes', async () => {
+    for (const piece of [
+      { id: 'x', npmPackage: 'evil', versionRange: 'git+https://example.invalid/evil.git', resolvedVersion: '1.0.0', installedAt: 1 },
+      { id: 'x', npmPackage: 'evil', versionRange: 'file:../../evil', resolvedVersion: '1.0.0', installedAt: 1 },
+      { id: 'x', npmPackage: '../evil', versionRange: '^1.0.0', resolvedVersion: '1.0.0', installedAt: 1 },
+      { id: 'x', npmPackage: 'evil' },
+    ]) {
+      writeFileSync(join(piecesDir, 'installed.json'), JSON.stringify({ version: 1, pieces: [piece] }));
+      const archive = join(root, 'bad-apps.tar');
+      rmSync(archive, { force: true });
+      expect(await cmdExport(['--out', archive], capture().io)).toBe(0);
+      writeFileSync(join(piecesDir, 'installed.json'), PIECES_MANIFEST_JSON);
+      const before = readFileSync(join(dataDir, 'jarvis.db'));
+      const { err, io } = capture();
+      expect(await cmdRestore([archive], io), JSON.stringify(piece)).toBe(1);
+      expect(err.join('\n')).toContain("the archive's list of installed apps");
+      expect(err.join('\n')).toContain('Nothing was changed');
+      expect(readFileSync(join(piecesDir, 'installed.json'), 'utf8')).toBe(PIECES_MANIFEST_JSON);
+      expect(readFileSync(join(dataDir, 'jarvis.db')).equals(before)).toBe(true);
+    }
+  });
+
+  test('--allow-missing-keys lets a key-less archive through, and still warns about what is missing', async () => {
+    const archive = join(root, 'nk2.tar');
+    expect(await cmdExport(['--out', archive, '--no-secrets'], capture().io)).toBe(0);
+    freshInstance();
+    const { err, io } = capture();
+    expect(await cmdRestore([archive, '--allow-missing-keys'], io)).toBe(0);
+    const text = err.join('\n');
+    expect(text).toContain('No saved AI provider keys');
+    expect(text).toContain('Connected devices');
+    expect(text).toContain('key NOT checked');
+    expect(text).toContain('were not checked against a key');
+    expect(text).toContain('with the items above still to do');
+  });
+
+  test('a key that does not unlock the saved connections is refused', async () => {
+    const archive = join(root, 'wk.tar');
+    expect(await cmdExport(['--out', archive], capture().io)).toBe(0);
+    // Swap the key inside the archive for a different one.
+    const x = join(root, 'wk-x');
+    mkdirSync(x);
+    expect(await Bun.spawn(['tar', '-xf', archive, '-C', x]).exited).toBe(0);
+    writeFileSync(join(x, 'workflow-encryption.key'), `${Buffer.alloc(32, 0x11).toString('hex')}\n`);
+    const bad = join(root, 'wk-bad.tar');
+    const files = (JSON.parse(readFileSync(join(x, 'manifest.json'), 'utf8')) as ExportManifest).files;
+    expect(await Bun.spawn(['tar', '-cf', bad, '-C', x, ...files]).exited).toBe(0);
+    freshInstance();
+    const { err, io } = capture();
+    expect(await cmdRestore([bad], io)).toBe(1);
+    expect(err.join('\n')).toContain('does not unlock 1 of its 1 saved connection');
+    expect(existsSync(join(dataDir, 'jarvis.db'))).toBe(false);
+  });
+
+  test('workflows that use a library app the archive does not list are named in the summary', async () => {
+    const db = new Database(join(dataDir, 'jarvis.db'));
+    db.exec('CREATE TABLE flow_version (id TEXT PRIMARY KEY, trigger TEXT NOT NULL)');
+    db.run('INSERT INTO flow_version VALUES (?, ?)', [
+      'v1',
+      JSON.stringify({ settings: { pieceName: '@activepieces/piece-stripe' }, nextAction: { settings: { pieceName: '@activepieces/piece-gmail' } } }),
+    ]);
+    db.close();
+    const archive = join(root, 'mp.tar');
+    expect(await cmdExport(['--out', archive], capture().io)).toBe(0);
+    freshInstance();
+    const { err, out, io } = capture();
+    expect(await cmdRestore([archive], io)).toBe(0);
+    const summary = JSON.parse(out.at(-1)!) as { todo: string[] };
+    // gmail is listed in the archive; stripe is not.
+    expect(summary.todo.join(' ')).toContain('piece-stripe');
+    expect(summary.todo.join(' ')).not.toContain('piece-gmail');
+    expect(err.join('\n')).toContain('Install them again from the Library');
   });
 });
 
