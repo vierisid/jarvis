@@ -308,11 +308,21 @@ const response = await manager.chatTier('medium', 'my_script', messages);
 - A turn may spend at most 200 provider calls on tool rounds. At the limit it stops, says so in plain words and ends as stopped (failed in Brief chat, with the steps already taken left in place), never as a completed turn.
 - A reply that is not a stream of events (a page served with a 200, `data:` lines that are not JSON) is a provider error, never an empty finished answer. A server that ignores `stream: true` and sends one JSON completion is read as that answer.
 
+### Retries and failover
+
+- A 5xx, a timeout and a provider-side rate limit are retried up to three times on the same provider (a rate limit moves on at once when another provider is configured). A 5xx waits 0.5 s then 1.5 s between attempts unless the server sent `Retry-After`. A dropped connection (reset) or a malformed reply is retried once. A stalled stream is not retried (see Timeouts).
+- When every attempt failed because the provider is down (5xx, reset or refused connection, timeout, malformed reply), or is out of capacity (rate limit, quota, restricted account), the call moves to the next provider configured for that tier. Only providers the user mapped to a tier are used.
+- A stream that stalls before it showed anything moves on the same way, as an outage.
+- It never moves on for `bad_request`, a content-policy block, or a key or plan the provider refused (`auth`, `forbidden`; on Usejarvis AI an inactive plan): those are verdicts on the request or the account, not an outage. A stated 4xx stays a request error even when its body mentions a timeout or a 5xx number.
+- A provider that failed this way is skipped under its other tiers too, and a stopped turn does not move on.
+- A stream that already produced text or a tool call does not move on, whether it failed or stalled; the partial reply is kept and the turn fails.
+- In what the user reads: a 5xx is "the AI provider returned an error", a refused or dropped connection is "the AI provider could not be reached", a timeout or a stalled stream is "the AI provider did not answer in time".
+
 ### Timeouts
 
 - A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Any bytes count as data, including thinking, a tool call's arguments arriving in pieces, and keepalive pings. Time Jarvis spends running a tool between two events never counts.
 - Ollama and OpenAI-compatible endpoints (often a model on your own machine) get 5 minutes before the first data, because loading a model and reading a long prompt on a CPU sends nothing for that long.
-- A stalled stream is not retried on the same provider (a hung provider stays hung). Without a tier map Jarvis moves on to the next provider in the fallback chain if nothing was shown yet; otherwise the turn fails with "did not answer in time". Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
+- A stalled stream is not retried on the same provider (a hung provider stays hung). If nothing was shown yet, Jarvis moves on: with a tier map to the next provider mapped for that tier, as for an outage; without one to the next provider in the fallback chain. Once any text or tool call was shown, the turn fails with "did not answer in time" and does not move on. Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
 - A workflow Ask step has one overall deadline of 120 seconds across all retries and fallbacks.
 
 ### Per-Call Options

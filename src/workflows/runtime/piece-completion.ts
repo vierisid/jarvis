@@ -30,7 +30,8 @@ export function recordPieceCompletion(ctx: WorkflowEffectContext, effectId: stri
       boundedReceiptText(canonicalJson({ effectId, result }), RECEIPT_MAX_CHARS));
     deps.auditTrail?.log({ agent_id: `workflow:${effect.runId}`, agent_name: `Workflow receipt ${effect.id}`,
       tool_name: effect.toolName, action_category: effect.actionCategory as ActionCategory,
-      authority_decision: effect.approvalId ? 'approval_required' : 'allowed', approval_id: effect.approvalId, executed: true });
+      authority_decision: effect.approvalId ? 'approval_required' : 'allowed', approval_id: effect.approvalId, executed: true,
+      effect_id: effect.id, outcome: 'succeeded' });
   } catch (error) { console.error('[Workflow receipt] secondary audit failed:', error); }
 }
 
@@ -59,6 +60,7 @@ export function recordPieceNotSent(ctx: WorkflowEffectContext, effectId: string,
     closeEffectApproval(deps.approvalManager, effect, 'blocked');
     deps.auditTrail?.log({ agent_id: `workflow:${effect.runId}`, agent_name: `Workflow receipt ${effect.id}`,
       tool_name: effect.toolName, action_category: effect.actionCategory as ActionCategory,
-      authority_decision: effect.approvalId ? 'approval_required' : 'allowed', approval_id: effect.approvalId, executed: false });
+      authority_decision: effect.approvalId ? 'approval_required' : 'allowed', approval_id: effect.approvalId, executed: false,
+      effect_id: effect.id, outcome: 'not_started' });
   } catch (error) { console.error('[Workflow receipt] secondary audit failed:', error); }
 }

@@ -2,6 +2,7 @@ import { getWorkflowDb } from "../index";
 import { signalRunCanceled } from "../../runtime/cancellation-signals";
 import { deleteDelegations } from "./delegation";
 import { listWorkflowEffects, saveWorkflowEffect } from "./workflow-effect";
+import type { RunConnectionBinding } from "./binding-pins";
 
 export interface RunCancellation {
   runId: string;
@@ -22,6 +23,39 @@ export function getRunCancellation(runId: string): RunCancellation | null {
   } : null;
 }
 
+/** The outcome of an approved effect whose connection was replaced after the card was raised. */
+export const CONNECTION_CHANGED_CODE = 'CONNECTION_CHANGED_AFTER_REQUEST';
+const CONNECTION_CHANGED_MESSAGE = 'The connection changed after you were asked, so this was not sent';
+/** The same, for a connection removed or revoked after the card was raised: there is nothing to accept, it has to be set up again. */
+export const CONNECTION_REMOVED_CODE = 'CONNECTION_REMOVED_AFTER_REQUEST';
+const CONNECTION_REMOVED_MESSAGE = 'The connection was removed after you were asked, so this was not sent';
+
+/** The refusals this run met fetching a connection (Q-05): a credential replaced, or a connection removed or revoked, while it ran. */
+function runConnectionRefusals(runId: string): Array<{ message: string; at: number }> {
+  return getWorkflowDb().query<{ record: string }, [string]>(
+    'SELECT record FROM workflow_run_connection_binding WHERE run_id = ?').all(runId)
+    .flatMap(row => (JSON.parse(row.record) as RunConnectionBinding).refusal ?? []);
+}
+
+/**
+ * Whether a refusal says the connection was removed or revoked rather than
+ * changed: there is nothing to accept then, it has to be set up again. Reads
+ * the sentence `enforceRunConnectionBinding` writes (binding-pins.ts).
+ */
+export function connectionWasRemoved(refusal: string): boolean {
+  return /^Connection .* was (removed|revoked) while this run asked for it\./su.test(refusal);
+}
+
+/** Whether this run was refused a connection it asked for (Q-05). */
+export function runWasRefusedConnection(runId: string): boolean {
+  return runConnectionRefusals(runId).length > 0;
+}
+
+function failedStepName(runId: string): string | null {
+  const row = getWorkflowDb().query<{ failed_step: string | null }, [string]>('SELECT failed_step FROM flow_run WHERE id = ?').get(runId);
+  try { return row?.failed_step ? (JSON.parse(row.failed_step) as { name?: string }).name ?? null : null; } catch { return null; }
+}
+
 /**
  * Caller holds the transaction and has established that the run cannot
  * continue. Returns the ids of the cards it closed, so a caller that can reach
@@ -30,6 +64,10 @@ export function getRunCancellation(runId: string): RunCancellation | null {
 function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] {
   const db = getWorkflowDb();
   const closed: string[] = [];
+  // A connection the run asked for was refused (Q-05): its credential was
+  // replaced, or it was removed, so nothing was handed out for it.
+  const refusals = canceled ? [] : runConnectionRefusals(runId);
+  const failedStep = refusals.length > 0 ? failedStepName(runId) : null;
   // Pending effects provably never dispatched. Leave in-flight and final
   // effects alone: cleanup cannot certify rollback or replace their receipts.
   for (const effect of listWorkflowEffects(runId)) {
@@ -44,6 +82,15 @@ function retireRunWaits(runId: string, ts: number, canceled: boolean): string[] 
       effect.error = canceled ? 'Workflow canceled between slices; earlier slices ran' : 'Workflow ended between slices; earlier slices ran';
       effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
         message: effect.error, effect: 'may_have_occurred' };
+    } else if (effect.approvalId && effect.stepName === failedStep && refusals.some(r => r.at >= effect.createdAt)) {
+      // The step that failed had raised this card, and only then was it refused
+      // its connection: replaced or removed after the card was raised. Nothing
+      // was handed out or sent. Another step's effect, or a refusal from before
+      // the card, is not this, and reads as the run having ended.
+      const removed = refusals.some(r => r.at >= effect.createdAt && connectionWasRemoved(r.message));
+      effect.status = 'blocked';
+      effect.error = removed ? CONNECTION_REMOVED_MESSAGE : CONNECTION_CHANGED_MESSAGE;
+      effect.outcome = { status: 'blocked', code: removed ? CONNECTION_REMOVED_CODE : CONNECTION_CHANGED_CODE, message: effect.error, effect: 'not_started' };
     } else {
       effect.status = 'blocked';
       effect.error = canceled ? 'Workflow canceled before dispatch' : 'Workflow ended before dispatch';

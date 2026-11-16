@@ -46,7 +46,7 @@ export function recallTerms(text: string): string[] {
  *  The period test is nullish-tolerant where appliesAt is strict: a row without
  *  the columns must read as unbounded, never as expired. */
 export function isCurrentRecallFact(fact: RecallFact, at = Date.now()): boolean {
-  return fact.status !== 'superseded' && fact.superseded_by == null
+  return fact.status !== 'superseded' && fact.superseded_by == null && !fact.is_private
     && (fact.valid_from == null || fact.valid_from <= at)
     && (fact.valid_to == null || at < fact.valid_to);
 }
