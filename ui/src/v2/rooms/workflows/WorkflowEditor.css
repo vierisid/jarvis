@@ -2112,3 +2112,25 @@
 /* focus → blue, not the danger-red accent */
 .wf-editor :focus-visible,
 .react-flow :focus-visible { outline-color: var(--speak); }
+
+.wf-schedule__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.wf-schedule__day {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+.wf-props__advanced-fields {
+  margin-bottom: var(--s-3);
+}
+.wf-props__advanced-fields > summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink-2);
+  padding: 4px 0;
+}
