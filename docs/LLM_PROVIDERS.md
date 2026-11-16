@@ -301,6 +301,10 @@ const response = await manager.chatTier('medium', 'my_script', messages);
 
 `setPrimary` / `setFallbackChain` and the tier-less `chat()` / `stream()` still exist for older callers: `chat()` and `stream()` route through the medium tier when medium resolves (medium or high is assigned), and otherwise use the primary plus fallback chain.
 
+### Usage numbers
+
+A provider's token counts are checked before they are stored or added up (`cleanTokenCount` in `src/llm/provider.ts`). Only a finite, non-negative whole number up to 100 million per call is accepted; a missing, null, negative, fractional, text or larger value counts as 0 (unknown), never as a clamped number. The call is still recorded in `llm_usage`, so one buggy gateway cannot lose a call's record or corrupt the local Usage totals. A count that is present but rejected is logged once per provider, field and kind (for example `[LLM] openai reported completion_tokens that is null; counted as 0 (unknown)`), never with the value or the response body. A missing usage block is 0 for every adapter and the reply is still delivered. Hosted plan limits are metered by the proxy, not from these local counts.
+
 ### Retries and failover
 
 - A 5xx, a timeout and a provider-side rate limit are retried up to three times on the same provider (a rate limit moves on at once when another provider is configured). A 5xx waits 0.5 s then 1.5 s between attempts unless the server sent `Retry-After`. A dropped connection (reset) or a malformed reply is retried once. A stalled stream is not retried (see Timeouts).
