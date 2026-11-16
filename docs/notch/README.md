@@ -883,8 +883,9 @@ What is not done, or not proven, in pass 8:
 ## Look at this, where is, and a dropped file
 
 Pass 9. Three ways of showing Jarvis something instead of describing it.
-Built for Windows; what is not, and what has not been seen on a real
-machine, is listed under the invariants.
+Built for Windows and for the Mac. The Mac's side is compiled and has never
+run; what that means, and what has not been seen on a real machine, is
+listed under the invariants.
 
 75. **While the talk pair is held, the pointer is Jarvis's.** A press with
     the pair down, and its letting go, are kept from the app in front
@@ -1127,10 +1128,23 @@ What is not done, or not proven, in pass 9:
   the arrows, Enter". With the pair held those are Windows' own shortcuts:
   Ctrl + Win + Left and Right switch desktops, Ctrl + Win + Enter starts
   Narrator. Taking them would break both. That is the owner's to decide.
-- **Nothing of pass 9 is built for the Mac.** There the look has no hands
-  (`notch_look_other.go`), so the pair only talks, and "where is" runs as an
-  ordinary instruction. The plan's rebuild of the Mac's element reading on
-  the native accessibility interface is not started.
+- **The Mac's side of pass 9 is written and compiled, and has never run**
+  (`notch_look_darwin.go`, `notch_mac_darwin.go`; the owner asked for it on
+  16 November 2026). It does what the Windows side does with the Mac's own
+  means: the pointer is watched by an event tap that exists only while the
+  look wants the pointer; the ink, the tag and the three pointers are layers
+  in one window that lets every click through and never has the keyboard;
+  what a thing is comes from the accessibility interface, asked of the
+  program whose window is at the place, with a time limit on every
+  question; "where is" reads the window in front the same way. What is
+  typed into a password field is never read there either. It needs the
+  Accessibility permission the notch's keys already need, and the picture
+  of what was circled needs the Screen Recording permission: without that
+  one the look still names things and sends no picture (the product's
+  setup asks for both, `setup_permissions_darwin.go`). What is not known
+  until it is tried on a Mac: whether the tap is given, whether the overlay
+  stays above a fullscreen app, how well a given program describes itself,
+  and every timing. On Linux the look has no hands (`notch_look_other.go`).
 - **How well a real app can be named is not known.** The reading is general,
   not written for Excel, Explorer or Chrome. What each of them calls a row or
   a cell is known from documentation, not from looking. Chrome is the known
@@ -1191,7 +1205,10 @@ Code: `src/notch/rounds.ts` (telling a repeated round from shapes),
 `src/daemon/notch-jobs.ts` (what they need of the product);
 `sidecar/notch_watch.go` and `notch_watch_windows.go` (watching, and
 `notch.act`), the hooks in `recorder_windows.go`, the pointers in
-`notch_look_windows.go`.
+`notch_look_windows.go`. On the Mac: `notch_watch_darwin.go` (the tap, the
+recorder and `notch.act`), `notch_mac_darwin.go` (windows, what a program
+says of itself, the clipboard, a click or a key made as if by hand),
+`notch_mac.go` (which keys are steps, tested), `notch_look_darwin.go`.
 
 96. **The notch watches the shape of what the hands do, and only the
     shape.** With the notch on, the desktop app keeps its mouse and keyboard
@@ -1347,6 +1364,35 @@ Code: `src/notch/rounds.ts` (telling a repeated round from shapes),
     itself, and Ctrl + C three times in one round and once in the next would
     not look like the same job. A shortcut is told when it goes down and not
     again until it has come up.
+112. **On a Mac the same shapes are told, and nothing more.** One event tap
+    sees the mouse buttons and the keys and keeps none of them
+    (`notch_watch_darwin.go`). Which key it was is decided in C, before Go
+    is woken: a key that types crosses over as "a key that types" with no
+    key in it, and a letter is only read off the event while Cmd or Ctrl is
+    held (`watchKeyMac`). What a program posted is passed over (its event
+    carries a process id), so what Jarvis presses is never taken for what
+    the person did. Cmd is to a Mac's shortcuts what Ctrl is on Windows: in
+    what is watched, in what counts as a copy and a paste, in how a shortcut
+    is said ("Cmd + C"), and in what the hands press for a copy and a paste
+    whatever system the job was shown on. The tap is in only while the notch
+    watches or a recording runs, and is out when neither does.
+113. **A job shown on a Mac is done again by place.** The product's replay
+    finds a button again by its name through the element reading, which the
+    Mac build does not have. So what "Watch me" saw on a Mac is also kept as
+    places (`teachPlaced`: a click in a window, a named key or shortcut,
+    what a field held), and "run it" there does those (`runPlaced`), each
+    step one request to the desktop app, done once, with the same stop, go
+    on and lost-answer rules as a round. The window is found again first
+    (`notch.act` `find`): the very window if it is still there, or the
+    program's topmost window of the same size; with none, nothing is
+    touched and the notch says so. A step that typed into a password field
+    was never kept, so the job stops there and says that step is the
+    person's; going on continues after it. A job with a step that has no
+    place (told with no window, outside its window, a key that types) is
+    not kept as places at all, and "run it" says to show it again: half a
+    job is worse than none. On Windows nothing changes: the product's
+    replay is used (`byPlace` in `src/daemon/notch-jobs.ts` asks which
+    system the desktop app is on).
 
 What is not done, or not proven, in pass 10:
 
@@ -1375,8 +1421,24 @@ What is not done, or not proven, in pass 10:
   answers slowly, and eight hours of it is pass 13's soak.
 - **A round with typing in it cannot be taken over**, and neither can one
   the person selects by dragging: a drag is seen as a click where it ended.
-- **Nothing of pass 10 is built for the Mac.** There is no recorder there
-  and no watching.
+- **The Mac's side of pass 10 is written and compiled, and has never run.**
+  The Mac had no recorder before; the tap, the recorder, the hands and the
+  clipboard there are all new (invariants 112 and 113). Not known until it
+  is tried on a Mac: whether a click or a key posted to the system lands in
+  a given program; whether Docs, Pages or Mail take the table off the
+  clipboard; whether measuring rows works on a display with two pixels to a
+  point (the screen is copied at one pixel to a point for it); what the tap
+  costs left in all day. Without the Screen Recording permission the rows
+  cannot be measured, so there nothing is ever offered and "run it" says
+  the rows cannot be seen. Doing a job again by place is cruder than finding
+  a button by name: a window that opens at another size, or lays itself out
+  differently, is refused or pressed in the wrong place, and only the
+  window's size is checked.
+- **What was typed is read from its field when the field is left, on both
+  systems.** A field that empties itself at Enter (a chat box) or goes away
+  with its window (a save sheet) can be read a moment too late and come out
+  empty, and then the step is not in the job. The Mac's recorder does this
+  the way the Windows one already did; neither was changed.
 - **Undo exists for a paste only.** A draft that was made is taken back
   inside its send window (pass 7), and nothing on the notch makes a calendar
   event yet, so there is nothing of that kind to undo.
@@ -1596,7 +1658,7 @@ What is not done, or not proven, in pass 10:
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
 | brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
-| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
+| brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `type`: `win`, `text` (up to 4000 signs), typed where the keyboard is when that window is the one in front. `find`: `win`, `app?`: the window a step named as it is now, or the topmost window of that program at the same size; adds `{win, app}`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
 | brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
 | brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |

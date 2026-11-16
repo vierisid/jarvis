@@ -443,8 +443,8 @@ static void jarvis_look_ring(double x, double y, double w, double h, double afte
 		jarvis_look_ensure(CGRectMake(sx, sy, sw, sh));
 		int gen = gLookRingGen;
 		CGPoint origin = jarvis_look_local(x, y);
-		CGRect round = CGRectInset(CGRectMake(origin.x, origin.y, w, h), -6, -6);
-		CGPathRef path = CGPathCreateWithRoundedRect(round, MIN(10, round.size.width / 2), MIN(10, round.size.height / 2), NULL);
+		CGRect about = CGRectInset(CGRectMake(origin.x, origin.y, w, h), -6, -6);
+		CGPathRef path = CGPathCreateWithRoundedRect(about, MIN(10, about.size.width / 2), MIN(10, about.size.height / 2), NULL);
 		CAShapeLayer *ring = jarvis_look_stroke(jarvis_look_citron(0.62), 9.6);
 		ring.path = path;
 		CGPathRelease(path);
@@ -900,7 +900,7 @@ func macSays(e macElem) string {
 func macDescribe(found macElem, light bool) lookThing {
 	thing := lookThing{Kind: lookKindOf(found.kind, found.local, found.rect), Role: found.kind, Name: found.name, Rect: found.rect}
 	// What is typed into a password field is never read, here or anywhere.
-	if light || found.secure || found.ref == nil {
+	if light || found.secure || !found.held() {
 		return thing
 	}
 	if full, ok := macElemOf(found.ref, false); ok {

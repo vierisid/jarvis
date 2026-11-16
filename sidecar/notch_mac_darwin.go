@@ -322,8 +322,23 @@ static int jarvis_mac_ax_same(AXUIElementRef a, AXUIElementRef b) {
 	return (a != NULL && b != NULL && CFEqual(a, b)) ? 1 : 0;
 }
 
+// How long any program is waited for. Set once, for every question this
+// program asks: a limit set on one thing holds for that thing only, and the
+// system's own is several seconds.
+static void jarvis_mac_ax_limit(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		AXUIElementRef all = AXUIElementCreateSystemWide();
+		if (all != NULL) {
+			AXUIElementSetMessagingTimeout(all, 0.6);
+			CFRelease(all);
+		}
+	});
+}
+
 // A program, to ask things of. The caller releases it.
 static AXUIElementRef jarvis_mac_ax_app(int pid) {
+	jarvis_mac_ax_limit();
 	AXUIElementRef app = AXUIElementCreateApplication(pid);
 	if (app != NULL) AXUIElementSetMessagingTimeout(app, 0.6);
 	return app;
@@ -784,6 +799,15 @@ func macPointer() lookPoint {
 
 func macAXTrusted() bool { return C.jarvis_mac_ax_trusted() == 1 }
 
+// A handle the system gave, when there is none. Go takes some of the Mac's
+// handle types for numbers and some for pointers, by rules of its own, so
+// "none" is never written as nil or 0 here: a handle is compared with one of
+// these, which is right for both.
+var (
+	macNoElem  C.AXUIElementRef
+	macNoImage C.CGImageRef
+)
+
 // macElem is a thing a program told of: what kind it is in the words the
 // look uses, what it is called and says, and where it is. ref is held until
 // release.
@@ -799,11 +823,14 @@ type macElem struct {
 }
 
 func (e *macElem) release() {
-	if e.ref != nil {
+	if e.ref != macNoElem {
 		C.jarvis_mac_ax_release(e.ref)
-		e.ref = nil
+		e.ref = macNoElem
 	}
 }
+
+// held is whether there is a thing here at all.
+func (e macElem) held() bool { return e.ref != macNoElem }
 
 func macElemFrom(t *C.JarvisMacAX) macElem {
 	role, subrole := "", ""
@@ -841,7 +868,7 @@ func macElemAt(at lookPoint, pid int, light bool) (macElem, bool) {
 // macElemParent is what a thing stands in. The caller releases it.
 func macElemParent(e macElem, light bool) (macElem, bool) {
 	var t C.JarvisMacAX
-	if e.ref == nil || C.jarvis_mac_ax_parent(e.ref, boolToCInt(light), &t) == 0 {
+	if !e.held() || C.jarvis_mac_ax_parent(e.ref, boolToCInt(light), &t) == 0 {
 		return macElem{}, false
 	}
 	return macElemFrom(&t), true
@@ -849,7 +876,7 @@ func macElemParent(e macElem, light bool) (macElem, bool) {
 
 // macElemChildren are the things inside a thing. The caller releases each.
 func macElemChildren(e macElem, most int, light bool) []macElem {
-	if e.ref == nil || most <= 0 {
+	if !e.held() || most <= 0 {
 		return nil
 	}
 	most = min(most, 512)
@@ -865,12 +892,12 @@ func macElemChildren(e macElem, most int, light bool) []macElem {
 }
 
 func macElemSame(a, b macElem) bool {
-	return a.ref != nil && b.ref != nil && C.jarvis_mac_ax_same(a.ref, b.ref) == 1
+	return a.held() && b.held() && C.jarvis_mac_ax_same(a.ref, b.ref) == 1
 }
 
 // macElemOf reads a thing that was handed over already held.
 func macElemOf(ref C.AXUIElementRef, light bool) (macElem, bool) {
-	if ref == nil {
+	if ref == macNoElem {
 		return macElem{}, false
 	}
 	var t C.JarvisMacAX
@@ -911,7 +938,7 @@ func macCapture(rect lookRect, nominal bool) *macShot {
 		return nil
 	}
 	image := C.jarvis_mac_capture(C.int(rect.X), C.int(rect.Y), C.int(rect.W), C.int(rect.H), boolToCInt(nominal))
-	if image == nil {
+	if image == macNoImage {
 		return nil
 	}
 	shot := &macShot{image: image, rect: rect, scale: float64(C.jarvis_mac_image_width(image)) / float64(rect.W)}
@@ -921,14 +948,14 @@ func macCapture(rect lookRect, nominal bool) *macShot {
 }
 
 func (s *macShot) close() {
-	if s.image != nil {
+	if s.image != macNoImage {
 		C.jarvis_mac_image_release(s.image)
-		s.image = nil
+		s.image = macNoImage
 	}
 }
 
 func (s *macShot) png(part lookRect, most int) []byte {
-	if s == nil || s.image == nil || part.empty() {
+	if s == nil || s.image == macNoImage || part.empty() {
 		return nil
 	}
 	x := int(float64(part.X-s.rect.X) * s.scale)
@@ -952,7 +979,7 @@ func (s *macShot) CutSmall(part lookRect, most int) []byte {
 
 // pixels gives the copy as pixels, each 0x00RRGGBB, with its width and height.
 func (s *macShot) pixels() ([]uint32, int, int) {
-	if s == nil || s.image == nil {
+	if s == nil || s.image == macNoImage {
 		return nil, 0, 0
 	}
 	var w, h C.int
