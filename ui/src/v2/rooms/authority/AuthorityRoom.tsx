@@ -484,7 +484,7 @@ export function ApprovalSentenceBlock({ approval }: { approval: { intent?: strin
   );
 }
 
-function PendingApprovalCard({
+export function PendingApprovalCard({
   approval,
   onApprove,
   onDeny,
@@ -514,6 +514,7 @@ function PendingApprovalCard({
         <span className="v2-auth__pending-agent">{approval.agent_name}</span>
       </header>
       <ApprovalSentenceBlock approval={approval} />
+      {approval.held && <p className="v2-auth__pending-held" role="note">{approval.held}</p>}
       <div className="v2-auth__pending-meta-row">
         <span className="v2-auth__pending-tool">{approval.tool_name}</span>
         <span className="v2-auth__pending-cat">{approval.action_category}</span>
