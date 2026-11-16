@@ -215,3 +215,12 @@ describe('buildCleanupScript — executes correctly against a fixture tree', () 
     expect(log).toContain('unlinked wrapper ' + missingWrapper);
   }, 10000);
 });
+
+describe('uninstallStopAdvice', () => {
+  test('a daemon whose lock names a process that is not the holder gets container advice, not "as root"', async () => {
+    const { uninstallStopAdvice } = await import('./uninstall.ts');
+    expect(uninstallStopAdvice({ notHolder: true })).toContain('could not be shown to hold the lock');
+    expect(uninstallStopAdvice({ notHolder: true })).not.toContain('with root');
+    expect(uninstallStopAdvice({})).toContain('as its owner (or with root)');
+  });
+});
