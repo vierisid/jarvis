@@ -14,7 +14,7 @@ import {
   BriefSegments,
 } from "../../components/controls";
 import { AppearanceSelector } from "./AppearanceSelector";
-import { SettingsController } from "./controller";
+import { SettingsController, type SettingsState } from "./controller";
 import type { SettingsDestination } from "./model";
 import "./settings.css";
 export interface SettingsBinding {
@@ -74,6 +74,38 @@ export function SettingsWorkspace({
     />
   );
 }
+function aiRow(ai: SettingsState["ai"], hosted: boolean) {
+  if (ai === null) return { title: "AI provider", text: "Loading…", warn: false, action: "" };
+  if (ai === "error")
+    return {
+      title: "AI provider",
+      text: "Could not read your AI provider.",
+      warn: false,
+      action: hosted ? "" : "Change AI provider",
+    };
+  if (ai.state === "managed")
+    return {
+      title: "Usejarvis AI",
+      text: ai.model
+        ? `Included with your plan. Model: ${ai.model}.`
+        : "Included with your plan. Nothing to set up.",
+      warn: false,
+      action: "",
+    };
+  if (ai.state === "missing")
+    return {
+      title: ai.provider ?? "No AI provider",
+      text: "Jarvis can't reach your AI provider. Update your key.",
+      warn: true,
+      action: "Change AI provider",
+    };
+  return {
+    title: ai.provider,
+    text: `Model: ${ai.model}`,
+    warn: false,
+    action: "Change AI provider",
+  };
+}
 function SettingsBody({ controller }: { controller: SettingsController }) {
   const state = useSyncExternalStore(
       controller.subscribe,
@@ -111,6 +143,7 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
     value = controller.value(),
     pending = state.phase === "saving";
   const retry = ["unknown", "error"].includes(state.phase);
+  const ai = aiRow(state.ai, data?.setup.deployment === "hosted");
   const link = (
     destination: SettingsDestination,
     label: string,
@@ -143,6 +176,27 @@ function SettingsBody({ controller }: { controller: SettingsController }) {
         <h1 className="brief-type-room-title">Settings</h1>
         <AppearanceSelector />
       </header>
+      <section aria-labelledby={`${id}-ai`}>
+        <h2 id={`${id}-ai`}>AI provider</h2>
+        <div className="brief-settings-row">
+          <div>
+            <h3>{ai.title}</h3>
+            <p id={`${id}-ai-status`} role={ai.warn ? "alert" : undefined}>
+              {ai.text}
+            </p>
+          </div>
+          {ai.action && (
+            <BriefButton
+              variant="text"
+              disabled={!controller.destinations.credentials}
+              aria-describedby={`${id}-ai-status`}
+              onClick={() => void controller.navigate("credentials")}
+            >
+              {ai.action}
+            </BriefButton>
+          )}
+        </div>
+      </section>
       <section aria-labelledby={`${id}-conversation`}>
         <h2 id={`${id}-conversation`}>Conversation</h2>
         <div className="brief-settings-row">
