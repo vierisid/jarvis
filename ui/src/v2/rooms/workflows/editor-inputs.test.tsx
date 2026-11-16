@@ -52,7 +52,7 @@ test('a file field is a text field that takes an earlier step\'s output, not a J
   await act(async () => root.render(<SchemaInputs schema={schema} input={{ file: '{{step_1}}' }} onSetInput={(k, v) => set.push([k, v])} />));
   expect(host.querySelector('textarea')).toBeNull();
   const box = host.querySelector('[role=textbox]') as HTMLElement;
-  expect(box.getAttribute('aria-label')).toBe('ZIP file');
+  expect(box.getAttribute('aria-label')).toBe('ZIP file (required)');
   expect(host.textContent).toContain('step_1');
   // A value saved as an object keeps the JSON box so nothing is lost.
   await act(async () => root.render(<SchemaInputs schema={schema} input={{ file: { fileName: 'a.zip', url: '/v1/step-files/x' } }} onSetInput={() => {}} />));

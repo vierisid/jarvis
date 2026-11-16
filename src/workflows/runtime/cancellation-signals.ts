@@ -54,3 +54,20 @@ export function onRunTurnedOff(runId: string, listener: () => void): () => void 
 export function signalRunTurnedOff(runId: string): void {
   for (const listener of [...(turnedOffListeners.get(runId) ?? [])]) listener();
 }
+
+// #1426: the owner took the CODE-step permission back from a workflow. Its
+// queued, waiting and executing runs are stopped through the run fence; this
+// reaches what the fence cannot: an engine parked warm for the workflow,
+// which may still hold processes a CODE step left behind, is retired.
+const codeRevokedListeners = new Set<(flowId: string) => void>();
+
+export function onCodeStepsRevoked(listener: (flowId: string) => void): () => void {
+  codeRevokedListeners.add(listener);
+  return () => { codeRevokedListeners.delete(listener); };
+}
+
+export function signalCodeStepsRevoked(flowId: string): void {
+  for (const listener of [...codeRevokedListeners]) {
+    try { listener(flowId); } catch (error) { console.error(`[code-steps] revoke listener failed for flow ${flowId}:`, error); }
+  }
+}

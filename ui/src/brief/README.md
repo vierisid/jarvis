@@ -489,9 +489,10 @@ replay, offline and unavailable). It sends nothing.
   retry never creates a second draft. A receipt must echo the request id, prompt, name and exact ordered
   ingredient pins, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
   `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
-- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
-  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
-  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) make one read of
+  `GET /api/workflows/recent-runs?limit=6`: the newest run of each workflow, most recent first, with the
+  workflow's name, whatever the number of workflows; no implicit polling. A missed read reports
+  `unavailable`, a malformed row `stale`, never complete recency.
   Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
   run ids. The host owns invocation, caching and abort on scope change.
 - `workflows/create/figma-reference.json` records the UI-21 source values.
@@ -600,6 +601,12 @@ ingredients (ready, loading, unavailable). It sends no request.
   accepted under that ID) withdraws the ID in the same transaction, so one still in transit can no
   longer start (#1162), and unlocks Run for a new, explicit request; any other answer leaves it
   uncertain.
+- History lists runs of every version; a row opens with the version that run used (#1398), since the
+  inspection answers a run only for its own version. When that locked version is no longer the
+  published one, the host passes `supersededBy` (the published version's ID): Runs and Canvas say it
+  is an earlier version shown read only and offer `Open current version` in place of Run, and the
+  host leaves out `port.start` and Canvas `edit` (so no new draft is copied from it) while keeping
+  `port.reconcile` for a request still waiting on that version.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
