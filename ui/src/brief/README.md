@@ -281,7 +281,8 @@ is unchanged.
 - Slots are plain nodes supplied and gated by their owners; the layout invents no fallback cards.
   `slots.goal` renders through `PebbleCompanion` into the one companion slot `PebbleLayout` keeps above
   the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
-  wheel input over the goal scrolls the room.
+  wheel input over the goal scrolls the room, and the card is placed from where the greeting really
+  sits, so notices above Today (paused, storage, connection) push it down instead of being covered.
 - `today/figma-reference.json` records the source values.
 - Outcomes and Recent activity (`today/outcomes/`, `today/activity/`) are read-only. `Outcomes` takes an
   `OutcomeBinding`; `outcomeView` passes it through only when `source` is `"fixture"` in preview mode, or
@@ -302,8 +303,11 @@ is unchanged.
   identity, status and time only, never captured step output. Empty reads "No workflow has run yet."
 - A figure renders only if its F-01 `BriefMeasurement` is finite, has a unit, an `asOf`, at least one
   provenance reference and `qualification` `measured` or `user_reported` (`qualified` in
-  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value. The view
-  never sums runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
+  `outcomes/model.ts`). Time saved also needs `minutes` and a baseline at or above the value, and may also
+  be `estimated`: the server counts every successful production root run (not one that continued past a failure) at the workflow's owner-set
+  minutes or an estimate from its steps, and the view labels it "estimated" and shows the basis in the
+  bar tooltips and "Data basis". An estimate never qualifies a goal figure. A started day with no runs renders an empty zero bar ("No time saved"); a future day is blank. Bars carry the short weekday, the full date is in the tooltip. The view itself never sums
+  runs or derives a value; a missing measurement shows "Not enough evidence yet" or "Progress
   not measured yet", and a measured zero shows 0. "Data basis" lists each figure's qualification, as-of
   time and evidence count.
 - Only changed digits fade (`BRIEF_MOTION.selection.enter`); mount, remount and a new window or goal do
@@ -485,9 +489,10 @@ replay, offline and unavailable). It sends nothing.
   retry never creates a second draft. A receipt must echo the request id, prompt, name and exact ordered
   ingredient pins, and keep its job id; a ready receipt navigates once to `workflow-draft` with its exact
   `flowId` and `versionId`. Unreadable saved state makes the record read-only rather than replacing it.
-- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) read the existing workflow API with
-  four workers, at most 200 flows and each flow's latest run page (`{ items, nextOffset }`); no implicit
-  polling. A missed read or a larger inventory reports `stale`/`unavailable`, never complete recency.
+- Recent rows (`readRecentWorkflows(authenticatedFetch, signal)`) make one read of
+  `GET /api/workflows/recent-runs?limit=6`: the newest run of each workflow, most recent first, with the
+  workflow's name, whatever the number of workflows; no implicit polling. A missed read reports
+  `unavailable`, a malformed row `stale`, never complete recency.
   Rows show status-derived copy only (never step output) and open `workflow` with flow, version and
   run ids. The host owns invocation, caching and abort on scope change.
 - `workflows/create/figma-reference.json` records the UI-21 source values.
@@ -596,6 +601,12 @@ ingredients (ready, loading, unavailable). It sends no request.
   accepted under that ID) withdraws the ID in the same transaction, so one still in transit can no
   longer start (#1162), and unlocks Run for a new, explicit request; any other answer leaves it
   uncertain.
+- History lists runs of every version; a row opens with the version that run used (#1398), since the
+  inspection answers a run only for its own version. When that locked version is no longer the
+  published one, the host passes `supersededBy` (the published version's ID): Runs and Canvas say it
+  is an earlier version shown read only and offer `Open current version` in place of Run, and the
+  host leaves out `port.start` and Canvas `edit` (so no new draft is copied from it) while keeping
+  `port.reconcile` for a request still waiting on that version.
 - `briefRunsPort(scope, request)` is the read half of the port, over F-21 (#1100): F-21's keyset reader
   owns Brief run history, so `list` reads `GET /api/brief/workflows/:flowId/runs[?cursor=]` (newest
   first, 50 a page, opaque cursor) and `detail` reads `GET /api/brief/workflows/:flowId/runs/:runId`, the
@@ -755,6 +766,14 @@ actions only change local fixture state.
   `GET .../document?requestId=<original>`. Persist requests before dispatch and reconcile them after
   reload; network errors, 5xx and timeouts are unknown, never refusals. Today and Needs you must share
   one decision owner before activation.
+- One count: `host/needs-you.tsx` `needsYouCount` (document decisions with an action, other queued rows
+  still asking, workflow input requests, and `listedNoticeCount`: the unread notification rows the room
+  lists from the same snapshot, saved workflow reminders included, plus voice confirmation cards) feeds
+  Today's request count, the sidebar badge and the room heading. Read notices are history and not counted;
+  a pending approval listed there (decisions off) counts until it resolves. A disconnected list shows
+  nothing and counts nothing. A held-runs note (`kind: 'held'`) is never counted. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
+  show in an "In progress" group. Card titles never show raw tool ids (`plainDecisionTitle`). Workflow
+  input requests render above the permission list, one line each with the focused one open.
 - Opt-in `decisionsRegistration(useBinding)`, not in the production registry. `decisionsAvailable`
   requires a non-empty scope, a `source` matching the shell mode, a controller bound to the same scope
   and, in live mode, the `decisions` capability.

@@ -259,6 +259,10 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   const hostAddresses = process.env["JARVIS_HOST_ADDRESSES"]?.trim();
   // Whole entries only, at most 64, so a cut never leaves a different address.
   if (hostAddresses) env[HOST_ADDRESSES_ENV] = hostAddresses.split(",").map((a) => a.trim()).filter(Boolean).slice(0, 64).join(",");
+  // The memory ceiling a CODE step's child runs under, in MB (4096 when unset,
+  // 0 for none; see no-op-code-sandbox.ts). Digits only, so nothing else rides along.
+  const codeStepMemory = process.env["JARVIS_CODE_STEP_MEMORY_MB"]?.trim();
+  if (codeStepMemory && /^\d{1,6}$/.test(codeStepMemory)) env["AP_CODE_STEP_MEMORY_MB"] = codeStepMemory;
   if (opts.customPiecesPaths?.length) {
     env["AP_CUSTOM_PIECES_PATHS"] = opts.customPiecesPaths.join(":");
   }
@@ -532,11 +536,25 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // `jarvis doctor` warns below that (MIN_BUN_FOR_NO_ENV_FILE). The empty
   // config works on all of them.
   //
+  // --disable-warning=DEP0169: every engine process printed two log lines
+  // (the warning and "Use `bun --trace-warnings`") for `url.parse()`, so every
+  // run added about six lines to the daemon log. The call is not ours: it is
+  // `xmlhttprequest-ssl`'s `Url.parse(settings.url)`, reached through
+  // socket.io-client's long-polling transport, and the engine cannot move to
+  // the websocket transport (the daemon's worker-rpc.ts documents that Bun's
+  // upgrade does not complete). So this one code is silenced for the engine
+  // process and nothing else: every other warning, deprecation included, still
+  // reaches the log. Bun 1.4.x raises DEP0169 and honours the flag; 1.3.x
+  // (1.3.11 is the oldest this package allows) never raises it and ignores
+  // the flag, so it is harmless there. Checked by running 1.3.11, 1.3.14 and
+  // 1.4.2. The warning text is fixed and names no URL, so nothing is hidden
+  // that redaction would have had to see.
+  //
   // `opts.runtime` (tests only, with /bin/true) gets none of these: they are
   // Bun flags, and that binary is not Bun.
   const args = opts.runtime
     ? [opts.bundlePath]
-    : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", opts.bundlePath];
+    : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", "--disable-warning=DEP0169", opts.bundlePath];
   const child = spawn(runtime, args, {
     env,
     cwd: opts.cwd,

@@ -56,6 +56,7 @@ import {
   parseFlowMetadata,
   setFlowCodeStepsEnabled,
   updateFlowMetadata,
+  updateFlowTimeSavedPerRun,
   updateFlowStatus,
   type FlowStatus,
 } from "../db/repos/flow";
@@ -91,10 +92,11 @@ import {
   getFlowRunInProject,
   listRecentRuns,
   listRuns,
+  listRecentRunSummaries,
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { countQueued, enqueue } from "../db/repos/job-queue";
+import { countQueued, countQueuedOwnerRuns, enqueue } from "../db/repos/job-queue";
 import { listChildRuns } from "../db/repos/child-run";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
 import { startWorkItemRun } from "../../goals/workflow-bridge";
@@ -112,7 +114,7 @@ import { flowBindingBlock } from "../runtime/binding-refusals";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
-  getConnectionByExternalId,
+  connectionExists,
   getConnectionInProject,
   listConnections,
   updateConnectionById,
@@ -121,6 +123,7 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
+import { refuseConnectionFields } from "./connection-input";
 import { pastedOAuth2Status, stampOAuth2Claim } from "../credentials/pasted-oauth2";
 import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
@@ -128,6 +131,7 @@ import type { PieceLookup } from "../runtime/piece-catalog";
 import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
+import { estimateMinutesPerRun, MAX_TIME_SAVED_PER_RUN } from "../time-saved-estimate";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
 import {
   installPiece,
@@ -251,6 +255,15 @@ export const WAITPOINT_RESUME_MAX_BODY_BYTES = 1_000_000;
  * where it gets one.
  */
 export const RUN_TRIGGERED_BY_MAX_CHARS = 200;
+
+/**
+ * Most runs the owner may have waiting to start in a project before
+ * `POST /:id/run` refuses another (429, Retry-After). Counts only runs the
+ * owner started (`countQueuedOwnerRuns`), never trigger runs: webhook ingress
+ * is refused at its own cap, and a sender filling the queue must not lock the
+ * owner out of running a workflow by hand.
+ */
+export const MAX_QUEUED_MANUAL_RUNS = 500;
 
 function isRunEnvironment(value: unknown): value is RunEnvironment {
   return value === "PRODUCTION" || value === "TESTING";
@@ -1237,7 +1250,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/connections": {
       GET: (req) =>
         trapErrors(() => {
-          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: pastedOAuth2Status(c.type, c.value) })).map(({ c, oauth2 }) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({ c, oauth2: withRefreshProblem(pastedOAuth2Status(c.type, c.value), opts.credentialResolver?.refreshProblem(c)) })).map(({ c, oauth2 }) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1301,14 +1314,33 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!body.value || typeof body.value !== "object" || Array.isArray(body.value)) {
             return err("value must be an object");
           }
+          const fieldProblem = refuseConnectionFields({
+            externalId: body.externalId,
+            displayName: body.displayName,
+            type: body.type,
+            pieceName: body.pieceName,
+            ...(opts.pieceRegistry
+              ? { isKnownPiece: (name: string) => !!opts.pieceRegistry?.get(name) || CATALOG.some((entry) => entry.npmPackage === name) }
+              : {}),
+          });
+          if (fieldProblem) return err(fieldProblem);
           // Soft schema check per type. Catches the common mistake of saving
           // an OAUTH2 connection with no `access_token` (the piece would
           // later fail with a confusing "auth missing" at run time).
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
+          // Adding never replaces. The same external id for the same piece
+          // used to overwrite the saved secret and pause every published
+          // workflow that uses it, with a toast that said "added". Changing a
+          // saved key is Rotate, which says what it will pause.
+          if (connectionExists(callerProject(req), body.pieceName, body.externalId)) {
+            return err(
+              `A connection with the external id "${body.externalId.slice(0, 80)}" already exists for this piece. Use Rotate on it to change its key, or choose a different external id.`,
+              409,
+            );
+          }
           // An OAuth2 token with `expires_in` is dated now, as upstream dates
           // the tokens it stores, so Jarvis knows when to refresh it (#954).
-          const previous = getConnectionByExternalId(callerProject(req), body.pieceName, body.externalId);
           const conn = upsertConnection({
             projectId: callerProject(req),
             externalId: body.externalId,
@@ -1316,7 +1348,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             type: body.type,
             pieceName: body.pieceName,
             pieceVersion: body.pieceVersion ?? "0.0.0",
-            value: stampOAuth2Claim(body.type, body.value, previous?.value),
+            value: stampOAuth2Claim(body.type, body.value, undefined),
           });
           return ok(
             {
@@ -1717,6 +1749,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const body = read.body as {
             status?: FlowStatus;
             metadata?: Record<string, unknown> | null;
+            timeSavedPerRun?: number | null;
           };
           // BOTH fields are validated before EITHER is written. They used to be
           // checked one at a time as they were applied, so a request carrying a
@@ -1727,9 +1760,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
+          if (body.timeSavedPerRun !== undefined && body.timeSavedPerRun !== null
+            && (!Number.isInteger(body.timeSavedPerRun) || body.timeSavedPerRun < 0 || body.timeSavedPerRun > MAX_TIME_SAVED_PER_RUN)) {
+            return err(`timeSavedPerRun must be a whole number of minutes from 0 to ${MAX_TIME_SAVED_PER_RUN}, or null`);
+          }
           // Turning a workflow off stops its queued and waiting runs (Q-06).
           if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
+          if (body.timeSavedPerRun !== undefined) updateFlowTimeSavedPerRun(id, body.timeSavedPerRun);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
@@ -2264,6 +2302,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err(`triggeredBy must be a string of at most ${RUN_TRIGGERED_BY_MAX_CHARS} characters`, 400);
           }
+          // Manual starts are capped: past this many of the owner's own runs
+          // waiting in this project, a request is refused rather than queued
+          // behind them for minutes. Trigger runs are not counted, so a
+          // webhook backlog never refuses a run started by hand. Before any
+          // run row exists, so nothing is left to clean up.
+          let waiting = 0;
+          try { waiting = countQueuedOwnerRuns(callerProject(req)); } catch { /* a probe failure must not stop the owner's run */ }
+          if (waiting >= MAX_QUEUED_MANUAL_RUNS) {
+            return new Response(JSON.stringify({
+              error: `${waiting} runs you started are still waiting to start. Try again once some of them have run.`,
+            }), {
+              status: 429,
+              headers: { "Content-Type": "application/json", "Retry-After": "30" },
+            });
+          }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
           //     is iterating on step definitions + sample data in the editor,
@@ -2343,6 +2396,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             return created;
           })();
           return ok(run, 202);
+        }),
+    },
+
+    // "Recently run" in one read: the newest run of each workflow, most recent first, with the
+    // workflow's name. Replaces a runs read and a detail read per workflow.
+    "/api/workflows/recent-runs": {
+      GET: (req) =>
+        trapErrors(() => {
+          const limit = Math.max(1, Math.min(20, Math.trunc(numParam(new URL(req.url).searchParams.get("limit")) ?? 6)));
+          const runs = listRecentRunSummaries(callerProject(req), limit);
+          return ok({ items: runs.map(run => {
+            const flow = getFlow(run.flowId);
+            const version = getLatestDraft(run.flowId) ?? (flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null);
+            return { ...run, displayName: version?.displayName ?? run.flowId };
+          }) });
         }),
     },
 
@@ -2670,6 +2738,10 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
     publishedVersionId: row.published_version_id,
     displayName: version?.displayName ?? null,
     metadata: parseFlowMetadata(row),
+    // What Today's time saved counts per successful run: the owner's number
+    // when set, else this estimate from the steps of the version shown here.
+    timeSavedPerRun: row.time_saved_per_run,
+    estimatedTimeSavedPerRun: version ? estimateMinutesPerRun(version.trigger) : null,
     // Surfaced so the dashboard can show that this flow may run CODE and,
     // when `grantedBy` is `upgrade`, that the permission was inherited from a
     // flow that already ran one rather than chosen. A grant nobody can see is
@@ -2718,6 +2790,21 @@ function clampPage(params: URLSearchParams, defaultLimit: number): { limit: numb
     limit: Math.max(1, Math.min(LISTING_MAX_LIMIT, Math.trunc(numParam(params.get("limit")) ?? defaultLimit))),
     offset: Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0)),
   };
+}
+
+/** Why an OAuth2 row's refresh cannot work, as `CredentialResolver.refreshProblem` says it. */
+type RefreshProblem = NonNullable<ReturnType<CredentialResolver["refreshProblem"]>>;
+
+/**
+ * An OAuth2 row's status plus why its refresh cannot work, when it carries
+ * refresh details and the resolver knows they do not (a refresh refused or
+ * unanswered, or a token URL this install never connects to).
+ */
+function withRefreshProblem(
+  status: ReturnType<typeof pastedOAuth2Status>,
+  problem: RefreshProblem | null | undefined,
+): (NonNullable<ReturnType<typeof pastedOAuth2Status>> & { refreshProblem?: RefreshProblem }) | null {
+  return status && status.refreshable && problem ? { ...status, refreshProblem: problem } : status;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { useHumanInputCount, useOwnerAttention } from './HumanInputs';
+import { NeedsYouContext, documentDecisionCount, isHeldNote } from './needs-you';
 import { EmergencyStatusContext } from './EmergencyStatus';
 import React, { useContext, useEffect, useState } from 'react';
 import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
@@ -74,6 +75,13 @@ export function onlyOtherDecisions(all: Pick<Snapshot<readonly DecisionView[]>, 
   if (!settled || all.data?.some(row => row.actions.length > 0)) return false;
   return otherCount === null || otherCount > 0 || !!all.data?.length;
 }
+/** A day id is a calendar date in the owner's timezone, so its weekday is read as a plain date in the user's locale. */
+export function dayLabels(id: string): { label: string; title: string } {
+  const at = Date.parse(`${id}T12:00:00Z`);
+  if (!Number.isFinite(at)) return { label: id, title: id };
+  return { label: new Intl.DateTimeFormat(undefined, { weekday: 'short', timeZone: 'UTC' }).format(at),
+    title: new Intl.DateTimeFormat(undefined, { dateStyle: 'full', timeZone: 'UTC' }).format(at) };
+}
 /** Whether the document list may hold the request a link names: only actionable rows are shown there, and an unsettled read may still hold it. */
 export function namedInDocuments(all: Pick<Snapshot<readonly DecisionView[]>, 'state' | 'data'>, approvalId: string | undefined): boolean {
   if (!(all.state === 'ready' || all.state === 'empty' || all.state === 'stale')) return true;
@@ -137,7 +145,10 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const initialGoal = useBriefProjection(initialGoalRead);
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
-    const waiting = waitingOnOwner(settledDocuments(d), useOtherDecisionCount(ports.otherDecisions, isBriefCapabilityEnabled(host.capabilities(), 'decisions')), useOwnerAttention());
+    // Same count as the sidebar badge; alone (no workspace around it) only the document decisions are known.
+    const waiting = useContext(NeedsYouContext)?.count ?? documentDecisionCount(d.data);
+    // What the Getting started all-clear waits for (#1340); null while any source is unread.
+    const allClearWaiting = waitingOnOwner(settledDocuments(d), useOtherDecisionCount(ports.otherDecisions, isBriefCapabilityEnabled(host.capabilities(), 'decisions')), useOwnerAttention());
     const emergency = useContext(EmergencyStatusContext);
     const [operation, setOperation] = useState<DecisionOperation>();
     const runs = useBriefProjection(recentRuns);
@@ -174,12 +185,12 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
             decisionRead.refresh(); void decisions.refresh();
           } catch { setOperation({ ...request, state: 'unknown', message: 'The decision is not confirmed. Open Needs you to check it.' }); }
         } }} slots={{
-        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} waiting={waiting} held={emergency === 'paused' || emergency === 'killed'} /> : undefined,
+        gettingStarted: isBriefCapabilityEnabled(caps, 'profileSettings') ? <GettingStarted journey={setup} navigate={shell.navigate} goalId={goal?.goal.goalId} compact={decisionSnapshot.state !== 'empty'} waiting={allClearWaiting} held={emergency === 'paused' || emergency === 'killed'} /> : undefined,
         goal: <GoalCard handoff={handoff} onReviewDraft={goal?.goal.status === 'draft' ? () => shell.navigate({ room: 'goals', selection: { goalId: goal.goal.goalId } }) : undefined}
           onPlanUnplanned={initialGoal.data === true ? () => shell.navigate({ room: 'goals', selection: {} }) : undefined} />,
-        queueNotice: d.data?.length ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {d.data.length} {d.data.length === 1 ? 'request' : 'requests'}</button> : null,
+        queueNotice: waiting ? <button onClick={() => shell.navigate({ room: 'needs-you', selection: {} })}>Review {waiting} {waiting === 1 ? 'request' : 'requests'}</button> : null,
         outcomes: <Outcomes mode="live" binding={{ source: 'live', capabilities: caps, state: view(outcome, data => ({ window: data.window,
-          today: data.today, week: data.week, days: data.days.map(day => ({ ...day, label: day.id })),
+          today: data.today, week: data.week, todayBasis: data.todayBasis, weekBasis: data.weekBasis, days: data.days.map(day => ({ ...day, ...dayLabels(day.id) })),
           chartMaxMinutes: Math.max(60, ...data.days.map(day => day.time?.value ?? 0)), goal: null,
           coverage: data.coverage.complete ? 'complete' : 'partial', basis: data.basis })) }} />,
         activity: <RecentActivity mode="live" onOpen={shell.navigate} binding={{ source: 'live', state: mergeActivity(view(runs, rows => rows),
@@ -202,13 +213,18 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
   }
   function NeedsYou({ shell }: { shell: BriefShellPort }) {
     const all = useBriefProjection(decisionRead);
-    const humanPending = useHumanInputCount();
+    const humanPending = useHumanInputCount(), shared = useContext(NeedsYouContext);
     const stored = useContext(StoredNoticesContext);
-    const [otherCount, setOtherCount] = useState<number | null>(null);
+    const [ownCount, setOtherCount] = useState<number | null>(null);
+    // With the workspace around, its read decides; the list reports its own count only when rendered alone.
+    const otherCount = shared ? shared.others?.filter(row => !isHeldNote(row)).length ?? null : ownCount;
     const onlyOther = onlyOtherDecisions(all, otherCount === null ? null : otherCount + humanPending);
+    const count = shared?.count ?? 0;
     // A link's request may sit in either list; only when neither has it is it gone.
     const elsewhere = namedInDocuments(all, shell.route.selection.approvalId);
     return <>{onlyOther ? <><header className="brief-decisions-heading"><h1 className="brief-type-room-title">Needs you</h1></header>{stored.list}</> : <DecisionsRoom shell={shell} binding={{ ...base(), controller: decisions }} />}
+      {shared && count > 0 && <p className="brief-needs-count" role="status">{count} waiting for you.</p>}
+      {shared?.inbox}
       <PendingDecisions onCount={setOtherCount} elsewhere={elsewhere} selection={shell.route.selection.approvalId} navigate={shell.navigate} http={transport} read={ports.otherDecisions} enabled={isBriefCapabilityEnabled(host.capabilities(), 'decisions')} changed={() => { decisionRead.refresh(); void decisions.refresh(); }} /></>;
   }
   const rooms: BriefRoomRegistry = {
@@ -217,7 +233,7 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     opportunities: { ...BRIEF_ROOMS.opportunities, Body: ({ shell }) => <OpportunitiesRoom shell={shell} binding={{ ...base(), controller: opportunities }} /> },
     memory: { ...BRIEF_ROOMS.memory, Body: Memory }, 'memory-detail': { ...BRIEF_ROOMS['memory-detail'], Body: Memory },
   };
-  return { rooms, setup, goals, decisions, opportunities, memory, detail, ports,
+  return { rooms, setup, goals, decisions, opportunities, memory, detail, ports, decisionRead,
     refresh() { goalRead.refresh(); initialGoalRead.refresh(); decisionRead.refresh(); opportunityRead.refresh(); outcomes.refresh(); recentRuns.refresh(); recommendations.refresh(); void goals.refresh(); void decisions.refresh(); void opportunities.refresh(); void memory.refresh(); },
     retire() { setup.retire(); goals.retire(); decisions.retire(); opportunities.retire(); memory.retire(); detail.retire(); } };
 }

@@ -43,12 +43,40 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   historical readiness. Providers must revalidate revision, readiness, permissions
   and bindings at the time of an action; a capability snapshot is not authorization.
 - Goals/outcomes carry value, unit, baseline, target, as-of time, provenance and
-  qualification. A legacy goal score is not a measurement. Time back needs a
-  defensible manual baseline and measured intervention, not engine duration.
+  qualification (`measured`, `user_reported` or `estimated`). A legacy goal score is
+  not a measurement. Time back has two tiers and counts a run once: a checked work
+  item with the owner's time record (a manual baseline minus observed intervention,
+  `user_reported`), and otherwise every successful production root run of a
+  workflow in the project (not a test, sample-data or child run, and not one that
+  continued past a failed step or an unsuccessful child run) counted at the minutes per run
+  the owner set on the workflow, or a deterministic estimate from the run's flow
+  version steps. A default estimate adds at most 60 minutes per workflow per local
+  day (`MAX_ESTIMATED_MINUTES_PER_WORKFLOW_PER_DAY`), so a frequent schedule cannot
+  claim a full day from a guess; owner-set minutes are never capped. Run-derived
+  time is always `estimated`, never `measured`, and is shown with its basis. A day
+  that has started with no counted runs is a known zero; a future day is unknown.
+  Engine duration is never used.
 - Memory identifies the canonical fact and source, qualifications, permissions and
   actual selected/supplied/outcome-verified uses. Supplied does not mean relied upon.
+  `GET /api/brief/memory` pages, searches and counts in the database, so the number of
+  facts is not bounded. A cursor freezes the member facts of its query: facts added
+  later join no page of it, and a change to a member fact, its evidence, its subject
+  or any use record answers `stale` (`source_changed`). Only the use ledger (50,000
+  records) and a fact's correction history (100 facts) are capped; over a cap the
+  answer is `unavailable`, never a partial list. Search folds ASCII letters only, so a
+  non-ASCII letter matches in the case it was stored in. Extraction bookkeeping the
+  room hides stays out of every page and count, freezes with the cursor (a newly
+  hidden member answers `stale`) and still opens by id. Legacy `GET /api/vault/facts`
+  returns every fact unless `limit` (1 to 1000) and `offset` are sent.
   Connections retain their store kind, source/account IDs and permissions. An
   installed library piece does not imply an authenticated account.
+- The workflow list `GET /api/brief/workflows` answers one page at a time, newest slot first:
+  `limit` (1 to 200, default 100) and `cursor`, with `nextCursor` (null on the last page) and the
+  `total` count in `data`. The cursor is the last slot position, which never changes for a workflow, so
+  workflows added or removed while paging shift or repeat nothing. There is no ceiling on the number of
+  workflows. A client that needs the whole list follows the cursors; a failed page fails the read.
+  "Recently run" is `GET /api/workflows/recent-runs?limit=` (1 to 20, default 6): the newest run of each
+  workflow with its name, in one read.
 - These types are compile-time contracts, not validators for untrusted input. Each
   provider owns bounded inputs, permission checks, runtime output validation and
   its domain-specific persistence/recovery acceptance checks.

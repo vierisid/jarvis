@@ -15,6 +15,7 @@ import {
   type WorkflowRequest,
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
+import { TimeSavedPerRun } from "./TimeSavedPerRun";
 import "./canvas.css";
 import { workflowStatusWords, WORKFLOW_SAVE_ACTION } from "../status-words";
 import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
@@ -37,6 +38,9 @@ export interface WorkflowCanvasBinding {
   permissionsChanged?: () => Promise<void>;
   publish?: () => Promise<void>;
   edit?: () => Promise<void>;
+  /** Set when this locked version is no longer the published one: the published version's
+   * ID. The host then offers neither Run nor Edit; the room offers the current version. */
+  supersededBy?: string;
 }
 export function canvasAvailable(
   shell: BriefShellPort,
@@ -201,7 +205,15 @@ function CanvasHeader({
           <h1 className="brief-type-room-title">Workflow</h1>
         )
       }
-      runAction={
+      runAction={binding.supersededBy ? (
+        <BriefButton
+          variant="primary"
+          disabled={editor.dirty}
+          onClick={() => shell.navigate({ room: "workflow", selection: { flowId: binding.flowId, versionId: binding.supersededBy } })}
+        >
+          Open current version
+        </BriefButton>
+      ) : (
         <BriefButton
           variant="primary"
           disabled={
@@ -222,7 +234,7 @@ function CanvasHeader({
         >
           {running ? "Queueing…" : "Run workflow"}
         </BriefButton>
-      }
+      )}
     >
       <WorkflowSummary trigger={editor.draftTrigger} catalog={editor.catalog} />
       <div className="brief-canvas-tools" aria-label="Draft tools">
@@ -280,9 +292,13 @@ function CanvasHeader({
                   message?.text ||
                   (editor.dirty
                     ? editor.invalidJsonMessage ?? "Unsaved changes"
-                    : savedLine)}
+                    : binding.supersededBy && editor.version?.state === "LOCKED"
+                      ? "Earlier version (read only)"
+                      : savedLine)}
         </span>
       </div>
+      {binding.permissions && <TimeSavedPerRun key={`time-${binding.flowId}`} flow={binding.permissions} request={binding.request as typeof fetch}
+        onChanged={() => { void binding.permissionsChanged?.().catch(() => setRunMessage('Time saved could not be refreshed. Reopen this workflow to check.')); }} />}
       {binding.permissions && <details className="brief-canvas-setup" open={hasCode || undefined}>
         <summary>Flow permissions{codeBlocked ? ' · CODE steps not allowed' : ''}</summary>
         <FlowPermissions key={binding.flowId} flow={binding.permissions} request={binding.request as typeof fetch}
