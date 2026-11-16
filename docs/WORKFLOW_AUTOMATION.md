@@ -900,7 +900,7 @@ third-party dependencies are part of the engine's committed staging install
 | `graphql` | Governed like an HTTP request with a body, because the piece always sends its query as one: GET, POST, PUT and PATCH are `send_message`, anything else `delete_data`. Tracked (sent once), egress-guarded, a proxy is refused, and "Retry on failure" is off and hidden. Header, query, URL and variable credentials are redacted from the card. |
 | `smtp` | Governed: `send-email` is `send_email`, so it asks at the shipped defaults. Tracked (sent once): upstream's resend after a connection reset is removed, since a reset after the server took the message is a sent email. The mail server passes the egress guard; the connection's host name stays the TLS name. |
 | `sftp` | Governed by action: `read_file_content` and `listFolderContents` are `read_data`; `createFolder` is `write_data`; `upload_file` and `create_file` put content on the server and replace a file at that path, so they are `send_message`, as an HTTP PUT is (not tracked: a repeat writes the same bytes to the same path); `renameFileOrFolder` (which can replace the target), `deleteFile` and `deleteFolder` are `delete_data`. The server passes the egress guard for SFTP, FTP and FTPS, and an FTP data connection always goes to the checked control address, never to a host a PASV reply names. Its polling trigger (`new_file`) is not loaded: a trigger runs outside the effect boundary. |
-| `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. |
+| `pdf` | Acts only inside the run, without upstream's "Convert to Image", which is not loaded: it writes the PDF to the OS temp dir and runs poppler's `pdftoppm` through `/bin/sh` with the engine's environment. Its built-in fonts show Western European text only: "Text to PDF" and "Add Text to PDF" fail on emoji, Chinese, Japanese or other scripts, naming up to five of the characters (invisible ones as U+ codes); "Text to PDF" can print a ? instead when "Replace characters the PDF cannot show" is on. |
 | `approval`, `crypto`, `csv`, `data-mapper`, `data-summarizer`, `date-helper`, `delay`, `file-helper`, `image-helper`, `math-helper`, `qrcode`, `schedule`, `store`, `text-helper`, `xml` | Act only inside the run (`IN_RUN_STEP_PIECES` in `runtime/step-admission.ts`); obey Pause and Kill, not audited one by one. A file one of them is given by URL is fetched by the engine's guarded file download. The password `crypto` generates (Generate Password) reaches the next step as generated, but run history, the run list, `manage_workflow get_run`, the run's effect records, its failure message, open failures, work items and sample data show it, and the same text (or its URL-encoded form) elsewhere in that run's steps, as `[redacted]` (`runAsShown` in `runtime/step-credentials.ts`); the stored run keeps it, since a resumed run rebuilds its steps from it. Not hidden: the approval card of a later step that sends it (the approver sees what is sent), a child workflow's run that returns it, the per-run engine log, and a password shorter than 6 characters anywhere but its own step. The zip steps' password is redacted where the assistant reads the workflow and in run history and sample data (`redactZipPassword` in `runtime/step-credentials.ts`). Any other step fails on a reference that resolves to nothing unless the expression gives its own fallback (`{{trigger.x ?? ''}}`), but the text helper's "Use Default Value if Input is Empty" accepts a missing reference as its Value and returns the default (`runtime/absent-value-fallbacks.ts`). |
 | `webhook` | Vendored, not loaded. The editor's Webhook trigger is Jarvis's own ingress (below); the core piece's trigger would never fire through the engine, and its "return response" actions answer a synchronous webhook Jarvis does not hold open. |
 | `tables`, `forms`, `subflows`, `connections`, `tags`, `manual-trigger` | Not vendored: each needs the Activepieces server (its API, its form and chat pages, its MANUAL trigger strategy). Child workflows use the "Jarvis: Reusable workflows" piece, and a workflow started by hand uses the editor's own manual trigger. `CORE_PIECES_LEFT_OUT` gives each reason. |
@@ -1195,7 +1195,7 @@ A global switch would be the wrong shape: turning CODE on for one automation
 would turn it on for every flow composed afterwards, which is the thing the
 gate exists to prevent.
 
-The refusal happens at AUTHORING time, never per execution:
+The refusal happens at AUTHORING time, never per execution of a flow that holds the grant (a flow published with the grant can only be refused at fire time after its owner revokes it, below):
 
 - `POST /api/workflows/:id/publish` and `manage_workflow publish` refuse with
   403 and change nothing -- the version is not locked, not attached, and the
@@ -1225,9 +1225,11 @@ The refusal happens at AUTHORING time, never per execution:
   later. A published flow always carries the grant, so this can only ever
   decline a flow that was never publishable.
 
-Nothing is refused per execution. That was the flaw in the allowlist cut from
-#459: it refused at run time, so a cron- or webhook-triggered flow published
-successfully and then failed on every fire with nobody there to read why.
+Nothing that holds the grant is refused per execution. That was the flaw in
+the allowlist cut from #459: it refused at run time, so a cron- or
+webhook-triggered flow published successfully and then failed on every fire
+with nobody there to read why. The one per-execution refusal is the owner's
+own revoke, below.
 
 The message names what was refused, which step caused it, and the call that
 grants the permission. A CODE step is found wherever it is -- the walker in
@@ -1247,11 +1249,39 @@ with `{"enabled": false}`. Every other flow -- including one holding an
 unpublished CODE draft -- starts at OFF.
 
 Revoking with `{"enabled": false}` takes the permission away from the next
-publish, enable, run or draft write, and from the next trigger registration --
-so a live schedule keeps firing until the daemon restarts or the flow is
-refreshed, and then stops. It does not unpublish the version and it does not
-stop a run already in flight. Disabling the flow is what stops a schedule
-immediately. The grant is not handed back later: the upgrade backfill is keyed
+publish, enable, run or draft write, and from the next trigger registration.
+It also takes effect for a flow that is already published and enabled: the
+trigger manager reads the grant again every time a webhook, event or scheduled
+time arrives, so none of them starts a run once it is revoked, and the grant
+route refreshes the flow's registration so the subscription is dropped
+(granting again registers it). A refused delivery runs nothing and leaves a
+`blocked` row in the delivery record with `code: "CODE_STEPS_NOT_ENABLED"` and
+a plain reason; repeats fold into one counted row; a webhook sender is answered
+as for a workflow that is not active (404); an event source is not polled.
+
+A revoke also reaches runs that are already past their trigger (#1426):
+
+- The grant route stops the flow's queued, waiting (paused) and executing runs
+  of a version with a CODE step, each with the reason "CODE steps stopped
+  being allowed for this workflow, so this run was stopped." and a `stopped`
+  lifecycle row (`code: "CODE_STEPS_NOT_ENABLED"`). An executing run's engine
+  is stopped through the run fence. A run on a version without a CODE step is
+  left alone. A warm engine parked for the flow is retired, so nothing a CODE
+  step left running in its process group outlives the revoke.
+- The RUN_FLOW worker reads the grant again before it starts or continues a
+  run, from any source (trigger, manual or test-step run, Brief, chat, a
+  parent workflow's child run, a continuation), and the engine executor reads
+  it once more synchronously just before it sends the flow, after the CODE
+  sources are written and their packages installed. A refused run fails with
+  a readiness refusal (`WORKFLOW_NOT_READY`, issue code
+  `CODE_STEPS_NOT_ENABLED`) naming the CODE steps; nothing runs, and an email
+  or attachment it was started for keeps no claim.
+- The write and the stop happen with no await between them, so a run either
+  read the grant before the revoke (and is stopped by it) or reads it after
+  (and is refused).
+
+It does not unpublish the version. Granting again stops nothing and lets new
+runs and deliveries through; a run the revoke stopped stays stopped. The grant is not handed back later: the upgrade backfill is keyed
 on the columns being introduced, so a revoked permission stays revoked across
 restarts. The other side of that key is that a build rolled back below this
 version and then rolled forward again will not re-grandfather a flow published
@@ -2002,15 +2032,16 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | PATCH | `/api/workflows/:id` | Enable / disable (`status`) and set `metadata`. Renaming is a version write, not this |
 | DELETE | `/api/workflows/:id` | Delete the flow and what it leaves: runs, versions, jobs, trigger events, flow-scoped store keys, step-file rows and their disk copies, run state backups, and the cards of runs that already ended. Stops its runs first and waits up to 10 s for effects they already dispatched to be recorded; one still running answers 409 (`code: workflow_stopping`) and the workflow stays, turned off (part of a large history may already be gone; deleting again finishes it). The workflow is turned off as the delete starts, so no trigger starts a run meanwhile. A large history goes in batches of 1,000 runs. 409 `workflow_history_retained` for a workflow removed in Brief (its purge serves it). Same for `manage_workflow` `delete` |
 | GET | `/api/workflows/:id/versions` | Version history |
-| POST | `/api/workflows/:id/versions` | New draft version. `{ displayName, trigger?, uiMeta? }` |
+| POST | `/api/workflows/:id/versions` | New draft version, a copy of the version the workflow runs (the published one, else its latest draft; never an older or merely locked version): `{ displayName?, trigger?, uiMeta? }`. A missing `displayName`, `trigger` or `uiMeta` is taken from that version (the name is required only when the flow has none). 409 when that version changed while the draft was made. A `trigger` that is not a Jarvis step graph is a 400 |
 | GET | `/api/workflows/:id/versions/:vid` | Get version + its `uiMeta` |
-| PATCH | `/api/workflows/:id/versions/:vid` | Edit a draft: `displayName`, `trigger`, `connectionIds`, `agentIds`, `uiMeta` (picked, not spread; other keys are ignored). Refused for a LOCKED version (409) |
+| PATCH | `/api/workflows/:id/versions/:vid` | Edit a draft: `displayName`, `trigger`, `connectionIds`, `agentIds`, `uiMeta` (picked, not spread; other keys are ignored). Refused for a LOCKED version (409). A `trigger` must be a Jarvis step graph with at most 100 steps (`{}` is a blank draft): anything else, such as a string, a list or another tool's export (an n8n file is named as such), is a 400 in plain words. A draft saved before this check still loads |
+| POST | `/api/workflows/:id/versions/:vid/discard` | Throw a draft away, the way out of one that cannot be opened. Only a draft: a published or locked version, a draft with runs recorded against it, the draft a turned-on workflow with nothing published runs, and a workflow's only version (remove the workflow instead) are kept (409) |
 | GET | `/api/workflows/:id/versions/:vid/readiness` | Readiness report for one version |
 | POST | `/api/workflows/:id/versions/:vid/lock` | Freeze a draft (DRAFT -> LOCKED). Gated on readiness (422 with the readiness report); may answer with `osWarnings`. Does not publish and does not refresh triggers |
 | PATCH | `/api/workflows/:id/versions/:vid/sample-data/:step` | Set one step's sample output, `{ output }`; `output` absent or null removes the entry |
 | DELETE | `/api/workflows/:id/versions/:vid/sample-data/:step` | Clear the version's WHOLE sample-data map. `:step` is required by the path and ignored. Refused for a LOCKED version (409) |
 | PATCH | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set one step's sample input override, `{ input }` (a JSON object; absent or null removes it) |
-| POST | `/api/workflows/:id/publish` | Publish the latest draft, or `{ versionId }` (403 when the version has a CODE step and CODE is off for the flow) |
+| POST | `/api/workflows/:id/publish` | Publish the latest draft, or `{ versionId }` (403 when the version has a CODE step and CODE is off for the flow). A workflow's name is its published version's `displayName`, so publishing a newer draft with another name renames it, but publishing an older version brings back its steps and keeps the current name (the older version takes it) |
 | POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
 | POST | `/api/workflows/:id/read-hosts` | Replace this flow's read list, the hosts an HTTP GET or HEAD reaches without asking (`{"hosts": string[]}`, required; bare host names, at most 64; `[]` clears it). A host matches exactly: listing `example.com` does not list `api.example.com`. Optional `expected`: the list the edit started from; 409 when the list has changed since |
 | POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
@@ -2106,6 +2137,14 @@ The primary agent has a `manage_workflow` tool registered (`src/actions/tools/ma
   - **One-shot fallback**: for text-only clients or models that don't call tools, the full piece catalog is inlined into one system prompt and parse/validation errors feed a retry loop (up to 4 attempts). Both modes share the same rule sections and worked examples in the system prompt.
 
 Source: `src/actions/tools/manage-workflow.ts` and `src/actions/tools/workflow-composer.ts`. The composer's role profile lives in `roles/specialists/workflow-default.yaml`.
+
+### Secrets are never written into a composed workflow
+
+A key, token, password or private key typed into a step is stored in plain text in the workflow version and copied into every run's logs. The composer refuses such a plan (`src/actions/tools/secret-literals.ts`) and feeds back where it is and what to do: use a connection. The feedback never names the value. Detected: credential formats (vendor key prefixes, JWTs, private keys, `Bearer <token>`, a password inside a URL), and a long high-entropy value in a field named like a credential (`apiKey`, `token`, `password`, `Authorization`). A value that holds an expression (`{{ ... }}`) is a reference and is never flagged, nor is a documentation placeholder (`AKIAIOSFODNN7EXAMPLE`, `sk-your-key-...`, `xxxxxx`). The Webhook trigger's signing secret is a secret by design (it has no connection to move to, and the model never reads it back), so it is neither refused nor warned about. Where a step has no connection (a plain HTTP request), the model is told to leave the value empty for the person to fill in the editor. What is kept in composition history (`previous_response`, `previous_graph`, errors) and returned on failure has secret-shaped text, and the value of a field named like a credential, replaced with `[secret removed]`.
+
+The assistant's draft edits (`manage_workflow` `update`) are held to the same rule: an edit that adds a secret is refused with the same feedback. A value the person already saved in the draft is theirs and does not block an edit.
+
+Publishing (and locking) a workflow that already holds one, whether drawn by hand or composed earlier, still succeeds, because readiness is re-checked on every trigger and a refusal would stop workflows that run today. The response (the publish and lock routes, and `manage_workflow` `publish`) adds `warnings` naming the step and field, never the value. Saving a draft through the editor (`POST`/`PATCH .../versions`) is not checked: the warning comes at publish.
 
 ### Intent-preserving repair
 

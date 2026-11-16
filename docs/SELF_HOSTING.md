@@ -38,11 +38,21 @@ records the port it bound in its lock file, which `jarvis stop` reads first. A
 that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
 for stopping a daemon whose config was edited after it started.
 
-`jarvis stop` only signals a process it can prove is this Jarvis: the daemon
-holding its lock, or a leftover process whose command line is this install's
-`jarvis`. Anything else listening on the port is named (program and PID) and
-left running. `--port N` and `--port=N` both work, and a `--port` with no usable
-value is an error rather than the default.
+`jarvis stop` never stops a program that is not this Jarvis. It stops the
+daemon holding the lock as before. With no daemon holding the lock, it still
+looks at the port, but it signals a listener only when both are true: its
+command line is this install's `jarvis`, and it holds this data folder's lock
+file open, which the daemon does for its whole life (on Linux, also after the
+lock file, or the whole data folder, was deleted under it). Anything else on
+the port is left running and named (program and PID), with the command to see
+what it is (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr
+:<port>` on Windows). That includes another program, and a Jarvis from this
+install running for a different data folder. Such a listener does not make
+`jarvis stop` fail; it fails, and says the port is still occupied, only when
+this data folder's own daemon is still on the port. A program run by another
+user may not show up at all without root; `sudo lsof -nP -iTCP:<port>
+-sTCP:LISTEN` shows it. `--port N` and `--port=N` both work, and a `--port`
+with no usable value is an error rather than the default.
 
 `jarvis restart` starts the daemon the way the running one was started:
 detached or not, with the same `--port`, `--data-dir`, `--no-open`,
@@ -894,6 +904,18 @@ with `allow_process_inspection` set. Keeping a secret out of the daemon's
 environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
+
+### Where Jarvis keeps its files, and a read-only home
+
+An instance that sets `JARVIS_HOME` starts with a read-only or missing `$HOME` (a container, a locked-down service account). With a normal, writable home it still uses some folders under `~/.jarvis`, as before:
+
+- Custom web-app templates are read from `<data dir>/webapp-templates`. An earlier install's `~/.jarvis/webapp-templates` is still read when it exists, never written, and the data dir's copy of a template wins.
+- Workflow run-log backups go to `<data dir>/workflow-logs`. A backup an earlier version wrote under `~/.jarvis/workflow-logs` is still read when its run resumes and removed with its run.
+- Google tokens go to `<data dir>/google-tokens.json`, unless only `~/.jarvis/google-tokens.json` exists: that file keeps being used until you move it into the data dir (with the daemon stopped).
+- The workflow engine's build cache, the pieces folder, the workflow files and CODE-step folders and the default site projects folder stay under `~/.jarvis` as before while that location can be written. When it cannot, and `JARVIS_HOME` is set, each moves inside the data dir (`<data dir>/cache`, `pieces`, `workflow-files`, `workflow-codes`, `projects`). A `sites.projects_dir` you set yourself is used as given.
+- Template seeding never stops the daemon: a templates folder that cannot be created or read is skipped with a warning and the built-in templates load.
+
+Not moved, and failing only when used with a read-only home: the controlled browser's profiles (`~/.jarvis/browser`), uploaded content (`~/.jarvis/content`), the dashboard window layout (`~/.jarvis/window-state.json`), and Bun's package cache (`~/.bun/install/cache`, used when a piece is installed; set `BUN_INSTALL_CACHE_DIR` to move it).
 
 ### Backup and restore
 

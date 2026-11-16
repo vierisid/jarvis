@@ -204,6 +204,10 @@ Providers, credentials, the default model, and per-tier routing are set in the d
 
 The daemon listens on port 3142 by default (`daemon.port`).
 
+### Applying a change
+
+Saving LLM settings in the dashboard (`POST /api/config/llm`, onboarding setup, or an external edit picked up by a reload) applies to the running daemon without a restart: the providers and tier map are swapped, and the chat layer follows. Adding the `conversation` tier switches chat to the router-first path; removing it returns chat to the single-orchestrator path. A turn already running stays on the path it started on, but its next model call uses the new providers and tier map: a router-first turn still running when the `conversation` tier is removed ends with "No provider configured for tier 'conversation'".
+
 ## Usage Examples
 
 These are for contributors writing standalone scripts. Inside the daemon the providers and tier map come from the saved settings (see Architecture). `src/llm/test.ts` shows the full load-and-bind sequence against your saved settings.
@@ -300,6 +304,13 @@ const response = await manager.chatTier('medium', 'my_script', messages);
 ### Usage numbers
 
 A provider's token counts are checked before they are stored or added up (`cleanTokenCount` in `src/llm/provider.ts`). Only a finite, non-negative whole number up to 100 million per call is accepted; a missing, null, negative, fractional, text or larger value counts as 0 (unknown), never as a clamped number. The call is still recorded in `llm_usage`, so one buggy gateway cannot lose a call's record or corrupt the local Usage totals. A count that is present but rejected is logged once per provider, field and kind (for example `[LLM] openai reported completion_tokens that is null; counted as 0 (unknown)`), never with the value or the response body. A missing usage block is 0 for every adapter and the reply is still delivered. Hosted plan limits are metered by the proxy, not from these local counts.
+
+### Timeouts
+
+- A non-streaming call is cut off after 90 seconds. A streaming call (chat) is cut off when the provider sends nothing for 90 seconds before the first data, or for 60 seconds between data after that. Any bytes count as data, including thinking, a tool call's arguments arriving in pieces, and keepalive pings. Time Jarvis spends running a tool between two events never counts.
+- Ollama and OpenAI-compatible endpoints (often a model on your own machine) get 5 minutes before the first data, because loading a model and reading a long prompt on a CPU sends nothing for that long.
+- A stalled stream is not retried on the same provider (a hung provider stays hung). Without a tier map Jarvis moves on to the next provider in the fallback chain if nothing was shown yet; otherwise the turn fails with "did not answer in time". Chat runs one turn at a time, so a stalled turn holds up the next one for at most that long.
+- A workflow Ask step has one overall deadline of 120 seconds across all retries and fallbacks.
 
 ### Per-Call Options
 

@@ -16,6 +16,8 @@ import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision 
 import { ensureDecisionSchema } from './decision-schema';
 import { HELD_RUN_EFFECT } from '../workflows/runtime/deferred-cards';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
+import { governedActionReview } from '../authority/governed-review';
+import { digest } from '../workflows/runtime/effect-context';
 import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
 
 export class DecisionError extends Error {
@@ -181,6 +183,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     let source: unknown;
     let linked: ReturnType<DecisionQueue['effects']>;
     let runId: string | null = null;
+    // What the approval row is bound to (its `tool_arguments`), for the governed review below.
+    let boundArguments: unknown;
     if (kind === 'approval') {
       const approval = this.authority.approvalManager.getRequest(sourceId);
       if (!approval) throw new DecisionError('Decision not found', 404, 'not_found');
@@ -188,6 +192,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       item.kind = 'permission';
       item.title = (approvalIntentFromContext(approval) ?? approval.reason ?? approval.tool_name).slice(0, 1000);
       item.review = { toolName: approval.tool_name, reason: approval.reason };
+      try { boundArguments = JSON.parse(approval.tool_arguments) as unknown; } catch { /* No bound arguments: no governed review. */ }
       if (approval.tool_name.startsWith('browser_')) {
         try {
           const args = JSON.parse(approval.tool_arguments);
@@ -272,6 +277,15 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       if (item.review && run) {
         item.review.workflowName = getFlowVersion(run.flowVersionId)?.displayName;
         item.review.requestedAt = run.startTime ?? run.created;
+        // A governed piece action (SMTP, HTTP, Gmail, ...): what it will do, from its frozen effect, and
+        // only while that effect's arguments are the ones this approval is bound to -- the digest the
+        // effect boundary compares before it runs anything. Redacted and bounded there, and again here.
+        const piece = /^piece:([^/]+)\//u.exec(item.review.toolName);
+        const pieceEffect = piece && boundArguments !== undefined ? linked.rows.filter(row => row.title === item.review!.toolName)
+          .map(row => getWorkflowEffect(row.id))
+          .find(effect => effect?.toolName === item.review!.toolName && effect.approvalId === item.approval?.approvalId
+            && digest(effect.arguments) === digest(boundArguments)) : undefined;
+        if (piece && pieceEffect) item.review.action = governedActionReview(piece[1]!, pieceEffect.arguments) ?? undefined;
         // Project only reviewed notification fields from its immutable effect, never generic tool arguments.
         // `title` is the effect's toolName, so only notification rows load their full record.
         const frozen = linked.rows.filter(row => row.title === 'workflow_notify').map(row => getWorkflowEffect(row.id)).find(effect => effect?.route === 'notify' && effect.toolName === 'workflow_notify');

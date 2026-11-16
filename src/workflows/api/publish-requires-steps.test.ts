@@ -108,7 +108,7 @@ describe("a version write needs a trigger that is an object", () => {
       const before = listVersions(flowId).length;
       const result = await call("/api/workflows/:id/versions", "POST", { id: flowId }, { displayName: "v2", trigger });
       expect(result.status).toBe(400);
-      expect(result.body.error).toContain("trigger must be an object");
+      expect(result.body.error).toContain("This is not a Jarvis workflow");
       expect(listVersions(flowId).length).toBe(before);
     });
 

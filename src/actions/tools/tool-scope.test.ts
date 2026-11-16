@@ -297,7 +297,8 @@ describe('what a future change could silently undo', () => {
     const conv = /return this\.streamMessageConv\(([^)]*)\);/.exec(src);
     expect(conv).not.toBeNull();
     // The taint carry-over (#1156) rides last, after everything this pins.
-    expect(conv![1]).toBe('text, channel, siteContext, scope, contextKey, conversation, carry');
+    // The orchestrator the turn started with leads (#1435), held across a hot reload.
+    expect(conv![1]).toBe('conv, text, channel, siteContext, scope, contextKey, conversation, carry');
     // F-03 adds explicit conversation history to both branches; it must not
     // replace or drop the existing site scope on either path.
     // F-05 selects multimodal content and tiers before the same trailing scope
@@ -307,7 +308,7 @@ describe('what a future change could silently undo', () => {
     expect(classic![1]!.trim()).toEndWith(', scope, conversation, carry');
     // The non-streaming fork too: `handleMessage` has the same conv/classic
     // split and the same way of quietly dropping half the turn.
-    expect(src).toContain('this.handleMessageConv(text, channel, scope, siteContext, undefined, undefined, carry)');
+    expect(src).toContain('this.handleMessageConv(conv, text, channel, scope, siteContext, undefined, undefined, carry)');
     expect(src).toContain('this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null, null, carry)');
   });
 

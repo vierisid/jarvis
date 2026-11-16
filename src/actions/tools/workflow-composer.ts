@@ -20,6 +20,7 @@ import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
 import { getLLMErrorCode, LLMProviderError, type LLMErrorCode } from "../../llm/provider.ts";
 import { CompositionTimeoutError, withCompositionBudget } from "./composition-budget.ts";
+import { findSecretLiterals, redactSecretLiterals, redactSecretText, secretLiteralFeedback } from "./secret-literals.ts";
 
 /** The hosted provider's authored sentence on a failure; the manager drops any other provider's. */
 const hostedDetailOf = (e: unknown): string | undefined => e instanceof LLMProviderError ? e.hostedDetail : undefined;
@@ -432,11 +433,13 @@ async function composeFlowWithinBudget(
 }
 
 function rememberCandidate(deps: ComposeDeps, context: CompositionContext, raw: string, parsed: unknown, errors: string[]): void {
-  context.previousResponse = raw;
+  // What is kept (the journal, and the repair prompt built from it) never holds
+  // a secret the model wrote: the repair is to use a connection instead.
+  context.previousResponse = redactSecretText(raw);
   // A malformed/prose reply must not erase the last inspectable graph.
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) context.previousGraph = parsed as Record<string, unknown>;
-  context.errors = [...errors];
-  deps.onCandidate?.({ previousResponse: raw, previousGraph: context.previousGraph, errors: context.errors });
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) context.previousGraph = redactSecretLiterals(parsed as Record<string, unknown>);
+  context.errors = errors.map(redactSecretText);
+  deps.onCandidate?.({ previousResponse: context.previousResponse, previousGraph: context.previousGraph, errors: context.errors });
 }
 
 function compositionPrompt(context: CompositionContext, instruction: string): string {
@@ -1699,6 +1702,11 @@ function acceptComposedFlow(
   ...args: Parameters<typeof validateComposedFlow>
 ): ValidationOk | ValidationFail {
   const validation = validateComposedFlow(...args);
+  // A secret typed into a step is refused with the reason, so the model's next
+  // attempt uses a connection. Reported with any structural errors too, so one
+  // repair round can fix both.
+  const secrets = secretLiteralFeedback(findSecretLiterals(args[0]));
+  if (secrets.length) return { ok: false, errors: [...(validation.ok ? [] : validation.errors), ...secrets] };
   if (validation.ok) markComposedScheduleZone(validation.flow.trigger, contract);
   if (!validation.ok || !contract) return validation;
   const { violations, report } = checkJobContract(validation.flow.trigger, contract);
@@ -2182,8 +2190,10 @@ export async function composeFlow(
       };
       return composeFlowWithinBudget({ ...deps, llm }, { ...request, signal });
     }, request.signal, deps.totalTimeoutMs);
-    return !result.ok && result.errors.some(e => e.startsWith('Selected ingredient '))
-      ? { ...result, blocked: true } : result;
+    const safe = result.ok ? result : { ...result, errors: result.errors.map(redactSecretText),
+      ...(result.rawResponse ? { rawResponse: redactSecretText(result.rawResponse) } : {}) };
+    return !safe.ok && safe.errors.some(e => e.startsWith('Selected ingredient '))
+      ? { ...safe, blocked: true } : safe;
   } catch (error) {
     request.signal?.throwIfAborted();
     if (error instanceof CompositionTimeoutError) {
