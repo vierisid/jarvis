@@ -11,7 +11,7 @@ import '../decisions/decisions.css';
 import './host.css';
 
 const labels: Record<DecisionAction, string> = { accept_intent: 'Accept next step', reject_intent: 'Reject next step',
-  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', inspect: 'Inspect' };
+  approve_permission: 'Grant permission', reject_permission: 'Deny permission', execute_once: 'Execute once', close_without_running: 'Close without running', mark_done: 'Mark done', not_doing: 'Not doing this', inspect: 'Inspect' };
 /**
  * A browser permission card's heading names what the call will do, from the
  * subject captured when the card was raised: the element a click lands on and
@@ -44,9 +44,19 @@ export function browserCardTitle(r: Pick<QueuedDecision, 'review'>): { heading: 
 /** Only a card that can still be allowed asks for permission; an allowed, expired or unknown one shows its state. */
 const asksPermission = (row: QueuedDecision) => row.kind === 'permission' && row.supportedActions.includes('approve_permission');
 /** Non-document F12 decisions retain their own action and result contract. */
-export function PendingDecisions({ http, read, enabled, changed, selection, navigate, onCount }: { onCount?(count: number | null): void; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
+/** What a link names that is not in the list: never another request's Grant/Deny. */
+export const REQUEST_GONE = 'This request was already answered or no longer exists.';
+/**
+ * `selection` is the approval a link names. When it is not pending, nothing is selected and `REQUEST_GONE` shows,
+ * unless `elsewhere` says the other decisions list is still loading or holds it.
+ */
+export function PendingDecisions({ http, read, enabled, changed, selection, elsewhere, navigate, onCount }: { onCount?(count: number | null): void; elsewhere?: boolean; selection?: string; navigate?(route: BriefRoute): void; http: HostTransport; read(): Promise<QueuedDecision[]>; enabled: boolean; changed(): void }) {
   const [rows, setRows] = useState<QueuedDecision[] | null>(null), [message, setMessage] = useState(''), [pending, setPending] = useState(false), [epoch, refresh] = useState(0);
-  const [selected, select] = useState<string | null>(null);
+  const [selected, select] = useState<string | null>(null), [chosenFor, setChosenFor] = useState<string>();
+  // A link names its request until the founder picks one on purpose.
+  const named = selection && chosenFor !== selection ? 'approval:' + selection : null;
+  // Once the route drops the id, a later link to the same request names it again.
+  useEffect(() => { if (!selection) setChosenFor(undefined); }, [selection]);
   // null while loading or failed: an unknown permission list is not an empty one.
   // Held runs (a workflow's runs waiting behind its card limit) are a note, not decisions: never counted.
   useEffect(() => { onCount?.(enabled ? rows ? rows.filter(r => r.kind !== 'held').length : null : 0); }, [rows, enabled, onCount]);
@@ -57,7 +67,6 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
       restoreFocus.current = false;
     }
   }, [rows]);
-  useEffect(() => { if (selection) select('approval:' + selection); }, [selection]);
   useEffect(() => {
     let alive = true, reading = false;
     const load = async () => { if (!enabled || reading) return; reading = true;
@@ -72,36 +81,41 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
     if (pending || !enabled || action === 'inspect') return;
     setPending(true);
     try {
-      const intent = action === 'accept_intent' || action === 'reject_intent';
-      const reason = intent ? await inputDialog('Reason for this decision', '', http.signal) : null;
+      const intent = action === 'accept_intent' || action === 'reject_intent' || action === 'mark_done' || action === 'not_doing';
+      const reason = intent ? await inputDialog(action === 'mark_done' ? 'What shows this is done?' : action === 'not_doing' ? 'Why are you not doing this?' : 'Reason for this decision', '', http.signal) : null;
       if (intent && !reason?.trim()) return;
       if (action === 'execute_once' && !await confirmDialog(`Execute this action once: ${row.title}?`)) return;
       const result = await http.json(`/api/brief/decisions/${encodeURIComponent(row.decisionId)}/resolve`, post({ revision: row.revision, action, ...(intent ? { reason } : {}) }));
       if (result.decisionId !== row.decisionId || typeof result.state !== 'string' || typeof result.revision !== 'string') throw Error();
-      setMessage(`Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; changed(); refresh(n => n + 1);
+      setMessage(action === 'mark_done' ? 'Marked done.' : action === 'not_doing' ? 'Dropped. You are not doing this step.' : `Decision updated: ${result.state.replaceAll('_', ' ')}.`); restoreFocus.current = true; release(); changed(); refresh(n => n + 1);
     } catch { setMessage('Outcome is unconfirmed. Recheck the saved decision before making another choice.'); setRows(null); }
     finally { setPending(false); }
   };
   if (!enabled) return null;
+  // Held runs are a note under the list, never a request a link can select or the founder can approve.
   const held = rows?.filter(r => r.kind === 'held') ?? [], asks = rows?.filter(r => r.kind !== 'held');
-  const row = asks?.find(r => r.decisionId === selected) ?? asks?.[0];
+  const row = named ? asks?.find(r => r.decisionId === named) : asks?.find(r => r.decisionId === selected) ?? asks?.[0];
+  const gone = !!named && !!rows && !row && !elsewhere;
+  const release = () => { if (selection) { setChosenFor(selection); navigate?.({ room: 'needs-you', selection: {} }); } };
+  const choose = (id: string) => { select(id); release(); };
   const title = (r: QueuedDecision) => browserCardTitle(r)?.heading ?? r.title;
   const actions = row?.supportedActions.filter(a => a !== 'inspect') ?? [];
-  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once'].includes(a));
+  const primary = actions.find(a => ['approve_permission', 'accept_intent', 'execute_once', 'mark_done'].includes(a));
   return <section className="brief-host-pending" aria-label="Other decisions">
-    {row && <div className="brief-decisions-grid">
+    {gone && <p role="status">{REQUEST_GONE}</p>}
+    {!!asks?.length && <div className="brief-decisions-grid">
       <nav ref={list} className="brief-decision-list" aria-label="Requests to review">
         {asks?.map(item => <button key={item.decisionId} className="brief-decision-choice" type="button"
-          aria-pressed={item.decisionId === row.decisionId} disabled={pending} onClick={() => select(item.decisionId)}>
+          aria-pressed={item.decisionId === row?.decisionId} disabled={pending} onClick={() => choose(item.decisionId)}>
           <span><strong>{title(item)}</strong></span><span className="brief-decision-recipient">{item.review?.workflowName ?? (item.workflow ? 'Workflow request' : 'Jarvis request')}</span>
           <span className="brief-decision-hint">{item.awarenessHeld ? 'Held while screen awareness is off.' : browserCardTitle(item)?.kind ?? (asksPermission(item) ? 'Your permission is needed to continue.' : item.state.replaceAll('_', ' '))}</span>
-          <small>{item.decisionId === row.decisionId ? 'Selected' : 'Review request'}</small>
+          <small>{item.decisionId === row?.decisionId ? 'Selected' : 'Review request'}</small>
         </button>)}
       </nav>
-      <article className="brief-decision-paper" aria-label="Selected request">
+      {row && <article className="brief-decision-paper" aria-label="Selected request">
         <header className="brief-decision-title"><h2 className="brief-type-hero-heading">{title(row)}</h2>
           {browserCardTitle(row) && <p className="brief-decision-subtitle">{browserCardTitle(row)!.kind}</p>}
-          <span className="brief-decision-badge">{actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
+          <span className="brief-decision-badge">{actions.includes('mark_done') ? 'Accepted' : actions.length ? 'Needs your review' : row.state.replaceAll('_', ' ')}</span></header>
         <div className="brief-decision-context"><span>{row.review?.workflowName ?? (row.workflow ? 'Workflow request' : 'Jarvis request')}</span>
           {row.run && navigate && <BriefButton size="sm" onClick={() => navigate({ room: 'workflow-runs', selection: { flowId: row.run!.flowId, versionId: row.run!.versionId, runId: row.run!.runId } })}>Open workflow</BriefButton>}</div>
         <div className="brief-decision-document">
@@ -130,7 +144,7 @@ export function PendingDecisions({ http, read, enabled, changed, selection, navi
           {[...actions.filter(a => a !== primary), ...(primary ? [primary] : [])].map(action => <BriefButton key={action}
             variant={action === primary ? 'primary' : 'ghost'} disabled={pending} onClick={() => void act(row, action)}>{labels[action]}</BriefButton>)}
         </div></footer>
-      </article>
+      </article>}
     </div>}
     {held.map(item => <p key={item.decisionId} className="brief-decision-hint">{item.title}</p>)}
     {message && <p role="status">{message}</p>}{rows === null && <BriefButton disabled={pending} onClick={() => refresh(n => n + 1)}>Recheck decisions</BriefButton>}
