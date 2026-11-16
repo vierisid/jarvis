@@ -11,7 +11,7 @@ import { EmergencyController, setActiveEmergencyController } from '../authority/
 import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
 import type { ToolRegistry } from '../actions/tools/registry';
-import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem } from '../goals/work-items';
+import { createWorkItem, decideWorkItem, checkWorkResult, getWorkItem, setWorkBlocker, NEEDS_YOU_DONE_REF, NEEDS_YOU_NOT_DOING_REF } from '../goals/work-items';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, getFlowVersion } from '../workflows/db/repos/flow-version';
 import { createFlowRun, updateRun, getFlowRun } from '../workflows/db/repos/flow-run';
@@ -68,6 +68,43 @@ test('prior-day work survives reload; intent acceptance is not permission or ver
   expect(queue.get(item.decisionId)).toEqual(accepted);
   expect(getWorkItem(work.id).decision!.id).toBe(id);
   expect((await read()).items).toHaveLength(1);
+});
+
+test('an accepted manual step can be finished or dropped from the queue, and only a written word verifies it', async () => {
+  const done = createWorkItem({ title: 'Send the shortlist' }), dropped = createWorkItem({ title: 'Call the supplier' });
+  for (const w of [done, dropped]) decideWorkItem(w.id, { outcome: 'accepted', reason: 'Yes' });
+  const item = queue.get(`work:${done.id}`);
+  expect(item).toMatchObject({ state: 'ready', workStatus: 'ready' });
+  expect(item.supportedActions).toEqual(['mark_done', 'not_doing', 'inspect']);
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done' })).rejects.toMatchObject({ status: 400 });
+  // Words with nothing visible in them are the caller's to fix, not an unknown outcome (a 503).
+  await expect(queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: '\u200e' })).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
+  expect(getWorkItem(done.id).status).toBe('ready');
+  const finished = await queue.resolve(item.decisionId, { revision: item.revision, action: 'mark_done', reason: 'Sent it to Anna' });
+  expect(finished).toMatchObject({ state: 'verified', workStatus: 'verified', supportedActions: ['inspect'] });
+  expect(getWorkItem(done.id).resultCheck).toMatchObject({ verdict: 'passed', checkedBy: 'user', summary: 'Sent it to Anna',
+    evidence: [{ ref: NEEDS_YOU_DONE_REF, description: 'Sent it to Anna' }] });
+  const other = queue.get(`work:${dropped.id}`);
+  await queue.resolve(other.decisionId, { revision: other.revision, action: 'not_doing', reason: 'Not worth it' });
+  // Not doing it never counts as done, and its ref keeps it apart from a failed attempt.
+  expect(getWorkItem(dropped.id)).toMatchObject({ status: 'failed', resultCheck: { verdict: 'failed', evidence: [{ ref: NEEDS_YOU_NOT_DOING_REF }] } });
+  expect((await read()).items).toHaveLength(0);
+});
+
+test('workflow work and blocked work are not offered a finish action', async () => {
+  const e = effect('succeeded');
+  const flowWork = createWorkItem({ title: 'Runs itself', mode: 'workflow', workflowId: e.flow.id, workflowVersionId: e.version.id });
+  decideWorkItem(flowWork.id, { outcome: 'accepted', reason: 'Yes' });
+  expect(queue.get(`work:${flowWork.id}`).supportedActions).toEqual(['inspect']);
+  const held = createWorkItem({ title: 'Waiting on someone' });
+  decideWorkItem(held.id, { outcome: 'accepted', reason: 'Yes' }); setWorkBlocker(held.id, { reason: 'Waiting' });
+  expect(queue.get(`work:${held.id}`).supportedActions).toEqual(['inspect']);
+  // A finish never settles a permission card or a proposal: the server refuses what it did not offer.
+  const card = queue.get(`approval:${approval('workflow').id}`), proposal = queue.get(`work:${createWorkItem({ title: 'Not yet accepted' }).id}`);
+  for (const target of [card, proposal]) for (const action of ['mark_done', 'not_doing'] as const) {
+    await expect(queue.resolve(target.decisionId, { revision: target.revision, action, reason: 'Done' })).rejects.toMatchObject({ status: 409, code: 'unsupported_action' });
+  }
+  expect(queue.get(card.decisionId).approval?.status).toBe('pending');
 });
 
 test('approval, effect detail and run detail share one identity; no duplicate blocked work card', async () => {

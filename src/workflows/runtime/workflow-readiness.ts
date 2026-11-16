@@ -34,7 +34,7 @@ import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } f
 import { propsToInputSchema, type PieceLookup, type PieceCatalogAction } from './piece-catalog';
 import { canContinuePastStep, canRetryStep, CONTINUE_UNAVAILABLE_MESSAGE, RETRY_UNAVAILABLE_MESSAGE } from './step-admission';
 import { evaluateWorkflowExpression, workflowExpressionReferences } from './safe-expression';
-import { emptyInput, inputIssue, plainInputReason } from './input-validation';
+import { emptyFieldInput, emptyInput, inputIssue, plainInputReason } from './input-validation';
 import { formFields } from './human-input-contract';
 import { BOUNDED_TOOLS } from './tool-capability';
 import { declaredDependencies } from './code-step-manifest';
@@ -637,7 +637,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
             for (const field of schema?.fields ?? []) {
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
-              if (field.required && emptyInput(value)) {
+              if (field.required && emptyFieldInput(field, value)) {
                 // Jarvis pieces name an account reference `<app>Connection` and label it
                 // "<App> account"; both must hold, so a third-party "Ad account" ID stays a fill-in.
                 const account = /Connection$/.test(field.name) ? /^(.+?)\s+account$/i.exec(field.label ?? '') : null;
