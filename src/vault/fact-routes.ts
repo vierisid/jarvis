@@ -1,4 +1,5 @@
-import { correctFact, verifyFact, getFact, FactInputError, factText } from './facts.ts';
+import { correctFact, verifyFact, getFact, FactInputError, factText, FACT_TEXT_LIMIT } from './facts.ts';
+import { refuseVaultText } from './input-limits.ts';
 
 type FactRequest = Request & { params: { id: string } };
 /** Every neighbouring /api route answers through the daemon's CORS-scoped
@@ -19,6 +20,11 @@ async function decide(req: FactRequest, action: 'confirm' | 'correct', json: Fac
       throw new FactInputError('Explicit confirmation and a reason are required');
     }
     const reason = factText(input.reason, 'reason', 1000);
+    // A corrected value is held to the same rule as a new one (POST /api/vault/facts).
+    if (action === 'correct' && typeof input.object === 'string') {
+      const bad = refuseVaultText(input.object, 'object', FACT_TEXT_LIMIT, true);
+      if (bad) throw new FactInputError(bad);
+    }
     const fact = action === 'confirm' ? verifyFact(req.params.id, reason)
       : correctFact(req.params.id, factText(input.object, 'object'), reason);
     return json(fact);
