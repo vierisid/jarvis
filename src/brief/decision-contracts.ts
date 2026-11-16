@@ -7,7 +7,7 @@ export type DecisionReference =
   | { kind: 'work_item'; id: string }
   | { kind: 'effect'; id: string; runId: string; status: EffectStatus };
 export type DecisionAction = 'accept_intent' | 'reject_intent' | 'approve_permission' | 'reject_permission'
-  | 'execute_once' | 'close_without_running' | 'inspect';
+  | 'execute_once' | 'close_without_running' | 'mark_done' | 'not_doing' | 'inspect';
 export interface QueuedDecision extends BriefDecision {
   kind: 'intent' | 'permission' | 'recovery' | 'held';
   /**
@@ -27,6 +27,8 @@ export interface QueuedDecision extends BriefDecision {
     computer?: string; window?: string; values?: Array<{ name: string; value: string; source: 'workflow' | 'run_data' | 'agent' }>;
     /** A governed piece action (email, HTTP request, ...): what it will do, from the frozen effect. `more` counts fields not shown. */
     action?: { fields: Array<{ label: string; value: string; text?: true; cut?: true }>; more: number } };
+  /** Set while approving waits on a switch: a screen-derived request while screen awareness is off (#1314 follow-up). */
+  awarenessHeld?: string;
   placement: number;
   createdAt: number;
 }

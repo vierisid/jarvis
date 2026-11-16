@@ -28,6 +28,7 @@
   background: var(--panel2);
 }
 .obw-bar i { width: 8px; height: 8px; border-radius: 50%; background: var(--rule); }
+.obw-bar .obw-later { margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0.02em; }
 .obw-bar .obw-wt { margin-left: 8px; font-family: var(--mono); font-size: 10px; color: var(--ink3); letter-spacing: 0.02em; }
 
 /* nine-segment progress */
