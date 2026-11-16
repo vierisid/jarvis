@@ -5,13 +5,24 @@ import { walkFlowNodes } from '../workflows/db/flow-graph';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion } from '../workflows/db/repos/flow-version';
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer';
+import { AI_PROVIDER_NEEDED_CODE, AI_PROVIDER_NEEDED_MESSAGE } from './ai-provider-needed';
 import type { ComposeDeps } from '../actions/tools/workflow-composer';
 import { COMPOSITION_LIMITS as limits, type BriefCompositionJob, type BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
+import { LLMProviderError } from '../llm/provider';
+import { briefChatFailure } from './chat-failure';
 import { runWithOrigin } from '../llm/origin';
 import { runWithAdmission } from '../llm/background-budget';
 import { parseCompositionIngredients, type CompositionIngredient } from '../workflows/runtime/composition-ingredients';
 import { CompositionIngredients, saveFlowIngredients } from '../workflows/db/repos/composition-ingredients';
+
+/** The authored provider guidance chat shows (src/brief/chat-failure.ts), or null when the error is not a provider failure. */
+function providerBlocker(error: unknown): BriefCompositionJob['blocker'] {
+  const failure = briefChatFailure(error, false);
+  return failure.code.startsWith('provider_') ? { code: failure.code as `provider_${string}`, message: failure.message, details: [] } : null;
+}
+
+const COULD_NOT_FINISH = 'Jarvis could not finish preparing this workflow. Send the request again.';
 
 export class CompositionRequestError extends Error {
   constructor(message: string, public readonly status = 400) { super(message); }
@@ -48,7 +59,9 @@ export class BriefCompositionProvider {
     this.interruptPending();
   }
 
-  configure(dependencies: () => ComposeDeps): void { this.dependencies = dependencies; }
+  private aiAvailable: (() => boolean) | null = null;
+  /** `aiAvailable` says whether any AI provider is saved; with none, a job is blocked with a plain message instead of failing mid-run. */
+  configure(dependencies: () => ComposeDeps, aiAvailable?: () => boolean): void { this.dependencies = dependencies; this.aiAvailable = aiAvailable ?? null; }
   readiness(): 'ready' | 'unavailable' {
     return !this.stopped && !this.recoveryNeeded && this.dependencies && this.currentDatabase() ? 'ready' : 'unavailable';
   }
@@ -179,6 +192,10 @@ export class BriefCompositionProvider {
       const timer = setTimeout(() => { timedOut = true; active.abort.abort(); }, this.timeoutMs);
       const owns = () => !this.stopped && this.currentDatabase() && this.active === active && this.row(row.id).state === 'running' && !active.abort.signal.aborted;
       try {
+        if (this.aiAvailable && !this.aiAvailable()) {
+          this.finish(row.id, 'blocked', { code: AI_PROVIDER_NEEDED_CODE, message: AI_PROVIDER_NEEDED_MESSAGE, details: [] });
+          continue;
+        }
         const deps = this.dependencies!();
         const selected = new CompositionIngredients(this.db, deps.pieceRegistry, this.projectId).resolve(JSON.parse(row.ingredients));
         if (selected.issues.length) {
@@ -202,9 +219,14 @@ export class BriefCompositionProvider {
         })]);
         if (!owns()) continue;
         if (!result.ok) {
-          this.finish(row.id, result.blocked ? 'blocked' : 'failed', { code: result.errorCode === 'composition_timeout' ? 'timeout' : result.blocked ? 'composition_blocked' : 'composition_failed',
-            message: result.blocked ? 'More information or an available capability is needed.' : 'A valid workflow could not be prepared. Review the saved request and retry explicitly.',
-            // Provider diagnostics and malformed-response excerpts stay in the journal.
+          // A provider failure says what the provider did and where it is fixed, as chat does. Only
+          // authored copy crosses: the provider's own diagnostics stay in the journal.
+          const callCode = !result.blocked && result.errorCode !== 'composition_timeout' ? result.errorCode : undefined;
+          const provider = callCode ? providerBlocker(new LLMProviderError('', callCode, undefined, undefined, result.hostedDetail)) : null;
+          this.finish(row.id, result.blocked ? 'blocked' : 'failed', provider ?? { code: result.errorCode === 'composition_timeout' ? 'timeout' : result.blocked ? 'composition_blocked' : 'composition_failed',
+            // A model call that failed for an unclassified reason says nothing about the request.
+            message: result.blocked ? 'More information or an available capability is needed.' : callCode ? COULD_NOT_FINISH : 'Jarvis could not build a valid workflow from this request. Edit the request above, add more detail, and send it again.',
+            // Malformed-response excerpts stay in the journal.
             details: result.blocked ? result.errors.slice(0, 6).map(message => message.slice(0, 500)) : [] });
         } else if (!walkFlowNodes(result.flow.trigger).some(node => node.type === 'PIECE')) {
           this.finish(row.id, 'blocked', { code: 'insufficient_information', message: 'No workflow actions were prepared. Describe the action, its destination and when it should run.', details: [] });
@@ -222,9 +244,9 @@ export class BriefCompositionProvider {
             this.db.run("UPDATE brief_workflow_composition_jobs SET state = 'draft_ready', flow_id = ?, version_id = ?, updated_at = ? WHERE id = ?", [flow.id, version.id, Date.now(), row.id]);
           }).immediate();
         }
-      } catch {
-        if (!this.stopped && this.currentDatabase() && this.active === active) this.finish(row.id, 'failed', {
-          code: timedOut ? 'timeout' : 'composition_failed', message: timedOut ? 'Composition timed out. Your request is saved; retry explicitly with a new requestId.' : 'Composition could not finish. Your request is saved; check model availability and retry explicitly.', details: [],
+      } catch (error) {
+        if (!this.stopped && this.currentDatabase() && this.active === active) this.finish(row.id, 'failed', (!timedOut && providerBlocker(error)) || {
+          code: timedOut ? 'timeout' : 'composition_failed', message: timedOut ? 'Preparing the workflow took too long. Edit the request above or send it again.' : COULD_NOT_FINISH, details: [],
         });
       } finally {
         clearTimeout(timer); active.abort.abort(); if (this.active === active) this.active = null;

@@ -32,6 +32,7 @@
 
 import type { DevServerManager } from './dev-server-manager.ts';
 import { isServiceWorkerScriptRequest, serviceWorkerKillSwitch } from '../comms/service-worker-kill-switch.ts';
+import { markRelayedResponse } from '../comms/security-headers.ts';
 
 const PROXY_PATH_REGEX = /^\/api\/sites\/([^/]+)\/proxy(\/.*)?$/;
 const COOKIE_NAME = '__proj';
@@ -238,11 +239,12 @@ export class SiteProxy {
       const resp = await fetch(targetUrl, init);
       const respHeaders = returnResponseHeaders(resp.headers);
 
-      return new Response(resp.body, {
+      // The previewed page itself: framing headers only (security-headers.ts).
+      return markRelayedResponse(new Response(resp.body, {
         status: resp.status,
         statusText: resp.statusText,
         headers: respHeaders,
-      });
+      }));
     } catch (err) {
       const rawMsg = err instanceof Error ? err.message : String(err);
       const safeMsg = rawMsg
