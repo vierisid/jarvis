@@ -39,6 +39,7 @@ const CHANNEL_INTENT_ROUTES: ReadonlySet<string> = new Set(['workflow', 'subflow
 import { holdStep, PAUSED_REASON } from './emergency-hold';
 import { isOwnerOnlyNotify } from '../jarvis-pieces/types';
 import { beginEffectDispatch } from './effect-inflight';
+import { applyAgentRung, type AgentRung } from './agent-rung';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -46,6 +47,12 @@ export interface WorkflowAuthorityDependencies {
   onWorkflowApproval?: (request: ApprovalRequest) => void | Promise<void>;
   /** Hears each workflow card the boundary closed, so the dashboard stops offering it (#1152). */
   onWorkflowCardClosed?: (approvalId: string) => void;
+  /**
+   * The rung the owner has put one workflow on, or null when it is not one
+   * of the notch's agents (./agent-rung.ts). Asked for every effect: a rung
+   * changed on the notch holds from the next step on.
+   */
+  agentRung?: (flowId: string) => AgentRung | null;
 }
 /**
  * Who an effect is dispatched for when it is not the workflow itself. A
@@ -230,7 +237,7 @@ export const workflowEffectId = (runId: string, stepName: string, executionPath:
  * category folded, then the above-level substitution. The emergency, run and
  * cancellation fences, and the ratchets a caller adds, are `policy()`'s.
  */
-function judgeEffect(authority: AuthorityEngine, input: EffectInvocation, runId: string) {
+function judgeEffect(authority: AuthorityEngine, input: EffectInvocation, runId: string, rung: AgentRung | null = null) {
   const who = input.principal ?? { agentId: `workflow:${runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
   // Fold first, then ratchet. Every category the effect reaches is judged
   // as the SAME principal -- its level and its merged profile apply to
@@ -252,7 +259,11 @@ function judgeEffect(authority: AuthorityEngine, input: EffectInvocation, runId:
   const decision = input.aboveLevelFloor && aboveLevelMayAsk(decisions, input.aboveLevelGovernedOnly, governed)
     ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
     : folded;
-  return decision;
+  // The owner's own word about this one workflow, when it is one of the
+  // notch's agents and the effect is the workflow's own (not a delegated
+  // sub-agent's, whose gate judged it as someone else). It never turns a
+  // refusal into a yes, and the ratchets in `policy()` are applied after it.
+  return input.principal ? decision : applyAgentRung(decision, rung, categories);
 }
 
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
@@ -357,7 +368,7 @@ export class WorkflowEffectBoundary {
           // Authority is asked again too: an override, a context rule or an
           // un-governed category added since the first dispatch stops the
           // retry, as the checkpoint would have stopped the first one.
-          const current = judgeEffect(authority, input, effect.runId);
+          const current = judgeEffect(authority, input, effect.runId, this.deps.agentRung?.(effect.flowId) ?? null);
           if (!current.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${current.reason}`);
           if ((current.requiresApproval || input.confirmation || input.approvalRequired) && !effect.approvalId) {
             throw new PolicyRefusal('APPROVAL_REQUIRED', 'Workflow Authority now requires approval; effect was not dispatched');
@@ -489,7 +500,7 @@ export class WorkflowEffectBoundary {
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
-      const decision = judgeEffect(authority, input, record.runId);
+      const decision = judgeEffect(authority, input, record.runId, this.deps.agentRung?.(record.flowId) ?? null);
       judgedBy = decision;
       if (!decision.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever

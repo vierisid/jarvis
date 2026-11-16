@@ -49,6 +49,7 @@ import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatch
 import { attachNotchJobs, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
 import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from './standing.ts';
+import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 
 export interface NotchRealDeps {
@@ -141,6 +142,12 @@ export interface NotchRealDeps {
    */
   standing?: { chaseWaitMs?: number; noClock?: boolean };
   /**
+   * Agents (pass 11): a sentence becomes a workflow that is switched on and
+   * asks first, with its own name and its own rung of trust. `workflows` is
+   * the product's composer and the switches of a workflow. Needs `asks`.
+   */
+  agents?: { db: Database; workflows: NotchAgentWorkflows; noClock?: boolean };
+  /**
    * From anywhere, and the shape of the day (pass 8). With this given: a
    * line nobody asked for comes up only in a still moment and never in the
    * person's quiet hours; a meeting is said ten minutes before; things are
@@ -226,6 +233,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let put: NotchPutter | null = null;
   let standing: NotchStanding | null = null;
   let standingTimer: ReturnType<typeof setInterval> | null = null;
+  let agents: NotchAgents | null = null;
+  let agentsTimer: ReturnType<typeof setInterval> | null = null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
@@ -319,6 +328,18 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       jobTimers.push(every);
     }
   }
+  if (deps.agents && deps.asks) {
+    const emergency = deps.emergency;
+    const made = attachNotchAgents({
+      inbox, db: deps.agents.db, workflows: deps.agents.workflows, log,
+      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+    });
+    agents = made;
+    if (!deps.agents.noClock) {
+      agentsTimer = setInterval(() => { try { made.tick(); } catch (error) { log(`[notch] the agents' runs could not be looked at: ${error instanceof Error ? error.message : String(error)}`); } }, NOTCH_AGENT_TICK_MS);
+      agentsTimer.unref?.();
+    }
+  }
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -331,10 +352,15 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // "Watch me", "done", "run it on nine rows", "undo that": the notch does these itself (pass 10).
       // And "put it here as a table", with a thing held.
       // "Tell me when Sam replies", "get Sam's answer by Friday": an eye, a chase (pass 11).
-      side: (text) => put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? null,
+      // "Every Monday send Sam the numbers": an agent. An eye and a chase are asked before it,
+      // because "tell me when" and "get Sam's answer" are theirs.
+      side: (text) => put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text) ?? null,
       standing: {
-        rows: () => standing?.rows() ?? [],
-        open: async (stage, row) => { if (row === 'eyes' || row === 'chases') await standing?.open(stage, row); },
+        rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? [])]; },
+        open: async (stage, row) => {
+          if (row === 'agents') await agents?.open(stage);
+          else if (row === 'eyes' || row === 'chases') await standing?.open(stage, row);
+        },
       },
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
@@ -527,6 +553,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       put?.stop();
       standing?.stop();
       if (standingTimer) clearInterval(standingTimer);
+      agents?.stop();
+      if (agentsTimer) clearInterval(agentsTimer);
       for (const timer of jobTimers) clearInterval(timer);
       for (const timer of dayTimers) clearInterval(timer);
     },
