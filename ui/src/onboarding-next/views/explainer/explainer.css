@@ -49,6 +49,7 @@
 .on-explainer__arrow { position: absolute; inset-inline-end: -22px; inset-block-start: 66px; inline-size: 20px; text-align: center; color: var(--oe-muted); font-size: 19px; line-height: 27px; }
 .on-explainer__alternative { max-inline-size: 660px; margin: 37px auto 0; padding: 16px 24px 21px; border-radius: 14px 3px 14px 14px; background: var(--oe-panel); }
 .on-explainer__alternative h2 { margin: 0 0 4px; font-size: 18px; line-height: 25px; font-weight: 600; }
+.on-explainer__alternative .on-explainer__hint { margin-block-start: 8px; font-size: 14px; line-height: 20px; }
 .on-explainer__alternative p { margin: 0; color: var(--oe-muted); font-size: 16px; line-height: 22px; }
 .on-explainer__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 24px; max-inline-size: 660px; margin: 47px auto 0; }
 .on-explainer .on-explainer__control {
