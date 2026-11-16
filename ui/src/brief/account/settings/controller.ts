@@ -1,5 +1,6 @@
 import {
   readSettings,
+  type AiProvider,
   type SettingsValue,
   type SettingsPort,
   type SettingsDestination,
@@ -9,6 +10,8 @@ export interface SettingsState {
   availability:
     "loading" | "ready" | "stale" | "error" | "unsupported" | "unavailable";
   base: SettingsValue | null;
+  /** null until read; "error" when the AI settings could not be read. */
+  ai: AiProvider | "error" | null;
   draft: string | null;
   phase: "clean" | "saving" | "saved" | "unknown" | "conflict" | "error";
   reading: boolean;
@@ -21,6 +24,7 @@ export interface SettingsState {
 const initial = (): SettingsState => ({
   availability: "loading",
   base: null,
+  ai: null,
   draft: null,
   phase: "clean",
   reading: false,
@@ -101,7 +105,8 @@ export class SettingsController {
     this.scope++;
     this.attempted = null;
     this.savedNotice = null;
-    this.publish({ ...initial(), availability });
+    // Voice settings being off says nothing about the AI provider row, which reads separately.
+    this.publish({ ...initial(), ai: this.state.ai, availability });
   }
   editable = () =>
     this.alive &&
@@ -124,6 +129,14 @@ export class SettingsController {
       return;
     const op = this.operation();
     this.publish({ reading: true, discarding: discard });
+    // The AI provider row is independent: its failure never blocks the voice settings.
+    void this.port.readAiProvider(op.signal).then(
+      (ai) => {
+        if (!op.signal.aborted && this.alive && this.access)
+          this.publish({ ai: ai.state === "ready" ? ai.data : "error" });
+      },
+      () => {},
+    );
     try {
       const result = await this.port.read(op.signal);
       if (!op.current()) return;

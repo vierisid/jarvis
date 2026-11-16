@@ -1,20 +1,21 @@
 import React from "react";
 import { ArrowRight } from "lucide-react";
 import type { BriefRoute } from "../../contracts";
-import { outcomeView, type OutcomeBinding } from "../outcomes/model";
+import type { BriefViewPort } from "../../contracts";
 import "./activity.css";
 
 export interface RecentActivityItem {
   activityId: string;
   title: string;
-  /** Owner-formatted in the outcome window's timezone; no client freshness invention. */
+  /** Owner-formatted time label; no client freshness invention. */
   timeLabel: string;
   occurredAt: number;
   detail: string;
   destination?: BriefRoute;
 }
-export function RecentActivity({ mode, binding, onOpen }: { mode: "live" | "preview"; binding?: OutcomeBinding<readonly RecentActivityItem[]>; onOpen?: (destination: BriefRoute) => void }) {
-  const { state } = outcomeView(mode, binding);
+export function RecentActivity({ mode, binding, onOpen }: { mode: "live" | "preview"; binding?: BriefViewPort<readonly RecentActivityItem[]>; onOpen?: (destination: BriefRoute) => void }) {
+  // Workflow runs feed this list, so it does not wait on the outcome evidence capabilities.
+  const state = binding?.source === (mode === "live" ? "live" : "fixture") ? binding.state : { status: "unavailable" as const, reason: "Activity is not available yet." };
   const rows = state.status === "ready" || state.status === "stale" ? state.data : null;
   return <section className="brief-recent-activity brief-surface" aria-label="Recent activity" data-state={state.status}>
     <h2 className="brief-type-body-emphasis">Recent activity</h2>
@@ -24,6 +25,6 @@ export function RecentActivity({ mode, binding, onOpen }: { mode: "live" | "prev
       return <li key={item.activityId} data-activity-id={item.activityId}>{item.destination && onOpen
         ? <button className="brief-activity-row" onClick={() => onOpen(item.destination!)}>{content}<ArrowRight size={14} aria-hidden="true" /></button>
         : <div className="brief-activity-row">{content}</div>}</li>;
-    })}</ul> : <p className="brief-type-body brief-secondary" role="status">{state.status === "loading" ? "Loading recent activity…" : state.status === "empty" || rows ? "No recent activity yet." : "Activity is not available yet."}</p>}
+    })}</ul> : <p className="brief-type-body brief-secondary" role="status">{state.status === "loading" ? "Loading recent activity…" : state.status === "empty" || rows ? "No workflow has run yet." : "Activity is not available yet."}</p>}
   </section>;
 }
