@@ -27,7 +27,22 @@
  */
 
 import { afterAll } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { assertNoLeakedEngines } from "./workflows/runner/engine-runtime/spawn";
+
+// Run logs, workflow files and CODE-step trees of a test run go to a folder of
+// its own, never the developer's real ~/.jarvis (hundreds of run-log .bin files
+// had piled up there). A test that sets the variable itself keeps its value.
+let scratchWorkflowData: string | null = null;
+if (!process.env.JARVIS_WORKFLOW_DATA_DIR) {
+  scratchWorkflowData = mkdtempSync(join(tmpdir(), "jarvis-test-workflow-data-"));
+  process.env.JARVIS_WORKFLOW_DATA_DIR = scratchWorkflowData;
+}
+afterAll(() => {
+  if (scratchWorkflowData) rmSync(scratchWorkflowData, { recursive: true, force: true });
+});
 
 afterAll(async () => {
   await assertNoLeakedEngines();

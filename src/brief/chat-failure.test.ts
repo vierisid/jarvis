@@ -63,3 +63,11 @@ test('a turn Jarvis stopped for looping on tools says so and asks to check the s
   expect(failure.message).toContain('stopped after too many steps');
   expect(failure.message).not.toContain('provider');
 });
+
+test('a provider that stopped answering is not described as unreachable', () => {
+  const failure = briefChatFailure(new LLMProviderError("Provider 'p' failed after 1 attempt: LLM stream from p sent no data for 90s (timed out)", 'network'), false);
+  expect(failure.code).toBe('provider_network');
+  expect(failure.message).toContain('did not answer in time');
+  expect(failure.message).not.toContain('could not be reached');
+  expect(briefChatFailure(new LLMProviderError('connect ECONNREFUSED', 'network'), false).message).toContain('could not be reached');
+});

@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus } from './provider.ts';
+import { classifyHttpStatus, LOCAL_STREAM_FIRST_DATA_MS } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 type OllamaToolCall = {
@@ -92,6 +92,8 @@ export class OllamaProvider implements LLMProvider {
   name = 'ollama';
   /** `llama3` is only a guess: Ollama serves whatever the operator pulled. */
   readonly placeholderDefaultModel = true;
+  /** Loading a model and reading the prompt sends nothing; slow hardware takes minutes. */
+  readonly streamFirstDataMs = LOCAL_STREAM_FIRST_DATA_MS;
   private baseUrl: string;
   private defaultModel: string;
 
@@ -207,6 +209,7 @@ export class OllamaProvider implements LLMProvider {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        options.onStreamActivity?.();
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');

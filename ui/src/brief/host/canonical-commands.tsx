@@ -140,6 +140,12 @@ export function PendingDecisions({ http, read, enabled, changed, selection, else
             <dl className="brief-decision-values">{row.review.values.map(v => <React.Fragment key={v.name}>
               <dt>{v.name}{v.source === 'run_data' ? ' (from run data)' : v.source === 'agent' ? ' (chosen by the agent)' : ''}</dt>
               <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v.value}</dd></React.Fragment>)}</dl></>}
+          {row.review?.action && row.review.action.fields.length > 0 && <><p><strong>What will happen</strong></p>
+            {/* Values are the run's text: each in its own field, a body framed as quoted text, so none can read as the card's own words. */}
+            <dl className="brief-decision-values brief-decision-action">{row.review.action.fields.map((f, i) => <React.Fragment key={`${f.label}-${i}`}>
+              <dt>{f.label}{f.cut ? (f.text ? ' (beginning only)' : ' (shortened)') : ''}</dt>
+              <dd className={f.text ? 'brief-decision-quoted' : undefined} style={{ whiteSpace: f.text ? 'pre-wrap' : undefined, overflowWrap: 'anywhere' }}>{f.value}</dd></React.Fragment>)}</dl>
+            {row.review.action.more > 0 && <p>{row.review.action.more} more {row.review.action.more === 1 ? 'field is' : 'fields are'} not shown.</p>}</>}
           {row.awarenessHeld && <p role="note"><strong>{row.awarenessHeld}</strong></p>}
           <p>{asksPermission(row) ? 'Jarvis needs your permission for this action before it can continue.' : plainDecisionTitle(row)}</p>
           {browserCardTitle(row) && <p>{row.title}</p>}

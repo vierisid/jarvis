@@ -829,6 +829,25 @@ describe("workflow API: versions", () => {
     expect(body.flow.status).toBe("ENABLED");
     expect(body.flow.publishedVersionId).toBe(versionId);
     expect(body.version.state).toBe("LOCKED");
+    // A workflow with nothing secret in it carries no warnings key at all.
+    expect(body.warnings).toBeUndefined();
+  });
+
+  test("POST .../publish still publishes a workflow with a key typed into a step, and says so without repeating the key", async () => {
+    const canary = "sk-qa4-canary-SECRET-9911";
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const flowId = createFlow().id;
+    createDraftVersion({ flowId, displayName: "v1", trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "notify", type: "PIECE", settings: { pieceName: "jarvis-notify", actionName: "notify", input: { message: `token ${canary}` } } } } as unknown as Record<string, unknown> });
+    const publish = routes["/api/workflows/:id/publish"]?.POST;
+    const { status, body } = await callJson(publish, reqWithParams("POST", `http://x/api/workflows/${flowId}/publish`, { id: flowId }));
+    expect(status).toBe(200);
+    expect(body.flow.status).toBe("ENABLED");
+    expect(body.warnings).toHaveLength(1);
+    expect(body.warnings[0]).toContain('Step "notify"');
+    expect(body.warnings[0]).toContain("connection");
+    expect(JSON.stringify(body.warnings)).not.toContain(canary);
   });
 });
 
@@ -1044,6 +1063,23 @@ describe("workflow API: runs", () => {
     const scoped = createWorkflowRoutes({ callerProjectId: () => "proj_other_recent" });
     const foreign = await callJson(scoped["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs"));
     expect(foreign).toEqual({ status: 200, body: { items: [] } });
+  });
+
+  test("Recently run names a workflow as every other list does: the published name wins over a draft's", async () => {
+    const { createFlow, setPublishedVersion } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const published = createDraftVersion({ flowId: flow.id, displayName: "Weekly digest",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    lockVersion(published.id);
+    setPublishedVersion(flow.id, published.id);
+    createDraftVersion({ flowId: flow.id, displayName: "Half-edited draft",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: published.id, status: "SUCCEEDED" });
+    const { body } = await callJson(routes["/api/workflows/recent-runs"]?.GET, plainReq("GET", "http://x/api/workflows/recent-runs?limit=20"));
+    const row = (body as { items: { id: string; flowId: string; displayName: string }[] }).items.find(i => i.flowId === flow.id);
+    expect(row).toMatchObject({ id: run.id, displayName: "Weekly digest" });
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
