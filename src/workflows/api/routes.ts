@@ -55,6 +55,7 @@ import {
   parseFlowMetadata,
   setFlowCodeStepsEnabled,
   updateFlowMetadata,
+  updateFlowTimeSavedPerRun,
   updateFlowStatus,
   type FlowStatus,
 } from "../db/repos/flow";
@@ -93,7 +94,7 @@ import {
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { countQueued, enqueue } from "../db/repos/job-queue";
+import { countQueued, countQueuedOwnerRuns, enqueue } from "../db/repos/job-queue";
 import { listChildRuns } from "../db/repos/child-run";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
 import { startWorkItemRun } from "../../goals/workflow-bridge";
@@ -128,6 +129,7 @@ import type { PieceLookup } from "../runtime/piece-catalog";
 import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
+import { estimateMinutesPerRun, MAX_TIME_SAVED_PER_RUN } from "../time-saved-estimate";
 import { withScheduleZoneDefault } from "../runner/triggers/schedule-zone";
 import {
   installPiece,
@@ -251,6 +253,15 @@ export const WAITPOINT_RESUME_MAX_BODY_BYTES = 1_000_000;
  * where it gets one.
  */
 export const RUN_TRIGGERED_BY_MAX_CHARS = 200;
+
+/**
+ * Most runs the owner may have waiting to start in a project before
+ * `POST /:id/run` refuses another (429, Retry-After). Counts only runs the
+ * owner started (`countQueuedOwnerRuns`), never trigger runs: webhook ingress
+ * is refused at its own cap, and a sender filling the queue must not lock the
+ * owner out of running a workflow by hand.
+ */
+export const MAX_QUEUED_MANUAL_RUNS = 500;
 
 function isRunEnvironment(value: unknown): value is RunEnvironment {
   return value === "PRODUCTION" || value === "TESTING";
@@ -1736,6 +1747,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const body = read.body as {
             status?: FlowStatus;
             metadata?: Record<string, unknown> | null;
+            timeSavedPerRun?: number | null;
           };
           // BOTH fields are validated before EITHER is written. They used to be
           // checked one at a time as they were applied, so a request carrying a
@@ -1746,9 +1758,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
+          if (body.timeSavedPerRun !== undefined && body.timeSavedPerRun !== null
+            && (!Number.isInteger(body.timeSavedPerRun) || body.timeSavedPerRun < 0 || body.timeSavedPerRun > MAX_TIME_SAVED_PER_RUN)) {
+            return err(`timeSavedPerRun must be a whole number of minutes from 0 to ${MAX_TIME_SAVED_PER_RUN}, or null`);
+          }
           // Turning a workflow off stops its queued and waiting runs (Q-06).
           if (body.status !== undefined && updateFlowStatus(id, body.status, { requireSteps: true }).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
+          if (body.timeSavedPerRun !== undefined) updateFlowTimeSavedPerRun(id, body.timeSavedPerRun);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
@@ -2283,6 +2300,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err(`triggeredBy must be a string of at most ${RUN_TRIGGERED_BY_MAX_CHARS} characters`, 400);
           }
+          // Manual starts are capped: past this many of the owner's own runs
+          // waiting in this project, a request is refused rather than queued
+          // behind them for minutes. Trigger runs are not counted, so a
+          // webhook backlog never refuses a run started by hand. Before any
+          // run row exists, so nothing is left to clean up.
+          let waiting = 0;
+          try { waiting = countQueuedOwnerRuns(callerProject(req)); } catch { /* a probe failure must not stop the owner's run */ }
+          if (waiting >= MAX_QUEUED_MANUAL_RUNS) {
+            return new Response(JSON.stringify({
+              error: `${waiting} runs you started are still waiting to start. Try again once some of them have run.`,
+            }), {
+              status: 429,
+              headers: { "Content-Type": "application/json", "Retry-After": "30" },
+            });
+          }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
           //     is iterating on step definitions + sample data in the editor,
@@ -2689,6 +2721,10 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
     publishedVersionId: row.published_version_id,
     displayName: version?.displayName ?? null,
     metadata: parseFlowMetadata(row),
+    // What Today's time saved counts per successful run: the owner's number
+    // when set, else this estimate from the steps of the version shown here.
+    timeSavedPerRun: row.time_saved_per_run,
+    estimatedTimeSavedPerRun: version ? estimateMinutesPerRun(version.trigger) : null,
     // Surfaced so the dashboard can show that this flow may run CODE and,
     // when `grantedBy` is `upgrade`, that the permission was inherited from a
     // flow that already ran one rather than chosen. A grant nobody can see is

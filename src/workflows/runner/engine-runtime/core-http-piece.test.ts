@@ -14,6 +14,11 @@ import { resolve } from 'node:path';
 import { ENGINE_BUILD_PATHS } from './build';
 import { buildPiece } from './build-pieces';
 import { EGRESS_POLICY_ENV, refusedBeforeSend, withReadHosts } from '../../runtime/http-egress';
+import { closeWorkflowDb, initWorkflowDb } from '../../db';
+import { createFlow } from '../../db/repos/flow';
+import { assertVersionReady, configureWorkflowReadiness } from '../../db/repos/flow-readiness';
+import { createDraftVersion, type FlowTriggerNode } from '../../db/repos/flow-version';
+import { metadataToCatalogEntry, PieceCatalog } from '../../runtime/piece-catalog';
 
 const pieceDir = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/http');
 const bundle = resolve(pieceDir, 'dist/src/index.js');
@@ -112,6 +117,31 @@ describe.skipIf(skip)('the compiled core HTTP piece', () => {
     await expect(run({ propsValue: props('GET', { url: 'http://nas.internal/status' }) })).rejects.toThrow(/reach only public addresses/);
     // Refused once, not retried.
     expect(lookups).toEqual(['nas.internal']);
+  });
+
+  test('a plain GET with only a method and a URL is ready, and runs without headers or query params', async () => {
+    const mod = require(bundle) as { http: { getAction(name: string): { props: Record<string, { required?: boolean }> } | undefined } };
+    const sendRequest = mod.http.getAction('send_request')!;
+    expect(sendRequest.props.headers!.required).toBe(false);
+    expect(sendRequest.props.queryParams!.required).toBe(false);
+    initWorkflowDb(':memory:');
+    try {
+      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry({
+        name: '@activepieces/piece-http', displayName: 'HTTP', description: '',
+        actions: { send_request: { name: 'send_request', displayName: 'Send HTTP request', description: '', props: sendRequest.props } },
+      })]) });
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'get', trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: {
+        name: 'step_1', type: 'PIECE',
+        settings: { pieceName: '@activepieces/piece-http', actionName: 'send_request', input: { method: 'GET', url: 'https://api.example.com/items', authType: 'NONE' } },
+      } } as FlowTriggerNode });
+      expect(() => assertVersionReady(flow.id, version.id)).not.toThrow();
+    } finally { closeWorkflowDb(); }
+    failingLookup();
+    const { headers: _h, queryParams: _q, ...bare } = props('GET');
+    const failure = await run({ propsValue: bare }).catch((error: unknown) => error);
+    expect(lookups.length).toBeGreaterThan(0);
+    expect(String((failure as Error).message)).not.toMatch(/undefined|TypeError/);
   });
 
   test('a proxy is refused rather than used without the check', async () => {

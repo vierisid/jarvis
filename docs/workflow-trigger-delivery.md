@@ -138,6 +138,12 @@ data (to the dashboard and to the assistant) show them by the same rule as
 `[redacted]` when read, and also hide the same values where a later step of
 that run repeated them (`runAsShown` in `runtime/step-credentials.ts`).
 
+A signing secret must be text. Saving a secret that is a number, boolean, list
+or object, or the timestamp setting on a webhook that had no secret, is refused
+with a plain message, and so is publishing one written some other way. Clearing
+a secret (removing it, or leaving it empty) makes the webhook unsigned, as the
+editor says.
+
 A repeat answers 200 with `outcome: "duplicate"` and the original `runId`;
 nothing runs again. Identical unsigned bodies without an id are separate
 deliveries: pings and button presses repeat on purpose. A provider's manual
@@ -153,6 +159,8 @@ work again, rerun it in Jarvis.
 | Workflow changed or gone | 404 `Webhook not found`, as for an id that never existed |
 | Queue full | 503 with `Retry-After` |
 | 100 steps of the workflow already waiting behind its approval cards | 503 with `Retry-After: 60`, recorded as skipped |
+| Signing secret unusable (not text, or the timestamp setting with no secret) | 401 for every request, recorded as blocked in the ledger; never treated as unsigned |
+| JSON body nested more than 100 levels deep (counted on the text, before it is parsed) | 400, recorded as blocked in the ledger; nothing runs |
 | Not recorded | 500 |
 
 ### What the workflow receives
@@ -306,6 +314,23 @@ Delayed means the work began more than a minute after it was due: handled late,
 or waiting in the queue. `GET /api/workflow-runs/:runId` includes the `fire`
 that started the run, and `manage_workflow get` returns the workflow's
 `recentDeliveries`.
+
+## Queue order and caps
+
+The queue takes the oldest job first, with each step of priority counting as
+ten minutes of waiting. A scheduled run and an approval or timer continuation
+queue at priority 1; webhook, manual and other runs at 0. A schedule's tick
+therefore goes ahead of a backlog of webhook or manual runs queued in the last
+ten minutes instead of being skipped behind it, while a run that has waited
+longer still goes first, so schedules and continuations cannot hold other runs
+back without end. Jobs queued before this order existed are all at 0 and keep
+their order.
+
+Manual starts (`POST /api/workflows/:id/run`) are refused with a 429,
+`Retry-After: 30` and a plain message once 500 runs the owner started in the
+project are waiting to start. Trigger runs do not count, so a webhook backlog
+(capped at 500 waiting jobs on its own) never refuses a run started by hand.
+Nothing is created for a refused start.
 
 ## Limits
 
