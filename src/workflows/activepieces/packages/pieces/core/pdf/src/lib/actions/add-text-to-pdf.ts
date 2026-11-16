@@ -1,6 +1,15 @@
 import { createAction, Property } from '@activepieces/pieces-framework';
 import { PDFDocument, rgb, StandardFonts, PDFFont, degrees } from 'pdf-lib';
 
+// === JARVIS PATCH (F-18): characters the PDF font cannot show ===
+// Up to five of them, on one line: a control, format or combining character
+// (a line break, a bidi override, an emoji joiner) is shown as its U+ code.
+function describeCharacters(chars: string[]): string {
+  const shown = chars.slice(0, 5).map((ch) => /^[\p{L}\p{N}\p{P}\p{S}]$/u.test(ch) ? `"${ch}"` : `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`);
+  return chars.length > 5 ? `${shown.join(', ')} and ${chars.length - 5} more` : shown.join(', ');
+}
+// === END JARVIS PATCH ===
+
 const fontOptions = Object.entries(StandardFonts).map(([key, value]) => {
   const formattedLabel = key.replace(/([A-Z])/g, ' $1').trim();
   return { label: formattedLabel, value: value };
@@ -57,7 +66,8 @@ export const addTextToPdf = createAction({
         }),
         fontSize: Property.Number({
           displayName: 'Font Size',
-          required: true,
+          // Jarvis (F-18): optional; 11 when left empty (see run).
+          required: false,
           defaultValue: 11,
         }),
         lineSpacing: Property.Number({
@@ -87,7 +97,7 @@ export const addTextToPdf = createAction({
         distanceFromLeft: number;
         distanceFromTop: number;
         font: StandardFonts;
-        fontSize: number;
+        fontSize?: number;
         lineSpacing?: number;
       }>;
 
@@ -98,10 +108,14 @@ export const addTextToPdf = createAction({
       const embeddedFonts: Record<string, PDFFont> = {};
 
       for (const item of textItems) {
-				const cleanText = item.text.replace(/\r\n|\r/g, '\n');
+				// Jarvis (F-18): an accent typed as a separate mark is joined to its letter, and a tab becomes spaces.
+				const cleanText = item.text.normalize('NFC').replace(/\r\n|\r/g, '\n').replace(/\t/g, '    ');
         const lines = cleanText.split('\n');
-        const cleanTextSample = cleanText.substring(0, 15);
+        // Jarvis (F-18): the sample quoted in an error stays on one line and never splits a character.
+        const cleanTextSample = Array.from(cleanText).slice(0, 15).join('').replace(/[\p{C}\p{Zl}\p{Zp}]/gu, ' ');
         const lineSpacing = item.lineSpacing ?? 1.15;
+        // Jarvis (F-18): the Font Size is not required; it is 11 when left empty, as its default says.
+        const fontSize = item.fontSize ?? 11;
 
         if (lineSpacing <= 0) {
           throw new Error(
@@ -109,13 +123,13 @@ export const addTextToPdf = createAction({
           );
         }
 
-				if (item.fontSize <= 0) {
+				if (fontSize <= 0) {
 					throw new Error(
-						`Font Size must be a positive number greater than 0. You provided ${item.fontSize} for text "${cleanTextSample}..."`
+						`Font Size must be a positive number greater than 0. You provided ${fontSize} for text "${cleanTextSample}..."`
 					);
 				}
 
-        const actualLineHeight = item.fontSize * lineSpacing;
+        const actualLineHeight = fontSize * lineSpacing;
 
         const fontEnum = item.font;
         if (!embeddedFonts[fontEnum]) {
@@ -123,8 +137,21 @@ export const addTextToPdf = createAction({
         }
         const font = embeddedFonts[fontEnum];
 
+        // Jarvis (F-18): the built-in PDF fonts show Western European text only
+        // (Symbol and ZapfDingbats: their own symbols only).
+        const supported = new Set(font.getCharacterSet());
+        const unsupported = Array.from(new Set(Array.from(cleanText.replace(/\n/g, '')).filter((ch) => !supported.has(ch.codePointAt(0)!))));
+        if (unsupported.length > 0) {
+          const scope = fontEnum === StandardFonts.Symbol || fontEnum === StandardFonts.ZapfDingbats
+            ? 'it has its own symbols only, so pick another font for ordinary text'
+            : 'it shows Western European text only, not emoji, Chinese, Japanese or other scripts';
+          throw new Error(
+            `The ${fontEnum} PDF font cannot show some characters (found ${describeCharacters(unsupported)}) in "${cleanTextSample}...": ${scope}. Remove them.`
+          );
+        }
+
         const maxTextWidth = Math.max(
-          ...lines.map(line => font.widthOfTextAtSize(line, item.fontSize))
+          ...lines.map(line => font.widthOfTextAtSize(line, fontSize))
         );
 
         const targetPages = [];
@@ -234,7 +261,7 @@ export const addTextToPdf = createAction({
           targetPage.drawText(cleanText, {
             x: iX,
             y: iY,
-            size: item.fontSize,
+            size: fontSize,
             font: font,
             color: rgb(0, 0, 0),
             lineHeight: actualLineHeight,
