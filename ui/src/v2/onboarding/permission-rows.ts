@@ -231,8 +231,8 @@ export function unavailableCopy(reason: PermUnavailable): { title: string; body:
   switch (reason) {
     case "offline":
       return {
-        title: "Jarvis isn't running on this machine right now.",
-        body: "The desktop app has to be open for permissions to be read or granted. Start it and this page will catch up on its own.",
+        title: "The desktop app isn't connected right now.",
+        body: "It is optional for now. Jarvis works from this page without it, and you can connect it later. Open it any time and this page will catch up on its own.",
       };
     case "refused":
       return {
@@ -262,8 +262,8 @@ export function unavailableCopy(reason: PermUnavailable): { title: string; body:
     case "no_sidecar":
     default:
       return {
-        title: "Nothing to set up from here.",
-        body: "This page isn't talking to a Jarvis desktop app, so there's nothing on this computer to grant. Install or open Jarvis on the machine you want it to act on.",
+        title: "The desktop app is optional for now.",
+        body: "This page isn't connected to a Jarvis desktop app, so there's nothing on this computer to grant yet. You can connect it later, on the machine you want Jarvis to act on.",
       };
   }
 }

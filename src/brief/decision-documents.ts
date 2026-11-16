@@ -154,7 +154,9 @@ export class DecisionDocuments {
         const target = governedPieceToolDefinition(resolved).workflowEffect!.target(args);
         const next = this.approvals.createRequest({ agentId: old.agent_id, agentName: old.agent_name,
           toolName: old.tool_name, toolArguments: args, actionCategory: old.action_category, urgency: old.urgency,
-          reason: old.reason, context: JSON.stringify({ ...JSON.parse(old.context), target }), executionMode: 'workflow' });
+          reason: old.reason, context: JSON.stringify({ ...JSON.parse(old.context), target }), executionMode: 'workflow',
+          // A revision keeps where its request came from (#1314 follow-up).
+          provenance: old.provenance ?? null });
         row.generation++;
         let bindingUpdate: Record<string, unknown> = {};
         if (this.factBindings) {

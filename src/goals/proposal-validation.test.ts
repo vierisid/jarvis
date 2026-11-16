@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NLGoalBuilder } from './nl-builder.ts';
+import { validateProposal } from './proposal.ts';
+import { GoalValidationError } from './validation.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import * as vault from '../vault/goals.ts';
 import type { GoalLevel } from './types.ts';
@@ -165,4 +167,20 @@ test('valid hierarchy, text and exact UTC deadlines survive database reopen', ()
       ['Auth', 'milestone', Date.parse(p.deadline_reference_at) + 30 * 86400000],
     ]);
   } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a proposal title over 200 characters is refused when the proposal is read, before anyone confirms it', () => {
+  for (const [path, mutate] of [
+    ['objective.title', (p: any) => p.objective.title = 'x'.repeat(201)],
+    ['key_results[0].title', (p: any) => p.key_results[0].title = 'x'.repeat(201)],
+    ['milestones[0].title', (p: any) => p.milestones[0].title = 'x'.repeat(201)],
+  ] as const) {
+    const p = proposal(); mutate(p);
+    let failure: unknown;
+    try { validateProposal(p); } catch (e) { failure = e; }
+    expect(failure).toBeInstanceOf(GoalValidationError);
+    expect((failure as GoalValidationError).path).toBe(path);
+  }
+  const p = proposal(); p.key_results[0].title = 'x'.repeat(200);
+  expect(() => validateProposal(p)).not.toThrow();
 });
