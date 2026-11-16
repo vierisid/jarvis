@@ -682,7 +682,10 @@ run response). It sends no request.
 - Activation adds no gate of its own and bypasses none (see the `WorkflowManagementPort` doc): enabling
   goes through the person path, which pins connections and the computer (Q-05; a changed binding shows
   as the readiness blocker, and enabling again accepts it), and the readiness and contract checks still
-  refuse. Turning a workflow off stops its queued and waiting runs (Q-06); the list says so above the
+  refuse. A blocked workflow says once, in plain words, the first step and what is missing (with a count
+  of the rest) and offers `readiness.fix`: Connected workspace for a missing account, the workflow for
+  anything else. The reason is built from the readiness issues, never from a second check. Turning a
+  workflow off stops its queued and waiting runs (Q-06); the list says so above the
   rows and in the result.
 - Opt-in `workflowManagementRegistration(useBinding)`, not in the production registry.
   `managementAvailable` requires a non-empty scope, a controller bound to it, a `source` matching the
@@ -1031,3 +1034,15 @@ actions only change local fixture state.
   localStorage before the runner starts (see Entry points).
 - `verification/*.test.ts` are unit tests of the matrix, assessment and DOM observations; they run
   in the normal suite without a browser.
+
+## Needs you at scale
+
+- The workflow request list asks the server for 50 pending requests (`GET /api/workflow-inputs?limit=`) and
+  adds 50 each time "Show more requests" is pressed, up to the server's largest page (500); past that it says
+  how many more are waiting. A thousand requests are never drawn at once.
+  The Needs you count is the server's `pendingTotal` plus the settled requests that still need attention,
+  never the number listed.
+- The queue reads every 5 seconds only while the page is visible, and once when it becomes visible again.
+- With nothing chosen, the first card selected is one a person can answer, not a row that can only be
+  inspected: in the other decisions list (`PendingDecisions`), and in the document room, which also lists
+  answerable rows first (live, that room only receives rows with document actions).

@@ -10,6 +10,7 @@ import {
   toastLines,
   taskCompleteBody,
   boundedApprovalLabel,
+  approvalIntentFields,
   approvalLabelAlteration,
   LOOK_ALIKE_REASON,
   toastLookAlike,
@@ -1306,5 +1307,28 @@ describe('a chat card with a chat sentence from its trusted writer', () => {
     expect(model.text).not.toContain('Nothing to see');
     // A chat sentence with no intent beside it is not used.
     expect(approvalChannelCard(makeRequest({ tool_name: 'workflow_start', context: JSON.stringify({ channelIntent: 'Orphan sentence' }) })).text).not.toContain('Orphan sentence');
+  });
+});
+
+describe('a governed piece sentence keeps the primary target (G-2)', () => {
+  // The frozen target is stored with its keys sorted, as canonicalJson writes it.
+  const sentence = (action: string, target: Record<string, unknown>) => approvalIntentFields(makeRequest({
+    tool_name: `piece:smtp/${action}`, execution_mode: 'workflow', context: JSON.stringify({ target: { piece: 'smtp', action, ...target } }),
+  })).intent_action;
+
+  test('to survives cc, bcc and a sender name', () => {
+    const line = sentence('send-email', { bcc: ['secret@example.test'], cc: ['bob@example.test'], from: 'owner@example.test',
+      senderName: 'Ops Team', subject: 'Hello', to: ['alice@example.test'] });
+    expect(line).toContain('to: alice@example.test');
+    expect(line).toContain('subject: Hello');
+    expect(line).toContain('cc: bob@example.test');
+    expect(line).toContain('bcc: secret@example.test');
+    expect(line.indexOf('to: ')).toBeLessThan(line.indexOf('subject: '));
+  });
+
+  test('an HTTP sentence names the URL before the less important fields', () => {
+    const line = sentence('send_request', { a: '1', b: '2', c: '3', d: '4', method: 'POST', url: 'http://203.0.113.10/hook' });
+    expect(line).toContain('url: http://203.0.113.10/hook');
+    expect(line).toContain('method: POST');
   });
 });

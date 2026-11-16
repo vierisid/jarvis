@@ -146,7 +146,7 @@ test('when Jarvis cannot be reached the page says so after a grace period, hides
     if (url === '/api/onboarding/status') return Response.json({ setup_completed: true, profile_completed: true, tutorial_completed: true });
     if (!up) throw new TypeError('Failed to fetch');
     if (url === '/api/authority/status') return Response.json({ enabled: true, emergency_state: 'normal' });
-    if (url === '/api/workflow-inputs') return Response.json({ requests: [{ id: 'r1', status: 'pending' }] });
+    if (url === '/api/workflow-inputs?limit=50') return Response.json({ requests: [{ id: 'r1', status: 'pending' }] });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
   const settle = () => React.act(async () => { await new Promise(r => setTimeout(r, 30)); });
@@ -184,7 +184,7 @@ test('Retry reconnects the socket at once, and a socket that comes back first ne
     if (url === '/api/onboarding/status') return Response.json({ setup_completed: true, profile_completed: true, tutorial_completed: true });
     if (!up) throw new TypeError('Failed to fetch');
     if (url === '/api/authority/status') return Response.json({ enabled: true, emergency_state: 'normal' });
-    if (url === '/api/workflow-inputs') return Response.json({ requests: [] });
+    if (url === '/api/workflow-inputs?limit=50') return Response.json({ requests: [] });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
   const settle = () => React.act(async () => { await new Promise(r => setTimeout(r, 30)); });

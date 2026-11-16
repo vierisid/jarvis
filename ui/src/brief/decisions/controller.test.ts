@@ -510,3 +510,15 @@ test("a decision still dispatches on HTTP origins without crypto.randomUUID", as
     Object.defineProperty(crypto, "randomUUID", { value: original, configurable: true });
   }
 });
+test("answerable requests come first and the first card selected is one a person can answer (G-10)", async () => {
+  const dead = (id: string) => ({ ...decisionFixture("invitation"), actions: [], state: "deferred", paper: { ...decisionFixture("invitation").paper,
+    decision: { ...decisionFixture("invitation").paper.decision, decisionId: id, approval: null, workItemId: null, actions: [] } } }) as ReturnType<typeof decisionFixture>;
+  const f = makeDecisionsFixture("ready", 0);
+  const live = decisionFixture("follow-up");
+  const rows = [dead("effect:one"), dead("effect:two"), live];
+  const c = owner({ ...f.port, read: async () => ({ status: "ready", data: rows }) });
+  await c.refresh();
+  const state = c.snapshot();
+  expect(state.rows.map(decisionId)).toEqual([decisionId(live), "effect:one", "effect:two"]);
+  expect(state.selectedId).toBe(decisionId(live));
+});
