@@ -13,10 +13,12 @@ precedence. `docs/hosted-dashboard.md` describes backend feature defaults and ro
 
 ## Entry points
 
-The D33 release record (`entry/release.ts`, `BRIEF_RELEASE`) is off and does not select the production
-default: `BRIEF_RELEASE` has `rollout: "off"`, and `DashboardEntry` gets no release runtime or live
-composition, so it would stay off even with a filled record. `scripts/brief-release/README.md` holds
-the integration contract, the release checklist and the rollback table.
+The production default does not come from the D33 release record. It comes from the host descriptor
+(see the top of this file), which `resolveHostedEntry` maps to rollout `released`. The record
+(`entry/release.ts`, `BRIEF_RELEASE`) still has `rollout: "off"`, and `DashboardEntry` gets no release
+runtime or live composition, so filling the record in would not change the default.
+`scripts/brief-release/README.md` holds the integration contract, the release checklist and the
+rollback table.
 
 When the operator explicitly selects the legacy default:
 
@@ -648,6 +650,12 @@ run response). It sends no request.
   and Paused are not shown. The one draft action is "Save and turn on" (publishing also turns the
   workflow on).
   Draft is never a switch state.
+- The list is searchable by name and filterable by On, Off or Needs setup (`list-view.ts`). It draws
+  at most 50 matching rows and adds 50 per `Show more`, so a long list stays light. Deleted rows
+  always stay drawn so Undo and the collapse keep working, and so does a row being confirmed, waiting
+  on a command or reconcile, or switched or restored since the search or filter last changed, so its
+  outcome stays in sight. The search, filter and page live in the controller beside the scroll
+  position, so returning from a workflow lands on the same row. Filtering never changes what is read.
 - `WorkflowManagementController` holds one owner scope and survives room, chat and sidebar changes;
   the host calls `retire()` on logout or owner change. Each command carries scope, flow, version,
   expected revision and a request ID. A lost or `pending` answer locks that row as uncertain until
