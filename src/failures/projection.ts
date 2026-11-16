@@ -140,6 +140,10 @@ const NAMED_REFUSALS: Record<string, { category: FailureCategory; why: string; s
   WORKFLOW_MACHINE_REPLACED: { category: 'missing_binding', why: 'the computer it was enabled for is no longer enrolled', step: 'accept_binding_change' },
   // #1314 M2: a browser or desktop action needs a computer a person chose.
   WORKFLOW_MACHINE_UNPINNED: { category: 'missing_binding', why: 'its browser or desktop steps have no pinned computer. Enable the workflow to pin its computer, or name the computer in the step', step: 'accept_binding_change' },
+  // G-6: the card was raised, then the run could not load the connection because its credential was replaced
+  // (accept the change before a new run is admitted) or the connection was removed (set it up again).
+  CONNECTION_CHANGED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was changed after you were asked, so nothing was sent', step: 'accept_binding_change' },
+  CONNECTION_REMOVED_AFTER_REQUEST: { category: 'missing_binding', why: 'the connection it uses was removed after you were asked, so nothing was sent', step: 'connect' },
   // A child call reused an invocation key for a different payload (for example a constant key in a loop); nothing was started.
   INVOCATION_KEY_REUSED: { category: 'invalid_input', why: 'its invocation key was already used for different data. Include something that changes per item in the key', step: 'edit_and_run_again' },
   WORKFLOW_FACT_STALE: { category: 'missing_binding', why: 'a recipient it sends to is no longer current in memory', step: 'update_recipient' },
