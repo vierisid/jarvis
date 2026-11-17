@@ -96,6 +96,7 @@ export interface NotchInboxOptions {
    * changed. Without this, anything may speak whenever the notch is free.
    */
   maySpeak?: () => boolean;
+  now?: () => number;
 }
 
 interface Entry {
@@ -118,7 +119,16 @@ interface Playing {
   round: Round | null;
   /** What the script asked to have played when it has ended. */
   then?: Entry;
+  /**
+   * The others that had waited to speak when this one was chosen to. They
+   * give up their turn only when this one has really spoken: if it turns out
+   * to be gone, the next of them speaks in its place.
+   */
+  others?: Entry[];
 }
+
+/** How long something that waits for the notch to be free is still wanted. */
+export const NOTCH_AFTER_MS = 15_000;
 
 export class NotchInbox {
   private entries: Entry[] = [];
@@ -130,10 +140,14 @@ export class NotchInbox {
   private opener: (() => boolean) | null = null;
   private readonly clock: NotchClock;
   private readonly log: (line: string) => void;
+  private readonly now: () => number;
+  /** What waits for the notch to be free (`after`). */
+  private afterwards: { run: () => void; at: number }[] = [];
 
   constructor(private readonly surface: NotchSurface, private readonly options: NotchInboxOptions = {}) {
     this.clock = options.clock ?? realNotchClock;
     this.log = options.log ?? ((line) => console.log(line));
+    this.now = options.now ?? Date.now;
     surface.onAnswer((answer, from) => { this.playing?.stage.heard(answer, from); });
     surface.onOpen(() => { this.opened(); });
     surface.onHello(() => { this.cameUp(); });
@@ -196,9 +210,14 @@ export class NotchInbox {
     const missed = this.entries.filter((entry) => entry.missed).sort((a, b) => Number(b.item.urgent ?? false) - Number(a.item.urgent ?? false) || a.seq - b.seq);
     // What may not speak yet keeps its turn for the next still moment.
     const may = missed.filter((entry) => this.quietEnough(entry.item));
-    for (const entry of may) entry.missed = false;
     const first = may[0];
-    if (first) { this.start(first, { unasked: true }, null); return; }
+    if (first) {
+      this.start(first, { unasked: true }, null);
+      // The others had the same chance and stay in the count, once this one has spoken. If it is found gone
+      // (a promise whose window has passed), the next of them speaks instead: before, nothing did.
+      if (this.playing?.entry === first) this.playing.others = may.slice(1);
+      return;
+    }
     this.pushCount();
   }
 
@@ -300,9 +319,27 @@ export class NotchInbox {
     this.pushCount();
   }
 
-  /** Puts a script that is not an item on the notch, if the notch is free. True if it started. */
-  present(name: string, script: (stage: NotchStage) => Promise<void>): boolean {
+  /**
+   * Does something the moment nothing is playing: now, or when what is
+   * playing has ended. Words the notch acts on itself ("settings", "what can
+   * you do", "day one") are said while the line that carries them still has
+   * the notch, and what they open cannot take it from under that line: it
+   * was refused, and nothing opened at all while the ledger said done. Not
+   * kept for long: what is wanted now is not wanted a minute later.
+   */
+  after(run: () => void): void {
+    if (!this.playing) { run(); return; }
+    this.afterwards.push({ run, at: this.now() });
+  }
+
+  /**
+   * Puts a script that is not an item on the notch, if the notch is free.
+   * True if it started. Nothing is presented while everything is held (a
+   * call, a stop): only the line that belongs to the hold itself (`held`).
+   */
+  present(name: string, script: (stage: NotchStage) => Promise<void>, how: { held?: boolean } = {}): boolean {
     if (this.playing || this.options.busy?.() || this.surface.current().line) return false;
+    if (this.holds.size > 0 && how.held !== true) return false;
     this.run({ entry: null, stage: this.stage(name, false), round: null }, async (stage) => {
       await script(stage);
       return 'waits';
@@ -367,15 +404,35 @@ export class NotchInbox {
     }
     this.playing = null;
     playing.stage.stop();
+    // It was chosen to speak of several that waited. It spoke: the others stay in the count. It was gone:
+    // they keep their turn, and the next of them speaks below.
+    if (playing.others && end !== 'gone') for (const other of playing.others) other.missed = false;
+    const then = playing.then;
+    // What was asked for while this had the notch comes first: the person asked for it.
+    const wanted = this.afterwards.splice(0).filter((one) => this.now() - one.at <= NOTCH_AFTER_MS);
+    if (wanted.length > 0) {
+      this.clear(playing.stage);
+      for (const one of wanted) {
+        try { one.run(); } catch (error) { this.log(`[notch] something that waited for the notch failed: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (this.playing) {
+        // What this was going to hand the notch back to has it back after that.
+        const taken: Playing = this.playing;
+        if (then && !taken.then && taken.entry !== then && this.entries.includes(then)) taken.then = then;
+        return;
+      }
+    }
     // What comes next takes the line's place directly. Going back to the eyes
     // in between would make the notch shrink and grow again for nothing.
     if (playing.round && this.next(playing.round)) return;
-    const then = playing.then;
     if (then && this.entries.includes(then) && this.holds.size === 0) {
       this.start(then, { unasked: false }, null);
       return;
     }
-    this.clear(playing.stage);
+    // Nothing follows. Whatever line is still up is nobody's now: this one's own, or one an earlier item
+    // left for its follower to replace when that follower turned out to be gone. Left there, it could not be
+    // answered or closed, and nothing else could take the notch until the brain was started again.
+    this.clearStale();
     // Something that could not speak while this was up (it arrived during a
     // fuse) speaks now.
     if (this.entries.some((waiting) => waiting.missed)) { this.cameUp(); return; }
@@ -390,6 +447,12 @@ export class NotchInbox {
     playing.stage.stop();
     this.clear(playing.stage);
     return playing;
+  }
+
+  /** Back to the eyes, whoever the line was: nothing is playing, so nothing owns it. Not while a demo has the notch. */
+  private clearStale(): void {
+    if (this.playing || this.options.busy?.()) return;
+    if (this.surface.current().line) this.surface.rest();
   }
 
   /** Back to the eyes, if the line still on the notch is this stage's. */

@@ -610,3 +610,90 @@ describe('speaking up only when it may', () => {
   });
 });
 
+
+// The hardening audit, 17 November 2026 (pass 13).
+describe('what the hardening audit found', () => {
+  // "settings", "what can you do", "day one": said while the line that carries the words has the notch. What
+  // they open was refused the notch, nothing opened at all, and the ledger said done.
+  test('what was asked for while something has the notch comes up the moment that has ended', async () => {
+    const h = harness();
+    const did: string[] = [];
+    let finish: () => void = () => {};
+    h.inbox.present('carrier', async (stage) => { stage.put({ id: stage.id(), kind: 'listen', say: [], heard: 'settings' }); await new Promise<void>((done) => { finish = done; }); });
+    await settle();
+    h.inbox.after(() => { did.push(`asked, sheet opened: ${h.inbox.present('settings', (stage) => stage.sheet(['Settings'], []).then(() => {}))}`); });
+    // Not yet: its own line is still up.
+    expect(did).toEqual([]);
+    finish();
+    await settle();
+    expect(did).toEqual(['asked, sheet opened: true']);
+    expect(h.said()).toBe('Settings');
+    // With nothing on the notch it happens at once.
+    await h.answer('no');
+    h.inbox.after(() => did.push('at once'));
+    expect(did.at(-1)).toBe('at once');
+  });
+
+  test('it is not kept for long, and what the notch was going to hand back to has it back afterwards', async () => {
+    let now = 0;
+    const timers: { fn: () => void; at: number }[] = [];
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = { dispatchRPC(_s, _m, params) { pushed.push((params as { message: NotchToPage }).message); return Promise.resolve({}); }, onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
+    const surface = new NotchSurface(port, () => {});
+    const inbox = new NotchInbox(surface, { clock: { setTimeout: (fn, ms) => { const t = { fn, at: now + ms }; timers.push(t); return t; }, clearTimeout: () => {} }, log: () => {}, now: () => now });
+    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+    const did: string[] = [];
+    let finish: () => void = () => {};
+    inbox.present('long', async () => { await new Promise<void>((done) => { finish = done; }); });
+    inbox.after(() => did.push('late'));
+    now += 60_000;
+    finish();
+    await settle();
+    expect(did).toEqual([]);
+  });
+
+  // An item ends with its line still up and hands on to the next of a round. That one turns out to be gone.
+  // The old line stayed for good: it could not be answered, and nothing else could take the notch.
+  test('a line left for a follower that turns out to be gone does not stay on the notch', async () => {
+    const h = harness();
+    const first: NotchItem = { id: 'first', subject: 'first', class: 'person', speaks: false, title: () => ['first'],
+      play: async (stage) => { const id = stage.id(); stage.put({ id, kind: 'offer', say: ['Morning. 1 needs you.'], yes: 'show' }); await stage.answer(id, ['yes']); return 'settled'; } };
+    const gone: NotchItem = { id: 'gone', subject: 'gone', class: 'rest', speaks: false, title: () => ['gone'], check: () => false, play: async () => 'settled' };
+    h.inbox.add(first);
+    h.inbox.add(gone);
+    await h.open();
+    expect(h.said()).toBe('Morning. 1 needs you.');
+    await h.answer('yes');
+    expect(h.line()).toBeNull();
+    // And the notch can be taken again.
+    h.inbox.add(item('next'));
+    await settle();
+    expect(h.said()).toBe('next?');
+  });
+
+  test('of several that waited to speak, when the one chosen is gone the next speaks, and when it spoke the others stay in the count', async () => {
+    const h = harness({ page: false });
+    h.inbox.add({ ...item('promise'), check: () => false });
+    h.inbox.add(item('approval'));
+    h.inbox.add(item('news'));
+    h.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    // The first was gone: the second has its say.
+    expect(h.said()).toBe('approval?');
+    await h.answer('yes');
+    // It spoke: the third stays in the count and does not speak up by itself.
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+  });
+
+  test('while everything is held nothing is presented, but for the line that belongs to the hold itself', async () => {
+    const h = harness();
+    h.inbox.hold('call');
+    expect(h.inbox.present('offline', (stage) => stage.say(['No connection. I carry on when it is back.'], 4200).then(() => {}))).toBe(false);
+    expect(h.line()).toBeNull();
+    expect(h.inbox.present('call-over', (stage) => stage.say(['Call ended.'], 2000).then(() => {}), { held: true })).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Call ended.');
+  });
+});

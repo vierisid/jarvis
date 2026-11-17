@@ -410,8 +410,10 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
       const binding = effectiveSttForBinding(config);
       return binding ? createSTTProvider(binding, usejarvisVoiceCredentials(config)) : null;
     },
-    async remember(what, sentence, askId) {
-      const result = await write(what, sentence, askId);
+    // The question that is asked of spoken words before they are saved goes through: it was dropped here, and
+    // what was misheard ("calls" as "colds") was written as a fact the person had told.
+    async remember(what, sentence, askId, confirm) {
+      const result = await write(what, sentence, askId, confirm);
       if (result.ok) {
         // One history: it is in the notch's chat too, where the next turn reads it.
         try {

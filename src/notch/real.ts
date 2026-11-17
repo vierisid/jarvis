@@ -444,7 +444,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         press: async (stage, button) => {
           if (button === 'memory' && memory) { await memory.open(stage); return 'stay'; }
           if (button === 'connections' && prefs) { await prefs.connections(stage); return 'stay'; }
-          if (button === 'settings' && prefs) { await prefs.settings(stage); return 'stay'; }
+          if (button === 'settings' && prefs) return (await prefs.settings(stage)) === 'leave' ? 'leave' : 'stay';
           if (button === 'dashboard' && deps.openDashboard) { deps.openDashboard(stage.from()); return 'leave'; }
           return null;
         },

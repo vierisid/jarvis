@@ -428,3 +428,44 @@ describe('doing it in view, put together (pass 10)', () => {
     expect(w.said()).toBe('Watching. Do it once by hand, then press done.');
   });
 });
+
+// The hardening audit, 17 November 2026: every test of these words had called the route on a free notch. In
+// the product the words are typed into Home, or spoken, and the line that carries them still has the notch
+// when they are acted on. What they opened was refused the notch: nothing came up, and the ledger said done.
+describe('words the notch acts on itself, typed into Home as a person types them', () => {
+  test('"what can you do", "settings" and "show me how you move" each open what they name', async () => {
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC(_sidecarId, _method, params) { const message = (params as { message?: NotchToPage }).message; if (message) pushed.push(message); return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      day: { db: getDb(), noClock: true },
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    const line = (): NotchLine | null => surface.current().line;
+    const title = (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
+    for (const [words, opens] of [['what can you do', 'What I can do'], ['settings', 'Settings'], ['show me how you move', 'How I move']] as const) {
+      fromPage({ type: 'open' });
+      await wait();
+      expect(line()?.kind).toBe('ask');
+      fromPage({ type: 'answer', id: line()!.id, act: 'ask', text: words });
+      await wait();
+      expect([words, line()?.kind, title()]).toEqual([words, 'sheet', opens]);
+      fromPage({ type: 'answer', id: line()!.id, act: 'no' });
+      await wait();
+      expect(line()).toBeNull();
+    }
+    real.stop();
+  });
+});

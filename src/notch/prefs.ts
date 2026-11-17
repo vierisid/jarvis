@@ -129,7 +129,8 @@ export interface NotchPrefsDeps {
 
 export interface NotchPrefs {
   route(text: string): { did: string; run(): void } | null;
-  settings(stage: NotchStage): Promise<void>;
+  /** The settings sheet. `leave` when what was pressed there takes the notch for itself (day one again): Home does not come back over it. */
+  settings(stage: NotchStage): Promise<'leave' | void>;
   connections(stage: NotchStage): Promise<void>;
   /** Whether its small sounds are on. */
   sound(): boolean;
@@ -139,7 +140,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
   const log = deps.log ?? ((line: string) => console.log(line));
   const sound = (): boolean => deps.settings.get<unknown>('sound', false) === true;
 
-  async function settings(stage: NotchStage): Promise<void> {
+  async function settings(stage: NotchStage): Promise<'leave' | void> {
     for (;;) {
       const machine = stage.from();
       let pairs: NotchKeyPairs | null = null;
@@ -184,7 +185,9 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
         if (answer.act === 'button') {
           if (answer.button === 'moves' && deps.moves) { await deps.moves(stage); again = true; break; }
           if (answer.button === 'cando' && deps.canDo) { await deps.canDo(stage); again = true; break; }
-          if (answer.button === 'dayone' && deps.dayOne) { deps.dayOne(); return; }
+          // Day one begins when this sheet, and Home under it, have left the notch. Started from in here it
+          // could not take the notch, sat in the count, and Home came back instead.
+          if (answer.button === 'dayone' && deps.dayOne) { const begin = deps.dayOne; deps.inbox.after(() => begin()); return 'leave'; }
           // What makes out speech is set at "Voice Transcription", not on the page of the voice it speaks with.
           if (answer.button === 'voice' && deps.openDashboard) { deps.openDashboard(stage.from(), 'speech'); return; }
           continue;
@@ -262,7 +265,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
 
   return {
     route(text) {
-      if (prefsRequest(text)) return { did: 'Show the settings.', run: () => { deps.inbox.present('settings', (stage) => settings(stage)); } };
+      if (prefsRequest(text)) return { did: 'Show the settings.', run: () => { deps.inbox.present('settings', async (stage) => { await settings(stage); }); } };
       if (connectionsRequest(text)) return { did: 'Show the connections.', run: () => { deps.inbox.present('connections', (stage) => connections(stage)); } };
       return null;
     },
