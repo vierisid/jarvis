@@ -48,61 +48,115 @@ export const NOTCH_AGENT_TICK_MS = 30_000;
 
 const LEAD = '(?:(?:ok(?:ay)?|hey|jarvis|please|now|and|then|so)[,\\s]+)*';
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+/** How a request is put when it is put politely. A request put as a question is still a request. */
+const POLITE = "(?:(?:can|could|would|will) you(?: please)?|please|i (?:want|need)(?: you)? to|i(?: would|'d) like(?: you)? to)\\s+";
+const MAKE = '(?:make|create|build|set up|add|give)(?: me)?';
+/** What an agent is also called. On the notch it is always an agent. */
+const KIND = '(?:agent|workflow|automation|routine|bot)';
 
 export interface AgentSentence {
   /** The schedule that was said, as the notch says one: "Monday at 9:00". Null for an agent that waits for something to happen. */
   when: string | null;
   /** What it does, without the schedule: "send Sam the numbers". For one that waits, the whole sentence. */
   job: string;
+  /** It was asked for as an agent and names no schedule: "an agent that replies to new leads". */
+  agent?: true;
+}
+
+/** "sends" as "send": what an agent does is read back as what to do. */
+function plainVerb(job: string): string {
+  const [first, ...rest] = job.split(' ');
+  if (!first || /^(?:always|is|as|this|its|his|plus|across|unless|perhaps|sometimes)$/i.test(first) || !/s$/i.test(first) || /(?:ss|us|is)$/i.test(first)) return job;
+  const plain = /ies$/i.test(first) ? first.replace(/ies$/i, 'y') : /(?:ch|sh|x|z|o)es$/i.test(first) ? first.replace(/es$/i, '') : first.replace(/s$/i, '');
+  return [plain, ...rest].join(' ');
 }
 
 /**
- * "Every Monday send Sam the numbers", "make an agent that files my
- * invoices", "when an invoice is 7 days late, chase it": an agent is asked
- * for. Null when it is not. A question is never one ("when is my next
- * call?"), and neither is "tell me when", which is an eye.
+ * The schedule a description names, wherever it stands in it, and the
+ * description without it: "sends me the news every day at 5.10" is "day at
+ * 17:10" and "sends me the news". An hour from one to six with no "am" is
+ * the afternoon: nobody means five in the morning by "at 5.10". Null when
+ * it names none the notch can say.
+ */
+function scheduleIn(text: string): { when: string; rest: string } | null {
+  let rest = text;
+  let day: string | null = null;
+  let time: string | null = null;
+  const named = rest.match(/\b(?:every|each)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|evening|night|week|weekday)\b|\b(daily|weekly)\b/i);
+  if (named) {
+    const name = (named[1] ?? named[2])!.toLowerCase();
+    day = DAYS.includes(name) ? cap(name) : name === 'week' || name === 'weekly' ? 'Monday' : 'day';
+    if (name === 'evening') time = '18:00';
+    if (name === 'night') time = '21:00';
+    rest = rest.replace(named[0], ' ');
+  }
+  const at = rest.match(/\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])/i) ?? (day ? rest.match(/(?:^|\s)(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])/i) : null);
+  if (at) {
+    let hour = Number(at[1]);
+    const half = (at[3] ?? '').toLowerCase().replace(/\./g, '');
+    if (half === 'pm' && hour < 12) hour += 12;
+    else if (half === 'am' && hour === 12) hour = 0;
+    else if (!half && hour >= 1 && hour <= 6) hour += 12;
+    if (hour <= 23 && Number(at[2] ?? '0') <= 59) {
+      time = `${hour}:${at[2] ?? '00'}`;
+      rest = rest.replace(at[0], ' ');
+      day ??= 'day';
+    }
+  }
+  if (!day) return null;
+  rest = rest.replace(/\s+,/g, ',').replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ');
+  return { when: `${day} at ${time ?? '9:00'}`, rest };
+}
+
+/**
+ * "Every Monday send Sam the numbers", "can you make an agent that every
+ * day at 5.10 sends me the news", "I want an agent that replies to new
+ * leads", "when an invoice is 7 days late, chase it": an agent is asked for.
+ * Null when it is not. A question about something is never one ("when is my
+ * next call?"), and neither is "tell me when", which is an eye.
+ *
+ * The owner's first agent, 17 November 2026, began "Can you make an agent
+ * that..." and was not taken as one: it went to the assistant, which built a
+ * workflow that was switched off, had no name, and could only be switched on
+ * in the dashboard. However it is put, asking for an agent is asking the
+ * notch.
  */
 export function agentSentence(text: string): AgentSentence | null {
-  let said = text.trim().replace(/[’`]/g, "'").replace(/[.!]+$/, '');
-  if (!said || said.endsWith('?') || said.split(/\s+/).length > 40 || said.split(/\s+/).length < 3) return null;
+  let said = text.trim().replace(/[’`]/g, "'").replace(/\s+/g, ' ');
+  const words = said ? said.split(' ').length : 0;
+  if (words < 3 || words > 45) return null;
   said = said.replace(new RegExp(`^${LEAD}`, 'i'), '');
-  const made = said.match(/^(?:create|make|build|set up)(?: me)? (?:an?|the)?\s*(?:new )?(?:agent|workflow)\s+(?:that|to|which|for)\s+(.+)$/i);
-  if (made) said = made[1]!.trim();
+  const asked = said.endsWith('?');
+  const polite = new RegExp(`^${POLITE}`, 'i').test(said);
+  const made = said.match(new RegExp(`^(?:${POLITE})?${MAKE}\\s+(?:an?\\s+|one\\s+|the\\s+)?(?:new\\s+)?${KIND}\\b[\\s:,-]*(that|to|which|who|for|so that)?\\s*(.*)$`, 'i'))
+    ?? said.match(new RegExp(`^i (?:want|need|would like|'d like)\\s+(?:an?\\s+|one\\s+)?(?:new\\s+)?${KIND}\\b[\\s:,-]*(that|to|which|who|for)?\\s*(.*)$`, 'i'))
+    ?? said.match(new RegExp(`^(?:new\\s+)?${KIND}\\s*[:,-]\\s*()(.*)$`, 'i'));
+  // A question that asks for nothing to be made is a question.
+  if (asked && !polite && !made) return null;
+  let rest = (made ? made[2]! : polite ? said.replace(new RegExp(`^${POLITE}`, 'i'), '') : said).replace(/[.!?\s]+$/, '').trim();
+  if (!rest) return null;
   // One that waits for something to happen: no schedule to read back.
-  if (/^(?:when(?:ever)?|before every|after every|before each|after each)\b/i.test(said)) {
-    if (/^when (?:is|are|do|does|did|will|can|could|should|would|was|were|am)\b/i.test(said)) return null;
+  if (/^(?:when(?:ever)?|before every|after every|before each|after each)\b/i.test(rest)) {
+    if (/^when (?:is|are|do|does|did|will|can|could|should|would|was|were|am)\b/i.test(rest)) return null;
     // It has to say what to do then: a comma, or enough words to hold both halves.
-    if (!said.includes(',') && said.split(/\s+/).length < 6) return null;
-    return { when: null, job: said };
+    if (!rest.includes(',') && rest.split(' ').length < 6) return null;
+    return { when: null, job: rest };
   }
-  const every = said.match(/^(?:every|each)\s+(.+)$/i) ?? (/^(?:daily|weekly)\b/i.test(said) ? [said, said] : null);
-  if (!every && !made) return null;
-  if (!every) return { when: 'Monday at 9:00', job: said };
-  let rest = every[1]!.trim();
-  let day: string | null = null;
-  const dayFound = rest.match(/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|evening|week|weekday)\b[,\s]*/i);
-  if (dayFound) {
-    const name = dayFound[1]!.toLowerCase();
-    day = DAYS.includes(name) ? cap(name) : name === 'week' ? 'Monday' : 'day';
-    rest = rest.slice(dayFound[0].length);
-  } else if (/^(daily|weekly)\b/i.test(rest)) {
-    day = /^weekly/i.test(rest) ? 'Monday' : 'day';
-    rest = rest.replace(/^(daily|weekly)\b[,\s]*/i, '');
-  } else {
-    // "every 5 minutes", "every invoice": not a schedule the notch can say.
-    return null;
+  // In "an agent that sends…" what it does is said of the agent: read back, it is what to do.
+  const told = made && /^(?:that|which|who)$/i.test(made[1] ?? '');
+  // Said without the word agent, it is one only when it begins with its schedule: "I run every
+  // day" is something a person says about themselves.
+  if (!made && !/^(?:every|each|daily|weekly)\b/i.test(rest)) return null;
+  const schedule = scheduleIn(rest);
+  if (schedule) {
+    const job = told ? plainVerb(schedule.rest) : schedule.rest;
+    return job.split(' ').filter(Boolean).length >= 2 ? { when: schedule.when, job } : null;
   }
-  let time = /^evening/i.test(dayFound?.[1] ?? '') ? '18:00' : '9:00';
-  const at = rest.match(/^(?:at\s+)?(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\b[,\s]*/i);
-  if (at && (at[0].toLowerCase().startsWith('at') || at[2] || at[3])) {
-    let hour = Number(at[1]);
-    if (at[3]?.toLowerCase() === 'pm' && hour < 12) hour += 12;
-    if (at[3]?.toLowerCase() === 'am' && hour === 12) hour = 0;
-    if (hour <= 23) { time = `${hour}:${at[2] ?? '00'}`; rest = rest.slice(at[0].length); }
-  }
-  rest = rest.replace(/^[,\s]+/, '').trim();
-  if (rest.split(/\s+/).filter(Boolean).length < 2) return null;
-  return { when: `${day} at ${time}`, job: rest };
+  // "Every 5 minutes", "every invoice": not a schedule the notch can say, and not asked for as an agent.
+  if (!made || rest.split(' ').length < 2) return null;
+  // "An agent that replies…", "an agent to keep…", "an agent for my invoices": read back as it was put.
+  const joined = (made[1] ?? '').toLowerCase();
+  return { when: null, job: told ? rest : `${joined === 'for' ? 'for' : 'to'} ${rest}`, agent: true };
 }
 
 /** "Show my agents", "my agents": the list is asked for. */
@@ -114,7 +168,8 @@ export function agentsListRequest(text: string): boolean {
 export const agentKey = (sentence: string): string => sentence.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 /** The whole sentence an agent is built from, with the schedule as it stands now. */
-export const agentFull = (sentence: AgentSentence): string => (sentence.when ? `Every ${sentence.when}, ${sentence.job}.` : `${cap(sentence.job)}.`);
+export const agentFull = (sentence: AgentSentence): string =>
+  (sentence.when ? `Every ${sentence.when}, ${sentence.job}.` : sentence.agent ? `An agent ${/^(?:to|for)\b/i.test(sentence.job) ? '' : 'that '}${sentence.job}.` : `${cap(sentence.job)}.`);
 
 export interface NotchAgent {
   flowId: string;
@@ -201,6 +256,12 @@ export interface NotchAgentWorkflows {
   look(flowId: string): { job: string; enabled: boolean } | null;
   /** How its latest runs ended, newest first. */
   runs(flowId: string, limit: number): { id: string; end: 'ok' | 'bad' | 'open'; at: number }[];
+  /**
+   * What was built since a moment, by whoever built it: the assistant too
+   * builds one when it is asked in words the notch did not take as its own.
+   * Newest first.
+   */
+  madeSince(at: number): { flowId: string; job: string; ready: boolean; missing: string; enabled: boolean }[];
 }
 
 export interface NotchAgentsDeps {
@@ -219,6 +280,13 @@ export interface NotchAgents {
   /** Home's row about the agents, when there are any. */
   row(): NotchBlock | null;
   open(stage: NotchStage): Promise<void>;
+  /**
+   * An instruction has been carried out by the assistant. If it built
+   * something that runs by itself, that is an agent like any other: the
+   * notch offers to switch it on, and gives it its name. Nobody is sent to
+   * the dashboard to do that.
+   */
+  adopt(since: number): void;
   /** The clock: runs that have ended are counted, told of, and the next rung is offered. Tests call it by hand. */
   tick(): void;
   stop(): void;
@@ -271,7 +339,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     const id = `agent-make-${++n}`;
     const line = (): NotchPart[] => (sentence.when
       ? ['Every ', word('when', sentence.when, [sentence.when, ...NOTCH_AGENT_SCHEDULES], { label: 'Schedule', read: 'sched' }), ', ', sentence.job, '.']
-      : [cap(sentence.job), '.']);
+      : [agentFull(sentence)]);
     deps.inbox.add({
       id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
       title: line,
@@ -331,6 +399,71 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     });
   }
 
+  /** How far back something that was built and never switched on is still offered. */
+  const PENDING_MS = 48 * 3_600_000;
+
+  /** What was built lately, is switched off, and is no agent yet. */
+  function pending(): ReturnType<NotchAgentWorkflows['madeSince']> {
+    let made: ReturnType<NotchAgentWorkflows['madeSince']>;
+    try { made = deps.workflows.madeSince(now() - PENDING_MS); } catch { return []; }
+    const known = new Set(store.list().map((agent) => agent.flowId));
+    return made.filter((one) => !one.enabled && !known.has(one.flowId)).slice(0, 5);
+  }
+
+  /** Switches on something that was built, and makes it an agent: a name, and the first rung. */
+  function switchOn(built: { flowId: string; job: string; enabled?: boolean }): { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry'; mark?: 'check' | 'fail' } } {
+    if (!built.enabled) {
+      const on = deps.workflows.enable(built.flowId);
+      if (!on.ok) return { parts: ['I could not switch ', em(built.job), ' on: ', on.why.replace(/[.\s]+$/, ''), '.'], ms: 6000, extras: { mood: 'sorry', mark: 'fail' } };
+    }
+    const name = nextName();
+    store.add({ flowId: built.flowId, name, rung: 'asks first', sentence: built.job, madeAt: now(), rungAt: now(), askedAt: 0, toldRun: '' });
+    log('[notch] something the assistant built was made an agent, and asks first');
+    return { parts: ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], ms: 7000, extras: { mood: 'proud', mark: 'check' } };
+  }
+
+  function adopt(since: number): void {
+    if (stopped) return;
+    let made: ReturnType<NotchAgentWorkflows['madeSince']>;
+    try { made = deps.workflows.madeSince(since); } catch { return; }
+    const known = new Set(store.list().map((agent) => agent.flowId));
+    // One instruction builds one thing: the newest that is no agent yet.
+    const built = made.find((one) => !known.has(one.flowId));
+    if (!built) return;
+    const id = `agent-adopt-${built.flowId}`;
+    if (deps.inbox.has(id)) return;
+    if (!built.ready) {
+      // Built, and not fit to run: said once, and it waits in the list until it is.
+      const parts: NotchPart[] = [em(built.job), ' is built, but cannot run yet: ', (built.missing || 'something in it is not set up').replace(/[.\s]+$/, ''), '.'];
+      deps.inbox.add({ id, subject: id, class: 'person', speaks: true, once: true, asked: true, title: () => parts,
+        play: async (stage) => { await stage.say(parts, 7000, { mood: 'careful' }); return 'settled'; } });
+      return;
+    }
+    // Switched on already, by whoever built it: it is an agent from now on, and is named.
+    if (built.enabled) {
+      const said = switchOn(built);
+      deps.inbox.add({ id, subject: id, class: 'person', speaks: true, once: true, asked: true, title: () => said.parts,
+        play: async (stage) => { await stage.say(said.parts, said.ms, said.extras); return 'settled'; } });
+      return;
+    }
+    const line: NotchPart[] = ['Switch ', em(built.job), ' on as an agent?'];
+    deps.inbox.add({
+      id, subject: id, class: 'person', speaks: true, asked: true,
+      title: () => line,
+      check: () => !store.get(built.flowId) && deps.workflows.look(built.flowId)?.enabled === false,
+      play: async (stage) => {
+        const answer = await stage.offer(line, 'switch on', { mood: 'look', fold: 0 });
+        if (answer.act === 'fold') return 'waits';
+        // A no leaves it switched off, in the list, where it can still be switched on or discarded.
+        if (answer.act !== 'yes') return 'settled';
+        if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'waits'; }
+        const said = switchOn(built);
+        await stage.say(said.parts, said.ms, said.extras);
+        return 'settled';
+      },
+    });
+  }
+
   const rungLine = (agent: NotchAgent & { job: string }): NotchPart[] =>
     [`${agent.job}${/[.!?]$/.test(agent.job) ? '' : '.'} `, word(`rung:${agent.flowId}`, agent.rung, NOTCH_AGENT_RUNGS, { label: 'Freedom' })];
 
@@ -342,8 +475,15 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         buttons: [{ id: 'run', label: 'Run now' }, { id: 'pause', label: agent.enabled ? 'Pause' : 'Resume', quiet: true }, { id: 'go', label: 'Let go', quiet: true }],
       }));
       blocks.push({ kind: 'note', say: [list.length
-        ? 'Their workflows live in the dashboard. Here you see what they do and how free they are. Money always asks.'
+        ? 'Here you see what each agent does and how free it is. Money always asks.'
         : 'No agents yet. Tell me what to take over: "Every Monday, send Sam the numbers."'] });
+      // What was built lately and never switched on: one click makes it an agent.
+      for (const draft of pending()) {
+        blocks.splice(blocks.length - 1, 0, {
+          kind: 'row', id: draft.flowId, lead: 'New', say: [`${draft.job}${/[.!?]$/.test(draft.job) ? '' : '.'}`], small: draft.ready ? 'Not switched on' : 'Needs setting up',
+          buttons: [...(draft.ready ? [{ id: 'on', label: 'Switch on' }] : []), { id: 'drop', label: 'Discard', quiet: true }],
+        });
+      }
       const id = stage.id();
       stage.put({ id, kind: 'sheet', say: ['Your agents'], blocks });
       const answer = await stage.answer(id, ['no', 'button', 'word', 'go']);
@@ -355,6 +495,14 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         continue;
       }
       if (answer.act !== 'button' || !answer.row) return;
+      if (answer.button === 'on' || answer.button === 'drop') {
+        const draft = pending().find((one) => one.flowId === answer.row);
+        if (!draft) continue;
+        if (answer.button === 'drop') { try { await deps.workflows.remove(draft.flowId); } catch { /* it stays in the list, and can be tried again */ } continue; }
+        const said = switchOn(draft);
+        await stage.say(said.parts, said.ms, said.extras);
+        return;
+      }
       const agent = list.find((one) => one.flowId === answer.row);
       if (!agent) continue;
       if (answer.button === 'run') {
@@ -365,11 +513,11 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       }
       if (answer.button === 'pause') { deps.workflows.pause(agent.flowId, agent.enabled); continue; }
       if (answer.button === 'go') {
-        const sure = await stage.offer(['Let ', em(agent.name), ' go? The workflow is deleted too.'], 'let go', { mood: 'careful', fold: 0 });
+        const sure = await stage.offer(['Let ', em(agent.name), ' go? It is deleted for good.'], 'let go', { mood: 'careful', fold: 0 });
         if (sure.act !== 'yes') continue;
         let gone = false;
         try { gone = await deps.workflows.remove(agent.flowId); } catch { gone = false; }
-        if (gone) { store.drop(agent.flowId); log('[notch] an agent was let go, and its workflow deleted'); }
+        if (gone) { store.drop(agent.flowId); log('[notch] an agent was let go and deleted'); }
         else { await stage.say([em(agent.name), ' is still finishing something. Try again in a moment.'], 4200, { mood: 'careful' }); return; }
       }
     }
@@ -453,9 +601,13 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     },
     row() {
       const count = store.list().length;
-      return count ? { kind: 'row', id: 'agents', go: true, say: [em(`${count} ${count === 1 ? 'agent' : 'agents'}`), ' on duty.'] } : null;
+      if (count) return { kind: 'row', id: 'agents', go: true, say: [em(`${count} ${count === 1 ? 'agent' : 'agents'}`), ' on duty.'] };
+      // None on duty, and one that was built waits to be switched on: the way to it is here too.
+      const waiting = pending().length;
+      return waiting ? { kind: 'row', id: 'agents', go: true, say: [em(`${waiting} ${waiting === 1 ? 'agent' : 'agents'}`), ' built, not switched on.'] } : null;
     },
     open,
+    adopt,
     tick,
     stop() { stopped = true; },
   };
