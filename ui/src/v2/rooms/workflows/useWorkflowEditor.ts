@@ -21,11 +21,13 @@ import { runStepTest, type StepTestResult } from "./step-test";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateCronExpression, validateCronTimezone, validateCronDstPolicy } from '../../../../../src/lib/cron-scheduler';
 import { chosenScheduleZone } from '../../../../../src/workflows/runner/triggers/schedule-zone';
+import { forCard } from '../../../../../src/util/card-text';
 import { emptyFieldInput } from '../../../../../src/workflows/runtime/input-validation';
 import { isHumanInputStep } from '../../../../../src/workflows/runtime/human-input-contract';
 import type { ConnectionMeta } from "./useConnections";
 import {
   detectTriggerKind,
+  TRIGGER_KINDS,
   makeEmptyStash,
   transitionTriggerKind,
   type TriggerKind,
@@ -35,6 +37,7 @@ import {
   addStepToHead as treeAddStepToHead,
   allReachableNames,
   applySchemaDefaults,
+  BLANK_STEP_DISPLAY_NAME,
   buildControlFlowStep,
   cloneTrigger,
   connectSteps as treeConnectSteps,
@@ -253,6 +256,9 @@ interface ActionResult {
   ok: boolean;
   message: string;
 }
+
+/** Cap on a step title taken from the piece catalog (a person may type a longer one). */
+const STEP_TITLE_MAX_CHARS = 120;
 
 export function useWorkflowEditor(flowId: string | null) {
   const fetch = useWorkflowRequest();
@@ -1054,6 +1060,10 @@ export function useWorkflowEditor(flowId: string | null) {
       triggerSettingsStashRef.current = nextStash;
       next.type = type;
       next.settings = settings;
+      // The node is titled after its kind ("Manual", "Schedule"...). Follow the
+      // switch, but keep a title the person typed.
+      const labelOf = (k: string): string | undefined => TRIGGER_KINDS.find((m) => m.kind === k)?.label;
+      if (!prev.displayName || prev.displayName === labelOf(currentKind)) next.displayName = labelOf(kind) ?? prev.displayName;
       return next;
     });
     setDirty(true);
@@ -1073,6 +1083,13 @@ export function useWorkflowEditor(flowId: string | null) {
         const sub = isTrigger
           ? piece?.triggers.find((t) => t.name === actionName)
           : piece?.actions.find((a) => a.name === actionName);
+        // The action this step had before the switch, so a title adopted from
+        // it can follow the switch too (below).
+        const prevPiece = catalog.find((p) => p.name === target.settings?.pieceName);
+        const prevActionName = isTrigger ? target.settings?.triggerName : target.settings?.actionName;
+        const prevSub = isTrigger
+          ? prevPiece?.triggers.find((t) => t.name === prevActionName)
+          : prevPiece?.actions.find((a) => a.name === prevActionName);
         const seed = applySchemaDefaults(target.settings?.input ?? {}, sub?.inputSchema ?? null);
         // Auto-fill the first available connection for pieces that
         // require auth. The user can override via the connection
@@ -1102,6 +1119,17 @@ export function useWorkflowEditor(flowId: string | null) {
         if (isTrigger) settings.triggerName = actionName;
         else settings.actionName = actionName;
         target.settings = settings;
+        // A step still carrying the placeholder name, or the name it took from
+        // its previous action, is named after what it now does. A name the
+        // person chose is never overwritten. The catalog name comes from the
+        // installed piece, so it is reduced like card text (forCard): no
+        // invisible or bidi characters, one line, capped.
+        const adopted = (name: string | undefined) => (name ? forCard(name, STEP_TITLE_MAX_CHARS) : "");
+        const next = adopted(sub?.displayName);
+        const current = target.displayName;
+        if (next && (!current || current === BLANK_STEP_DISPLAY_NAME || (!!prevSub && current === adopted(prevSub.displayName)))) {
+          target.displayName = next;
+        }
       });
     },
     [catalog, connections, mutateAnyStep, snapshotForUndo],

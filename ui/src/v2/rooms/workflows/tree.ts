@@ -247,6 +247,9 @@ export function applySchemaDefaults(
 
 /* ----------------------------------------------------------- mutations */
 
+/** The title a new, unconfigured step carries until it is named or given an action. */
+export const BLANK_STEP_DISPLAY_NAME = "New step";
+
 /**
  * Insert a new unconfigured PIECE step immediately after `predecessorName`.
  * Returns `null` if the predecessor doesn't exist.
@@ -262,7 +265,7 @@ export function insertStepAfter(
   const newStep: FlowStepNode = {
     name: newName,
     type: "PIECE",
-    displayName: "New step",
+    displayName: BLANK_STEP_DISPLAY_NAME,
     settings: { input: {} },
     nextAction: predecessor.nextAction,
   };
@@ -284,7 +287,7 @@ export function addStepToHead(
   const newStep: FlowStepNode = {
     name: newName,
     type: "PIECE",
-    displayName: "New step",
+    displayName: BLANK_STEP_DISPLAY_NAME,
     settings: { input: {} },
   };
 
