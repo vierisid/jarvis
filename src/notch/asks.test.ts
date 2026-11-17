@@ -1302,7 +1302,7 @@ describe('pass 12: day one and talking share the notch', () => {
     h.asks.released('t1');
     h.asks.nothing('t1', 'no_stt');
     await h.advance(3000);
-    expect(h.said()).toBe('I heard a voice. I cannot make out words until speech-to-text is set up. It is under Voice in Settings.');
+    expect(h.said()).toBe('I heard a voice. I cannot make out words until speech-to-text is set up. It is in Settings, under Channels.');
     // It shook for nothing: nothing of the usual refusal happened.
     expect(h.shakes()).toBe(0);
     await h.answer('done');

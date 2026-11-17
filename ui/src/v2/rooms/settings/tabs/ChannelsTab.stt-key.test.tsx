@@ -74,3 +74,41 @@ test("an OpenAI speech key is not saved as the Groq key after switching provider
   await render("openai");
   expect(keyInput().value).toBe(OPENAI_KEY);
 });
+
+// The notch's day one sends a person here to give speech-to-text a key. The
+// owner, 17 November 2026: "it brought me to the voice section instead of to
+// the channel where there is the speech to text."
+test("a link that asks for speech-to-text brings that part into view, once, and no other link does", async () => {
+  const scrolled: string[] = [];
+  const realScroll = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function scroll(this: Element) { scrolled.push(this.querySelector("h3")?.textContent ?? ""); };
+  const data = { channelStatus: null, channelCfg: null, ttsCfg: null, sttCfg: { provider: "openai" }, setSTTProvider: async () => ({ ok: true, message: "ok" }) };
+  // The test DOM starts on about:blank and ignores history changes there: its own setter is the way.
+  const go = (href: string) => (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(`http://localhost:3143${href}`);
+  const open = async (href: string) => {
+    go(href);
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(<ChannelsTab data={data as never} onToast={() => {}} />); });
+    // A second render of the same opening.
+    await act(async () => { root!.render(<ChannelsTab data={{ ...data } as never} onToast={() => {}} />); });
+    await act(async () => root!.unmount());
+    host.remove();
+    root = null;
+    host = null;
+  };
+  try {
+    await open("/?settingsTab=channels#/_panel_settings");
+    expect(scrolled).toEqual([]);
+    await open("/?settingsTab=channels&settingsFocus=stt#/_panel_settings");
+    expect(scrolled).toEqual(["Voice Transcription (STT)"]);
+    // Only inside the settings, and only for a part this tab knows.
+    await open("/?settingsFocus=stt#/somewhere-else");
+    await open("/?settingsTab=channels&settingsFocus=tts#/_panel_settings");
+    expect(scrolled).toEqual(["Voice Transcription (STT)"]);
+  } finally {
+    Element.prototype.scrollIntoView = realScroll;
+    go("/");
+  }
+});

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  NOTCH_POINT_MAX_ELEMENTS, NOTCH_POINT_MAX_STEPS, NOTCH_POINT_MS, NOTCH_POINT_SETTLE_MS, NOTCH_POINT_WAIT_MS,
-  NOTCH_POINT_CLOSE_H, NOTCH_POINT_CLOSE_W, NOTCH_POINT_PICTURE_MAX, POINT_SEEN,
-  createNotchPoint, pointBlind, pointBox, pointBoxRect, pointChoice, pointChosen, pointCloseMessages, pointCloseUp, pointLabel, pointMessages, pointPlace,
-  pointSeen, pointSeenChoice, pointSeenMessages, pointSentence, pointVerb, pointWindow, whereQuestion,
+  NOTCH_POINT_MAX_ELEMENTS, NOTCH_POINT_MAX_STEPS, NOTCH_POINT_MS, NOTCH_POINT_SETTLE_MS, NOTCH_POINT_SETTLE_STEP_MS, NOTCH_POINT_UNCHANGED_MS, NOTCH_POINT_WAIT_MS,
+  NOTCH_POINT_CLOSE_H, NOTCH_POINT_CLOSE_W, NOTCH_POINT_PICTURE_MAX, NOTCH_POINT_SYSTEM, POINT_SEEN,
+  createNotchPoint, pointBlind, pointBox, pointBoxRect, pointChoice, pointChosen, pointCloseMessages, pointCloseUp, pointGoOn, pointLabel, pointMessages, pointPlace,
+  pointSeen, pointSeenChoice, pointSeenMessages, pointSentence, pointVerb, pointWindow, whereKind, whereQuestion,
 } from './point.ts';
 import type { PointMessage, PointSeen, PointWindow } from './point.ts';
 
@@ -31,6 +31,47 @@ describe('a question about where something is on the screen', () => {
       'How do I start recording?', 'how can I mute the microphone', 'Hey Jarvis, how do I export this', 'How to add a source',
       'What do I click to go live?', 'Show me how to share my screen', 'which setting turns this off',
     ]) expect(whereQuestion(yes)).toBe(true);
+  });
+
+  // An audit on 17 November 2026 put 109 ways a person asks to it, and 27 were known. Speech that is made out
+  // writes a comma after "so"; people say "show me the…", "I can't find…", "is there a way to…"; and the owner
+  // speaks Italian.
+  test('is known in the many ways a person asks, and which of the two it is', () => {
+    for (const where of [
+      'So, where is the export button?', 'Hey, where is the share menu', 'OK. Where do I change the font?', 'Can you show me where the settings are?',
+      'show me the export button', "I can't find the save button", 'I cannot find the print option', "I'm looking for the dark mode switch",
+      'Could you tell me where I change my password', 'where to click to export', 'where could I find the history', 'Pillow, where is the mute button',
+      "Dov'è il pulsante per esportare?", 'dove trovo le impostazioni', 'Non trovo il tasto salva', 'Mostrami dove si cambia il carattere',
+      'Wo ist der Speichern-Knopf?', 'Où est le bouton exporter ?', '¿Dónde está el botón de exportar?', 'Onde fica o botão de salvar?',
+    ]) expect([where, whereKind(where)]).toEqual([where, 'where']);
+    for (const how of [
+      'How do I export this as a PDF?', 'so how do I add a column', 'Can you tell me how to merge these cells', 'tell me how to change the margins',
+      'how could I share this', 'What should I click to publish?', 'Is there a way to undo this?', 'is it possible to export just this page',
+      'Show me how to add a signature', 'walk me through adding a new source', 'what do I have to press to save',
+      'Come faccio a esportare in PDF?', 'come si fa a cambiare la lingua', 'Mostrami come si aggiunge una colonna', "C'è un modo per annullare?",
+      'Wie kann ich das exportieren?', 'Comment faire pour exporter ?', '¿Cómo puedo exportar esto?', 'Como faço para salvar?',
+    ]) expect([how, whereKind(how)]).toEqual([how, 'how']);
+  });
+
+  // Knowing more ways of asking must not turn instructions into questions about the screen: each of these
+  // would first be put to the model with the window in front, a few seconds before it is done.
+  test('what is asked of a thing no screen has, and what is simply asked for, stays an instruction', () => {
+    for (const plain of [
+      'show me my calendar for tomorrow', 'show me the mail from Sam', 'show me the last invoice', 'find me the mail from Northwind',
+      "I can't find the invoice from Northwind", "I'm looking for the contract with Lumen", 'take me to the airport', 'help me find a flight to Rome',
+      'tell me where my order is', 'is there a meeting tomorrow', 'is there any mail from Anna', 'help me write a reply to Sam', 'what should I do today',
+      'how are you', 'how is the weather', 'how many mails wait', 'what do I have today', 'and then send it', 'show me how you move', 'what can you do',
+      'I want to export this as a PDF', 'export this as a PDF', 'come stai', 'wie geht es dir heute', 'comment ça va',
+    ]) expect([plain, whereKind(plain)]).toEqual([plain, null]);
+  });
+
+  test('"go on" and its like are known, said alone, and nothing longer is', () => {
+    for (const yes of ['go on', 'Go on.', 'And now?', 'ok, what next', 'next', 'next step', 'Done, what now?', 'I clicked it, and now?', 'continue', 'keep going', 'then what?', 'e adesso?', 'E poi?', 'avanti', 'continua', 'weiter', 'et maintenant ?'.replace(' ?', '?')]) {
+      expect([yes, pointGoOn(yes)]).toEqual([yes, true]);
+    }
+    for (const no of ['go on holiday with Anna', 'now send it to Leo', 'next week we meet Sam', 'continue the draft for Northwind', 'done', 'and now tell me a joke', 'where is it', '']) {
+      expect([no, pointGoOn(no)]).toEqual([no, false]);
+    }
   });
 
   test('anything else is an ordinary instruction', () => {
@@ -86,7 +127,9 @@ describe('choosing the one that answers', () => {
   test('the answer is a number from the list, and nothing else is taken', () => {
     expect(pointChosen('{"id": 4}', window())?.name).toBe('Close');
     expect(pointChosen('Sure: {"id": 6} there you go', window())?.name).toBe('Save as');
-    for (const none of ['{"id": null}', '{"id": 99}', '{"id": "4"}', '{"id": 4.5}', '{"x": 1652, "y": 52}', 'the Close button', '{broken', '']) {
+    // A number written as text is the number: a model that quotes it is not sent away for it.
+    expect(pointChosen('{"id": "4"}', window())?.name).toBe('Close');
+    for (const none of ['{"id": null}', '{"id": 99}', '{"id": "four"}', '{"id": 4.5}', '{"x": 1652, "y": 52}', 'the Close button', '{broken', '']) {
       expect(pointChosen(none, window())).toBeNull();
     }
     // A number that is not in the list is nothing, even when the window had such an element: text is never pointed at.
@@ -163,7 +206,7 @@ describe('"Where do I close this window?"', () => {
   // The owner's test for pass 9: "It points within a few pixels."
   test('the window is read, one element is chosen, the pointer goes to that element\'s own rectangle, and one line says where', async () => {
     const h = world();
-    expect(await h.point('Where do I close this window?')).toEqual({ ok: true, said: 'Close, the button, top right of the window. I am pointing at it.' });
+    expect(await h.point('Where do I close this window?')).toMatchObject({ ok: true, said: 'Close, the button, top right of the window. I am pointing at it.' });
     expect(h.did).toEqual(['read', 'choose 2', `ring 1652,52 46x30 "Close" ${NOTCH_POINT_MS}`]);
     // What the window said is never in the log.
     expect(h.logs.join('\n')).not.toContain('Close');
@@ -204,9 +247,9 @@ describe('"Where do I close this window?"', () => {
 
   test('when the pointer cannot be drawn the line still says where, and does not say it is pointing', async () => {
     const old = world({ ring: new Error('unknown method notch.point') });
-    expect(await old.point('Where do I close this window?')).toEqual({ ok: true, said: 'Close, the button, top right of the window.' });
+    expect(await old.point('Where do I close this window?')).toMatchObject({ ok: true, said: 'Close, the button, top right of the window.' });
     const refused = world({ ring: false });
-    expect(await refused.point('Where do I close this window?')).toEqual({ ok: true, said: 'Close, the button, top right of the window.' });
+    expect(await refused.point('Where do I close this window?')).toMatchObject({ ok: true, said: 'Close, the button, top right of the window.' });
   });
 });
 
@@ -222,14 +265,22 @@ const obs = (more: unknown[] = []): unknown => ({ window_title: 'OBS Studio', ap
 describe('"How do I start recording?", with a recording program in front', () => {
   test('the button that does it is pointed at, and the line says where it is', async () => {
     const h = world({ read: async () => obs(), answer: '{"id": 12, "last": true, "how": "click"}', clicks: [{ clicked: true, inside: true, why: 'click' }] });
-    expect(await h.point('How do I start recording?')).toEqual({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.' });
+    expect(await h.point('How do I start recording?')).toMatchObject({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.' });
     // One thing on the screen answers it: nothing is waited for.
     expect(h.did).toEqual(['read', 'choose 2', `ring 1380,736 200x30 "Start Recording" ${NOTCH_POINT_MS}`]);
   });
 
-  test('an answer with no word about being the last is the plain "it is this one"', async () => {
-    const h = world({ read: async () => obs(), answer: '{"id": 12}', clicks: [{ clicked: true, inside: true, why: 'click' }] });
-    expect(await h.point('How do I start recording?')).toEqual({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.' });
+  // An answer with no word about being the last. It was always taken as "this is it", which ended a way of
+  // many clicks at its first: `"last": "false"` in quotes counted as true too. Now it depends on the question.
+  test('with no word about being the last, "where is" is answered by the one thing, and "how do I" goes on until the model says it is over', async () => {
+    const where = world({ read: async () => obs(), answer: '{"id": 12}', clicks: [{ clicked: true, inside: true, why: 'click' }] });
+    expect(await where.point('Where is the record button?')).toMatchObject({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.', ended: 'shown' });
+    expect(where.did.some((line) => line.startsWith('wait'))).toBe(false);
+    const how = world({ read: async () => obs(), answer: ['{"id": 12}', '{"done": true}'], clicks: [{ clicked: true, inside: true, why: 'click' }] });
+    expect(await how.point('How do I start recording?')).toMatchObject({ ok: true, said: 'That is it. You are there.', ended: 'there', steps: 1 });
+    // And a false in quotes is a false.
+    const quoted = world({ read: async () => obs(), answer: ['{"id": 14, "last": "false"}', '{"done": true}'], clicks: [{ clicked: true, inside: true, why: 'click' }] });
+    expect(await quoted.point('Where do I add a source?')).toMatchObject({ ok: true, ended: 'there', steps: 1 });
   });
 
   test('a "how do I" that this window cannot answer still runs as an ordinary question', async () => {
@@ -240,7 +291,7 @@ describe('"How do I start recording?", with a recording program in front', () =>
 
   test('a thing that wants a right-click says so', async () => {
     const h = world({ read: async () => obs(), answer: '{"id": 11, "last": true, "how": "right-click"}' });
-    expect(await h.point('How do I see the stream settings?')).toEqual({ ok: true, said: 'Right-click Start Streaming, bottom right of the window. I am pointing at it.' });
+    expect(await h.point('How do I see the stream settings?')).toMatchObject({ ok: true, said: 'Right-click Start Streaming, bottom right of the window. I am pointing at it.' });
   });
 });
 
@@ -263,16 +314,18 @@ describe('something that takes several clicks to get to', () => {
       answer: ['{"id": 14, "last": false, "how": "click"}', '{"id": 31, "last": true, "how": "click"}'],
       clicks: [click, click],
     });
-    expect(await h.point('How do I add an audio input capture?', { step: (line) => said.push(line) })).toEqual({ ok: true, said: 'That was the last step.' });
+    expect(await h.point('How do I add an audio input capture?', { step: (line) => said.push(line) })).toMatchObject({ ok: true, said: 'That was the last step.' });
     expect(h.did).toEqual([
       'read', 'choose 2', `wait 420,850 28x28 "1. Click Add Source" ${NOTCH_POINT_WAIT_MS}`,
-      `sleep ${NOTCH_POINT_SETTLE_MS}`,
-      'read', 'choose 2', `wait 430,600 220x26 "2. Click Audio Input Capture" ${NOTCH_POINT_WAIT_MS}`,
+      // After the click the window is read until it shows a change (the menu) and reads the same twice.
+      `sleep ${NOTCH_POINT_SETTLE_MS}`, 'read', `sleep ${NOTCH_POINT_SETTLE_STEP_MS}`, 'read',
+      'choose 2', `wait 430,600 220x26 "2. Click Audio Input Capture" ${NOTCH_POINT_WAIT_MS}`,
       // Done with: the pointer goes home at once.
       'clear',
     ]);
-    // The line on the notch for each step. The first says where, so the eye finds the pointer.
-    expect(said).toEqual(['Step 1: click Add Source, bottom left of the window.', 'Last step: click Audio Input Capture.']);
+    // The line on the notch for each step. The first says where, so the eye finds the pointer. Between two
+    // steps it says that it is looking, so it never seems to have stopped.
+    expect(said).toEqual(['Step 1: click Add Source, bottom left of the window.', 'Looking for the next step.', 'Last step: click Audio Input Capture.']);
     // The second question to the model says what was clicked already, inside the marks for outside content.
     expect(h.asked[0]).toContain('Clicks already made on the way: none yet');
     expect(h.asked[1]).toContain('Clicks already made on the way: 1. clicked button "Add Source"');
@@ -286,14 +339,14 @@ describe('something that takes several clicks to get to', () => {
 
   test('the model can say the person is there: the walk ends', async () => {
     const h = world({ read: async () => obs(), answer: ['{"id": 13, "last": false}', '{"done": true}'], clicks: [click] });
-    expect(await h.point('How do I open the settings?')).toEqual({ ok: true, said: 'That is it. You are there.' });
+    expect(await h.point('How do I open the settings?')).toMatchObject({ ok: true, said: 'That is it. You are there.' });
     expect(h.did.at(-1)).toBe('clear');
   });
 
   test('a click somewhere else is told to the model, which chooses again; three of them and it stops showing the way', async () => {
     const off: Click = { clicked: true, inside: false, why: 'click' };
     const h = world({ read: async () => obs(), answer: '{"id": 14, "last": false}', clicks: [off, off, off] });
-    expect(await h.point('How do I add an audio input capture?')).toEqual({ ok: true, said: 'I stopped showing the way. Ask me again when you want it.' });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({ ok: true, said: 'I stopped showing the way after three clicks somewhere else. Say "go on" when you want it again.', ended: 'wandered', steps: 0 });
     expect(h.did.filter((line) => line.startsWith('wait')).length).toBe(3);
     expect(h.asked[1]).toContain('1. was shown, but clicked somewhere else: button "Add Source"');
     expect(h.did.at(-1)).toBe('clear');
@@ -301,7 +354,7 @@ describe('something that takes several clicks to get to', () => {
 
   test('nobody clicks: it says it stopped, and why', async () => {
     const h = world({ read: async () => obs(), answer: '{"id": 14, "last": false}', clicks: [{ clicked: false, inside: false, why: 'time' }] });
-    expect(await h.point('How do I add an audio input capture?')).toEqual({ ok: true, said: 'I stopped showing the way: nothing was clicked for 60 seconds.' });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({ ok: true, said: 'I stopped showing the way: nothing was clicked for 60 seconds. Say "go on" to pick it up.', ended: 'timeout' });
   });
 
   test('something else took the pointer\'s place (a line was drawn, another question): nothing more is said', async () => {
@@ -322,7 +375,7 @@ describe('something that takes several clicks to get to', () => {
 
   test('the next step cannot be found after a click: it says so, and the pointer goes', async () => {
     const h = world({ read: async () => obs(), answer: ['{"id": 14, "last": false}', '{"id": null}'], clicks: [click] });
-    expect(await h.point('How do I add an audio input capture?')).toEqual({ ok: true, said: 'I cannot see the next step from here. Ask me again from where you are.' });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({ ok: true, said: 'I cannot see the next step from here. Say "go on" when the window has changed.', ended: 'lost', steps: 1 });
     expect(h.did.at(-1)).toBe('clear');
     // The window went where nothing may be read (a password box came up): it says why.
     let reads = 0;
@@ -330,15 +383,241 @@ describe('something that takes several clicks to get to', () => {
     expect(await away.point('How do I add an audio input capture?')).toEqual({ ok: false, why: 'A password is being typed. I am not looking.' });
   });
 
-  test('it does not go on for ever', async () => {
+  test('a click that changes nothing is not shown again and again', async () => {
+    // The model keeps choosing the same button, and the window stays exactly as it was.
     const h = world({ read: async () => obs(), answer: '{"id": 14, "last": false}', clicks: [click] });
-    expect(await h.point('How do I add an audio input capture?')).toEqual({ ok: true, said: 'That is as far as I can show the way.' });
-    expect(h.did.filter((line) => line.startsWith('wait')).length).toBe(NOTCH_POINT_MAX_STEPS);
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({
+      ok: true, said: 'I keep coming back to Add Source, and clicking it changes nothing I can see. I cannot show the way from here.', ended: 'loop', steps: 1,
+    });
+    expect(h.did.filter((line) => line.startsWith('wait')).length).toBe(1);
+    // Nothing changed, so it was waited out before the window was taken as it is: no longer than that.
+    const slept = h.did.filter((line) => line.startsWith('sleep')).map((line) => Number(line.slice(6))).reduce((a, b) => a + b, 0);
+    expect(slept).toBeGreaterThanOrEqual(NOTCH_POINT_UNCHANGED_MS);
+    expect(slept).toBeLessThan(NOTCH_POINT_UNCHANGED_MS + NOTCH_POINT_SETTLE_STEP_MS);
+  });
+
+  /** A program whose every click opens the next thing: a way of `length` clicks, one new window per click. */
+  const longWay = (length: number) => {
+    let at = 0;
+    const read = async (): Promise<unknown> => ({ window_title: `Screen ${at}`, app: 'tool', elements: [
+      { id: 1, name: `Screen ${at}`, control_type: 'Window', rect: { x: 0, y: 0, w: 1600, h: 900 } },
+      { id: 10 + at, name: `Thing ${at + 1}`, control_type: 'Button', rect: { x: 100 + at * 40, y: 400, w: 120, h: 30 } },
+      { id: 90, name: 'Other', control_type: 'Button', rect: { x: 900, y: 800, w: 120, h: 30 } },
+    ] });
+    return { read, advance: () => { at++; }, where: () => at, answer: () => (at >= length ? '{"done": true}' : `{"id": ${10 + at}, "last": ${at === length - 1}}`) };
+  };
+  /** A walk through such a program, where a click on the thing moves it on. */
+  const walkThrough = (way: ReturnType<typeof longWay>, clicks: ('hit' | 'miss')[]) => {
+    const did: string[] = [];
+    const said: string[] = [];
+    let n = 0;
+    const point = createNotchPoint({
+      read: async () => way.read(),
+      choose: async () => way.answer(),
+      ring: async () => true,
+      wait: async (_rect, label) => {
+        did.push(label);
+        const hit = (clicks[n++] ?? 'hit') === 'hit';
+        if (hit) way.advance();
+        return { clicked: true, inside: hit, why: 'click' };
+      },
+      clear: async () => { did.push('clear'); },
+      sleep: async () => {},
+      log: () => {},
+    });
+    return { point, did, said, during: { step: (line: string) => said.push(line) } };
+  };
+
+  // The owner, 17 November 2026: "if I ask where do I do a certain thing that takes many different clicks and
+  // many different steps, that has to work." It used to stop after eight rounds, wherever it was.
+  test('a way of twelve clicks is shown to its end', async () => {
+    const way = longWay(12);
+    const h = walkThrough(way, []);
+    expect(await h.point('How do I export this as a PDF?', h.during)).toMatchObject({ ok: true, said: 'That was the last step.', ended: 'finished', steps: 12 });
+    expect(h.did.filter((line) => line !== 'clear')).toEqual(Array.from({ length: 12 }, (_, i) => `${i + 1}. Click Thing ${i + 1}`));
+    expect(h.said.filter((line) => line.startsWith('Step') || line.startsWith('Last'))).toEqual([
+      'Step 1: click Thing 1, on the left of the window.', ...Array.from({ length: 10 }, (_, i) => `Step ${i + 2}: click Thing ${i + 2}.`), 'Last step: click Thing 12.',
+    ]);
+  });
+
+  test('a click beside the thing is not a step: the same step is shown again, with its own number', async () => {
+    const way = longWay(7);
+    const h = walkThrough(way, ['hit', 'miss', 'hit', 'hit', 'miss', 'hit', 'hit', 'hit', 'hit']);
+    expect(await h.point('How do I export this as a PDF?', h.during)).toMatchObject({ ok: true, ended: 'finished', steps: 7 });
+    expect(h.did.filter((line) => line !== 'clear')).toEqual([
+      '1. Click Thing 1', '2. Click Thing 2', '2. Click Thing 2', '3. Click Thing 3', '4. Click Thing 4', '4. Click Thing 4', '5. Click Thing 5', '6. Click Thing 6', '7. Click Thing 7',
+    ]);
+  });
+
+  test('past as many steps as one go shows it says how far it came, and "go on" takes it further', async () => {
+    const way = longWay(NOTCH_POINT_MAX_STEPS + 3);
+    const h = walkThrough(way, []);
+    expect(await h.point('How do I set this up?', h.during)).toMatchObject({
+      ok: true, said: `I showed ${NOTCH_POINT_MAX_STEPS} steps, and there is more. Say "go on" and I show the next.`, ended: 'limit', steps: NOTCH_POINT_MAX_STEPS,
+    });
+    expect(h.point.goesOn('go on')).toBe(true);
+    expect(h.point.goesOn('And now?')).toBe(true);
+    // Not a new question, and not words that mean something else.
+    expect(h.point.goesOn('go on holiday with Anna')).toBe(false);
+    expect(await h.point('go on', h.during)).toMatchObject({ ok: true, said: 'That was the last step.', ended: 'finished', steps: NOTCH_POINT_MAX_STEPS + 3 });
+    // Its steps go on being counted from where it was.
+    expect(h.did.filter((line) => line !== 'clear').at(-1)).toBe(`${NOTCH_POINT_MAX_STEPS + 3}. Click Thing ${NOTCH_POINT_MAX_STEPS + 3}`);
+    // A walk that reached its end leaves nothing to go on with.
+    expect(h.point.goesOn('go on')).toBe(false);
+    expect(await h.point('go on')).toBeNull();
+  });
+
+  test('"go on" is only taken for a few minutes, and never when no walk stopped', async () => {
+    let now = 1_000_000;
+    const point = createNotchPoint({
+      read: async () => obs(), choose: async () => '{"id": 14, "last": false}', ring: async () => true,
+      wait: async () => ({ clicked: false, inside: false, why: 'time' }), clear: async () => {}, sleep: async () => {}, now: () => now, log: () => {},
+    });
+    expect(point.goesOn('go on')).toBe(false);
+    // Nothing was clicked: there is no way begun to go on with.
+    expect(await point('How do I add a source?')).toMatchObject({ ended: 'timeout', steps: 0 });
+    expect(point.goesOn('go on')).toBe(false);
+  });
+
+  // A dialog or a page can take seconds to be there. One fixed wait of 450 ms read the window as it was: the
+  // same step was pointed at twice, or "you are there" was said of a place the person had not reached.
+  test('a window that is slow to change is waited for, and read until it has stopped changing', async () => {
+    const dialog = (rows: number): unknown => ({ window_title: 'Export', app: 'obs64', elements: [
+      { id: 1, name: 'Export', control_type: 'Window', rect: { x: 300, y: 200, w: 800, h: 500 } },
+      ...Array.from({ length: rows }, (_, i) => ({ id: 40 + i, name: `Format ${i + 1}`, control_type: 'ListItem', rect: { x: 320, y: 260 + i * 30, w: 300, h: 28 } })),
+    ] });
+    // After the click: the old window for three reads, then the dialog with one row, then with three, and it stays.
+    const after = [obs(), obs(), obs(), dialog(1), dialog(3), dialog(3), dialog(3)];
+    let reads = 0;
+    const h = world({
+      read: async () => (reads++ === 0 ? obs() : after[Math.min(reads - 2, after.length - 1)]!),
+      answer: ['{"id": 14, "last": false}', '{"id": 42, "last": true}'],
+      clicks: [click, click],
+    });
+    expect(await h.point('How do I export this?')).toMatchObject({ ok: true, ended: 'finished', steps: 2 });
+    // The second question was put with the dialog as it ended up, all three rows of it.
+    expect(h.asked[1]).toContain('42 | item | Format 3');
+    expect(h.asked[1]).not.toContain('Start Streaming');
+    const before = h.did.indexOf('choose 2', 2);
+    expect(h.did.slice(2, before).filter((line) => line === 'read').length).toBe(6);
+  });
+
+  test('the model can ask for a scroll: the person scrolls, and the way goes on when the window has moved', async () => {
+    const page = (top: number): unknown => ({ window_title: 'Settings', app: 'settings', elements: [
+      { id: 1, name: 'Settings', control_type: 'Window', rect: { x: 0, y: 0, w: 1200, h: 800 } },
+      ...Array.from({ length: 6 }, (_, i) => ({ id: 20 + top + i, name: `Section ${top + i + 1}`, control_type: 'ListItem', rect: { x: 40, y: 100 + i * 100, w: 600, h: 80 } })),
+    ] });
+    let reads = 0;
+    const said: string[] = [];
+    const h = world({
+      // Read once, then twice more with nothing moved, then the person has scrolled.
+      read: async () => (reads++ < 3 ? page(0) : page(6)),
+      answer: ['{"scroll": "down"}', '{"id": 29, "last": true}'],
+      clicks: [click],
+    });
+    expect(await h.point('Where is section ten?', { step: (line) => said.push(line) })).toMatchObject({ ok: true, said: 'That was the last step.', ended: 'finished', steps: 1 });
+    expect(said).toEqual(['Scroll down a little: it is further down.', 'Last step: click Section 10, on the left of the window.']);
+    // Nothing is ringed while a scroll is waited for.
+    expect(h.did.slice(0, 3)).toEqual(['read', 'choose 2', 'clear']);
+  });
+
+  test('a scroll that nobody makes, and scroll after scroll that finds nothing, both end with a word', async () => {
+    const h = world({ read: async () => obs(), answer: '{"scroll": "down"}', clicks: [click] });
+    expect(await h.point('Where is the advanced part?')).toMatchObject({ ok: true, said: 'I stopped showing the way: nothing moved for 30 seconds. Say "go on" to pick it up.', ended: 'timeout' });
+    let reads = 0;
+    const endless = world({ read: async () => ({ window_title: `at ${reads++}`, app: 'tool', elements: [{ id: 3, name: 'A', control_type: 'Button', rect: { x: 1, y: 1, w: 50, h: 20 } }] }), answer: '{"scroll": "down"}', clicks: [click] });
+    expect(await endless.point('Where is the advanced part?')).toMatchObject({ ok: true, said: 'I could not find it by scrolling. Say "go on" when it is in view.', ended: 'lost' });
+  });
+
+  test('a field to type in is a step, not the end: it says what to type, and goes on to the next thing', async () => {
+    const save = (): unknown => ({ window_title: 'Save As', app: 'obs64', elements: [
+      { id: 1, name: 'Save As', control_type: 'Window', rect: { x: 300, y: 200, w: 800, h: 500 } },
+      { id: 50, name: 'File name', control_type: 'Edit', rect: { x: 420, y: 600, w: 400, h: 28 } },
+      { id: 51, name: 'Save', control_type: 'Button', rect: { x: 900, y: 650, w: 90, h: 30 } },
+    ] });
+    const said: string[] = [];
+    const h = world({
+      read: async () => save(),
+      answer: ['{"id": 50, "last": false, "how": "click", "then": "type the file name"}', '{"id": 51, "last": true}'],
+      clicks: [click, click],
+    });
+    expect(await h.point('How do I save this under a new name?', { step: (line) => said.push(line) })).toMatchObject({ ok: true, ended: 'finished', steps: 2 });
+    expect(said).toEqual(['Step 1: click in File name, at the bottom of the window, then type the file name.', 'Looking for the next step.', 'Last step: click Save.']);
+    // The model is told what was to be typed there.
+    expect(h.asked[1]).toContain('1. clicked field "File name" (to type the file name)');
+    // Typing changes nothing that can be read, so it is not waited out for long.
+    const slept = h.did.filter((line) => line.startsWith('sleep')).map((line) => Number(line.slice(6))).reduce((a, b) => a + b, 0);
+    expect(slept).toBeLessThan(NOTCH_POINT_UNCHANGED_MS);
+    // What to type is words for the person. Anything that looks like markup or a link is left out.
+    expect(pointChoice('{"id": 50, "last": false, "then": "open https://evil.example now"}', pointWindow(save())!)).toEqual({ go: expect.objectContaining({ name: 'File name' }), last: false, how: 'click' });
+  });
+
+  test('a thing that is greyed out is told to the model as off', () => {
+    const got = pointWindow({ window_title: 'Doc', app: 'writer', elements: [
+      { id: 2, name: 'Export', control_type: 'MenuItem', enabled: false, rect: { x: 10, y: 40, w: 100, h: 24 } },
+      { id: 3, name: 'Save', control_type: 'MenuItem', enabled: true, rect: { x: 10, y: 64, w: 100, h: 24 } },
+    ] })!;
+    const asked = pointMessages('How do I export?', got)[1]!.content;
+    expect(asked).toContain('2 | menu item | Export (off)');
+    expect(asked).toContain('3 | menu item | Save\n');
+    expect(NOTCH_POINT_SYSTEM).toContain('(off) is greyed out');
+  });
+
+  test('a click beside the thing that lands in another program: it says so, and does not show the way there', async () => {
+    const other = (): unknown => ({ window_title: 'Chat', app: 'slack', elements: [{ id: 14, name: 'File', control_type: 'MenuItem', rect: { x: 10, y: 10, w: 60, h: 24 } }] });
+    let reads = 0;
+    const h = world({ read: async () => (reads++ === 0 ? obs() : other()), answer: '{"id": 14, "last": false}', clicks: [{ clicked: true, inside: false, why: 'click' }] });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({
+      ok: true, said: 'You went to another program, so I stopped showing the way. Say "go on" when you are back.', ended: 'left',
+    });
+    expect(h.did.filter((line) => line.startsWith('wait')).length).toBe(1);
+    // A click on the thing that opens another program is the way itself: it goes on there.
+    reads = 0;
+    const way = world({ read: async () => (reads++ === 0 ? obs() : other()), answer: ['{"id": 14, "last": false}', '{"id": 14, "last": true}'], clicks: [click, click] });
+    expect(await way.point('How do I add an audio input capture?')).toMatchObject({ ok: true, ended: 'finished', steps: 2 });
+  });
+
+  test('in a window that runs as administrator the click cannot be seen: the step is shown, and it says why it does not wait', async () => {
+    const admin = (): unknown => ({ ...(obs() as object), window_elevated: true });
+    const h = world({ read: async () => admin(), answer: '{"id": 14, "last": false}', clicks: [click] });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({
+      ok: true, said: 'Start with Add Source, bottom left of the window. I am pointing at it. This window runs as administrator, so I cannot see your clicks in it. Say "go on" after each step.', ended: 'shown',
+    });
+    expect(h.did.some((line) => line.startsWith('wait'))).toBe(false);
+    // And "go on" shows the next one.
+    expect(h.point.goesOn('go on')).toBe(true);
+    expect(await h.point('go on')).toMatchObject({ ok: true, said: expect.stringContaining('Next: Add Source') });
+  });
+
+  test('a walk that was replaced takes nothing off the screen: what is there is the next walk\'s', async () => {
+    const did: string[] = [];
+    let release: (answer: string) => void = () => {};
+    let asked = 0;
+    const point = createNotchPoint({
+      read: async () => obs(),
+      // The first walk's question to the model is still out when the second walk begins.
+      choose: async () => (asked++ === 0 ? new Promise<string>((resolve) => { release = resolve; }) : '{"id": 14, "last": false}'),
+      ring: async () => true,
+      wait: async (_rect, label) => { did.push(`wait ${label}`); return new Promise(() => {}); },
+      clear: async () => { did.push('clear'); },
+      sleep: async () => {}, log: () => {},
+    });
+    const stopFirst = new AbortController();
+    const first = point('How do I add a source?', { signal: stopFirst.signal });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    void point('How do I start recording?');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(did).toEqual(['wait 1. Click Add Source']);
+    // Now the first walk is stopped and its late answer comes in.
+    stopFirst.abort();
+    release('{"id": 12, "last": true}');
+    expect(await first).toEqual({ ok: 'stopped' });
+    expect(did).toEqual(['wait 1. Click Add Source']);
   });
 
   test('a desktop app that cannot wait for a click shows the first step and says it is the first', async () => {
     const h = world({ read: async () => obs(), answer: '{"id": 14, "last": false}' });
-    expect(await h.point('How do I add an audio input capture?')).toEqual({ ok: true, said: 'Start with Add Source, bottom left of the window. I am pointing at it.' });
+    expect(await h.point('How do I add an audio input capture?')).toMatchObject({ ok: true, said: 'Start with Add Source, bottom left of the window. I am pointing at it.' });
     // Or one that answers the wait with no word about a click.
     const old = world({ read: async () => obs(), answer: '{"id": 14, "last": false}', clicks: [null] });
     expect(await old.point('How do I add an audio input capture?')).toBeNull();
@@ -362,7 +641,8 @@ describe('something that takes several clicks to get to', () => {
     // A number that is not in the list, a thing that cannot be pointed at, and anything else: nothing.
     expect(pointChoice('{"id": 99, "last": true}', got)).toBeNull();
     expect(pointChoice('{"id": 1}', got)).toBeNull();
-    expect(pointChoice('{"id": "12"}', got)).toBeNull();
+    expect(pointChoice('{"id": "12"}', got)).toMatchObject({ go: { name: 'Start Recording' } });
+    expect(pointChoice('{"id": "twelve"}', got)).toBeNull();
     expect(pointChoice('{"done": "yes"}', got)).toBeNull();
     expect(pointChoice('[12]', got)).toBeNull();
     expect(pointChoice('twelve', got)).toBeNull();
@@ -530,7 +810,7 @@ describe('a window that says nothing about what is in it is looked at', () => {
 
   test('on a page in a browser the pointer goes to the thing on the page', async () => {
     const h = sight({ seen: ['{"x": 3, "y": 60, "name": "New post", "last": true, "how": "click"}', '{"x0": 20, "y0": 40, "x1": 62, "y1": 56}'] });
-    expect(await h.point('Where do I post?')).toEqual({ ok: true, said: 'New post, on the left of the window. I am pointing at it.' });
+    expect(await h.point('Where do I post?')).toMatchObject({ ok: true, said: 'New post, on the left of the window. I am pointing at it.' });
     expect(h.did).toEqual([
       'read',
       // A blind window is not answered from its list alone: the browser's own buttons are all that is in it.
@@ -561,26 +841,26 @@ describe('a window that says nothing about what is in it is looked at', () => {
 
   test('when the thing is one the program names, its own rectangle is taken: nothing is read off the picture', async () => {
     const h = sight({ seen: ['{"id": 5, "last": true}'] });
-    expect(await h.point('Where do I reload this page?')).toEqual({ ok: true, said: 'Reload, the button, top left of the window. I am pointing at it.' });
+    expect(await h.point('Where do I reload this page?')).toMatchObject({ ok: true, said: 'Reload, the button, top left of the window. I am pointing at it.' });
     expect(h.did).toEqual(['read', 'see the window', 'look', `ring 90,48 34x34 "Reload" ${NOTCH_POINT_MS}`]);
   });
 
   test('a window that names what fills it is answered from its list, and no picture is taken', async () => {
-    const h = sight({ read: () => studio(), listed: '{"id": 6}', seen: ['{"id": null}'] });
-    expect(await h.point('How do I start recording?')).toEqual({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.' });
+    const h = sight({ read: () => studio(), listed: '{"id": 6, "last": true}', seen: ['{"id": null}'] });
+    expect(await h.point('How do I start recording?')).toMatchObject({ ok: true, said: 'Start Recording, the button, bottom right of the window. I am pointing at it.' });
     expect(h.did).toEqual(['read', 'choose from the list', `ring 1300,700 280x36 "Start Recording" ${NOTCH_POINT_MS}`]);
   });
 
   test('when its list does not hold the thing, the window is looked at before giving up', async () => {
     const h = sight({ read: () => studio(), listed: '{"id": null}', seen: ['{"x": 40, "y": 30, "name": "the red marker", "last": true}', '{"x0": 45, "y0": 45, "x1": 55, "y1": 55}'] });
-    expect(await h.point('Where is the red marker?')).toEqual({ ok: true, said: 'the red marker, in the middle of the window. I am pointing at it.' });
+    expect(await h.point('Where is the red marker?')).toMatchObject({ ok: true, said: 'the red marker, in the middle of the window. I am pointing at it.' });
     expect(h.did.slice(0, 4)).toEqual(['read', 'choose from the list', 'see the window', 'look']);
     expect(h.logs.join('\n')).toContain('by sight, it was not in the list');
   });
 
   test('a window that cannot be read at all can still be looked at', async () => {
     const h = sight({ read: () => null, seen: ['{"x": 50, "y": 50, "name": "Play", "last": true}', '{"x0": 40, "y0": 40, "x1": 60, "y1": 60}'] });
-    expect(await h.point('Where do I start the game?')).toEqual({ ok: true, said: 'Play, in the middle of the window. I am pointing at it.' });
+    expect(await h.point('Where do I start the game?')).toMatchObject({ ok: true, said: 'Play, in the middle of the window. I am pointing at it.' });
     expect(h.did).not.toContain('choose from the list');
     expect(h.logs.join('\n')).toContain('by sight, the window says nothing');
   });
@@ -609,8 +889,8 @@ describe('a window that says nothing about what is in it is looked at', () => {
       clicks: [{ clicked: true, inside: true, why: 'click' }, { clicked: true, inside: true, why: 'click' }],
     });
     const steps: string[] = [];
-    expect(await h.point('How do I post a photo?', { step: (said) => steps.push(said) })).toEqual({ ok: true, said: 'That was the last step.' });
-    expect(steps).toEqual(['Step 1: click Create, on the left of the window.', 'Last step: click Select from computer.']);
+    expect(await h.point('How do I post a photo?', { step: (said) => steps.push(said) })).toMatchObject({ ok: true, said: 'That was the last step.' });
+    expect(steps).toEqual(['Step 1: click Create, on the left of the window.', 'Looking for the next step.', 'Last step: click Select from computer.']);
     expect(h.did.filter((line) => line.startsWith('wait'))).toEqual([
       'wait 109,800 244x57 "1. Click Create"',
       'wait 1164,677 233x39 "2. Click Select from computer"',

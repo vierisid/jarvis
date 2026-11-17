@@ -11,7 +11,7 @@ import { MemoryForget } from '../brief/memory-forget.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { NotchMemoryFact } from '../notch/memory.ts';
-import type { NotchConnection, NotchKeyPairs, NotchPrefsDeps } from '../notch/prefs.ts';
+import type { NotchConnection, NotchKeyPairs, NotchPrefsDeps, NotchSettingsPage } from '../notch/prefs.ts';
 import type { NotchRealDeps } from '../notch/real.ts';
 import { getEntity } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
@@ -108,7 +108,7 @@ export interface NotchOfficeOptions {
   /** Shows Jarvis's own browser at Gmail, where the person signs in. */
   openMail(): Promise<void>;
   /** Opens the dashboard at one of its settings pages. */
-  openPage(sidecarId: string | null, page: 'voice' | 'llm' | 'integrations'): void;
+  openPage(sidecarId: string | null, page: NotchSettingsPage): void;
 }
 
 export function notchOfficeDeps(options: NotchOfficeOptions): NonNullable<NotchRealDeps['office']> {

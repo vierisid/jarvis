@@ -177,6 +177,7 @@ import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, no
 import { notchOfficeDeps } from "./notch-office.ts";
 import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
+import type { NotchSettingsPage } from "../notch/prefs.ts";
 
 /** The small window that says it is installed, by its name among the desktop app's windows. */
 const NOTCH_INSTALLED_CARD = 'notch:installed';
@@ -4681,12 +4682,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // A settings page of the dashboard, in a window of its own: the
       // dashboard's main window may be open on something else, and is not
       // moved. Where that cannot be opened, the dashboard is.
-      const notchOpenPage = (sidecarId: string | null, page: 'voice' | 'llm' | 'integrations'): void => {
+      // "speech" is where speech-to-text is set: the Channels tab, at its
+      // "Voice Transcription" part. The Voice tab is the voice it speaks with.
+      const notchOpenPage = (sidecarId: string | null, page: NotchSettingsPage): void => {
+        const query = page === 'speech' ? 'settingsTab=channels&settingsFocus=stt' : `settingsTab=${page}`;
         const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
         for (const id of targets) {
           void sidecarManager.dispatchRPC(id, 'panel.spawn', {
             id: `notch:settings:${page}`,
-            url: `${pebblePanelOrigin}/?settingsTab=${page}#/_panel_settings`,
+            url: `${pebblePanelOrigin}/?${query}#/_panel_settings`,
             title: 'JARVIS',
             bounds: { x: -1, y: -1, w: 1100, h: 760 },
             resizable: true,
@@ -4826,7 +4830,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // done: day one is those steps, with the notch on.
           openSetup: (sidecarId) => notchOpenPage(sidecarId, 'llm'),
           // What makes out speech has a page and a key of its own.
-          openVoice: (sidecarId) => notchOpenPage(sidecarId, 'voice'),
+          openVoice: (sidecarId) => notchOpenPage(sidecarId, 'speech'),
           finishSetup: async () => { await notchFinishSetup?.(); },
           // "Pillow is installed": a small window in the middle of the
           // screen, of each computer that shows the notch, that takes no

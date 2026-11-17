@@ -300,13 +300,14 @@ describe('settings', () => {
     expect(h.rows()[0]!.say.some((part) => typeof part === 'object' && 'word' in part)).toBe(false);
   });
 
-  test('with nothing to make out speech it says so, and the way to set it up is the dashboard\'s voice page', async () => {
+  // The owner, 17 November 2026: "it brought me to the voice section instead of to the channel where there is the speech to text."
+  test('with nothing to make out speech it says so, and the way to set it up is where speech-to-text is set, not the voice page', async () => {
     const h = prefs({ voice: null });
     await h.speak('settings');
     expect(rowText(h.rows()[2]!)).toBe('Sounds: My small sounds are off.');
     expect(h.rows()[3]).toMatchObject({ lead: 'Voice', say: ['Nothing turns your speech into words yet.'], buttons: [{ id: 'voice', label: 'Set up', quiet: true }] });
     await h.reply('button', { button: 'voice' });
-    expect(h.did).toEqual(['dashboard voice']);
+    expect(h.did).toEqual(['dashboard speech']);
   });
 
   test('Watching leads to what I see, How I move to the library, and the settings are back after each', async () => {
