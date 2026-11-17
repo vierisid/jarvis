@@ -359,7 +359,7 @@ describe('a reply written again in another manner', () => {
     const next = await watch.redraft(row!.id, { told: '  I am on "Central European Time"\n ' });
     expect(next).toMatchObject({ draft: 'Hi Leo,\nI am on Central European Time.\nSam', missing: '', told: 'I am on "Central European Time"', tone: '' });
     const said = asked.thinks[1]!;
-    expect(said).toContain(`told you, for this reply: "I am on 'Central European Time'". This is true and it is theirs to say`);
+    expect(said).toContain(`told you, for this reply: "I am on 'Central European Time'". It is theirs to say and theirs to decide.`);
     // Before the mail's marks, never inside them.
     expect(said.indexOf('told you, for this reply')).toBeLessThan(said.indexOf('<<<UNTRUSTED_CONTENT'));
     // A later change of tone keeps what was told.

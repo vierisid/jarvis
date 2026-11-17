@@ -41,9 +41,10 @@ export interface MailProposalInput {
    */
   manner?: string;
   /**
-   * What the owner told Jarvis for this reply, in their own words, after it
-   * said what it did not know: "Tuesday at 15:00 works", "the price is 49 a
-   * month". Theirs, and true: it is used, not weighed.
+   * What the owner told Jarvis for this reply, in their own words: a fact it
+   * did not have ("Tuesday at 15:00 works", "the price is 49 a month"), or
+   * what the reply is to say ("say no", "decline, we are full until
+   * January"). Theirs, and theirs to decide: it is followed, not weighed.
    */
   told?: string;
 }
@@ -184,6 +185,7 @@ If it needs a reply, write the reply ${name} would send.
 - When they sent a link to book a time with them, do not propose times and do not ask for a link: say that ${name} will pick a time there.
 - You know ${name}'s time zone: it is given with the date. When they are asked for it, say it. Never name it as missing.
 - Say only what ${name} can say from what is in the thread and in their calendar. Never make up a fact, a price, a date, a decision, a promise or an attachment. When the reply would need something you do not have, write the reply without it and name what is missing in "missing".
+- A decision that is ${name}'s alone is never yours to make silently: whether to accept or turn down an offer, a proposal, a price, a job, a partnership, an invitation. When the last message asks for one and ${name} has not told you which way, write the reply their own writing in the thread makes most likely, and say in "missing" which way you wrote it and that it is theirs: "Whether you accept. I wrote a yes."
 - Propose or accept a time only when the calendar shows ${name} is free then. If you do, copy the words that name the time, exactly as you wrote them in the reply, into "time".
 - When what is missing is a file or a document that ${name} would have (a deck, a contract, a sheet, a recording), put two to five words it would be found by, as they would stand in its name, in "look_for". Leave it empty for anything else.
 - The body only: no subject line, no quoted history, no notes to ${name}.
@@ -206,7 +208,7 @@ export function mailProposalMessages(input: MailProposalInput): { role: 'system'
     `It is ${when(input.now, zone)}${zoneText ? `, in ${ownerName}'s time zone: ${zoneText}` : ''}.`,
     ...(manner ? [`${ownerName} asked for this reply to be written ${manner}. Keep what it says; change how it says it.`] : []),
     // The owner's own words, typed on the notch for this reply: they stand outside the mail's marks.
-    ...(told ? [`${ownerName} told you, for this reply: "${told.replace(/"/g, "'")}". This is true and it is theirs to say: use it in the reply, and do not name as missing what it answers.`] : []),
+    ...(told ? [`${ownerName} told you, for this reply: "${told.replace(/"/g, "'")}". It is theirs to say and theirs to decide. It may be a fact you did not have, or what the reply is to say: a yes, a no, a condition, something to add or to leave out. Follow it, also where it turns round what the reply would otherwise have said, and do not name as missing what it answers.`] : []),
     wrapUntrusted(mailThreadText(thread, owner, ownerName, zone), 'a mail thread'),
     input.calendar
       ? wrapUntrusted(days.length ? days.join('\n') : 'Nothing is in the calendar for these days.', `${ownerName}'s calendar for the coming days`)
