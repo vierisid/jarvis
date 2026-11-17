@@ -127,6 +127,32 @@ test('a turn Jarvis stopped at its tool loop limit is not "nothing started": its
   expect(failure.effect).toBe('unknown');
 });
 
+describe('workflow step failure wording', () => {
+  test('a step that failed with nothing taking effect reads as that, with its cause, and says to fix the step', () => {
+    const failure = projectFailure({ source: 'local', message: 'Error: Second number cannot be zero\n    at run (/srv/engine/index.js:1:1)' },
+      { label: 'The step "Divide"', sideEffects: false });
+    expect(failure).toMatchObject({ category: 'invalid_input', effect: 'none', headline: 'The step "Divide" failed.',
+      outcome: 'Nothing was done. Second number cannot be zero.', detail: 'Second number cannot be zero' });
+    expect(failure.next.map(n => n.step)).toEqual(['fix_step', 'open_details']);
+  });
+
+  test('an AI provider that rejected its key before any call says nothing was done and points to AI settings', () => {
+    const failure = projectFailure({ source: 'provider', code: 'auth', message: '401 invalid x-api-key' }, { label: 'The step "Ask"', sideEffects: false });
+    expect(failure).toMatchObject({ category: 'missing_binding', effect: 'none', outcome: 'Nothing was done.',
+      headline: 'The step "Ask" failed: the AI provider did not accept its credentials.' });
+    expect(failure.next.map(n => n.step)).toEqual(['check_ai_settings', 'open_details']);
+    expect(failure.next[0]!.label).toContain('AI settings');
+  });
+
+  test('a rejected human request is a clean denial: nothing after it ran, and no advice to run it again', () => {
+    const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'HUMAN_INPUT_REJECTED', message: 'Human request rejected', effect: 'not_started' } },
+      { label: 'The step "Ask"', sideEffects: false });
+    expect(failure).toMatchObject({ category: 'approval_denied', effect: 'none', outcome: 'Nothing after it ran.' });
+    expect(failure.headline).toBe('The step "Ask" did not continue: the request was rejected.');
+    expect(failure.next.map(n => n.step)).toEqual(['open_details']);
+  });
+});
+
 test('an approved step whose connection changed after the card says so and that nothing was sent (G-6)', () => {
   const failure = projectFailure({ source: 'action', outcome: { status: 'blocked', code: 'CONNECTION_CHANGED_AFTER_REQUEST',
     message: 'The connection changed after you were asked, so this was not sent', effect: 'not_started' } }, { label: 'The step "Send invoice"', sideEffects: false });
