@@ -20,6 +20,19 @@ import {
 import { getSuggestionStats, getSuggestionCountSince } from '../vault/awareness.ts';
 import type { ContextTracker } from './context-tracker.ts';
 
+/** 'YYYY-MM-DD' for the local calendar day of `d`, the day the user sees. */
+function localDateString(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** Local midnight that starts `day`, and the last millisecond before the next local midnight. */
+function localDayBounds(day: Date): { dayStart: number; dayEnd: number } {
+  const start = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+  return { dayStart: start.getTime(), dayEnd: next.getTime() - 1 };
+}
+
 export class BehaviorAnalytics {
   private llm: LLMManager;
   private maxGapMs: number;
@@ -37,10 +50,10 @@ export class BehaviorAnalytics {
 
   /**
    * Generate a daily productivity report.
-   * @param date — Date string 'YYYY-MM-DD' or undefined for today
+   * @param date — Local calendar date 'YYYY-MM-DD', or undefined for today (local)
    */
   async generateDailyReport(date?: string): Promise<DailyReport> {
-    const targetDate = date || new Date().toISOString().split('T')[0];
+    const targetDate = date || localDateString(new Date());
     const dayStart = new Date(targetDate + 'T00:00:00').getTime();
     const dayEnd = new Date(targetDate + 'T23:59:59.999').getTime();
 
@@ -180,15 +193,16 @@ export class BehaviorAnalytics {
 
   /**
    * Generate a weekly productivity report with trends.
-   * @param weekStart — Monday date 'YYYY-MM-DD', or undefined for current week
+   * @param weekStart — Monday as a local date 'YYYY-MM-DD', or undefined for the current local week
    */
   async generateWeeklyReport(weekStart?: string): Promise<WeeklyReport> {
     const monday = weekStart ? new Date(weekStart + 'T00:00:00') : this.getMondayOfWeek(new Date());
+    if (Number.isNaN(monday.getTime())) throw new Error(`Invalid weekStart "${weekStart}", expected YYYY-MM-DD`);
     const sunday = new Date(monday);
     sunday.setDate(sunday.getDate() + 6);
 
-    const weekStartStr = monday.toISOString().split('T')[0];
-    const weekEndStr = sunday.toISOString().split('T')[0];
+    const weekStartStr = localDateString(monday);
+    const weekEndStr = localDateString(sunday);
 
     // Previous week for trend comparison
     const prevMonday = new Date(monday);
@@ -205,9 +219,8 @@ export class BehaviorAnalytics {
     for (let d = 0; d < 7; d++) {
       const day = new Date(monday);
       day.setDate(day.getDate() + d);
-      const dateStr = day.toISOString().split('T')[0];
-      const dayStart = new Date(dateStr + 'T00:00:00').getTime();
-      const dayEnd = new Date(dateStr + 'T23:59:59.999').getTime();
+      const dateStr = localDateString(day);
+      const { dayStart, dayEnd } = localDayBounds(day);
 
       const captures = getCapturesInRange(dayStart, dayEnd);
       const activeMinutes = activeMinutesFrom(captures, this.maxGapMs);
@@ -225,7 +238,7 @@ export class BehaviorAnalytics {
       const allSessions = getRecentSessions(100);
       const sessionCount = allSessions.filter(s => s.started_at >= dayStart && s.started_at <= dayEnd).length;
 
-      dailyBreakdown.push({ date: dateStr!, activeMinutes, focusScore, contextSwitches, sessionCount });
+      dailyBreakdown.push({ date: dateStr, activeMinutes, focusScore, contextSwitches, sessionCount });
       totalMinutes += activeMinutes;
       totalFocus += focusScore;
       totalSwitches += contextSwitches;
@@ -238,7 +251,7 @@ export class BehaviorAnalytics {
 
     // Get aggregated top apps for the week
     const weekStartMs = monday.getTime();
-    const weekEndMs = sunday.getTime() + 24 * 60 * 60 * 1000 - 1;
+    const weekEndMs = localDayBounds(sunday).dayEnd;
     const topApps = getAppUsageStats(weekStartMs, weekEndMs, this.maxGapMs);
 
     // Compare with previous week for trends
@@ -252,9 +265,7 @@ export class BehaviorAnalytics {
     for (let d = 0; d < 7; d++) {
       const day = new Date(prevMonday);
       day.setDate(day.getDate() + d);
-      const dateStr = day.toISOString().split('T')[0];
-      const dayStart = new Date(dateStr + 'T00:00:00').getTime();
-      const dayEnd = new Date(dateStr + 'T23:59:59.999').getTime();
+      const { dayStart, dayEnd } = localDayBounds(day);
       const captures = getCapturesInRange(dayStart, dayEnd);
       const mins = activeMinutesFrom(captures, this.maxGapMs);
       const switches = captures.filter((c, i) => i > 0 && c.app_name !== captures[i - 1]!.app_name).length;
@@ -293,8 +304,8 @@ export class BehaviorAnalytics {
     );
 
     return {
-      weekStart: weekStartStr!,
-      weekEnd: weekEndStr!,
+      weekStart: weekStartStr,
+      weekEnd: weekEndStr,
       totalActiveMinutes: totalMinutes,
       avgDailyMinutes,
       avgFocusScore,
