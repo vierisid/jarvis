@@ -652,7 +652,9 @@ removes autostart first so the daemon is not relaunched halfway through.
 daemon the way it was started.** Both read `jarvis.launch.json` beside the lock
 (see `jarvis restart` above). `jarvis update` passes on the recorded `--port`,
 `--data-dir`, `--no-local-tools` and `--system-config`, and always restarts the
-daemon detached and without opening the dashboard. `jarvis restart` prints the
+daemon detached and without opening the dashboard. It records that daemon as
+detached, as `jarvis start -d` does, so a later `jarvis restart` keeps it in the
+background. `jarvis restart` prints the
 options it took from the record. A daemon that recorded nothing, such as one
 started by an older version, is restarted with the defaults (or, for `restart`,
 the flags given), and the command says so. `jarvis start -d` hands its detached
