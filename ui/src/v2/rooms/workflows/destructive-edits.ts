@@ -18,7 +18,7 @@ function consequences(roots: FlowStepNode[], removed: FlowStepNode[], results: F
   for (const step of results) for (const reader of stepsReadingResultOf(roots, step.name, removed)) readers.set(reader.name, reader);
   const lines: string[] = [];
   if (inside.length) lines.push(`This also removes the steps inside it: ${list(inside)}.`);
-  if (readers.size) lines.push(`These steps use its result and would be left pointing at nothing: ${list([...readers.values()])}. Change them before you publish.`);
+  if (readers.size) lines.push(`These steps use its result and would be left pointing at nothing: ${list([...readers.values()])}. Change them before you turn this workflow on.`);
   return lines;
 }
 
