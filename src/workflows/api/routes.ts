@@ -1,7 +1,6 @@
 import { dismissHumanInput, getHumanInput, humanInputHistory, humanInputHistoryCursor, humanInputQueue, resolveHumanInput } from '../runtime/human-input';
 import { HUMAN_INPUT_LIST_DEFAULT, HUMAN_INPUT_LIST_MAX, HUMAN_INPUT_MAX_BODY_BYTES } from '../runtime/human-input-contract';
 import { readBoundedText } from '../../util/bounded-body.ts';
-import { forCard } from '../../util/card-text';
 import type { WorkflowContext } from '../../brief/workflow-context';
 import { editorVersion, versionAsShown } from './editor-version';
 import { boundedRunSteps } from './run-view';
@@ -98,7 +97,6 @@ import {
   createFlowRun,
   getFlowRun,
   getFlowRunInProject,
-  listRecentRuns,
   listRuns,
   listRecentRunSummaries,
   type FlowRunStatus,
@@ -2527,19 +2525,27 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
-    // "Recently run" in one read: the newest run of each workflow, most recent first, with the
-    // workflow's name. Replaces a runs read and a detail read per workflow.
+    // The newest run of each workflow, most recent first, with the workflow's
+    // name: "Recently run" in one read, and Today's "Recent activity" with
+    // `?environment=PRODUCTION&topLevel=true` (its latest real run, so a test or
+    // child run cannot hide it). One bounded read, not a list of every flow and
+    // each flow's runs. Identity, status and time only; never step output.
     "/api/workflows/recent-runs": {
       GET: (req) =>
         trapErrors(() => {
-          const limit = Math.max(1, Math.min(20, Math.trunc(numParam(new URL(req.url).searchParams.get("limit")) ?? 6)));
-          const runs = listRecentRunSummaries(callerProject(req), limit);
-          return ok({ items: runs.map(run => {
-            const flow = getFlow(run.flowId);
-            // Named as every other list names a workflow: its published version, else its latest draft.
-            const version = (flow?.published_version_id ? getFlowVersion(flow.published_version_id) : null) ?? getLatestDraft(run.flowId);
-            return { ...run, displayName: version?.displayName ?? run.flowId };
-          }) });
+          const params = new URL(req.url).searchParams;
+          const environment = params.get("environment");
+          if (environment !== null && !isRunEnvironment(environment)) return err("environment must be PRODUCTION or TESTING", 400);
+          const topLevelParam = params.get("topLevel");
+          if (topLevelParam !== null && topLevelParam !== "true" && topLevelParam !== "false") return err("topLevel must be true or false", 400);
+          const topLevel = topLevelParam === "true";
+          // Today's read keeps the listing page bounds it always had (5, up to
+          // 100); every other read keeps Recently run's (6, up to 20).
+          const today = environment === "PRODUCTION" && topLevel;
+          const limit = today ? clampPage(params, 5).limit
+            : Math.max(1, Math.min(20, Math.trunc(numParam(params.get("limit")) ?? 6)));
+          return ok({ items: listRecentRunSummaries(callerProject(req), limit, {
+            ...(environment ? { environment } : {}), ...(topLevel ? { topLevel } : {}) }) });
         }),
     },
 
@@ -2598,22 +2604,6 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const graphs = new Map<string, FlowTriggerNode | undefined>();
           const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...boundedRunSteps(publicRun(shown)), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
-        }),
-    },
-
-    // Today's "Recent activity": the latest production, top-level run of each
-    // flow in the caller's project, newest first. One bounded read, so Today
-    // does not list every flow and fetch each flow's runs. Identity, status and
-    // time only; never step output.
-    "/api/workflow-runs/recent": {
-      GET: req =>
-        trapErrors(() => {
-          const { limit } = clampPage(new URL(req.url).searchParams, 5);
-          // The name is model- or person-authored text shown on Today: invisible
-          // and bidi control characters are dropped and it is capped, as on a card.
-          const items = listRecentRuns(callerProject(req), limit)
-            .map(row => ({ ...row, name: forCard(row.name, RECENT_RUN_NAME_MAX) }));
-          return ok({ items });
         }),
     },
 
@@ -2907,8 +2897,6 @@ function numParam(raw: string | null): number | null {
  * moves, move `LIST_RUNS_MAX_LIMIT` with it.
  */
 const LISTING_MAX_LIMIT = 100;
-/** Longest workflow name Today's Recent activity shows. */
-const RECENT_RUN_NAME_MAX = 120;
 
 /**
  * A listing's `limit` and `offset`, clamped. Three listings were doing this

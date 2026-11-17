@@ -3825,7 +3825,7 @@ describe("#652: the runs listing says where the next page starts", () => {
     expect((await page(flowId, "?limit=-3")).nextOffset).toBe(1);
   });
 
-  test("the recent-runs read gives each flow's latest real run, newest first, scoped and clamped", async () => {
+  test("the recent-runs read for Today (production, top-level) gives each flow's latest real run, newest first, scoped and clamped", async () => {
     const { createFlow } = await import("../db/repos/flow");
     const { createDraftVersion } = await import("../db/repos/flow-version");
     const { createFlowRun } = await import("../db/repos/flow-run");
@@ -3851,28 +3851,31 @@ describe("#652: the runs listing says where the next page starts", () => {
     createFlowRun({ flowId: c.flow.id, flowVersionId: c.version.id, environment: "TESTING", status: "SUCCEEDED" });
     createFlowRun({ flowId: other.flow.id, flowVersionId: other.version.id, status: "SUCCEEDED" });
     const read = async (query: string, r = routes) => {
-      const res = await callJson(r["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", `http://x/api/workflow-runs/recent${query}`, {}));
+      const res = await callJson(r["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", `http://x/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true${query}`, {}));
       expect(res.status).toBe(200);
-      return res.body as { items: Array<{ runId: string; name: string; status: string }> };
+      return res.body as { items: Array<{ id: string; displayName: string; status: string }> };
     };
     const all = await read("");
-    expect(all.items.map((row) => [row.runId, row.name, row.status])).toEqual([
+    expect(all.items.map((row) => [row.id, row.displayName, row.status])).toEqual([
       [latestB.id, "Beta", "PAUSED"], [latestA.id, "Alpha", "SUCCEEDED"],
     ]);
     expect(JSON.stringify(all)).not.toContain("CANARY");
-    expect((await read("?limit=1")).items.map((row) => row.runId)).toEqual([latestB.id]);
-    expect((await read("?limit=-4")).items).toHaveLength(1);
+    // Without the filter (Recently run) a test run counts, so the test-only flow shows.
+    const unfiltered = await callJson(routes["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", "http://x/api/workflows/recent-runs", {}));
+    expect((unfiltered.body as { items: Array<{ displayName: string; environment: string }> }).items[0]).toMatchObject({ displayName: "Gamma", environment: "TESTING" });
+    expect((await read("&limit=1")).items.map((row) => row.id)).toEqual([latestB.id]);
+    expect((await read("&limit=-4")).items).toHaveLength(1);
     const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
-    expect((await read("", scoped)).items.map((row) => row.name)).toEqual(["Foreign"]);
+    expect((await read("", scoped)).items.map((row) => row.displayName)).toEqual(["Foreign"]);
     // A rename shows the flow's current name, as the Workflows room does, not the
     // name of the version the run used.
     await Bun.sleep(3);
     createDraftVersion({ flowId: a.flow.id, displayName: "Alpha renamed",
       trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
-    expect((await read("")).items.find((row) => row.runId === latestA.id)?.name).toBe("Alpha renamed");
+    expect((await read("")).items.find((row) => row.id === latestA.id)?.displayName).toBe("Alpha renamed");
   });
 
-  test("the recent-runs read leaves out removed workflows and single-step tests, and cleans the name", async () => {
+  test("the recent-runs read for Today leaves out removed workflows and single-step tests, and hands the name to the screen to clean", async () => {
     const { createFlow } = await import("../db/repos/flow");
     const { createDraftVersion } = await import("../db/repos/flow-version");
     const { createFlowRun } = await import("../db/repos/flow-run");
@@ -3893,10 +3896,11 @@ describe("#652: the runs listing says where the next page starts", () => {
     createFlowRun({ flowId: stepped.flow.id, flowVersionId: stepped.version.id, stepNameToTest: "step_1", status: "SUCCEEDED" });
     // A removed workflow (Undo receipt held) is gone from the Workflows room, so from Today too.
     getWorkflowDb().run("UPDATE brief_workflow_slots SET receipt_id = 'receipt' WHERE flow_id = ?", [removed.flow.id]);
-    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent", {}));
-    const items = (res.body as { items: Array<{ runId: string; name: string; status: string }> }).items;
-    expect(items.map(row => [row.runId, row.status])).toEqual([[realStepped.id, "FAILED"], [keptRun.id, "SUCCEEDED"]]);
-    expect(items[1]!.name).toBe("Invoicetxt.exe sender");
+    const res = await callJson(routes["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", "http://x/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true", {}));
+    const items = (res.body as { items: Array<{ id: string; displayName: string; status: string }> }).items;
+    expect(items.map(row => [row.id, row.status])).toEqual([[realStepped.id, "FAILED"], [keptRun.id, "SUCCEEDED"]]);
+    // Today's reader cleans and caps it (ui/src/brief/today/activity/read.test.ts).
+    expect(items[1]!.displayName).toBe(kept.version.displayName);
   });
 
   test("a paused run in the recent-runs read says whether it waits on a person or a timer", async () => {
@@ -3916,13 +3920,38 @@ describe("#652: the runs listing says where the next page starts", () => {
     createWaitpoint({ flowRunId: timer.run.id, projectId: "proj", stepName: "delay", type: "TIMER", resumeDateTime: resume });
     createWaitpoint({ flowRunId: person.run.id, projectId: "proj", stepName: "ask", type: "MANUAL" });
     createWaitpoint({ flowRunId: hook.run.id, projectId: "proj", stepName: "hook", type: "WEBHOOK" });
-    const res = await callJson(routes["/api/workflow-runs/recent"]?.GET, reqWithParams("GET", "http://x/api/workflow-runs/recent?limit=50", {}));
-    const items = (res.body as { items: Array<{ runId: string; waitingOn?: string; resumeAt?: number }> }).items;
-    const of = (id: string) => items.find(row => row.runId === id);
+    const res = await callJson(routes["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", "http://x/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true&limit=50", {}));
+    const items = (res.body as { items: Array<{ id: string; waitingOn?: string; resumeAt?: number }> }).items;
+    const of = (id: string) => items.find(row => row.id === id);
     expect(of(timer.run.id)).toMatchObject({ waitingOn: "timer", resumeAt: Date.parse(resume) });
     expect(of(person.run.id)).toMatchObject({ waitingOn: "person" });
     expect(of(person.run.id)?.resumeAt).toBeUndefined();
     expect(of(hook.run.id)).toMatchObject({ waitingOn: "other" });
+    // Recently run (no filter) says the same.
+    const recent = await callJson(routes["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", "http://x/api/workflows/recent-runs?limit=20", {}));
+    expect((recent.body as { items: Array<{ id: string; waitingOn?: string }> }).items.find(row => row.id === person.run.id)).toMatchObject({ waitingOn: "person" });
+  });
+
+  test("a workflow locked without a draft or a published version is named by the version its run used, on both screens", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Locked digest",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown> });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "SUCCEEDED" });
+    lockVersion(version.id);
+    for (const url of ["http://x/api/workflows/recent-runs?limit=20", "http://x/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true&limit=100"]) {
+      const res = await callJson(routes["/api/workflows/recent-runs"]?.GET, reqWithParams("GET", url, {}));
+      expect((res.body as { items: Array<{ id: string; displayName: string }> }).items.find(row => row.id === run.id))
+        .toMatchObject({ displayName: "Locked digest" });
+    }
+  });
+
+  test("the recent-runs read refuses an environment or topLevel it does not know", async () => {
+    const get = routes["/api/workflows/recent-runs"]?.GET;
+    expect((await callJson(get, reqWithParams("GET", "http://x/api/workflows/recent-runs?environment=STAGING", {}))).status).toBe(400);
+    expect((await callJson(get, reqWithParams("GET", "http://x/api/workflows/recent-runs?topLevel=yes", {}))).status).toBe(400);
   });
 
   test("following nextOffset from the start visits every run once, newest first", async () => {

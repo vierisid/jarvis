@@ -247,7 +247,7 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_flow_run_ended ON flow_run(project_id, flow_id, created DESC, id DESC)
     WHERE status IN ${ENDED_RUN_STATUSES_SQL} AND step_name_to_test IS NULL`,
   // Each workflow's latest real run, for Today's Recent activity
-  // (listRecentRuns). Over the run history index a workflow whose runs are all
+  // (listRecentRunSummaries with environment=PRODUCTION, topLevel). Over the run history index a workflow whose runs are all
   // tests or subflow children was walked to its first run on every poll.
   `CREATE INDEX IF NOT EXISTS idx_flow_run_recent ON flow_run(project_id, flow_id, created DESC, id DESC)
     WHERE environment = 'PRODUCTION' AND parent_run_id IS NULL AND step_name_to_test IS NULL`,

@@ -76,7 +76,8 @@ Source of truth: `src/brief/contracts.ts`, `capabilities.ts`, `providers.ts` and
   workflows added or removed while paging shift or repeat nothing. There is no ceiling on the number of
   workflows. A client that needs the whole list follows the cursors; a failed page fails the read.
   "Recently run" is `GET /api/workflows/recent-runs?limit=` (1 to 20, default 6): the newest run of each
-  workflow with its name, in one read.
+  workflow with its name, in one read. Today's Recent activity reads the same route with
+  `environment=PRODUCTION&topLevel=true`.
 - These types are compile-time contracts, not validators for untrusted input. Each
   provider owns bounded inputs, permission checks, runtime output validation and
   its domain-specific persistence/recovery acceptance checks.
