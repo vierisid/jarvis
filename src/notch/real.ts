@@ -79,7 +79,7 @@ export interface NotchRealDeps {
    * Day one in the notch (pass 12): the first five minutes, on a brain that
    * was never set up, and again whenever it is asked for.
    */
-  dayOne?: Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'watching' | 'told' | 'around'>;
+  dayOne?: Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'watching' | 'told' | 'around' | 'system'>;
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
@@ -432,6 +432,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       side: (text) => dayOne?.route(text) ?? mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
         ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
       unheard: (why) => dayOne?.unheard(why) ?? false,
+      pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
       more: {
         buttons: () => [
@@ -644,6 +645,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       canDrop: () => drop !== null,
       canPoint: () => deps.asks?.point !== undefined,
       isWhere: whereQuestion,
+      onDesktop: where ? () => where.onDesktop() : undefined,
       canDo: (stage, more) => canDo.open(stage, more),
       mail: layer && office?.connect ? {
         reached: () => layer.reached(),

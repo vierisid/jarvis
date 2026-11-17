@@ -1898,6 +1898,51 @@ missing some." Day one has thirteen steps since then.
     it and only notes that it was asked. With no AI, or with its eyes
     closed, each says what it needs and asks for nothing.
 
+Asked whether looking around should also open the files, the owner said
+the same evening: "Should it open file? Yes, it should." And from his next
+run: "it says it couldn't go through the document", and "I was on my
+desktop, I didn't have any windows open, which will be something that a lot
+of people will have, and so it couldn't perform anything."
+
+139. **The newest files are opened, said in a line each, and not kept.** The
+    newest four of the desktop and two of the documents that are made of
+    words (text, a web page, Word, Excel, PowerPoint, a PDF, code) are
+    handed over by the person's own computer (`notch.file`), read in the
+    brain, and put to the owner's model in one request, which answers one
+    line for each: what it is and what it is about (`src/notch/files.ts`).
+    What is in a file is outside text: it travels inside the wrapper all
+    outside text travels in, with the rule said beside it, and a line of
+    the answer that carries a link, an address or markup is not shown at
+    all. Nothing that was read is written anywhere: not to memory, not to
+    a log. With no AI nothing is opened.
+
+140. **A private file is never opened, and the computer it is on decides
+    that.** The desktop app marks a file as private from its name alone
+    (passwords, keys, recovery codes, a bank's papers, payslips, tax,
+    identity papers, medical, and the endings keys and vaults have) and
+    does not hand it over, whoever asks. It errs towards private. It hands
+    over only a plain file at the top of the desktop, the documents or the
+    downloads, asked for by place and name: a name with a path in it, a
+    folder, a shortcut, a link to somewhere else, a file over 16 MB and
+    anything in a blocked folder are refused. That a file was left closed
+    is said under the map.
+
+141. **Where the desktop is, is asked of the system, not of the
+    environment.** A test build is started with its home pointed at a
+    folder of its own, and the first look found nothing there. The desktop
+    app asks Windows where the three folders are, then tries a cloud
+    drive's copy, then the account's own home as the system records it, and
+    the environment's last; of those, the first that holds anything is the
+    one that is looked in, and a file is handed over from that same one.
+
+142. **"Where is" has something to point at on a bare desktop.** With no
+    window of a program open, the desktop is where the person is: it can be
+    read and seen like a window, with the bar along its edge. Day one's
+    question is then about something every desktop has (the Start button,
+    the Trash, the clock), and about closing the window otherwise. When the
+    thing could not be pointed at, day one says so, and never that it
+    pointed.
+
 138. **"What I can do" promises nothing the product does not take.** One
     sheet names everything the notch does, with the words that start each
     (`src/notch/cando.ts`). Day one ends on it, the settings lead to it,
@@ -1919,14 +1964,19 @@ What is not done, or not proven, in pass 12:
   the notch opens that and waits. Both choices open the same setup.
 - **Day one has no "3 things you repeat".** Nothing is known of anyone's
   habits in their first five minutes. It says how they will be found.
-- **Looking around reads names, not what is in a file.** The top of the
-  desktop, the documents and the downloads, the mail that waits, the week's
-  meetings, memory and the agents. It does not open a file, go down into a
-  folder, or read browser history or the list of programs. Whether it
-  should open files is the owner's to decide.
-- **The look at the files has not run on a real desktop.** Where a cloud
-  drive keeps the desktop was written from how Windows does it and tried on
-  made-up folders only.
+- **Looking around opens a few files and no more.** The newest four of the
+  desktop and two of the documents. It does not go down into a folder, read
+  a picture, a film or a sound, or read browser history or the list of
+  programs. What it reads is not kept, so it is not remembered afterwards:
+  whether it should be is the owner's to decide.
+- **Which files are private is told from their names.** A private file
+  with a plain name is opened. A harmless one with a private-sounding name
+  is not.
+- **The look at the files, and the opening, have not run on a real
+  desktop.** Asking Windows where the folders are compiles for Windows and
+  was never run; on made-up folders the rest was.
+- **Pointing on a bare desktop has not run.** It is written for Windows.
+  On a Mac the desktop is not yet a place that can be pointed in.
 - **Only three of what it does are lessons in day one**: the circle, a file,
   and "where is". The rest is on the sheet day one ends on.
 - **"Give me a file" is not in Home.** A file is dropped on the notch.
@@ -2139,6 +2189,7 @@ What is not done, or not proven, in pass 12:
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
 | brain to desktop app | `notch.files` | none. Only on a desktop app that may read files | `{places: [{place: "desktop" \| "documents" \| "downloads", reached, files, folders, shortcuts, kinds: {kind: count}, recent: [{name, kind, changed}], more}]}`: names, kinds and counts at the top of each place, and nothing of what is in any file |
+| brain to desktop app | `notch.file` | `{place: "desktop" \| "documents" \| "downloads", name}`. Only on a desktop app that may read files | `{opened: true, kind, size}` with the file's bytes beside it, or `{opened: false, why}`. Never a file whose name says it is private, never a path, never more than 16 MB |
 | brain to desktop app | `notch.keys` | `{}` to ask, or `{talk?: string, yes?: string}` with a pair written as `ctrl+meta` to change one or both | `{talk: [key, key], yes: [key, key], mac: boolean}`, the pairs as they now are. Refused when a pair is not two different modifier keys, or both would be the same two keys |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
 | brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |

@@ -11,23 +11,43 @@ package main
 // and the names of the few that were changed last. That is what anyone
 // looking at the desktop sees.
 //
-// What it never does: open a file. Nothing of what is in one is read here,
-// not a line and not a first page. A name, a kind told from the ending of the
-// name, and a date are all that leave this function. It looks at the top of
-// each folder and does not go down into the folders it finds.
+// notch.files itself opens nothing: a name, a kind told from the ending of the
+// name, a size and a date are all that leave it. It looks at the top of each
+// folder and does not go down into the folders it finds.
 //
-// It is only there on a desktop app that may read files at all, and a folder
-// the person has blocked is not looked into.
+// Asked whether it should also open the files, the owner said the same
+// evening: "Should it open file? Yes, it should." So there is notch.file,
+// which hands the brain one file from the top of one of those three places,
+// to be read there and said in a line. What it will not hand over:
+//
+//   - anything that is not at the top of the desktop, the documents or the
+//     downloads. The brain names a place and a name, never a path, and a name
+//     with a path in it is refused;
+//   - a file whose name says it is private: passwords, keys, recovery codes,
+//     a bank's papers. The prototype's own words for looking around were "I
+//     skip banking and passwords". Such a file is marked in the list and is
+//     never opened, whoever asks;
+//   - a folder, a shortcut, a link to somewhere else, or a file larger than
+//     the brain reads;
+//   - anything in a folder the person has blocked.
+//
+// Both are only there on a desktop app that may read files at all.
 
 import (
+	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
 const (
+	// The largest file that is handed over to be read: what the brain reads of
+	// a dropped file at the most (src/notch/drop.ts).
+	notchFileMost = 16 * 1024 * 1024
 	// How many entries of one folder are looked at. A desktop with more than
 	// this is counted as far as this, and says so.
 	notchFilesMost = 2000
@@ -42,6 +62,22 @@ type notchFileSeen struct {
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
 	Changed int64  `json:"changed"`
+	Size    int64  `json:"size"`
+	// Its name says it is private. It is listed, and never opened.
+	Private bool `json:"private,omitempty"`
+}
+
+// What a name says is private. Told from the name alone: nothing is opened to
+// find out. It errs towards calling a file private.
+var notchFilePrivateName = regexp.MustCompile(`(?i)(pass(word|wd|phrase|code)?s?\b|\bpwd\b|secret|credential|\btokens?\b|private[ _-]?key|\bkeys?\b|recovery|seed[ _-]?phrase|\bwallet|\b2fa\b|backup[ _-]?codes?|\blogins?\b|\bbank|\biban\b|statement|payslip|salary|\btax(es)?\b|passport|\bid[ _-]?card|\bssn\b|medical|diagnos)`)
+
+var notchFilePrivateEnding = map[string]bool{
+	".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".kdb": true, ".env": true, ".ppk": true, ".asc": true, ".gpg": true, ".keychain": true, ".ovpn": true, ".wallet": true,
+}
+
+// notchFilePrivate: whether a file is one that is never opened.
+func notchFilePrivate(name string) bool {
+	return notchFilePrivateEnding[strings.ToLower(filepath.Ext(name))] || notchFilePrivateName.MatchString(name)
 }
 
 // notchFilePlace is one of the places looked in.
@@ -144,11 +180,14 @@ func notchFilesIn(place, dir string) notchFilePlace {
 			out.Files++
 			out.Kinds[kind]++
 		}
-		changed := int64(0)
+		changed, size := int64(0), int64(0)
 		if info, err := entry.Info(); err == nil {
 			changed = info.ModTime().UnixMilli()
+			if kind != "folder" {
+				size = info.Size()
+			}
 		}
-		seen = append(seen, notchFileSeen{Name: notchFileName(name), Kind: kind, Changed: changed})
+		seen = append(seen, notchFileSeen{Name: notchFileName(name), Kind: kind, Changed: changed, Size: size, Private: kind != "folder" && notchFilePrivate(name)})
 	}
 	sort.SliceStable(seen, func(i, j int) bool { return seen[i].Changed > seen[j].Changed })
 	if len(seen) > notchFilesNamed {
@@ -158,63 +197,178 @@ func notchFilesIn(place, dir string) notchFilePlace {
 	return out
 }
 
+// platformNotchKnownFolders asks the system itself where the person's
+// desktop, documents and downloads are. Set where the system can be asked
+// (Windows); nil elsewhere.
+var platformNotchKnownFolders func() map[string]string
+
+// notchFileHomes is every folder that may be the person's own, the surest
+// first. The environment is asked last, because it can be wrong: a test build
+// is started with its "home" pointed at a folder of its own, so that it does
+// not touch an installed Jarvis, and the person's desktop is not in there.
+// The owner's first look at his files, 17 November 2026, found nothing for
+// exactly that reason. The system's own record of who is signed in is not
+// changed by that, and is asked first.
+func notchFileHomes(account, environment string, env func(string) string, goos string) []string {
+	homes := []string{account}
+	if goos == "windows" {
+		if drive, path := env("HOMEDRIVE"), env("HOMEPATH"); drive != "" && path != "" {
+			homes = append(homes, drive+path)
+		}
+	}
+	homes = append(homes, environment)
+	seen, out := map[string]bool{}, []string{}
+	for _, home := range homes {
+		key := strings.ToLower(filepath.Clean(home))
+		if home == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, home)
+	}
+	return out
+}
+
 // notchFileRoots is where each place may be on this machine, the likeliest
-// first. A desktop that a cloud drive has taken over lives in that drive's
-// folder, and the one in the home folder is then empty or gone.
-func notchFileRoots(home string, env func(string) string, goos string) map[string][]string {
+// first: where the system says it is, then a cloud drive that has taken it
+// over (the one in the home folder is then empty or gone), then each home.
+func notchFileRoots(homes []string, env func(string) string, goos string, known map[string]string) map[string][]string {
 	roots := map[string][]string{}
 	names := map[string]string{"desktop": "Desktop", "documents": "Documents", "downloads": "Downloads"}
 	for place, name := range names {
 		var dirs []string
-		if goos == "windows" {
+		if dir := known[place]; dir != "" {
+			dirs = append(dirs, dir)
+		}
+		if goos == "windows" && place != "downloads" {
 			for _, key := range []string{"OneDrive", "OneDriveConsumer", "OneDriveCommercial"} {
-				if drive := env(key); drive != "" && place != "downloads" {
+				if drive := env(key); drive != "" {
 					dirs = append(dirs, filepath.Join(drive, name))
 				}
 			}
+			for _, home := range homes {
+				dirs = append(dirs, filepath.Join(home, "OneDrive", name))
+			}
 		}
-		if home != "" {
+		for _, home := range homes {
 			dirs = append(dirs, filepath.Join(home, name))
 		}
-		roots[place] = dirs
+		seen, unique := map[string]bool{}, []string{}
+		for _, dir := range dirs {
+			key := strings.ToLower(filepath.Clean(dir))
+			if !seen[key] {
+				seen[key] = true
+				unique = append(unique, dir)
+			}
+		}
+		roots[place] = unique
 	}
 	return roots
 }
 
-// notchFilesLook looks in each place: the first of its folders that is there,
-// is not blocked, and holds anything. Blocked is asked for each folder.
+// notchFileRootsHere is the roots on this machine, as it is now.
+func notchFileRootsHere() map[string][]string {
+	account := ""
+	if who, err := user.Current(); err == nil {
+		account = who.HomeDir
+	}
+	environment, _ := os.UserHomeDir()
+	var known map[string]string
+	if platformNotchKnownFolders != nil {
+		known = platformNotchKnownFolders()
+	}
+	return notchFileRoots(notchFileHomes(account, environment, os.Getenv, goosName()), os.Getenv, goosName(), known)
+}
+
+// notchFilesPlace looks in one place: the first of its folders that is
+// there, is not blocked, and holds anything. It also says which folder that
+// was, so that a file is later handed over from the same one.
+func notchFilesPlace(place string, dirs []string, blocked func(dir string) bool) (notchFilePlace, string) {
+	best, where := notchFilePlace{Place: place, Kinds: map[string]int{}, Recent: []notchFileSeen{}}, ""
+	for _, dir := range dirs {
+		if blocked != nil && blocked(dir) {
+			continue
+		}
+		got := notchFilesIn(place, dir)
+		if !got.Reached {
+			continue
+		}
+		// The one that holds something is the one the person uses.
+		if !best.Reached || got.Files+got.Folders > best.Files+best.Folders {
+			best, where = got, dir
+		}
+		if best.Files+best.Folders > 0 {
+			break
+		}
+	}
+	return best, where
+}
+
+// notchFilesLook looks in each of the three places.
 func notchFilesLook(roots map[string][]string, blocked func(dir string) bool) []notchFilePlace {
 	out := make([]notchFilePlace, 0, 3)
 	for _, place := range []string{"desktop", "documents", "downloads"} {
-		best := notchFilePlace{Place: place, Kinds: map[string]int{}, Recent: []notchFileSeen{}}
-		for _, dir := range roots[place] {
-			if blocked != nil && blocked(dir) {
-				continue
-			}
-			got := notchFilesIn(place, dir)
-			if !got.Reached {
-				continue
-			}
-			// The one that holds something is the one the person uses.
-			if !best.Reached || got.Files+got.Folders > best.Files+best.Folders {
-				best = got
-			}
-			if best.Files+best.Folders > 0 {
-				break
-			}
-		}
-		out = append(out, best)
+		got, _ := notchFilesPlace(place, roots[place], blocked)
+		out = append(out, got)
 	}
 	return out
+}
+
+// notchFileOpen reads one file from the top of one place, for the brain to
+// say what it is. The name is a name and nothing else: it is looked for in
+// the folder that the list was made from, and is never joined to anything
+// the brain sent. Every refusal says why in a word the brain can show.
+func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, place, name string) ([]byte, string, error) {
+	dirs, known := roots[place]
+	if !known {
+		return nil, "", fmt.Errorf("that is not a place I look in")
+	}
+	// A name, not a way to somewhere: no folder in it, and not "." or "..".
+	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\`) || name == "." || name == ".." || len(name) > 255 {
+		return nil, "", fmt.Errorf("that is not the name of a file")
+	}
+	if notchFileHidden(name) {
+		return nil, "", fmt.Errorf("that is not a file I list")
+	}
+	if notchFilePrivate(name) {
+		return nil, "", fmt.Errorf("private: its name says so, and it is never opened")
+	}
+	kind := notchFileKind(name, false)
+	if kind == "shortcut" {
+		return nil, "", fmt.Errorf("that is a shortcut, not a file")
+	}
+	_, dir := notchFilesPlace(place, dirs, blocked)
+	if dir == "" {
+		return nil, "", fmt.Errorf("that place is not reached")
+	}
+	path := filepath.Join(dir, name)
+	// Not followed: a link on the desktop may point anywhere on the machine.
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("it is no longer there")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("that is not a plain file")
+	}
+	if info.Size() == 0 {
+		return nil, "", fmt.Errorf("it is empty")
+	}
+	if info.Size() > notchFileMost {
+		return nil, "", fmt.Errorf("it is too large to read")
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("it could not be read")
+	}
+	return bytes, kind, nil
 }
 
 // makeNotchFilesHandler serves notch.files. It takes nothing: where to look
 // is this machine's own to know, and the brain cannot name a folder.
 func makeNotchFilesHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		home, _ := os.UserHomeDir()
 		started := time.Now()
-		places := notchFilesLook(notchFileRoots(home, os.Getenv, goosName()), func(dir string) bool {
+		places := notchFilesLook(notchFileRootsHere(), func(dir string) bool {
 			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
 		})
 		// Counts, never a name.
@@ -224,5 +378,28 @@ func makeNotchFilesHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		logNotchFiles(len(places), total, time.Since(started))
 		return &RPCResult{Result: map[string]any{"places": places}}, nil
+	}
+}
+
+// makeNotchFileHandler serves notch.file: {place, name} gives one file's
+// bytes, or the reason it is not handed over.
+func makeNotchFileHandler(cfg *SidecarConfig) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		place, _ := params["place"].(string)
+		name, _ := params["name"].(string)
+		bytes, kind, err := notchFileOpen(notchFileRootsHere(), func(dir string) bool {
+			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
+		}, place, name)
+		if err != nil {
+			// Why, never which.
+			logNotchFile(place, "", 0, err.Error())
+			return &RPCResult{Result: map[string]any{"opened": false, "why": err.Error()}}, nil
+		}
+		logNotchFile(place, kind, len(bytes), "")
+		return &RPCResult{
+			Result:     map[string]any{"opened": true, "kind": kind, "size": len(bytes)},
+			BinaryRaw:  bytes,
+			BinaryMime: "application/octet-stream",
+		}, nil
 	}
 }

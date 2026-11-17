@@ -95,6 +95,10 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
       'goals/rhythm.ts',
+      // The notch's look around, day one: the beginning of a file from the
+      // owner's desktop, cut to a fixed length before it is framed into the
+      // prompt that asks for one line about each file.
+      'notch/files.ts',
       // The notch's mail proposer: a thread, a calendar and the owner's own
       // mails, each cut to its own limit before it is framed into the prompt.
       'notch/mail/proposer.ts',

@@ -405,3 +405,24 @@ describe('pass 12: watching that was switched off can be switched on again here'
     expect(buttons(h)).not.toContain('Open my eyes');
   });
 });
+
+describe('pass 12: whether the person is on the bare desktop', () => {
+  test('the system\'s own shell with no folder open is the desktop; a folder, or any program, is not', async () => {
+    const { whereIsDesktop } = await import('./where.ts');
+    expect(whereIsDesktop('explorer', 'Program Manager')).toBe(true);
+    expect(whereIsDesktop('explorer', '')).toBe(true);
+    expect(whereIsDesktop('finder', '')).toBe(true);
+    expect(whereIsDesktop('explorer', 'Documents')).toBe(false);
+    expect(whereIsDesktop('notepad', '')).toBe(false);
+    expect(whereIsDesktop('chrome', 'Program Manager')).toBe(false);
+  });
+
+  test('it follows what is in front, and is not known before anything was told', () => {
+    const h = harness();
+    expect(h.where.onDesktop()).toBeNull();
+    h.tell({ app: 'explorer', name: 'Windows Explorer', title: 'Program Manager', look: '' });
+    expect(h.where.onDesktop()).toBe(true);
+    h.tell({ app: 'notepad', name: 'Notepad', title: 'notes', look: '' });
+    expect(h.where.onDesktop()).toBe(false);
+  });
+});

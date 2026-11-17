@@ -1317,3 +1317,25 @@ describe('pass 12: day one and talking share the notch', () => {
     expect(row(h).state).not.toBe('done');
   });
 });
+
+describe('pass 12: whether a "where is" was answered by pointing is told', () => {
+  test('true when the thing was shown on the screen, false when there was nothing to point at and it went on as any question', async () => {
+    const told: boolean[] = [];
+    const shown = harness({ deps: { point: async () => ({ ok: true, said: 'Close is at the top right. I am pointing at it.' }), pointed: (was) => { told.push(was); } } });
+    await shown.type('where do I close this window');
+    await shown.advance(0);
+    expect(told).toEqual([true]);
+    const none = harness({ deps: { point: async () => null, pointed: (was) => { told.push(was); } } });
+    await none.type('where is the Start button');
+    await none.advance(0);
+    expect(told).toEqual([true, false]);
+  });
+
+  test('a question that is not about where something is tells nothing', async () => {
+    const told: boolean[] = [];
+    const h = harness({ deps: { point: async () => null, pointed: (was) => { told.push(was); } } });
+    await h.type('what is two plus two');
+    await h.advance(0);
+    expect(told).toEqual([]);
+  });
+});

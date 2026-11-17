@@ -1289,6 +1289,8 @@ func notchFrontWindow() (hwnd uintptr, pid uint32) {
 	if fg := win32RootWindow(win32GetForegroundWindow()); fg != 0 && !ownWindow(fg) {
 		return fg, win32GetWindowPid(fg)
 	}
+	var desk uintptr
+	var deskPid uint32
 	for _, w := range enumTopWindows() {
 		if ownWindow(w.Hwnd) {
 			continue
@@ -1296,13 +1298,22 @@ func notchFrontWindow() (hwnd uintptr, pid uint32) {
 		if minimized, _, _ := procIsIconic.Call(w.Hwnd); minimized != 0 {
 			continue
 		}
-		// The desktop itself is not a window a person is "in".
+		// The desktop itself is not a window a person is "in" while any
+		// window of a program is open: it lies behind them all.
 		if w.ClassName == "Progman" || w.ClassName == "WorkerW" || w.ClassName == "Shell_TrayWnd" {
+			if desk == 0 && w.ClassName == "Progman" {
+				desk, deskPid = w.Hwnd, w.Pid
+			}
 			continue
 		}
 		return w.Hwnd, w.Pid
 	}
-	return 0, 0
+	// Nothing is open: then the desktop is where they are. The owner, on day
+	// one, 17 November 2026: "I was on my desktop, I didn't have any windows
+	// open, which will be something that a lot of people will have, and so
+	// it couldn't perform anything." What is on the desktop, and the bar
+	// along its edge, can be pointed at like anything else.
+	return desk, deskPid
 }
 
 func init() {
