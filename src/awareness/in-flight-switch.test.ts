@@ -177,15 +177,18 @@ test('a session topic is not even attempted when awareness went off as the sessi
   } finally { summarize.mockRestore(); }
 });
 
+// The reports below are asked for a fixed day and week, and the workday ends at that
+// day's local noon, so they do not depend on when or in which time zone the suite runs.
+const DAY = '2026-11-11', WEEK = '2026-11-09';
 function workday(value: AwarenessService) {
-  const start = Date.now() - 20 * 60000;
+  const start = new Date(`${DAY}T11:40:00`).getTime();
   return (async () => { for (let i = 0; i <= 20; i++) await capture(value, start + i * 60000, 'Editor', `Reviewing the project draft, part ${i}.`); })();
 }
 
 test('on: the daily report asks the model for takeaways (the report fixture is live)', async () => {
   const value = await service(llm(() => '["ok"]'), async () => null, { cloud_vision_enabled: false });
   await workday(value);
-  const report = await value.generateReport();
+  const report = await value.generateReport(DAY);
   expect(sends).toContain('awareness_daily_takeaways');
   expect(report.aiTakeaways).toEqual(['ok']);
 });
@@ -193,18 +196,18 @@ test('on: the daily report asks the model for takeaways (the report fixture is l
 test('a report is held at the provider retry boundary once awareness is off', async () => {
   const value = await service(llm(options => { on = false; options?.checkDeadline?.(); return '["leaked"]'; }), async () => null, { cloud_vision_enabled: false });
   await workday(value);
-  await expect(value.generateReport()).rejects.toThrow('Screen awareness is off');
+  await expect(value.generateReport(DAY)).rejects.toThrow('Screen awareness is off');
   expect(sends).toEqual([]);
 });
 
 test('a report finished after awareness went off is not handed out', async () => {
   const value = await service(llm(() => { on = false; return '["leaked"]'; }), async () => null, { cloud_vision_enabled: false });
   await workday(value);
-  await expect(value.generateReport()).rejects.toThrow('Screen awareness is off');
+  await expect(value.generateReport(DAY)).rejects.toThrow('Screen awareness is off');
   on = true;
   sends.length = 0;
   const weekly = llm(() => { on = false; return '["leaked"]'; });
   const second = await service(weekly, async () => null, { cloud_vision_enabled: false });
   await workday(second);
-  await expect(second.generateWeeklyReport()).rejects.toThrow('Screen awareness is off');
+  await expect(second.generateWeeklyReport(WEEK)).rejects.toThrow('Screen awareness is off');
 });
