@@ -18,13 +18,14 @@
  * daemon binds (resolveDashboardTarget), not a fixed one.
  */
 
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { tryAcquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
+import { tryAcquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, getPidPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { clearLaunchRecord, daemonOwnsPort, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeAlreadyRunning, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
+import { detectInstallMethod } from '../src/cli/install-method.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
 
@@ -204,8 +205,7 @@ async function cmdStart(args: string[]): Promise<void> {
       // cannot be written (read-only or full disk, wrong owner). Only the first
       // is "already running".
       if (lock.reason === 'held') {
-        console.log(c.yellow('JARVIS is already running'));
-        console.log(c.dim('  Stop it first with: jarvis stop'));
+        printAlreadyRunning(null);
       } else {
         console.error(c.red(`Jarvis did not start. ${lock.message}`));
       }
@@ -232,8 +232,7 @@ async function cmdStart(args: string[]): Promise<void> {
     // Check if already running before spawning detached child
     const existingPid = isLocked();
     if (existingPid) {
-      console.log(c.yellow(`JARVIS is already running (PID ${existingPid})`));
-      console.log(c.dim('  Stop it first with: jarvis stop'));
+      printAlreadyRunning(existingPid);
       process.exit(1);
     }
 
@@ -320,6 +319,17 @@ async function cmdStart(args: string[]): Promise<void> {
       process.exit(1);
     }
   }
+}
+
+// Start was refused because another JARVIS holds this data folder's lock.
+function printAlreadyRunning(pid: number | null): void {
+  const [headline, ...advice] = describeAlreadyRunning({
+    folder: dirname(getPidPath()),
+    inDocker: detectInstallMethod(PACKAGE_ROOT).method === 'docker',
+    pid,
+  });
+  console.log(c.yellow(headline!));
+  for (const line of advice) console.log(c.dim(`  ${line}`));
 }
 
 // What still holds the port after a stop, and why it was left there.
