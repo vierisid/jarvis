@@ -8,7 +8,7 @@ import { NotchInbox } from '../inbox.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import type { MailReplyPlan, MailReplySession, MailStep, Mailbox } from './mailbox.ts';
-import { MAIL_FUSE_MS, attachNotchMail, mailDraftBlocks } from './notch.ts';
+import { MAIL_FUSE_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer } from './notch.ts';
 import { MailStore, mailProposalId, type MailProposalRow } from './store.ts';
 import { mailPerson } from './thread.ts';
 import type { MailLook } from './watch.ts';
@@ -154,18 +154,27 @@ describe('the draft as it is shown', () => {
     expect(blocks.at(-1)).toEqual({ kind: 'buttons', buttons: [{ id: 'not-needed', label: 'Not needed', quiet: true }] });
     // The word beside what was not known takes a sentence, not a word.
     const missing = blocks[1] as { say: NotchPart[] };
-    expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: [], label: 'Tell Jarvis', free: true, long: true } });
+    // The owner's own words, or one of the commonest turns with one click.
+    expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Jarvis', free: true, long: true } });
   });
 
-  test('what the owner told is shown, with the one word to change it, and nothing missing has no word to tell', () => {
+  test('what the owner told is shown, with the one word to change it', () => {
     const told = mailDraftBlocks(row({ told: 'Central European Time', missing: 'Whether Thursday still suits Leo.' }));
     expect(notes(told)).toEqual([
       'I did not know: Whether Thursday still suits Leo.',
       'You told me: Central European Time [change]',
       'Not sent yet. Tone [yours]',
     ]);
-    const none = mailDraftBlocks(row({ missing: '' }));
-    expect(none.map((block) => JSON.stringify(block)).join('')).not.toContain('"told"');
+    // The owner, 17 November 2026: a proposal came, the draft said yes to it, and there was no way to
+    // turn it round. A reply that Jarvis was sure of is the one that most needs a way in: the word
+    // stands under every draft.
+    const sure = mailDraftBlocks(row({ missing: '' }));
+    expect(notes(sure)).toEqual(['Not what you would say? [tell me]', 'Not sent yet. Tone [yours]']);
+    expect((sure[1] as Extract<NotchBlock, { kind: 'note' }>).say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Jarvis', free: true, long: true } });
+    // Once, not twice: with something missing, or something told, that line carries the word.
+    for (const one of [mailDraftBlocks(row()), mailDraftBlocks(row({ told: 'say no', missing: '' }))]) {
+      expect(one.map((block) => JSON.stringify(block)).join('').split('"name":"told"').length - 1).toBe(1);
+    }
   });
 
   // The owner, 15 November 2026: "I've got no context on what the thread was about ... a very small summary".
@@ -173,7 +182,7 @@ describe('the draft as it is shown', () => {
     const blocks = mailDraftBlocks(row({ about: 'Leo wants the deck before Thursday\'s call with Northwind.', missing: '' }));
     expect(blocks[0]).toEqual({ kind: 'note', say: ['Leo wants the deck before Thursday\'s call with Northwind.'] });
     expect(blocks[1]!.kind).toBe('paper');
-    expect(notes(blocks)).toEqual(['Leo wants the deck before Thursday\'s call with Northwind.', 'Not sent yet. Tone [yours]']);
+    expect(notes(blocks)).toEqual(['Leo wants the deck before Thursday\'s call with Northwind.', 'Not what you would say? [tell me]', 'Not sent yet. Tone [yours]']);
     // One line it stays, whatever the model wrote.
     expect(text((mailDraftBlocks(row({ about: 'x'.repeat(400) }))[0] as { say: NotchPart[] }).say).length).toBeLessThanOrEqual(180);
     // None made: the paper is first, as before.
@@ -185,10 +194,10 @@ describe('the draft as it is shown', () => {
     expect((blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', '[Thursday at 10:00] works for me.', 'Sam']);
   });
 
-  test('a reply with no time has no lit word, and one with nothing missing says nothing of it', () => {
+  test('a reply with no time has no lit word for one, and one with nothing missing says nothing of it', () => {
     const blocks = mailDraftBlocks(row({ time: null, missing: '' }));
     expect((blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Thursday at 10:00 works for me.', 'Sam']);
-    expect(notes(blocks)).toEqual(['Not sent yet. Tone [yours]']);
+    expect(notes(blocks)).toEqual(['Not what you would say? [tell me]', 'Not sent yet. Tone [yours]']);
   });
 });
 
@@ -785,5 +794,113 @@ describe('keeping the notch in line with the replies that wait', () => {
     h.mail.sync();
     await settle();
     expect(h.count()).toBe(1);
+  });
+});
+
+// The owner, 17 November 2026: "I received like a proposal by email, and I
+// don't want to accept that proposal, but the draft was a draft that would
+// accept the proposal. So I want a way for me to steer the draft, and that's
+// very important."
+describe('the owner steers what a reply says', () => {
+  /** A reply Jarvis was sure of: nothing missing, nothing told. It says yes. */
+  const sure = (): MailProposalRow => row({ missing: '', time: null, draft: 'Hi Leo,\nHappy to go ahead with the proposal.\nSam' });
+  /** Something else takes the notch, as the talk keys do: the draft goes back to waiting. */
+  const takenAway = async (h: ReturnType<typeof harness>): Promise<void> => {
+    h.inbox.add({
+      id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, once: true, asked: true,
+      title: () => ['Listening'],
+      play: async (stage) => { await stage.say(['Listening'], 800); return 'settled'; },
+    });
+    await h.advance(4000);
+  };
+
+  test('one click turns it round: "say no" writes the reply again as a no, and that is what is sent', async () => {
+    const h = harness([sure()]);
+    await h.arrive();
+    await h.answer('yes');
+    expect(notes(h.blocks())).toEqual(['Not what you would say? [tell me]', 'Not sent yet. Tone [yours]']);
+    await h.answer('word', { word: 'told', value: 'say no' });
+    expect(h.redrafts).toEqual([[sure().id, { told: 'say no' }]]);
+    expect(notes(h.blocks())).toEqual(['You told me: say no [change]', 'Not sent yet. Tone [yours]']);
+    expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'say no.', 'Sam']);
+    // Turned again, in their own words this time.
+    await h.answer('word', { word: 'told', value: 'Decline, but ask to talk again in January' });
+    expect(h.redrafts.at(-1)).toEqual([sure().id, { told: 'Decline, but ask to talk again in January' }]);
+    await h.answer('yes');
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nDecline, but ask to talk again in January.\nSam');
+  });
+
+  test('said with the talk keys while the draft is open: it is written again with that, and comes back up', async () => {
+    const h = harness([sure()]);
+    await h.arrive();
+    await h.answer('yes');
+    expect(h.said()).toBe('Reply to Leo');
+    // The keys are held: the draft leaves the notch for the listening.
+    await takenAway(h);
+    const route = h.mail.route('Decline it, we are full until January.');
+    expect(route?.did).toBe('Write the reply again, as told.');
+    // Routing changes nothing by itself: it is asked twice for one sentence.
+    expect(h.redrafts).toEqual([]);
+    route!.run();
+    await h.advance(0);
+    expect(h.redrafts).toEqual([[sure().id, { told: 'Decline it, we are full until January.' }]]);
+    // The draft is back, written again, and says what it was told.
+    expect(h.said()).toBe('Reply to Leo');
+    expect(notes(h.blocks())).toEqual(['You told me: Decline it, we are full until January. [change]', 'Not sent yet. Tone [yours]']);
+    // Nothing was sent by saying it.
+    expect(h.plans).toEqual([]);
+    await h.answer('yes');
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nDecline it, we are full until January..\nSam');
+  });
+
+  test('what is said is about the draft only while it is open, or was a moment ago', async () => {
+    const h = harness([sure()]);
+    // No draft is open: the same words are an instruction like any other.
+    expect(h.mail.route('Decline it, we are full until January')).toBeNull();
+    await h.arrive();
+    // The line that offers the draft is not the draft.
+    expect(h.mail.route('Decline it')).toBeNull();
+    await h.answer('yes');
+    // Open: it is.
+    expect(h.mail.route('Decline it')).not.toBeNull();
+    await takenAway(h);
+    await h.advance(MAIL_STEER_SAID_MS - 10_000);
+    expect(h.mail.route('Decline it')).not.toBeNull();
+    await h.advance(20_000);
+    // Long after: it is not.
+    expect(h.mail.route('Decline it')).toBeNull();
+  });
+
+  test('a draft the owner closed, sent or turned down is in hand no more', async () => {
+    const closed = harness([sure()]);
+    await closed.arrive();
+    await closed.answer('yes');
+    await closed.answer('no');
+    expect(closed.mail.route('Decline it')).toBeNull();
+
+    const sent = harness([sure()]);
+    await sent.arrive();
+    await sent.answer('yes');
+    await sent.answer('yes');
+    await sent.advance(MAIL_FUSE_MS + 3000);
+    expect(sent.mail.route('Decline it')).toBeNull();
+  });
+
+  test('a question is not what a reply is to say, and neither is a bare yes or no', () => {
+    for (const steer of ['Decline it', 'say no, politely', 'Tell him we are full until January', 'make it shorter and ask for the price', 'accept, but only from March', 'no thanks, not this year']) {
+      expect(mailSteer(steer)).toBe(true);
+    }
+    for (const not of ['What did he ask for?', 'who is Leo', 'How much was it', 'Is this the proposal from Lumen', 'yes', 'No.', 'ok', 'send it', 'stop', 'never mind', 'thanks', '', '   ']) {
+      expect(mailSteer(not)).toBe(false);
+    }
+  });
+
+  test('when it cannot be written again, the reply stays as it was and says so', async () => {
+    const h = harness([sure()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('word', { word: 'told', value: 'cannot be written' });
+    expect(notes(h.blocks())).toEqual(['Not what you would say? [tell me]', 'I could not write it again. This is the reply as it was. Tone [yours]']);
+    expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Happy to go ahead with the proposal.', 'Sam']);
   });
 });

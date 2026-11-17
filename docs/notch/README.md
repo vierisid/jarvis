@@ -1665,6 +1665,28 @@ applied).
     row ("Freedom"), which the owner can set by hand, up or down. On "tells
     you after" each run that went well is told once.
 
+124. **What a reply says is the owner's to turn, on every draft.** The
+    owner, 17 November 2026: a proposal came by mail, the draft accepted
+    it, and he did not want to. "I want a way for me to steer the draft,
+    and that's very important." Until then the one word that takes the
+    owner's own words stood only under a draft that said it was missing
+    something, so a reply Jarvis was sure of, the one that most needs it,
+    had no way in. Now it stands under every draft (`mailDraftBlocks`):
+    "Not what you would say? [tell me]", with the commonest turns one click
+    away (`MAIL_STEERS`: say no, say yes, ask for more time) and room to
+    type anything. With the draft open, what is said with the talk keys is
+    what that reply is to say (`NotchMail.route`, first in the line of
+    things the notch does itself): the reply is written again with it and
+    comes back up, with "You told me: ..." under it. That holds while the
+    draft is open and for 45 seconds after it left the notch for the keys.
+    A question is not a turn, and neither is a bare yes or no. Nothing is
+    sent by saying it: the draft still waits for its yes. The writer is
+    told that what the owner said is theirs to decide and may turn the
+    reply round, and that a decision which is the owner's alone (to accept
+    or turn down an offer, a proposal, a price) is never made silently: it
+    writes the likely answer and says under the draft which way it wrote
+    it ("I did not know: Whether you accept. I wrote a yes.").
+
 What is not done, or not proven, in pass 11:
 
 - **None of it has run on a real machine or against a real mailbox.** The

@@ -80,6 +80,30 @@ export const MAIL_TOLD_WORD = 'told';
 export const MAIL_TELL = 'tell me';
 export const MAIL_TELL_AGAIN = 'change';
 
+/**
+ * What a reply can be turned to with one click, beside the owner's own words.
+ * The owner, 17 November 2026: a proposal came by mail, the draft accepted
+ * it, and he did not want to: "I want a way for me to steer the draft, and
+ * that's very important." A reply says yes or no for them, so which of the
+ * two is always theirs to turn.
+ */
+export const MAIL_STEERS = ['say no', 'say yes', 'ask for more time'] as const;
+/** How long after a draft left the notch for the talk keys what is said is still about that draft. */
+export const MAIL_STEER_SAID_MS = 45_000;
+
+/**
+ * Whether what was said, with a draft in hand, is what the reply is to say:
+ * "decline it, we are full until January". A question is not ("what did he
+ * ask for?"), and neither is a bare yes or no, which is nobody's sentence
+ * for a letter.
+ */
+export function mailSteer(text: string): boolean {
+  const said = text.trim().replace(/[.!\s]+$/, '');
+  if (!said || said.endsWith('?')) return false;
+  if (/^(?:who|whom|what|where|when|why|how|which|whose|is|are|was|were|can|could|do|does|did|will|would|should|has|have)\b/i.test(said)) return false;
+  return !/^(?:yes|yeah|yep|no|nope|ok(?:ay)?|send(?: it)?|stop|cancel|never ?mind|thanks?(?: you)?|wait)$/i.test(said);
+}
+
 /** The manners a reply can be written again in. The first is the owner's own. */
 export const MAIL_TONES: Record<string, string> = { yours: '', shorter: 'shorter', warmer: 'more warmly', 'more formal': 'more formally' };
 
@@ -118,6 +142,12 @@ export interface NotchMail {
   homeRow(): NotchBlock | null;
   /** What that row opens: the reply when one waits, the list when several do. Comes back when it is closed. */
   open(stage: NotchStage): Promise<void>;
+  /**
+   * What the notch does itself with words said while a draft is open: they
+   * are what the reply is to say, and it is written again. Null when no
+   * draft is in hand, or the words are a question.
+   */
+  route(text: string): { did: string; run(): void } | null;
 }
 
 /** The one thing mail is in the inbox. */
@@ -146,9 +176,12 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   const blocks: NotchBlock[] = [...(row.about ? [{ kind: 'note' as const, say: [short(row.about, 180)] }] : []), { kind: 'paper', to, lines }];
   // What it did not know is not the end of it: the owner can say it, in their own words, and the reply is
   // written again with it. One word on the sheet takes that: beside what is missing, or beside what was told.
-  const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [], label: 'Tell Jarvis', free: true, long: true } });
+  // And what it says is the owner's to turn, always: the same word stands under every draft, with the
+  // commonest turns one click away. Typed, clicked, or said with the talk keys while the draft is open.
+  const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [...MAIL_STEERS], label: 'Tell Jarvis', free: true, long: true } });
   if (row.missing) blocks.push({ kind: 'note', say: ['I did not know: ', short(row.missing, 200), ...(row.told ? [] : [' ', tell(MAIL_TELL)])] });
   if (row.told) blocks.push({ kind: 'note', say: ['You told me: ', em(short(row.told, 200)), ' ', tell(MAIL_TELL_AGAIN)] });
+  if (!row.missing && !row.told) blocks.push({ kind: 'note', say: ['Not what you would say? ', tell(MAIL_TELL)] });
   if (row.found?.length) blocks.push({ kind: 'note', say: ['Found in your Drive: ', em(row.found.map((file) => short(file.name, 60)).join(', '))] });
   blocks.push({ kind: 'note', say: [note ?? 'Not sent yet.', ' Tone ', { word: { name: 'tone', value: tone, options: Object.keys(MAIL_TONES), label: 'Tone' } }] });
   // Turning a reply down for good is said in words, on the draft: it is not what closing a draft means.
@@ -168,6 +201,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   /** Replies the owner has seen once, as a line or as a row of the list they opened: these wait in Home, not in the count. */
   const seen = new Set<string>();
   const unseen = (): MailProposalRow[] => store.ready().filter((row) => !seen.has(row.id));
+  /** The draft that is open on the notch, or was until a moment ago: what is said then is about it. */
+  let inHand: { id: string; showing: boolean; leftAt: number } | null = null;
 
   const decline = (id: string): NotchItemEnd => {
     store.move(id, 'ready', 'declined', now());
@@ -179,7 +214,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * once: the owner picked it from the list. Comes back `settled` when the
    * reply no longer waits, `waits` when it does.
    */
-  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean }): Promise<NotchItemEnd> {
+  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean; steer?: string }): Promise<NotchItemEnd> {
     let row = store.proposal(id);
     if (!row || row.state !== 'ready') return 'settled';
     const who = mailFirstName(row.who);
@@ -212,8 +247,26 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // The draft, on paper. Only yes and Esc answer it: a click somewhere else is neither.
     const sheet = stage.id();
     stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row), yes: 'send', stay: true, ...(options.keep ? { no: options.keep } : {}), src: 'mail' });
+    /** The owner said what the reply is to say: it is written again with that, and the paper says so while it is. */
+    const retell = async (value: string): Promise<boolean> => {
+      stage.surface.update(sheet, { blocks: mailDraftBlocks({ ...row!, told: value }, 'Writing it again…') });
+      const again = await watch.redraft(id, { told: value });
+      if (stage.ended()) return false;
+      if (again) row = again;
+      stage.surface.update(sheet, { blocks: mailDraftBlocks(row!, again ? undefined : 'I could not write it again. This is the reply as it was.') });
+      return true;
+    };
+    // This draft is in hand: what is said with the talk keys while it is open is about it (`route`).
+    const mine = { id, showing: true, leftAt: 0 };
+    inHand = mine;
+    /** The owner answered the draft: sent, closed or turned down. It is in hand no more. */
+    let closed = false;
+    try {
+    // Said with the talk keys, a moment ago, while this draft was open.
+    if (options.steer && !(await retell(options.steer))) return 'waits';
     for (;;) {
       const answer = await unlessGone(stage.answer(sheet, ['yes', 'no', 'word', 'button']));
+      if (answer === GONE || answer.act === 'yes' || answer.act === 'no' || (answer.act === 'button' && answer.button === MAIL_NOT_NEEDED)) closed = true;
       if (answer === GONE) return movedOn();
       if (answer.act === 'button') { if (answer.button === MAIL_NOT_NEEDED) return decline(id); continue; }
       // Esc. On a draft the owner opened from the list or from Home it closes the draft, and the sheet
@@ -236,13 +289,13 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         stage.surface.update(sheet, { blocks: mailDraftBlocks(row, again ? undefined : 'I could not write it again. This is the reply as it was.') });
       }
       if (answer.word === MAIL_TOLD_WORD && value && value !== MAIL_TELL && value !== MAIL_TELL_AGAIN && value !== row.told) {
-        // The owner said what was not known: it is written again with that, and the paper says so while it is.
-        stage.surface.update(sheet, { blocks: mailDraftBlocks({ ...row, told: value }, 'Writing it again…') });
-        const again = await watch.redraft(id, { told: value });
-        if (stage.ended()) return 'waits';
-        if (again) row = again;
-        stage.surface.update(sheet, { blocks: mailDraftBlocks(row, again ? undefined : 'I could not write it again. This is the reply as it was.') });
+        // What was not known, or what the reply is to say instead: typed, or one of the turns picked.
+        if (!(await retell(value))) return 'waits';
       }
+    }
+    } finally {
+      // Taken off the notch by something else (the talk keys, above all): still in hand for a moment.
+      if (inHand === mine) inHand = closed ? null : { id, showing: false, leftAt: now() };
     }
 
     // Yes: into the thread as a draft, a fuse, and out.
@@ -468,5 +521,26 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   }
 
   sync();
-  return { sync, arrived, speak, newSince: (at) => unseen().filter((row) => row.createdAt >= at).length, told, homeRow, open };
+  /**
+   * What was said with the talk keys while a draft is open, or was a moment
+   * ago, is what that reply is to say: it is written again with it and comes
+   * back up. Has no effect until `run`.
+   */
+  function route(text: string): { did: string; run(): void } | null {
+    const hand = inHand;
+    if (!hand || !(hand.showing || now() - hand.leftAt < MAIL_STEER_SAID_MS) || !mailSteer(text)) return null;
+    const said = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const row = store.proposal(hand.id);
+    if (!said || !row || row.state !== 'ready') return null;
+    return {
+      did: 'Write the reply again, as told.',
+      run: () => {
+        log('[notch] a reply is written again from what the owner said with the draft open');
+        seen.add(hand.id);
+        inbox.present('mail-steer', async (stage) => { await play(stage, hand.id, { line: false, keep: 'close', steer: said }); sync(); });
+      },
+    };
+  }
+
+  return { sync, arrived, speak, newSince: (at) => unseen().filter((row) => row.createdAt >= at).length, told, homeRow, open, route };
 }

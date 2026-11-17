@@ -59,7 +59,14 @@ describe('what the model is given', () => {
     expect(mailTold('  Tuesday\n at 15:00\tworks \u0007 ')).toBe('Tuesday at 15:00 works');
     expect(mailTold('x'.repeat(500)).length).toBe(200);
     const user = mailProposalMessages(input({ told: 'Tuesday at 15:00 works' }))[1]!.content;
-    expect(user).toContain('Sam told you, for this reply: "Tuesday at 15:00 works". This is true and it is theirs to say: use it in the reply, and do not name as missing what it answers.');
+    expect(user).toContain('Sam told you, for this reply: "Tuesday at 15:00 works". It is theirs to say and theirs to decide. It may be a fact you did not have, or what the reply is to say: a yes, a no, a condition, something to add or to leave out. Follow it, also where it turns round what the reply would otherwise have said, and do not name as missing what it answers.');
+    // The owner, 17 November 2026: a proposal came, the draft accepted it, and he did not want to.
+    // What they tell can turn the reply round, and a decision that is theirs is never made silently.
+    const turned = mailProposalMessages(input({ told: 'say no' }))[1]!.content;
+    expect(turned).toContain('Sam told you, for this reply: "say no".');
+    const rules = mailProposalMessages(input())[0]!.content;
+    expect(rules).toContain("A decision that is Sam's alone is never yours to make silently");
+    expect(rules).toContain('say in "missing" which way you wrote it and that it is theirs: "Whether you accept. I wrote a yes."');
     expect(user.indexOf('told you, for this reply')).toBeLessThan(user.indexOf('<<<UNTRUSTED_CONTENT'));
     expect(mailProposalMessages(input())[1]!.content).not.toContain('told you, for this reply');
   });
