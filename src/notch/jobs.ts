@@ -466,15 +466,22 @@ export async function undoPuts(puts: NotchPut[], hands: NotchJobHands, options: 
         // One cell. First, is this a table at all? Taking in the next cell must give two cells.
         // In a page of writing it gives one letter, and Delete there would eat a letter of the person's.
         const two = await hands.act({ do: 'copy', win, right: 1 });
-        if (two?.done && !two.empty && two.cols === 2) {
+        // A reading that was refused says nothing about what is there: the undo stops with the reason, and
+        // what was pasted stays on record. (It was taken for "changed since": the record was thrown away, the
+        // notch said "3 are not as I left them", and Today said the job was taken back. Nothing had been.)
+        if (!two?.done) return { taken, kept, why: actRefusal(two?.why) };
+        if (!two.empty && two.cols === 2) {
           const back = await hands.act(click);
           await sleep(AFTER_CLICK_MS);
-          const one = back?.done ? await hands.act({ do: 'copy', win }) : null;
-          same = !!one?.done && !one.empty && one.hash === put.hash;
+          if (!back?.done) return { taken, kept, why: actRefusal(back?.why) };
+          const one = await hands.act({ do: 'copy', win });
+          if (!one?.done) return { taken, kept, why: actRefusal(one?.why) };
+          same = !one.empty && one.hash === put.hash;
         }
       } else {
         const read = await hands.act({ do: 'copy', win, right: put.cols - 1, down: put.rows - 1 });
-        same = !!read?.done && !read.empty && read.hash === put.hash && read.cols === put.cols && read.rows === put.rows;
+        if (!read?.done) return { taken, kept, why: actRefusal(read?.why) };
+        same = !read.empty && read.hash === put.hash && read.cols === put.cols && read.rows === put.rows;
       }
       if (same) {
         const cleared = await hands.act({ do: 'keys', win, keys: 'delete' });
@@ -738,7 +745,9 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
         dealt = all - left.length;
         // What is still there can still be taken back; what was taken back cannot be again.
         store.progress(ofJob, store.get(ofJob)?.done ?? 0, left);
-        if (left.length === 0) store.state(ofJob, 'undone');
+        // "Taken back" is said of a job of which everything was taken back. One of which nothing or only a
+        // part was is not undone: it keeps its place in Today as it was.
+        if (left.length === 0 && result.kept === 0) store.state(ofJob, 'undone');
         if (part.stopped) return { how: 'stopped' };
         if (part.why) return { how: 'failed', why: part.why };
         return { how: 'done' };
@@ -768,7 +777,11 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
   const undoable = (row: NotchJobRow): boolean => row.puts.length > 0 && row.state !== 'running' && row.state !== 'undone';
 
   function undo(jobId: string): void {
-    if (live) { tell(['I am in the middle of something. Stop it first.']); return; }
+    // Only a job that is still running stands in the way. One that has ended keeps its line on the notch
+    // ("Done. 3 pasted.", or "Stopped at 2 of 3. What now?" for as long as nobody answers), and undoing it was
+    // refused with "I am in the middle of something" when nothing ran.
+    if (live && live.end === null) { tell(['I am in the middle of something. Stop it first.']); return; }
+    if (live) { inbox.remove(itemId(live.id)); live = null; }
     if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.']); return; }
     const row = store.get(jobId);
     if (!row || !undoable(row)) { tell(['Nothing of mine to undo there.'], 'look'); return; }

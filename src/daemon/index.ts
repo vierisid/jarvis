@@ -4698,6 +4698,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           });
         }
       };
+      // A card that was left up comes down when its desktop app connects: the brain went away in the card's
+      // two minutes, or the app was not there when it was told to take it away. The card takes no click and no
+      // key, so nothing else would ever close it. Day one shows a new one later, when the page says hello.
+      sidecarManager.onSidecarConnected((sidecar) => {
+        void sidecarManager.dispatchRPC(sidecar.id, 'panel.close', { id: NOTCH_INSTALLED_CARD }).catch(() => { /* none was up, or an older desktop app */ });
+      });
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         approvalManager,

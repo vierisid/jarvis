@@ -29,6 +29,8 @@ interface World {
   model: { ready: boolean; name: string; hosted: boolean };
   /** Whether anything makes out speech. Null: day one is not told, and does not ask. */
   voice: boolean | null;
+  /** Whether the AI that is set up answers. Null: day one has no way to ask, and takes what is set up to work. */
+  works: boolean | null;
   watching: boolean;
   canSwitch: boolean;
   mailReached: boolean;
@@ -42,7 +44,7 @@ interface World {
 
 function harness(given: Partial<World> = {}) {
   const world: World = {
-    fresh: true, name: '', model: { ready: true, name: 'gpt-test', hosted: false }, voice: null, watching: true, canSwitch: true,
+    fresh: true, name: '', model: { ready: true, name: 'gpt-test', hosted: false }, voice: null, works: null, watching: true, canSwitch: true,
     mailReached: false, reply: null, sources: null, canPoint: true, onDesktop: false, system: 'windows', db: new Database(':memory:'), ...given,
   };
   const pushed: NotchToPage[] = [];
@@ -64,6 +66,10 @@ function harness(given: Partial<World> = {}) {
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const settings = new NotchSettings(world.db);
   const did: string[] = [];
+  /** How often the product's own first setup was finished. */
+  const setups: string[] = [];
+  /** How often the AI was asked whether it answers. */
+  const checks: string[] = [];
   const card: string[] = [];
   const logs: string[] = [];
   const deps: NotchDayOneDeps = {
@@ -72,7 +78,8 @@ function harness(given: Partial<World> = {}) {
     name: { get: () => world.name, set: (name) => { did.push(`name ${name}`); world.name = name; } },
     model: {
       ready: () => world.model.ready, name: () => world.model.name, hosted: () => world.model.hosted,
-      setUp: (id) => { did.push(`set up on ${id}`); }, finish: () => { did.push('finish setup'); },
+      setUp: (id) => { did.push(`set up on ${id}`); }, finish: () => { setups.push('finish setup'); },
+      ...(world.works !== null ? { works: async () => { checks.push('check'); return world.works === true; } } : {}),
     },
     ...(world.voice !== null ? { voice: { ready: () => world.voice === true, setUp: (id: string | null) => { did.push(`voice on ${id}`); } } } : {}),
     installed: { show: () => { card.push('show'); }, hide: () => { card.push('hide'); } },
@@ -110,7 +117,7 @@ function harness(given: Partial<World> = {}) {
   const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
   /** Goes through the steps before `step` the short way: yes to each, and nothing said. */
   const upTo = async (name: NotchDayOneStep): Promise<void> => { settings.set('dayone', { step: S[name], done: false }); day.cameUp(); await pass(NOTCH_DAY_ONE_AFTER_MS); };
-  return { world, day, inbox, surface, settings, did, card, logs, line, said, reply, seen, pass, acts, upTo, fromPage, count: (): number => surface.current().count };
+  return { world, day, inbox, surface, settings, did, setups, checks, card, logs, line, said, reply, seen, pass, acts, upTo, fromPage, count: (): number => surface.current().count };
 }
 
 describe('when it begins', () => {
@@ -399,7 +406,8 @@ describe('what it works with', () => {
     await h.upTo('brain');
     expect(h.said()).toBe('I think with gpt-test. That is set.');
     expect(h.line()).toMatchObject({ kind: 'say', mark: 'check' });
-    expect(h.did).toEqual(['finish setup']);
+    expect(h.did).toEqual([]);
+    expect(h.setups).toEqual(['finish setup']);
     const hosted = harness({ model: { ready: true, name: '', hosted: true } });
     await hosted.upTo('brain');
     expect(hosted.said()).toBe('Jarvis AI it is. It comes with your plan.');
@@ -420,7 +428,8 @@ describe('what it works with', () => {
     expect(h.did).toEqual(['set up on pc']);
     h.world.model = { ready: true, name: 'claude-test', hosted: false };
     await h.pass(2000);
-    expect(h.did).toEqual(['set up on pc', 'finish setup']);
+    expect(h.did).toEqual(['set up on pc']);
+    expect(h.setups).toEqual(['finish setup']);
     expect(h.said()).toBe('claude-test it is. Now I can think.');
   });
 
@@ -448,7 +457,8 @@ describe('what it works with', () => {
     expect(h.said()).toBe('To hear you I need speech-to-text too. Set that up now?');
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'set up', step: of('brain') });
     await h.reply('yes');
-    expect(h.did).toEqual(['finish setup', 'voice on pc']);
+    expect(h.did).toEqual(['voice on pc']);
+    expect(h.setups).toEqual(['finish setup']);
     expect(h.said()).toBe('I opened the settings at Voice Transcription. Choose a service there, and give its key.');
     await h.pass(6000);
     expect(h.line()?.kind).toBe('work');
@@ -476,7 +486,7 @@ describe('what it works with', () => {
     await no.seen();
     await no.reply('no');
     expect(no.said()).toBe('Later then. Until then I cannot make out what you say. It is in Settings, under Channels.');
-    expect(no.did).toEqual(['finish setup']);
+    expect(no.did).toEqual([]);
     await no.seen();
     expect(no.day.step()).toBe(S.notNow);
 
@@ -517,8 +527,8 @@ describe('what it works with', () => {
     h.fromPage({ type: 'open' });
     await settle();
     expect(h.said()).toBe('To hear you I need speech-to-text too. Set that up now?');
-    // The setup was finished once, when the AI was named, and asked for again harmlessly: it does nothing the second time.
-    expect(h.did.filter((what) => what === 'finish setup').length).toBe(2);
+    // The setup was finished once, when the AI was first seen.
+    expect(h.setups).toEqual(['finish setup']);
   });
 
   test('8: mail that is already within reach is said, and nothing is opened', async () => {
@@ -815,5 +825,129 @@ describe('left alone, and come back to', () => {
     await settle();
     expect(h.logs.join('\n')).not.toMatch(/Sam|studio|Lisbon/);
     expect(h.logs.some((line) => line.includes(`step ${S.litWord} of 13 is done`))).toBe(true);
+  });
+});
+
+// The hardening audit, 17 November 2026 (pass 13).
+describe('what the hardening audit found in day one', () => {
+  test('a step left in the count waits for nothing: words said later are not its answer, and a look is not its lesson', async () => {
+    const h = harness();
+    await h.upTo('talk');
+    expect(h.said()).toBe('Now tell me what you do. Out loud.');
+    // While it is on the notch, what is said is its answer.
+    expect(h.day.route('what is on my calendar today')?.did).toBe('Told Pillow what they do, on day one.');
+    await h.reply('fold');
+    expect(h.count()).toBe(1);
+    // An hour later, with the step in the count: the words are the person's own instruction again.
+    expect(h.day.route('what is on my calendar today')).toBeNull();
+    expect(h.day.unheard('silence')).toBe(false);
+    // The same for the step that is shown something.
+    const look = harness();
+    await look.upTo('show');
+    await look.reply('fold');
+    expect(look.day.shown({ app: 'chrome', things: [{ name: 'Total' }] })).toBe(false);
+    // Opened again, it waits for it again.
+    look.fromPage({ type: 'open' });
+    await settle();
+    expect(look.day.shown({ app: 'chrome', things: [{ name: 'Total' }] })).toBe(true);
+  });
+
+  test('an AI that arrives after its own step finishes the setup at the next step all the same', async () => {
+    const h = harness({ model: { ready: false, name: '', hosted: false } });
+    await h.upTo('brain');
+    await h.reply('no');
+    await h.seen();
+    expect(h.setups).toEqual([]);
+    // The key is saved while day one is two steps on.
+    h.world.model = { ready: true, name: 'claude-test', hosted: false };
+    expect(h.said()).toContain('For not now, press esc');
+    await h.reply('no');
+    await h.seen();
+    expect(h.setups).toEqual(['finish setup']);
+  });
+
+  test('coming up by itself it is not "asked for": its line is marked as unasked, and it waits for a still moment', async () => {
+    const h = harness();
+    h.day.cameUp();
+    await h.pass(NOTCH_DAY_ONE_AFTER_MS);
+    // The page takes no yes and no Esc on such a line in its first moment.
+    expect(h.line()).toMatchObject({ kind: 'offer', unasked: true });
+    // Asked for by name, it is the person's own.
+    const asked = harness();
+    asked.day.again();
+    await settle();
+    expect(asked.line()?.unasked).toBeUndefined();
+  });
+
+  test('at the "where is" step, something else said three times ends the step: it does not come back after every question', async () => {
+    const h = harness();
+    await h.upTo('whereIs');
+    /** The person says something that is no "where is": the talking takes the notch, and gives it back. */
+    const somethingElse = async (): Promise<void> => {
+      h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['talk'],
+        play: async (stage) => { await stage.offer(['Listening'], 'x'); return 'settled'; } });
+      await settle();
+      expect(h.said()).toBe('Listening');
+      h.inbox.remove('talk');
+      await settle();
+    };
+    expect(h.said()).toContain('Now ask me where something is.');
+    await somethingElse();
+    expect(h.said()).toContain('Now ask me where something is.');
+    await somethingElse();
+    expect(h.said()).toContain('Now ask me where something is.');
+    // The third time it lets the step go. (The count was kept in the step's own showing and began again each
+    // time day one had the notch back: the step returned after every question, for as long as it was not asked.)
+    await somethingElse();
+    expect(h.said()).toBe('When I see you do the same thing twice, I will offer to take it over.');
+    expect(h.day.step()).toBe(S.habits);
+  });
+
+  test('looking around can be left while a place hangs, and what is still being read is told that it was left', async () => {
+    let signalSeen: AbortSignal | undefined;
+    const hanging: NotchAroundSource = { name: 'Calendar', read: (signal) => { signalSeen = signal; return new Promise(() => {}); } };
+    const h = harness({ sources: [{ name: 'Gmail', read: async () => ({ found: '2 waiting', things: [] }) }, hanging] });
+    await h.upTo('lookAround');
+    await h.reply('yes');
+    await h.pass(1000);
+    expect(h.said()).toBe('Looking around');
+    expect(signalSeen?.aborted).toBe(false);
+    // "continue" while the calendar never answers: the step moves on at once.
+    await h.reply('yes');
+    await h.pass(100);
+    expect(signalSeen?.aborted).toBe(true);
+    expect(h.day.step()).toBe(S.drop);
+  });
+
+  test('an AI that is set up and does not answer is not called working: it says so, waits for one that does, and only then is the setup finished', async () => {
+    const h = harness({ works: false });
+    await h.upTo('brain');
+    expect(h.said()).toBe('My AI does not answer: its key or its model may be wrong. Open the AI settings?');
+    expect(h.setups).toEqual([]);
+    await h.reply('yes');
+    expect(h.did).toEqual(['set up on pc']);
+    expect(h.said()).toBe('The AI is set up but does not answer. Check its key and its model in the AI settings.');
+    await h.pass(6000);
+    expect(h.line()?.kind).toBe('work');
+    h.world.works = true;
+    await h.pass(2000);
+    expect(h.said()).toBe('gpt-test it is. Now I can think.');
+    expect(h.setups).toEqual(['finish setup']);
+    // And a key typed wrongly into an empty brain is said on the waiting line.
+    const fresh = harness({ model: { ready: false, name: '', hosted: false }, works: false });
+    await fresh.upTo('brain');
+    await fresh.reply('pick', { option: 'My own AI account', index: 0 });
+    expect(fresh.said()).toBe('I opened the AI settings. Add your account and its key there.');
+    fresh.world.model = { ready: true, name: 'claude-test', hosted: false };
+    await fresh.pass(2000);
+    expect(fresh.said()).toBe('The AI is set up but does not answer. Check its key and its model in the AI settings.');
+    expect(fresh.setups).toEqual([]);
+    fresh.world.works = true;
+    await fresh.pass(2000);
+    expect(fresh.said()).toBe('claude-test it is. Now I can think.');
+    // Once it has answered it is not asked again.
+    const before = fresh.checks.length;
+    await fresh.seen();
+    expect(fresh.checks.length).toBe(before);
   });
 });

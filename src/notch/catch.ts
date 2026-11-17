@@ -247,6 +247,10 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     const rounds = findRounds(steps);
     if (!rounds) return;
     const name = roundsName(rounds);
+    // An offer that is no longer in the count is over: it went stale there (its check failed when the count
+    // was opened) and nothing had said so here. While it stayed set, no repeated job was offered again until
+    // a job ran or the desktop app connected anew.
+    if (offer && !deps.inbox.has('catch')) offer = null;
     // Offered already, and still up: the offer follows the person, it is not made again.
     if (offer?.name === name) return;
     const declined = quiet.get(name);
@@ -261,6 +265,7 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     measuring.add(name);
     void sureRounds(rounds, deps.hands).then((sure) => {
       measuring.delete(name);
+      if (offer && !deps.inbox.has('catch')) offer = null;
       if (stopped || offer || deps.jobs.busy() || deps.teaching?.()) return;
       if (!sure) {
         unseen.set(name, now());

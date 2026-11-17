@@ -545,8 +545,9 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
    */
   async function refuse(requestId: string, stage: NotchStage): Promise<NotchItemEnd> {
     answering.add(requestId);
+    let outcome: Awaited<ReturnType<typeof deps.deny>> | null = null;
     try {
-      await deps.deny(requestId);
+      outcome = await deps.deny(requestId);
     } catch (error) {
       log(`[notch] an approval could not be denied: ${error instanceof Error ? error.message : String(error)}`);
       await stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' });
@@ -554,7 +555,12 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     } finally {
       answering.delete(requestId);
     }
-    // Denied here, or already decided somewhere else: either way it no longer waits.
+    // Decided somewhere else a moment before (approved in the dashboard): the no came too late, and the
+    // notch does not shake its head as if it had been turned down while the thing runs.
+    if (outcome?.status === 'already_decided') {
+      await stage.say(decidedElsewhere(requestId), 2600);
+      return 'settled';
+    }
     stage.surface.act({ gesture: 'shake' });
     return 'settled';
   }
@@ -583,9 +589,13 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         await stage.say(['That one is approved in the dashboard.'], 2600, { mood: 'careful' });
         return 'waits';
       case 'held':
+        // Three reasons a yes is held, and each has its own true sentence. (With watching off it said "I was
+        // stopped", which it was not.)
         await stage.say([outcome.state === 'paused'
           ? 'I am paused, so this waits. Wake me, then say yes again.'
-          : 'I was stopped, so this cannot be approved.'], 3200, { mood: 'careful' });
+          : outcome.state === 'awareness_off'
+            ? 'This acts on your screen, and watching is switched off. It waits until my eyes are open.'
+            : 'I was stopped, so this cannot be approved.'], 3600, { mood: 'careful' });
         return 'waits';
       case 'denied':
         return 'settled';

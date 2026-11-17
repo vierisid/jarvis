@@ -98,7 +98,7 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   const opens = async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); };
   /** What the notch was asked to do with its face and body, in order. */
   const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
-  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, advance: (ms: number) => { now += ms; } };
+  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, advance: (ms: number) => { now += ms; }, now: (): number => now };
 }
 
 describe('a sentence that asks for an agent', () => {
@@ -392,13 +392,15 @@ describe('the next rung is offered from results', () => {
   test('from "tells you after" the next is "acts alone", each good run is told once, and at the top nothing more is offered', async () => {
     const h = harness();
     await h.makes();
-    h.agents.store.setRung('flow-1', 'tells you after', 1_000_000);
-    h.advance(1000);
+    // A run that ended before it was put on this rung is not its news.
     h.ran('flow-1');
+    h.advance(1000);
+    h.agents.store.setRung('flow-1', 'tells you after', h.now());
     h.agents.tick();
     await settle();
-    // The first run it sees is where it starts counting from: it was not told of what came before it looked.
     expect(h.line()).toBeNull();
+    // Its first run on the rung is told like any other. (It was not: an agent that ran on Monday said nothing.)
+    h.advance(1000);
     h.ran('flow-1');
     h.agents.tick();
     await settle();
@@ -408,7 +410,8 @@ describe('the next rung is offered from results', () => {
     await settle();
     // Told once.
     expect(h.line()).toBeNull();
-    for (let i = 0; i < 3; i++) { h.ran('flow-1'); h.agents.tick(); await settle(); await h.pass(7000); }
+    // Four more: five good runs on this rung in all (the one from before it does not count).
+    for (let i = 0; i < 4; i++) { h.ran('flow-1'); h.agents.tick(); await settle(); await h.pass(7000); }
     await settle();
     // It came while the notch was telling of a run: it waits in the count, and is there when the count is opened.
     expect(h.inbox.waiting().map((item) => item.id)).toEqual(['agent-rung-flow-1']);

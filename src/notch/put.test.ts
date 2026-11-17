@@ -276,6 +276,12 @@ describe('the form a thing is put in', () => {
     expect(putForm('put it here')).toBeNull();
     for (const said of ['Put it here', 'put that here as a table', 'Paste it into the doc', 'Okay, put this in my document as a table', 'insert it here', 'mettilo qui']) expect(putRequest(said)).toBe(true);
     for (const said of ['What does this put option do', 'I put it there yesterday', 'Can you summarise the table', '']) expect(putRequest(said)).toBe(false);
+    // The verb alone is not enough: for a minute and a half after any look these pasted what had been looked
+    // at into the window in front, with no question (the audit, 17 November 2026).
+    for (const said of ['put a meeting with Sam on my calendar for Friday', 'Place an order for more paper', 'insert a row above', 'Drop Anna a note', 'paste the link from Leo into the chat', 'put the kettle on']) {
+      expect([said, putRequest(said)]).toEqual([said, false]);
+    }
+    for (const said of ['paste', 'Paste here.', 'put them in the sheet', 'paste the table into my doc', 'insert the numbers here', 'incollalo qui']) expect([said, putRequest(said)]).toEqual([said, true]);
     for (const said of ['yes', 'Here', 'as a list', 'As a table.', 'table', 'make it a list', 'plain text', 'yes, as a table', 'in a table']) expect(putAnswer(said)).toBe(true);
     for (const said of ['the table is wrong', 'yes and then email it to Anna', 'what is a table', 'list my meetings']) expect(putAnswer(said)).toBe(false);
   });

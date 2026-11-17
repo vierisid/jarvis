@@ -543,6 +543,14 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
         await stage.say(['Learned it in ', em(size), ', done ', em(times), '. ', NOTCH_ROWS_NOT_SEEN], 6000, { mood: 'careful' });
         return;
       }
+      // A job that pays is never taken over, and one that deletes is asked about: the same rule as for a job
+      // done again as it was shown (`startSkill`). Rounds had no such check at all: "Pay now" shown twice was
+      // offered as "I can take it from here: 6 left", and one yes clicked it six times.
+      const effect = deps.effect(saved.skill);
+      if (effect.pays) {
+        await stage.say(['Learned it in ', em(size), ', done ', em(times), '. It pays for something, so I do not take it over.'], 6000, { mood: 'careful' });
+        return;
+      }
       // The rest of it is there to do now.
       fresh = { rounds, learned: row.id };
       const left = await countLeft(rounds);
@@ -557,6 +565,10 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       }
       const answer = await stage.offer(parts, 'take over', { mood: 'proud', fold: 0 });
       if (answer.act !== 'yes') return;
+      if (effect.deletes) {
+        const sure = await stage.offer(['That job ', em('deletes'), ' something', ...(left && left > 0 ? [', ', em(`${left} more times`)] : []), '. Do it?'], 'do it', { mood: 'careful', fold: 0 });
+        if (sure.act !== 'yes') return;
+      }
       if (left === null && !roundsCopy(rounds)) {
         await stage.say(['Tell me how many: "run it on nine".'], 4200);
         return;
@@ -635,7 +647,10 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
         answered.catch(() => {});
         let shown = mine.count;
         for (;;) {
-          const what = await Promise.race([
+          // "Done" may have been said while the talking had the notch: the showing is over when this line is
+          // back, and waits for nothing more. (It waited for a key or a step, and the person's next click
+          // became a step of the job.)
+          const what = mine.ended ? ('changed' as const) : await Promise.race([
             answered.then((answer) => answer.act),
             new Promise<'changed'>((resolve) => { mine.waiters.add(() => resolve('changed')); }),
           ]);
@@ -676,7 +691,22 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
         if (n === 0) { tell(['Nothing is left to do there.'], 'look'); return; }
         if (n === null && !roundsCopy(fresh.rounds)) { tell(['Tell me how many: "run it on nine".']); return; }
       }
-      if (!startRounds(fresh.rounds, n, fresh.learned)) tell(['I am in the middle of something else.']);
+      const rounds = fresh.rounds, learnedId = fresh.learned;
+      const begin = (): void => { if (!startRounds(rounds, n, learnedId)) tell(['I am in the middle of something else.']); };
+      const skill = store.get(learnedId)?.skill;
+      const effect = skill ? deps.effect(skill) : null;
+      if (effect?.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
+      if (!effect?.deletes) { begin(); return; }
+      const id = `teach-delete-${++tells}`;
+      deps.inbox.add({
+        id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
+        title: () => ['That job deletes something. Do it?'],
+        play: async (stage) => {
+          const answer = await stage.offer(['That job ', em('deletes'), ' something. Do it?'], 'do it', { mood: 'careful', fold: 0 });
+          if (answer.act === 'yes') begin();
+          return 'settled';
+        },
+      });
       return;
     }
     // A job begun by hand and not shown: the catcher has it.

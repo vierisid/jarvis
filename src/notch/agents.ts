@@ -306,6 +306,8 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   let n = 0;
   /** A sentence that is being built into an agent: a second one of the same waits its turn by being refused. */
   const building = new Set<string>();
+  /** Built, and not switched on yet: the notch was taken away, or everything was stopped, when the building was over. */
+  const waiting = new Map<string, Extract<Awaited<ReturnType<NotchAgentWorkflows['build']>>, { ok: true }>>();
 
   const tell = (parts: NotchPart[], ms = 3000, extras: { mood?: 'look' | 'proud' | 'sorry' | 'careful' | 'confused' | 'happy'; mark?: 'check' | 'fail' } = {}): void => {
     const id = `agents-say-${++n}`;
@@ -375,14 +377,22 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         if (same) { await stage.say(['You already have an agent for that: ', em(same.name), '.'], 3600, { mood: 'careful' }); return 'settled'; }
         if (building.has(key)) { await stage.say(['I am already building that one.'], 2600); return 'settled'; }
         if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'settled'; }
-        building.add(key);
-        const workId = stage.id();
-        stage.put({ id: workId, kind: 'work', say: ['Building it. This can take a couple of minutes.'], steps: 0, done: 0, mood: 'work' });
-        let built: Awaited<ReturnType<NotchAgentWorkflows['build']>>;
-        try { built = await deps.workflows.build(full); } catch (error) {
-          built = { ok: false, why: error instanceof Error ? error.message.slice(0, 160) : 'it could not be built' };
-        } finally {
-          building.delete(key);
+        // One that was built while the notch was taken away is not built a second time: it waits here,
+        // switched off, for its line to be back.
+        let built: Awaited<ReturnType<NotchAgentWorkflows['build']>> | undefined = waiting.get(key);
+        let stopped = false;
+        if (!built) {
+          building.add(key);
+          const workId = stage.id();
+          stage.put({ id: workId, kind: 'work', say: ['Building it. This can take a couple of minutes.'], steps: 0, done: 0, mood: 'work' });
+          // The line shows "esc stop". Nobody listened: two minutes after an Esc came "Meet Tony", built and
+          // switched on. The building itself cannot be called back, so what an Esc stops is the switching on.
+          stage.answer(workId, ['stop']).then(() => { stopped = true; }, () => {});
+          try { built = await deps.workflows.build(full); } catch (error) {
+            built = { ok: false, why: error instanceof Error ? error.message.slice(0, 160) : 'it could not be built' };
+          } finally {
+            building.delete(key);
+          }
         }
         if (!built.ok) {
           log('[notch] an agent could not be built from a sentence');
@@ -396,6 +406,21 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
             '. It is in the dashboard, switched off.'], 8000, { mood: 'careful' });
           return 'settled';
         }
+        if (stopped) {
+          log('[notch] an agent was built and not switched on: it was stopped while it was being built');
+          await stage.say(['Stopped. ', em(built.job), ' is built but not switched on. It is in the dashboard.'], 6000, { mood: 'careful' });
+          return 'settled';
+        }
+        // Nothing is switched on behind the person's back: not while everything is stopped, and not when
+        // something else has taken the notch, so that "Meet…" could not be said. It waits, switched off, and
+        // is switched on when this line has the notch again.
+        if (deps.paused?.() || stage.ended()) {
+          waiting.set(key, built);
+          log('[notch] an agent was built and waits, switched off, until its line is back');
+          await stage.say(['Everything is stopped. ', em(built.job), ' is built and waits, switched off.'], 5000, { mood: 'careful' });
+          return 'waits';
+        }
+        waiting.delete(key);
         const on = deps.workflows.enable(built.flowId);
         if (!on.ok) {
           await stage.say(['I built ', em(built.job), ', but could not switch it on: ', on.why.replace(/[.\s]+$/, ''), '. It is in the dashboard, switched off.'], 8000, { mood: 'sorry', mark: 'fail' });
@@ -600,7 +625,10 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       const newest = ended[0];
       if (newest && newest.id !== agent.toldRun) {
         store.told(agent.flowId, newest.id);
-        if (agent.rung === 'tells you after' && newest.end === 'ok' && agent.toldRun !== '' ) {
+        // Its first run on this rung is told like any other. (It was not: "none told yet" was taken for "this
+        // one is from before I looked", and an agent that ran on Monday said nothing.) Only a run that ended
+        // before it was put on this rung is not its news.
+        if (agent.rung === 'tells you after' && newest.end === 'ok' && (agent.toldRun !== '' || newest.at >= agent.rungAt)) {
           const parts: NotchPart[] = [em(agent.name), ' did its job: ', agent.job.replace(/[.\s]+$/, ''), '.'];
           const id = `agent-told-${agent.flowId}-${newest.id}`;
           deps.inbox.add({

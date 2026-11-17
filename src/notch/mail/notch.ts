@@ -315,10 +315,24 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     const plan: MailReplyPlan = { thread: row.thread, to: row.to.map((person) => person.address), cc: row.cc.map((person) => person.address), text: row.draft };
     watch.hold(id);
     // Said at once: the tab may be in the middle of a look, and the yes must not seem to have gone nowhere.
-    stage.put({ id: stage.id(), kind: 'work', say: ['Putting it in the thread…'], steps: 0, done: 0, src: 'mail' });
+    const putting = stage.id();
+    stage.put({ id: putting, kind: 'work', say: ['Putting it in the thread…'], steps: 0, done: 0, src: 'mail' });
+    // The line shows "esc stop", and it means it. Nobody listened: Esc dimmed the line, and "Sending to…" came
+    // all the same a few seconds later. An Esc here ends it before anything is sent.
+    let stopped = false;
+    stage.answer(putting, ['stop']).then(() => { stopped = true; }, () => {});
     try {
       return await mailbox.reply(plan, async (reply) => {
+        if (stopped) {
+          await stage.say(['Not sent. It is kept here.'], 3200, { src: 'mail' });
+          return 'waits';
+        }
         const wrote = await reply.write();
+        if (stopped) {
+          const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
+          await stage.say(gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
+          return 'waits';
+        }
         if (!wrote.ok) {
           log(`[notch] a reply could not be put in its thread: ${wrote.why}`);
           // Whatever got as far as the page is taken away again: nothing half written is left behind.
