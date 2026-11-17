@@ -1714,6 +1714,14 @@ applied).
       asks first from then on. One that cannot run yet is said once.
     - What was built in the last two days and never switched on stands in
       "Your agents" with "Switch on" and "Discard", and Home leads to it.
+    - What was built in the last two days and switched on somewhere else
+      (the owner had switched his on in the dashboard before any of this
+      was built) runs with no name. It stands in "Your agents" as "Running,
+      no name yet" with one button, "Make it an agent", and Home says "1
+      agent running without a name". It is not made an agent without that
+      click: an agent asks first, and this one does not today. Nothing on
+      its row deletes it; a thing that runs is let go as an agent, with
+      that ask.
     - On the notch it is an agent, never a workflow: in the notch's own
       lines, and in what the assistant is told for a turn that came from
       the notch (`NOTCH_TURN_NOTE`), which also tells it not to ask whether
@@ -1746,11 +1754,13 @@ What is not done, or not proven, in pass 11:
 - **The agent's name and Esc as undo are not on the line that announces
   it.** The prototype made the name a word and let Esc take the agent back.
   Here the name is given, and "Let go" in the list removes it.
-- **A workflow made in the dashboard is not an agent**, unless it was made
-  in the last two days and is still switched off: then it stands in "Your
-  agents" to be switched on. One that already runs is left as it is: making
-  it an agent would put it on "asks first", and it would start asking for
-  things it does alone today. That is the owner's to decide.
+- **A workflow made in the dashboard is not an agent** until the owner
+  makes it one. One made in the last two days stands in "Your agents": to
+  be switched on when it is off, to be made an agent with one click when it
+  runs. An older one that runs is not shown there and is left as it is:
+  making it an agent would put it on "asks first", and it would start
+  asking for things it does alone today. Whether every such one should be
+  offered is the owner's to decide.
 - **The dashboard itself still says "workflow".** Only the notch, and what
   the assistant says on it, call it an agent.
 - **Whether the assistant keeps to the word is its own doing.** It is told
