@@ -8,30 +8,38 @@ import { EngineConstants } from './context/engine-constants'
 import { FlowExecutorContext } from './context/flow-execution-context'
 import { flowExecutor } from './flow-executor'
 
-// === JARVIS PATCH: a number condition with an operand that is not a number fails the router step ===
 export const routerExecuter: BaseExecutor<RouterAction> = {
     async handle(params) {
+        // === JARVIS PATCH: a router that cannot resolve an operand, or whose number condition has an operand that is not a number, fails as the router step ===
+        // Without this the error escaped as an engine error naming no step
+        // (a reference with no value ended the run on "<engine>"). Only resolving
+        // and evaluating the conditions is caught: the chosen branch runs after,
+        // outside it, so an error there keeps the steps that ran and is not
+        // blamed on the router.
+        let runBranches: () => Promise<FlowExecutorContext>
         try {
-            return await routerBranchExecuter.handle(params)
+            runBranches = await resolveRoute(params)
         }
         catch (error) {
-            if (!(error instanceof NonNumericOperandError)) throw error
-            const failedStepOutput = RouterStepOutput.init({ input: {} }).setStatus(StepOutputStatus.FAILED)
-            return params.executionState.upsertStep(params.action.name, failedStepOutput).setVerdict({ status: FlowRunStatus.FAILED, failedStep: {
-                name: params.action.name,
-                displayName: params.action.displayName,
-                message: error.message,
-            } })
+            const { action, executionState } = params
+            // A number condition's own message already names the operand as the run
+            // records it (censored), so it is kept as it is and no input is recorded.
+            const nonNumeric = error instanceof NonNumericOperandError
+            const message = error instanceof NonNumericOperandError ? error.message : utils.formatError(error as Error)
+            return executionState
+                .upsertStep(action.name, RouterStepOutput.init({ input: nonNumeric ? {} : action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
+                .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
         }
+        return runBranches()
+        // === END JARVIS PATCH ===
     },
 }
 
-const routerBranchExecuter: BaseExecutor<RouterAction> = {
-    async handle({
-        action,
-        executionState,
-        constants,
-    }) {
+const resolveRoute = async ({
+    action,
+    executionState,
+    constants,
+}: Parameters<BaseExecutor<RouterAction>['handle']>[0]): Promise<() => Promise<FlowExecutorContext>> => {
         const resolver = constants.getPropsResolver(LATEST_CONTEXT_VERSION)
         const settings = withPresenceFallbacks(action.settings) as RouterActionSettings
         // Resolve metadata first, leaving condition operands untouched until
@@ -86,13 +94,12 @@ const routerBranchExecuter: BaseExecutor<RouterAction> = {
 
         switch (resolvedInput.executionType) {
             case RouterExecutionType.EXECUTE_ALL_MATCH:
-                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })
+                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })
             case RouterExecutionType.EXECUTE_FIRST_MATCH:
-                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })
+                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })
             default:
                 throw new EngineGenericError('RouterExecutionTypeNotSupportedError', `Router execution type ${resolvedInput.executionType} is not supported`)
         }
-    },
 }
 
 async function handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType }: {

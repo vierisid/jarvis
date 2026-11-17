@@ -59,6 +59,7 @@ import { boundedReceiptText } from "../../roles/untrusted";
 import { redactSecrets } from "../../util/redact";
 import type { ToolRegistry } from "../../actions/tools/registry";
 import type { ActionOutcome } from "../../actions/action-outcome";
+import { providerOutcome } from "../../failures/evidence";
 import type { DelegationCheckpoint } from "../db/repos/delegation";
 import {
   createScopedToolRegistry,
@@ -499,7 +500,11 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         : { finalMessage: result.response, toolCalls,
             status: result.terminationReason === "max_iterations" ? "max_iterations" : "completed" };
       finished = browserTaskResult(finished, input.requiredTools ?? []);
-      finished.outcome = delegationOutcome(finished, input.requiredTools);
+      // The provider refused the model call (a rejected key, a limit) before any
+      // tool ran: nothing was done, and the outcome carries the provider's code.
+      const refused = result.terminationReason === "error" ? providerOutcome(result.cause) : null;
+      finished.outcome = refused?.effect === "not_started" && toolCalls.length === 0
+        ? refused : delegationOutcome(finished, input.requiredTools);
       Object.assign(finished, failedToolCallNotice(finished.toolCalls));
       // The log is dropped once the result exists; the trace is in the step output.
       durable?.save({ ...stateOf(0), messages: [], status: "completed", result: finished });

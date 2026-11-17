@@ -47,6 +47,7 @@ import { NOT_ONE_LINE } from '../../vault/commitment-text.ts';
 import { getRunRecovery, listRunRecoveries, decideRunRecovery, RecoveryError } from '../runtime/recovery';
 import { OnboardingResolutionError, resolveOnboardingOutcome, runOnboardingOutcomes } from '../runtime/onboarding-service';
 import { runFailure } from '../runtime/run-failure';
+import { publicRun } from '../runtime/run-public';
 import { continuedFailures } from '../runtime/continued-failures';
 import { dismissFailures, listOpenFailures } from '../runtime/open-failures';
 import type { AuthorityEngine } from '../../authority/engine';
@@ -2619,7 +2620,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           };
           if (status) opts.status = status;
           const graphs = new Map<string, FlowTriggerNode | undefined>();
-          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...boundedRunSteps(shown), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
+          const items = listRuns(opts).map(run => { const shown = shownRun(run, graphs); return { ...boundedRunSteps(publicRun(shown)), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }; });
           return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
@@ -2736,7 +2737,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const run = scopedRun(req, runId);
           // The delivery that started it (Q-06): which trigger, when it was due, how late.
           const shown = run ? shownRun(run) : null;
-          return shown ? ok({ ...boundedRunSteps(shown), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
+          return shown ? ok({ ...boundedRunSteps(publicRun(shown)), fire: fireForRun(runId), recovery: getRunRecovery(runId), failure: runFailure(shown), continuedFailures: continuedFailures(shown) }) : err("run not found", 404);
         }),
     },
 
