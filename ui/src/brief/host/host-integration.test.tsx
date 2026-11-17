@@ -86,7 +86,7 @@ test('host Run skips empty scheduled input, retains webhook cancellation and sen
       if (path.includes('/inspection?')) return Response.json({ status: 'ready', data: { ...RUN_SCOPE } });
       if (path.endsWith('/runs')) return Response.json(await fixture.port.list(null, signal));
       if (path.includes('/runs/')) return Response.json(await fixture.port.detail(path.split('/').at(-1)!, signal));
-      if (path === '/api/workflows/' + flowId) return Response.json({ flow: { id: flowId }, published: version });
+      if (path === '/api/workflows/' + flowId) return Response.json({ flow: { id: flowId, status: 'ENABLED', publishedVersionId: versionId }, published: version });
       throw Error('Unexpected fixture path ' + path);
     }) as typeof fetch);
     const stored = new Map<string, string>();
