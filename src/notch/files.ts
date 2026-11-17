@@ -17,8 +17,9 @@
  * file. A line with a link in it, or anything that is not plain words, is
  * not shown.
  *
- * Nothing that was read is kept. The words of a file are in memory for the
- * one request and are gone with it; the brain's own memory is not written.
+ * The words of a file are held for the one request and are gone with it.
+ * What is remembered is the line that was said about the file, where the
+ * owner asked for that (src/daemon/notch-dayone.ts, `notchRememberFile`).
  * Which files are never opened at all is decided where the files are, by the
  * desktop app (sidecar/notch_files.go): a name that says it is private.
  */

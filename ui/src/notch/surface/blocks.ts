@@ -5,6 +5,7 @@
  */
 import type { NotchBlock, NotchButton, NotchPart } from '../../../../src/notch/protocol.ts';
 import { SVGNS, btn, el } from './dom.ts';
+import { NOTCH_NAME } from '../../../../src/notch/name.ts';
 import { FICON, G } from './icons.ts';
 
 export interface BlockDeps {
@@ -121,7 +122,7 @@ const MAP_MOST = 24;
 function map(block: Extract<NotchBlock, { kind: 'map' }>, deps: BlockDeps): HTMLElement {
   const box = el('div');
   const known = deps.known ?? new Set<string>();
-  const drawing = svg('svg', { viewBox: '0 0 444 204', class: 'map', role: 'img', 'aria-label': 'A map of the people, tools and things Jarvis found' });
+  const drawing = svg('svg', { viewBox: '0 0 444 204', class: 'map', role: 'img', 'aria-label': `A map of the people, tools and things ${NOTCH_NAME} found` });
   const gLinks = svg('g', {}), gNodes = svg('g', {});
   drawing.append(gLinks, gNodes);
   const num = (value: unknown, most: number): number => (typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(most, value)) : 0);

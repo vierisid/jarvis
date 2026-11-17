@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { attachNotchDayOne, type NotchDayOne } from './dayone.ts';
+import { NOTCH_DAY_ONE_ORDER, attachNotchDayOne, type NotchDayOne, type NotchDayOneStep } from './dayone.ts';
 import { NotchSettings } from './settings.ts';
 import { Database } from 'bun:sqlite';
 import type { BriefChatEvent, BriefChatPayload, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
@@ -532,7 +532,7 @@ describe('with nobody looking, and after a restart', () => {
     await settle();
     const rows = after.ledger.recent(10);
     expect(rows.map((entry) => entry.state)).toEqual(['dismissed', 'failed']);
-    expect(after.said()).toBe('Jarvis restarted in the middle of it. Nothing is tried again.');
+    expect(after.said()).toBe('I restarted in the middle of it. Nothing is tried again.');
     expect(after.door.texts()).toEqual([]);
   });
 
@@ -742,7 +742,7 @@ describe('first batch of the edge-case audit', () => {
     after.asks.resume();
     after.fromPage({ type: 'hello', v: 1 });
     await settle();
-    expect(after.said()).toBe('Jarvis restarted before it started on: send Leo the numbers. Say it again.');
+    expect(after.said()).toBe('I restarted before I started on: send Leo the numbers. Say it again.');
     expect(after.door.texts()).toEqual([]);
   });
 });
@@ -1253,7 +1253,9 @@ describe('pass 12: what was said is seen to land', () => {
 
 describe('pass 12: day one and talking share the notch', () => {
   const now = { setTimeout: (fn: () => void) => { fn(); return 0; }, clearTimeout: () => {} };
-  function dayOne(step: number) {
+  const place = (name: NotchDayOneStep): number => NOTCH_DAY_ONE_ORDER.indexOf(name) + 1;
+  function dayOne(name: NotchDayOneStep) {
+    const step = place(name);
     let day: NotchDayOne | null = null;
     const told: string[] = [];
     // No model at all: day one's lessons need none.
@@ -1271,7 +1273,7 @@ describe('pass 12: day one and talking share the notch', () => {
   }
 
   test('while day one waits to hear the person, what they say is its answer: no model is asked, and day one has the notch back', async () => {
-    const { h, day, told } = dayOne(4);
+    const { h, day, told } = dayOne('talk');
     await h.advance(0);
     expect(h.said()).toBe('Now tell me what you do. Out loud.');
     // The keys go down: the talking takes the notch from day one.
@@ -1286,29 +1288,29 @@ describe('pass 12: day one and talking share the notch', () => {
     expect(told).toEqual(['Every Monday I send Sam the numbers']);
     expect(h.said()).toBe('Heard. That is how you tell me anything.');
     expect(row(h).state).toBe('done');
-    expect(row(h).answer).toBe('Told Jarvis what they do, on day one.');
+    expect(row(h).answer).toBe('Told Pillow what they do, on day one.');
     await h.answer('done');
-    expect(day.step()).toBe(5);
+    expect(day.step()).toBe(place('watch'));
     expect(h.said()).toBe('May I watch which app you are in? Close my eyes any time.');
   });
 
   test('with nothing to make words of the voice, day one says what is true, and the usual "I did not catch that" is not said as well', async () => {
-    const { h, day } = dayOne(4);
+    const { h, day } = dayOne('talk');
     await h.advance(0);
     h.asks.listen('t1');
     await h.advance(0);
     h.asks.released('t1');
     h.asks.nothing('t1', 'no_stt');
     await h.advance(3000);
-    expect(h.said()).toBe('I heard a voice. I cannot make out words until I have an AI. That is step 7.');
+    expect(h.said()).toBe('I heard a voice. I cannot make out words until speech-to-text is set up. It is under Voice in Settings.');
     // It shook for nothing: nothing of the usual refusal happened.
     expect(h.shakes()).toBe(0);
     await h.answer('done');
-    expect(day.step()).toBe(5);
+    expect(day.step()).toBe(place('watch'));
   });
 
   test('at a step that is not listening, talking is talking as ever', async () => {
-    const { h, told } = dayOne(5);
+    const { h, told } = dayOne('watch');
     await h.advance(0);
     await h.speak('t1', 'what is two plus two');
     await h.advance(3000);

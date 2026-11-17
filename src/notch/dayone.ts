@@ -1,11 +1,11 @@
 /**
  * Day one: the first five minutes, in the notch.
  *
- * The prototype's eleven steps, in its order and its words: say yes, say not
- * now, change a lit word, talk, allow watching, show it something, choose an
- * AI, connect mail and calendar, let it look around, what it will take over,
- * and one rule. The first six teach the grammar by having the person do each
- * thing once. The rest set up what Jarvis works with.
+ * The prototype's eleven steps, in its words: say yes, say not now, change a
+ * lit word, talk, allow watching, show it something, choose an AI, connect
+ * mail and calendar, let it look around, what it will take over, and one
+ * rule. Six of them teach the grammar by having the person do each thing
+ * once. The rest set up what it works with.
  *
  * Two steps were added on 17 November 2026, when the owner had gone through
  * it: "there is a lot of functionalities that are not shown. For example,
@@ -14,24 +14,40 @@
  * are a movement of the hands. Everything else it does is on one sheet that
  * day one ends on (./cando.ts). Thirteen steps.
  *
+ * And the AI moved to the front the same night: "it makes sense to have the
+ * AI step at the beginning, because a lot of it will use AI." It is the
+ * second step now, straight after hello: what is said at step 5 is made out
+ * and answered with it, and so is everything after.
+ *
+ * On a brain that was never set up, day one is the setup. When the AI is in,
+ * it finishes the product's own first steps too (`model.finish`), so that
+ * what waits for them starts, and the dashboard does not ask it all again.
+ *
+ * Before its first word, on that brain, a small card in the middle of the
+ * screen says that it is installed and where it lives (`installed`): the
+ * prototype's card, in the new name.
+ *
  * Here every step is real. Nothing is pretended, so where the product cannot
  * do what the prototype played, the step says what is true:
  *
- *   3   the name is kept, and is what the assistant calls the person;
- *   4   what they say is heard by the same keys as ever. With no AI yet it
+ *   2   an AI is set up on the product's own AI page, which this opens in a
+ *       window of its own and waits for. One that is already there is named,
+ *       and nothing is asked. Said "later", the steps that need one say so.
+ *       With an AI in, it asks for what makes out speech too, on the voice
+ *       page: that has a key of its own, and the talking needs it;
+ *   4   the name is kept, and is what the assistant calls the person;
+ *   5   what they say is heard by the same keys as ever. With no AI it
  *       cannot be made into words, and the step says so and goes on;
- *   5   yes leaves watching on, and a no switches it off;
- *   6   any real look is the lesson. It says how: the keys held down, then
+ *   6   yes leaves watching on, and a no switches it off;
+ *   7   any real look is the lesson. It says how: the keys held down, then
  *       the mouse pressed and dragged round the thing;
- *   7   an AI is set up in the dashboard's own setup, which this opens and
- *       waits for. One that is already there is named, and nothing is asked;
- *   8   mail and calendar are reached by signing in to Google in Jarvis's
- *       own browser, which this opens and waits for;
+ *   8   mail and calendar are reached by signing in to Google in its own
+ *       browser, which this opens and waits for;
  *   9   looking around reads the mail that waits, the week's meetings, and
  *       the files on the desktop and in the documents and downloads, and
  *       draws them as they are found. The newest few are opened, and each
- *       is said in a line (./files.ts). A file whose name says it is
- *       private is never opened, and nothing of what was opened is kept;
+ *       is said in a line (./files.ts) that is remembered. A file whose
+ *       name says it is private is never opened;
  *   10  a real file dropped on it is the lesson, and is asked about as any
  *       dropped file is;
  *   11  a real "where is…" is the lesson, and is pointed at as ever;
@@ -48,6 +64,7 @@
  * is over.
  */
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
+import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchMapNode, NotchMapSource, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { realNotchClock, type NotchClock, type NotchStage } from './stage.ts';
@@ -60,7 +77,12 @@ const cut = (text: string, most: number): string => {
   return [...flat].length > most ? `${[...flat].slice(0, most - 1).join('')}…` : flat;
 };
 
-export const NOTCH_DAY_ONE_STEPS = 13;
+/** The steps, in the order they come. A step is known by its name here, and by its place only on the screen. */
+export const NOTCH_DAY_ONE_ORDER = ['hello', 'brain', 'notNow', 'litWord', 'talk', 'watch', 'show', 'connect', 'lookAround', 'drop', 'whereIs', 'habits', 'rule'] as const;
+export type NotchDayOneStep = (typeof NOTCH_DAY_ONE_ORDER)[number];
+export const NOTCH_DAY_ONE_STEPS = NOTCH_DAY_ONE_ORDER.length;
+/** How long the card that says it is installed stays, when nobody answers the first line. */
+export const NOTCH_INSTALLED_CARD_MS = 120_000;
 /** How long a step waits to be answered before it goes to the count. */
 export const NOTCH_DAY_ONE_FOLD_MS = 45_000;
 /** How long after the notch first comes up day one says its first line: after the birth, and the stretch. */
@@ -93,11 +115,28 @@ export interface NotchDayOneDeps {
   fresh(): boolean;
   /** What the assistant calls the person: read, and kept. */
   name?: { get(): string; set(name: string): void };
-  /** The AI that answers: whether there is one, what it is called, and the way to set one up. */
-  model: { ready(): boolean; name(): string; hosted(): boolean; setUp(sidecarId: string | null): void };
+  /**
+   * The AI that answers: whether there is one, what it is called, and the
+   * way to set one up. `finish`, when given, completes the product's own
+   * first setup once an AI is there: asked for each time, and does nothing on
+   * a brain that is set up already.
+   */
+  model: { ready(): boolean; name(): string; hosted(): boolean; setUp(sidecarId: string | null): void; finish?(): Promise<void> | void };
+  /**
+   * What makes out speech: whether anything does, and the way to set it up.
+   * It has a key of its own, apart from the AI's. Asked for straight after
+   * the AI, since the talking three steps on needs it.
+   */
+  voice?: { ready(): boolean; setUp(sidecarId: string | null): void };
+  /**
+   * The card that says it is installed, in the middle of the screen: shown
+   * when day one begins by itself, and taken away when its first line is
+   * answered.
+   */
+  installed?: { show(): void; hide(): void };
   /** Whether Jarvis watches the app in front, and the switch. */
   watching?: { on(): boolean; set(on: boolean): Promise<boolean> | boolean };
-  /** Whether a desktop app can take a look (step 6). */
+  /** Whether a desktop app can take a look (the step that is shown something). */
   canLook?: () => boolean;
   /** Whether a file can be dropped on the notch and asked about (step 10). */
   canDrop?: () => boolean;
@@ -128,7 +167,7 @@ export interface NotchDayOne {
   again(): void;
   /** A page has come up: on a brain that is due it, day one begins a moment later. */
   cameUp(): void;
-  /** Words the notch acts on itself: "day one", "look around", and whatever is said while step 4 waits to hear it. */
+  /** Words the notch acts on itself: "day one", "look around", and whatever is said while the talking step waits to hear it. */
   route(text: string): { did: string; run(): void } | null;
   /** A look was taken. True when day one was waiting for one: it is the lesson, and nothing else comes of it. */
   shown(looked: { app: string; things: { name?: string }[] }): boolean;
@@ -145,7 +184,7 @@ export interface NotchDayOne {
   stop(): void;
 }
 
-interface Kept { step: number; done: boolean }
+interface Kept { step: number; done: boolean; /** Esc was pressed at the first line: "not now" is learned, and its own step is passed over. */ esc?: boolean }
 
 /** "Day one", "show me around", "start over". */
 export function dayOneRequest(text: string): boolean {
@@ -179,9 +218,11 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   const log = deps.log ?? ((line: string) => console.log(line));
   let stopped = false;
   let begun = false;
-  /** Step 4: what was said, or why nothing was made out. Step 6: what was shown. */
+  /** The talking step: what was said, or why nothing was made out. The showing step: what was shown. */
   let told: string | null = null, missed: string | null = null, showed: string | null = null;
   let tries = 0;
+  /** The AI was named already: said once, also when its step is come back to for the hearing. */
+  let thinks = false;
   /** Whether the step on the notch is waiting to hear, or to be shown. */
   let hearing = false, looking = false;
   /** Step 10: waiting for a file, and one came. Step 11: waiting to be asked where something is, and it was asked. */
@@ -203,35 +244,48 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   const kept = (): Kept | null => {
     const raw = deps.settings.get<Partial<Kept> | null>(KEPT, null);
-    return raw && typeof raw.step === 'number' ? { step: Math.max(1, Math.floor(raw.step)), done: raw.done === true } : null;
+    return raw && typeof raw.step === 'number' ? { step: Math.max(1, Math.floor(raw.step)), done: raw.done === true, ...(raw.esc === true ? { esc: true } : {}) } : null;
   };
   const keep = (state: Kept): void => { deps.settings.set(KEPT, state, now()); };
   const stepNow = (): number => { const state = kept(); return state && !state.done ? state.step : 0; };
-  const counter = (n: number): string => `step ${n}/${NOTCH_DAY_ONE_STEPS}`;
+  /** The place of a step, from 1, and whether it is the one day one is on. */
+  const at = (name: NotchDayOneStep): number => NOTCH_DAY_ONE_ORDER.indexOf(name) + 1;
+  const on = (name: NotchDayOneStep): boolean => stepNow() === at(name);
+  const counter = (name: NotchDayOneStep): string => `step ${at(name)}/${NOTCH_DAY_ONE_STEPS}`;
+  let cardTimer: unknown = null;
+  const cardOff = (): void => {
+    if (cardTimer !== null) { clock.clearTimeout(cardTimer); cardTimer = null; }
+    try { deps.installed?.hide(); } catch { /* it leaves by itself */ }
+  };
 
   /** A step's answer: go on, go on past the next one too, or it was left and waits in the count. */
   type Went = 'on' | 'left' | 'past';
 
   /** A step that asks one thing: yes, not now, or left alone. */
-  const ask = async (stage: NotchStage, n: number, parts: NotchPart[], yes: string, mood: 'look' | 'curious' | 'careful' = 'look'): Promise<'yes' | 'no' | 'left'> => {
+  const ask = async (stage: NotchStage, name: NotchDayOneStep, parts: NotchPart[], yes: string, mood: 'look' | 'curious' | 'careful' = 'look'): Promise<'yes' | 'no' | 'left'> => {
     const id = stage.id();
-    stage.put({ id, kind: 'offer', say: parts, yes, mood, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(n) });
+    stage.put({ id, kind: 'offer', say: parts, yes, mood, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(name) });
     const answer = await stage.answer(id, ['yes', 'no', 'fold']);
     return answer.act === 'yes' ? 'yes' : answer.act === 'no' ? 'no' : 'left';
   };
 
   async function hello(stage: NotchStage): Promise<Went> {
-    const said = await ask(stage, 1, ['Hi. I am Jarvis. I live up here. Say hello?'], 'hello', 'curious');
+    const said = await ask(stage, 'hello', [`Hi. I am ${NOTCH_NAME}. I live up here. Say hello?`], 'hello', 'curious');
+    // They have found it: the card that said where it lives is not needed any more.
+    cardOff();
     if (said === 'left') return 'left';
     if (said === 'yes') { await stage.say(['That was a yes. One tap.'], 2300, { mood: 'happy' }); return 'on'; }
-    // They pressed Esc: that is the next lesson, already learned.
+    // They pressed Esc: that is a lesson of its own, already learned. Its step is passed over when it comes.
+    const state = kept();
+    if (state) keep({ ...state, esc: true });
     await stage.say(['That was a not now. It is all it takes.'], 2600, { mood: 'happy' });
-    return 'past';
+    return 'on';
   }
 
   async function notNow(stage: NotchStage): Promise<Went> {
+    if (kept()?.esc) return 'on';
     const id = stage.id();
-    stage.put({ id, kind: 'offer', keys: 'esc', say: ['For not now, press esc, or just ignore me. I never mind. Try it.'], mood: 'look', fold: 8000, step: counter(2) });
+    stage.put({ id, kind: 'offer', keys: 'esc', say: ['For not now, press esc, or just ignore me. I never mind. Try it.'], mood: 'look', fold: 8000, step: counter('notNow') });
     for (;;) {
       const answer = await stage.answer(id, ['yes', 'no', 'fold']);
       if (answer.act === 'yes') {
@@ -252,7 +306,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     let name = options[0]!;
     const id = stage.id();
     stage.put({
-      id, kind: 'offer', yes: 'good', mood: 'look', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(3),
+      id, kind: 'offer', yes: 'good', mood: 'look', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('litWord'),
       say: ['The lit words are yours to change. I call you ', word('name', name, options, { label: 'I call you', free: true }), '. Click the name.'],
     });
     for (;;) {
@@ -282,7 +336,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         missed = null;
         if (why === 'no_stt') {
           hearing = false;
-          await stage.say(['I heard a voice. I cannot make out words until I have an AI. That is step 7.'], 4200, { mood: 'look' });
+          await stage.say(['I heard a voice. I cannot make out words until speech-to-text is set up. It is under Voice in Settings.'], 4400, { mood: 'look' });
           return 'on';
         }
         if (++tries >= 2) { hearing = false; await stage.say(['I did not catch it. It will come. On we go.'], 2600, { mood: 'look' }); return 'on'; }
@@ -290,7 +344,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       hearing = true;
       const id = stage.id();
-      stage.put({ id, kind: 'offer', keys: 'talk', yes: 'hold and talk', say: ['Now tell me what you do. Out loud.'], mood: 'listen', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(4) });
+      stage.put({ id, kind: 'offer', keys: 'talk', yes: 'hold and talk', say: ['Now tell me what you do. Out loud.'], mood: 'listen', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('talk') });
       // While they talk, the talking has the notch: this ends under it, and is back with what was said.
       const answer = await stage.answer(id, ['yes', 'no', 'fold']);
       if (answer.act === 'fold') return 'left';
@@ -302,7 +356,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   async function watch(stage: NotchStage): Promise<Went> {
     const watching = deps.watching;
-    const said = await ask(stage, 5, ['May I watch which app you are in? Close my eyes any time.'], 'allow');
+    const said = await ask(stage, 'watch', ['May I watch which app you are in? Close my eyes any time.'], 'allow');
     if (said === 'left') return 'left';
     if (!watching) { await stage.say(['Thank you.'], 1600, { mood: 'happy' }); return 'on'; }
     let on = watching.on();
@@ -334,7 +388,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       looking = true;
       const id = stage.id();
       stage.put({
-        id, kind: 'offer', keys: 'talk', yes: 'hold, then drag', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(6),
+        id, kind: 'offer', keys: 'talk', yes: 'hold, then drag', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('show'),
         // The owner, 17 November 2026: "it doesn't specify that you need to click the hotkey and then click and drag around the circle."
         say: nudged ? ['Both at once: ', { key: 'talk' }, ' held down, and the mouse pressed and dragged round the thing.']
           : ['Now show me something. Keep ', { key: 'talk' }, ' held down, then click and drag a circle round a thing.'],
@@ -368,22 +422,58 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   async function brain(stage: NotchStage): Promise<Went> {
     const model = deps.model;
-    if (model.ready()) {
-      await stage.say(model.hosted() ? [em('Jarvis AI'), ' it is. It comes with your plan.'] : ['I think with ', em(cut(model.name() || 'the AI you set up', 40)), '. That is set.'], 2800, { mood: 'happy', mark: 'check' });
+    /** With an AI in, the product's own first setup is over too: what waits for it starts. Never stands in day one's way. */
+    const finish = async (): Promise<void> => {
+      try { await model.finish?.(); } catch (error) { log(`[notch] day one could not finish the setup: ${error instanceof Error ? error.message : String(error)}`); }
+    };
+    /**
+     * Hearing is an AI of its own, with its own key. With an AI to answer
+     * what is said, the next thing is to make out what is said: asked for
+     * here, at the beginning, and not when the talking step finds it missing.
+     */
+    const hear = async (): Promise<Went> => {
+      const voice = deps.voice;
+      if (!voice || voice.ready()) return 'on';
+      const said = await ask(stage, 'brain', ['To hear you I need speech-to-text too. Set that up now?'], 'set up');
+      if (said === 'left') return 'left';
+      const notYet = async (): Promise<Went> => {
+        await stage.say(['Later then. Until then I cannot make out what you say. It is under Voice in Settings.'], 4400, { mood: 'careful' });
+        return 'on';
+      };
+      if (said === 'no') return notYet();
+      voice.setUp(stage.from());
+      const heard = await waitFor(stage, ['I opened the voice settings. Choose a speech-to-text service there, and give its key.'], 2000, () => voice.ready());
+      if (!heard) return notYet();
+      await stage.say(['Now I can hear you.'], 2200, { mood: 'happy', mark: 'check' });
       return 'on';
+    };
+    if (model.ready()) {
+      await finish();
+      if (!thinks) {
+        thinks = true;
+        // "Jarvis AI" is what the plan's own model is called where it is sold: a product's name, not the notch's.
+        await stage.say(model.hosted() ? [em('Jarvis AI'), ' it is. It comes with your plan.'] : ['I think with ', em(cut(model.name() || 'the AI you set up', 40)), '. That is set.'], 2800, { mood: 'happy', mark: 'check' });
+      }
+      return hear();
     }
     const options = ['My own AI account', 'AI on this computer'];
     const id = stage.id();
-    stage.put({ id, kind: 'offer', say: ['Which AI should I use?'], options, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(7) });
+    stage.put({ id, kind: 'offer', say: ['First, an AI to think with. Which one should I use?'], options, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('brain') });
     const answer = await stage.answer(id, ['pick', 'no', 'fold']);
     if (answer.act === 'fold') return 'left';
-    if (answer.act !== 'pick') { await stage.say(['Later then. Until I have one I cannot think, only listen.'], 3400, { mood: 'careful' }); return 'on'; }
+    const later = async (): Promise<Went> => {
+      await stage.say(['Later then. Until I have one I can listen and show you round, but not think.'], 3800, { mood: 'careful' });
+      return 'on';
+    };
+    if (answer.act !== 'pick') return later();
     model.setUp(stage.from());
     const local = answer.index === 1;
-    const there = await waitFor(stage, [local ? 'I opened the setup. Choose the AI on this computer there.' : 'I opened the setup. Add your account there.'], 2000, () => model.ready());
-    if (!there) { await stage.say(['Later then. Until I have one I cannot think, only listen.'], 3400, { mood: 'careful' }); return 'on'; }
-    await stage.say([em(cut(model.name() || 'That one', 40)), ' it is.'], 2800, { mood: 'happy', mark: 'check' });
-    return 'on';
+    const there = await waitFor(stage, [local ? 'I opened the AI settings. Choose the AI on this computer there.' : 'I opened the AI settings. Add your account and its key there.'], 2000, () => model.ready());
+    if (!there) return later();
+    await finish();
+    thinks = true;
+    await stage.say([em(cut(model.name() || 'That one', 40)), ' it is. Now I can think.'], 2800, { mood: 'happy', mark: 'check' });
+    return hear();
   }
 
   async function connect(stage: NotchStage): Promise<Went> {
@@ -392,7 +482,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     let reached = false;
     try { reached = await mail.reached(); } catch { reached = false; }
     if (reached) { await stage.say(['Your mail and calendar are already within reach.'], 2600, { mood: 'happy', mark: 'check', src: 'mail' }); return 'on'; }
-    const said = await ask(stage, 8, ['Connect your email and calendar? I learn fastest there.'], 'connect');
+    const said = await ask(stage, 'connect', ['Connect your email and calendar? I learn fastest there.'], 'connect');
     if (said === 'left') return 'left';
     if (said === 'no') { await stage.say(['Later then. Connections is in Home, one step away.'], 2800); return 'on'; }
     try { await mail.open(stage.from()); } catch (error) {
@@ -467,7 +557,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     log(`[notch] looked around: ${sources.length} place(s), ${nodes.length - 1} thing(s) drawn`);
     // One stroke through everything it found.
     if (nodes.length > 2) tour = [...nodes.slice(1).map((node) => node.id), ME.id];
-    rows.push({ kind: 'note', say: [nodes.length > 1 ? 'That is what I can reach today. Of what I opened, nothing is kept. Ask me about any of it.' : 'I can reach nothing yet. It fills as you connect things.'] });
+    rows.push({ kind: 'note', say: [nodes.length > 1 ? 'That is what I can reach today. What I remember of it is in Memory, where you can forget any of it.' : 'I can reach nothing yet. It fills as you connect things.'] });
     stage.surface.update(id, { blocks: blocks() });
     stage.surface.act({ mood: 'proud' });
     // It stays to be read, until it is closed or gone on from.
@@ -477,9 +567,9 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   async function lookAround(stage: NotchStage): Promise<Went> {
     if (!deps.around) return 'on';
-    const said = await ask(stage, 9, ['May I look around? Your mail, your calendar, and the files on your desktop. I open the newest few to see what they are, and skip anything private.'], 'allow', 'curious');
+    const said = await ask(stage, 'lookAround', ['May I look around? Your mail, your calendar, and the files on your desktop. I open the newest few, remember what they are, and skip anything private.'], 'allow', 'curious');
     if (said === 'left') return 'left';
-    if (said === 'yes') await around(stage, { yes: 'continue', step: counter(9) });
+    if (said === 'yes') await around(stage, { yes: 'continue', step: counter('lookAround') });
     return 'on';
   }
 
@@ -503,7 +593,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       feeding = true;
       const id = stage.id();
-      stage.put({ id, kind: 'offer', keys: 'esc', say: ['Now hand me a file. Drag any file from your desktop onto me.'], mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(10) });
+      stage.put({ id, kind: 'offer', keys: 'esc', say: ['Now hand me a file. Drag any file from your desktop onto me.'], mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('drop') });
       // While a file is over it, and while it is asked about, the file has the notch: this ends under it.
       for (;;) {
         const answer = await stage.answer(id, ['yes', 'no', 'fold']);
@@ -542,7 +632,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       asking = true;
       const id = stage.id();
       stage.put({
-        id, kind: 'offer', keys: 'talk', yes: 'hold and ask', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(11),
+        id, kind: 'offer', keys: 'talk', yes: 'hold and ask', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('whereIs'),
         say: ['Now ask me where something is. Hold ', { key: 'talk' }, ' and say: ', em(example())],
       });
       const answer = await stage.answer(id, ['yes', 'no', 'fold']);
@@ -559,21 +649,22 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   }
 
   async function rule(stage: NotchStage): Promise<Went> {
-    const said = await ask(stage, 13, ['One rule to start: every new agent asks before it acts.'], 'agreed', 'careful');
+    const said = await ask(stage, 'rule', ['One rule to start: every new agent asks before it acts.'], 'agreed', 'careful');
     if (said === 'left') return 'left';
     // Everything else it does, on one sheet, before it lets them go.
     if (deps.canDo) await deps.canDo(stage, { yes: 'done' });
     return 'on';
   }
 
-  const STEPS = [hello, notNow, litWord, talk, watch, show, brain, connect, lookAround, drop, whereIs, habits, rule];
+  const STEPS: Record<NotchDayOneStep, (stage: NotchStage) => Promise<Went>> = { hello, brain, notNow, litWord, talk, watch, show, connect, lookAround, drop, whereIs, habits, rule };
 
   async function play(stage: NotchStage): Promise<NotchItemEnd> {
     for (;;) {
       const state = kept();
       if (!state || state.done) return 'settled';
       if (deps.paused?.()) return 'waits';
-      const step = STEPS[state.step - 1];
+      const name = NOTCH_DAY_ONE_ORDER[state.step - 1];
+      const step = name ? STEPS[name] : undefined;
       if (!step) {
         keep({ step: state.step, done: true });
         hearing = false; looking = false; feeding = false; asking = false;
@@ -585,7 +676,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       if (went === 'left') return 'waits';
       tries = 0;
       // Kept as soon as it is taken: a brain that stops here goes on from the next step.
-      keep({ step: state.step + (went === 'past' ? 2 : 1), done: false });
+      // (`past`: the step after this one has nothing to stand on, and is passed over. Only ever the one beside it.)
+      keep({ ...(kept() ?? state), step: state.step + (went === 'past' ? 2 : 1), done: false });
       // Which step, never what was said in it.
       log(`[notch] day one: step ${state.step} of ${NOTCH_DAY_ONE_STEPS} is done`);
     }
@@ -601,7 +693,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   function again(): void {
     if (stopped) return;
-    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false; shown = null;
+    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false; shown = null; thinks = false;
     keep({ step: 1, done: false });
     log('[notch] day one was started');
     present();
@@ -616,23 +708,29 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       if (state ? state.done : !deps.fresh()) return;
       begun = true;
       if (!state) { keep({ step: 1, done: false }); log('[notch] day one begins by itself: this brain was never set up'); }
+      // Before its first word: the card that says it is installed, and where it lives. Only where it has never
+      // said that first word. It leaves when that word is answered, and by itself if nobody is there.
+      if (stepNow() === 1 && deps.installed) {
+        try { deps.installed.show(); } catch { /* day one goes on without it */ }
+        cardTimer = clock.setTimeout(() => { cardTimer = null; cardOff(); }, NOTCH_INSTALLED_CARD_MS);
+      }
       clock.setTimeout(() => present(), NOTCH_DAY_ONE_AFTER_MS);
     },
     route(text) {
       if (stopped) return null;
-      if (hearing && stepNow() === 4) {
+      if (hearing && on('talk')) {
         // Whatever they say now is the answer to "tell me what you do".
-        return { did: 'Told Jarvis what they do, on day one.', run: () => { told = cut(text, 400); present(); } };
+        return { did: `Told ${NOTCH_NAME} what they do, on day one.`, run: () => { told = cut(text, 400); present(); } };
       }
       // Step 11 waits to be asked where something is. Such a question is answered as ever, by pointing, and
       // day one only notes that it was asked: nothing is taken from it here.
-      if (asking && stepNow() === 11 && deps.isWhere?.(text)) { asked = true; shown = null; }
+      if (asking && on('whereIs') && deps.isWhere?.(text)) { asked = true; shown = null; }
       if (dayOneRequest(text)) return { did: 'Start day one.', run: () => again() };
       if (aroundRequest(text) && deps.around) return { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } };
       return null;
     },
     shown(looked) {
-      if (stopped || !looking || stepNow() !== 6) return false;
+      if (stopped || !looking || !on('show')) return false;
       showed = cut(looked.things.find((thing) => (thing.name ?? '').trim())?.name ?? looked.app ?? '', 40) || 'that';
       present();
       return true;
@@ -640,24 +738,24 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     unheard(why) {
       if (stopped) return false;
       // Holding the keys to circle makes a recording with nothing in it: that is not something to answer.
-      if (stepNow() === 6 && (looking || showed !== null)) return true;
-      if (!hearing || stepNow() !== 4) return false;
+      if (on('show') && (looking || showed !== null)) return true;
+      if (!hearing || !on('talk')) return false;
       missed = why;
       present();
       return true;
     },
     gave() {
-      if (stopped || !feeding || stepNow() !== 10) return;
+      if (stopped || !feeding || !on('drop')) return;
       // It is asked about as any dropped file is, and day one has the notch back after that.
       fed = true;
       present();
     },
     pointed(was) {
-      if (stopped || !asked || stepNow() !== 11) return;
+      if (stopped || !asked || !on('whereIs')) return;
       shown = was;
     },
     step: stepNow,
     around,
-    stop() { stopped = true; },
+    stop() { stopped = true; cardOff(); },
   };
 }

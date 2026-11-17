@@ -4,6 +4,8 @@
  * that let the whole surface be stopped in one place.
  */
 
+import { NOTCH_NAME } from '../../../../src/notch/name.ts';
+
 export const SVGNS = 'http://www.w3.org/2000/svg';
 
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string | null): HTMLElementTagNameMap[K] {
@@ -45,7 +47,7 @@ export const SKELETON = `
     <div class="nin" data-body="rest" data-mood="idle" data-icon="0" data-mark="" data-wait="">
       <div class="bar">
         <div class="lead">
-          <button class="eyes" type="button" aria-pressed="false" aria-label="Open Jarvis"><i class="eye l">${EYE}</i><i class="eye r">${EYE}</i></button>
+          <button class="eyes" type="button" aria-pressed="false" aria-label="Open ${NOTCH_NAME}"><i class="eye l">${EYE}</i><i class="eye r">${EYE}</i></button>
           <span class="appicon" aria-hidden="true"></span>
           <span class="mark" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M3.5 8.6 6.7 11.6 12.5 5"/></svg></span>
           <span class="badge"></span>
@@ -55,7 +57,7 @@ export const SKELETON = `
       </div>
       <div class="pick"></div>
       <div class="opts"></div>
-      <div class="sheet" role="region" aria-live="polite" aria-label="Jarvis"></div>
+      <div class="sheet" role="region" aria-live="polite" aria-label="${NOTCH_NAME}"></div>
     </div>
   </div>
 </div>

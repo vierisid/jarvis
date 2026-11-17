@@ -155,7 +155,7 @@ describe('the draft as it is shown', () => {
     // The word beside what was not known takes a sentence, not a word.
     const missing = blocks[1] as { say: NotchPart[] };
     // The owner's own words, or one of the commonest turns with one click.
-    expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Jarvis', free: true, long: true } });
+    expect(missing.say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Pillow', free: true, long: true } });
   });
 
   test('what the owner told is shown, with the one word to change it', () => {
@@ -170,7 +170,7 @@ describe('the draft as it is shown', () => {
     // stands under every draft.
     const sure = mailDraftBlocks(row({ missing: '' }));
     expect(notes(sure)).toEqual(['Not what you would say? [tell me]', 'Not sent yet. Tone [yours]']);
-    expect((sure[1] as Extract<NotchBlock, { kind: 'note' }>).say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Jarvis', free: true, long: true } });
+    expect((sure[1] as Extract<NotchBlock, { kind: 'note' }>).say.at(-1)).toEqual({ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Pillow', free: true, long: true } });
     // Once, not twice: with something missing, or something told, that line carries the word.
     for (const one of [mailDraftBlocks(row()), mailDraftBlocks(row({ told: 'say no', missing: '' }))]) {
       expect(one.map((block) => JSON.stringify(block)).join('').split('"name":"told"').length - 1).toBe(1);
@@ -501,13 +501,13 @@ describe('coming to Gmail', () => {
     const h = harness([], { monthRead: () => false, look: { through: null, listed: 0, read: 0, asked: 0, prepared: 0, overtaken: 0 } });
     expect(await h.mail.arrived()).toBe('said');
     await settle();
-    expect(h.said()).toBe('I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.');
+    expect(h.said()).toBe('I cannot see your mail right now. My own browser may not be signed in to Gmail.');
   });
 
   test('when the mail cannot be seen, that is what it says', async () => {
     const h = harness([], { look: { through: null, listed: 0, read: 0, asked: 0, prepared: 0, overtaken: 0 } });
     await h.arrive();
-    expect(h.said()).toBe('I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.');
+    expect(h.said()).toBe('I cannot see your mail right now. My own browser may not be signed in to Gmail.');
   });
 });
 

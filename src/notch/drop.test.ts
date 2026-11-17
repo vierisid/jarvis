@@ -454,7 +454,9 @@ describe('pass 12: day one hears of a file that was taken', () => {
     fromPage({ type: 'hello', v: 1 });
     const inbox = new NotchInbox(surface, { clock, log: () => {} });
     const settings = new NotchSettings(new Database(':memory:'));
-    settings.set('dayone', { step: 10, done: false });
+    const { NOTCH_DAY_ONE_ORDER } = await import('./dayone.ts');
+    const dropStep = NOTCH_DAY_ONE_ORDER.indexOf('drop') + 1;
+    settings.set('dayone', { step: dropStep, done: false });
     const day = attachNotchDayOne({
       inbox, settings, clock, log: () => {}, fresh: () => true,
       model: { ready: () => true, name: () => 'test', hosted: () => false, setUp: () => {} },
@@ -473,7 +475,7 @@ describe('pass 12: day one hears of a file that was taken', () => {
     // A file that is refused is no lesson: day one is still waiting for one.
     expect(drop.take({ name: 'film.mov', mediaType: 'video/quicktime', size: 10, bytes: new Uint8Array(10), count: 1 }).taken).toBe(false);
     await settle();
-    expect(day.step()).toBe(10);
+    expect(day.step()).toBe(dropStep);
     // A file that is taken: what is wanted from it takes the notch.
     expect(drop.take({ name: 'notes.txt', mediaType: 'text/plain', size: 4, bytes: new Uint8Array(4), count: 1 }).taken).toBe(true);
     await settle();
@@ -488,6 +490,6 @@ describe('pass 12: day one hears of a file that was taken', () => {
     expect(said()).toBe('That is all there is to it: drop it, then ask.');
     fromPage({ type: 'answer', id: surface.current().line!.id, act: 'done' });
     await settle();
-    expect(day.step()).toBe(11);
+    expect(day.step()).toBe(dropStep + 1);
   });
 });

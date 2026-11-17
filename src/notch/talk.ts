@@ -24,6 +24,7 @@
  * Neither the audio nor the words are in an event's payload: payloads are not
  * private (see the skip list where sidecar events are broadcast).
  */
+import { NOTCH_NAME } from './name.ts';
 import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchAskFile, NotchAsks } from './asks.ts';
@@ -172,7 +173,7 @@ export function pcmToWav(pcm: Buffer, sampleRate: number): Buffer {
 
 const REFUSALS: Record<string, string> = {
   muted: 'The microphone is muted. Unmute it from the tray icon, then hold the keys again.',
-  busy: 'The microphone is already in use by Jarvis. Try again in a moment.',
+  busy: `The microphone is already in use by ${NOTCH_NAME}. Try again in a moment.`,
   none: 'This desktop app has no microphone path. Type instead.',
 };
 

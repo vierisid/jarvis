@@ -57,7 +57,7 @@ describe('the mail layer, put together', () => {
     expect(h.thought).toEqual([]);
     h.layer.arrived('mail.google.com');
     await settle();
-    expect(h.said()).toBe('I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.');
+    expect(h.said()).toBe('I cannot see your mail right now. My own browser may not be signed in to Gmail.');
   });
 
   // Found on the owner's first try: a look through the month that was cut short was not taken again for six hours.

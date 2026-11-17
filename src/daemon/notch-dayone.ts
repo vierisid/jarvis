@@ -6,6 +6,7 @@
  *
  * Nothing in src/notch reaches for these itself (src/notch/real.ts).
  */
+import type { Database } from 'bun:sqlite';
 import type { JarvisConfig } from '../config/types.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -16,8 +17,10 @@ import type { NotchRealDeps } from '../notch/real.ts';
 import { NOTCH_OWNER_NAME, NOTCH_TOLD_SOURCE } from '../notch/remember.ts';
 import { createEntity, findEntities } from '../vault/entities.ts';
 import { createFact, findFacts } from '../vault/facts.ts';
+import { automaticSourceKey } from '../vault/memory-suppression.ts';
 import { USER_PROFILE_VAULT_SOURCE, getUserProfile } from '../vault/user-profile.ts';
 import { notchModelReady } from './notch-asks.ts';
+import { notchVoice } from './notch-office.ts';
 import { hasUsejarvisAi } from './usejarvis-ai.ts';
 import { saveUserSection } from './user-settings.ts';
 
@@ -115,8 +118,19 @@ export interface NotchDayOneOptions {
   llm(): LLMManager;
   /** Whether Jarvis is watching now, and the product's own switch for it. Null where there is none. */
   watching: { on(): boolean; set: ((on: boolean) => Promise<boolean>) | null };
-  /** Opens the dashboard's setup: its own first-run steps while this brain was never set up, the AI page after. */
-  openSetup(sidecarId: string | null, setUp: boolean): void;
+  /** Opens the page where an AI is chosen and its key is given. */
+  openSetup(sidecarId: string | null): void;
+  /** Opens the page where what makes out speech is chosen and its key is given. Not given: day one does not ask for it. */
+  openVoice?(sidecarId: string | null): void;
+  /**
+   * Completes the product's own first setup, on a brain where it never was:
+   * what waits for it (the background work, watching, promises) starts, and
+   * the dashboard does not ask it all again. Does nothing on a brain that is
+   * set up.
+   */
+  finishSetup(): Promise<void>;
+  /** The card that says it is installed, in the middle of the screen of each connected computer: shown, and taken away. */
+  card: { show(): void; hide(): void };
   /** People who wait for a reply, as the notch's own mail store knows them: first names. Null when mail is not read. */
   waiting(): string[] | null;
   /** The meetings of the next seven days, by title. Null when the calendar cannot be read. */
@@ -139,6 +153,52 @@ export interface NotchDayOneOptions {
   openFile(place: NotchFilePlace['place'], name: string): Promise<Uint8Array | null>;
   /** The words of a PDF, read apart and under a deadline. Null, or a throw, when it cannot be read. */
   pdf(bytes: Uint8Array): Promise<string | null>;
+  /**
+   * Keeps one line about one file in memory (`notchRememberFile`). Not given:
+   * nothing that was read is kept.
+   */
+  remember?(place: NotchFilePlace['place'], name: string, line: string): 'kept' | 'known' | 'forgotten';
+}
+
+/**
+ * What was read of a file is remembered: one line, as a fact about the file.
+ * The owner, 17 November 2026, asked whether it should remember what it
+ * read: "yes, it should remember what it read."
+ *
+ * Remembered is the line the model wrote about the file, never anything out
+ * of the file itself. It is kept the way anything Jarvis learned by itself
+ * is kept (`llm_extraction`, inferred, not confirmed): so the product treats
+ * it as outside content when it is recalled, it shows in Memory with where
+ * it came from, and it can be forgotten there.
+ *
+ * Forgotten holds. The line about a file is worded anew each time the file
+ * is read, so the product's own guard against learning the same sentence
+ * again from the same place would not hold it back. A file the owner has
+ * forgotten something about is therefore never written about again.
+ */
+export const NOTCH_FILE_FACT_SOURCE = 'llm_extraction';
+/** What made the entity a file's fact hangs on. Not the owner's own words. */
+export const NOTCH_FILE_ENTITY_SOURCE = 'notch_files';
+export const notchFileRef = (place: string, name: string): string => `notch:files:${place}:${name}`.slice(0, 400);
+const PLACE_WORDS: Record<string, string> = { desktop: 'on your desktop', documents: 'in your documents', downloads: 'in your downloads' };
+
+/**
+ * Keeps one line about one file. `kept` when it was written; `known` when
+ * this file is remembered already (the first line stays); `forgotten` when
+ * the owner forgot something about this file, and nothing is written.
+ */
+export function notchRememberFile(db: Database, place: string, name: string, line: string): 'kept' | 'known' | 'forgotten' {
+  const ref = notchFileRef(place, name);
+  const key = automaticSourceKey(db, { source: NOTCH_FILE_FACT_SOURCE, source_ref: ref });
+  if (key && db.query('SELECT 1 FROM memory_forget_suppressions WHERE source_key = ? LIMIT 1').get(key)) return 'forgotten';
+  // A file is called by its name without the ending: "Budget Q4", as a person says it.
+  const called = (name.replace(/\.[A-Za-z0-9]{1,8}$/, '').trim() || name).slice(0, 120);
+  const entity = findEntities({ name: called }).find((one) => one.source === NOTCH_FILE_ENTITY_SOURCE)
+    ?? createEntity('concept', called, { file: name, place }, NOTCH_FILE_ENTITY_SOURCE);
+  if (findFacts({ subject_id: entity.id }).some((fact) => fact.evidence.some((evidence) => evidence.source_ref === ref))) return 'known';
+  createFact(entity.id, 'is', `a file ${PLACE_WORDS[place] ?? 'on this computer'} (${name}). ${line}`.slice(0, 600),
+    { source: NOTCH_FILE_FACT_SOURCE, sourceRef: ref, quote: line, basis: 'inferred' });
+  return 'kept';
 }
 
 /** How long the reading of the files may take in all before the look around goes on without it. */
@@ -159,7 +219,8 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
         .slice(0, most).map((seen) => ({ place: found!.place, name: seen.name, size: seen.size }));
     /**
      * Opens the newest files and says what each one is: one line each, from
-     * one request to the owner's own model. Nothing of them is kept.
+     * one request to the owner's own model. That line is remembered. What is
+     * in a file is not kept anywhere.
      */
     const reading = async (): Promise<{ found: string; rows: { lead: string; say: NotchPart[] }[]; say?: NotchPart[] }> => {
       const desk = await place('desktop'), docs = await place('documents');
@@ -171,7 +232,7 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       if (picked.length === 0) return { found: 'nothing to read', rows: [], say: ['None of the newest files is one I can read.', ...closed] };
       const llm = options.llm();
       if (!notchModelReady(llm)) return { found: 'needs the AI', rows: [], say: ['I can open them and say what each is once I have an AI.', ...closed] };
-      const read: { name: string; text: string }[] = [];
+      const read: { place: NotchFilePlace['place']; name: string; text: string }[] = [];
       for (const file of picked) {
         const reader = fileReader(file.name, file.size);
         if (!reader) continue;
@@ -179,7 +240,7 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
         try { bytes = await options.openFile(file.place, file.name); } catch { bytes = null; }
         if (!bytes) continue;
         const text = await fileBeginning(reader, bytes, options.pdf);
-        if (text) read.push({ name: file.name, text });
+        if (text) read.push({ place: file.place, name: file.name, text });
       }
       // How many, never which.
       console.log(`[notch] looking around: ${read.length} of ${picked.length} file(s) could be read, ${held} left closed as private`);
@@ -193,9 +254,26 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       }
       const said = filesSaid(answer, read.length);
       const rows = read.flatMap((file, at) => (said[at] ? [{ lead: file.name, say: [said[at]!] satisfies NotchPart[] }] : []));
+      // The line about each is remembered. One the owner has forgotten is said here, and not written again.
+      let kept = 0;
+      if (options.remember) {
+        read.forEach((file, at) => {
+          const line = said[at];
+          if (!line) return;
+          try { if (options.remember!(file.place, file.name, line) !== 'forgotten') kept++; } catch (error) {
+            console.warn('[notch] looking around: a line about a file could not be kept:', error instanceof Error ? error.message : error);
+          }
+        });
+        // How many, never which.
+        console.log(`[notch] looking around: ${kept} line(s) about files are in memory`);
+      }
       return {
         found: `${many(read.length, 'file', 'files')} opened`, rows,
-        say: [rows.length ? `I opened the newest ${read.length === 1 ? 'one' : read.length}, to see what ${read.length === 1 ? 'it is' : 'they are'}.` : 'I opened them and could not tell what they are.', ...closed],
+        say: [
+          rows.length ? `I opened the newest ${read.length === 1 ? 'one' : read.length}, to see what ${read.length === 1 ? 'it is' : 'they are'}.` : 'I opened them and could not tell what they are.',
+          ...(kept > 0 ? [` I remember ${kept === 1 ? 'it' : 'them'}: ${kept === 1 ? 'it is' : 'they are'} in Memory.`] : []),
+          ...closed,
+        ],
       };
     };
     /** The newest files of a place, by name: what is drawn on the map. */
@@ -287,8 +365,12 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       ready: () => notchModelReady(options.llm()),
       name: () => notchModelName(options.llm()),
       hosted: () => hasUsejarvisAi(options.config()),
-      setUp: (sidecarId) => options.openSetup(sidecarId, !options.config().onboarding?.setup_completed_at),
+      setUp: (sidecarId) => options.openSetup(sidecarId),
+      finish: () => options.finishSetup(),
     },
+    // What the talking itself asks before it makes words of a voice (notch-asks.ts): the same reading of the same settings.
+    ...(options.openVoice ? { voice: { ready: () => notchVoice(options.config()) !== null, setUp: (sidecarId: string | null) => options.openVoice!(sidecarId) } } : {}),
+    installed: options.card,
     system: options.system,
     watching: {
       on: options.watching.on,

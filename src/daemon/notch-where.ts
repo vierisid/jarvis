@@ -56,7 +56,7 @@ export function notchPlaceSentence(reply: unknown, front: boolean): string | nul
   const program = text(said.process_name, 40);
   const role = text(said.element_role, 30);
   const name = text(said.element_name, 80);
-  if (said.own === true) return "one of Jarvis's own windows";
+  if (said.own === true) return 'one of my own windows';
   const window = title ? `"${title}"${program ? ` (${program})` : ''}` : '';
   const element = name ? `${role || 'Element'} "${name}"` : role && role !== 'Unknown' ? `${role} with no name` : '';
   if (element && window) return `${element} in ${window}`;

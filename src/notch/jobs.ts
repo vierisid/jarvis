@@ -28,6 +28,7 @@
  *     was pasted. Something the person changed since is left alone.
  *   - A payment is never part of a job on the notch.
  */
+import { NOTCH_NAME } from './name.ts';
 import type { Database } from 'bun:sqlite';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
@@ -133,7 +134,7 @@ export class NotchJobStore {
     )`);
     db.run('CREATE INDEX IF NOT EXISTS idx_notch_jobs_created ON notch_jobs(created_at)');
     // A job that was running when the brain went down is not running now.
-    db.run("UPDATE notch_jobs SET state = 'stopped', note = 'Jarvis restarted in the middle of it.', ended_at = ? WHERE state = 'running'", [this.now()]);
+    db.run("UPDATE notch_jobs SET state = 'stopped', note = ?, ended_at = ? WHERE state = 'running'", [`${NOTCH_NAME} restarted in the middle of it.`, this.now()]);
     db.run('DELETE FROM notch_jobs WHERE created_at < ?', [this.now() - NOTCH_JOB_DAYS * 86_400_000]);
   }
 

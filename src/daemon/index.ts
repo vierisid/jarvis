@@ -175,7 +175,11 @@ import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
-import { notchDayOneDeps, notchFilePlaces } from "./notch-dayone.ts";
+import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
+import { NOTCH_NAME } from "../notch/name.ts";
+
+/** The small window that says it is installed, by its name among the desktop app's windows. */
+const NOTCH_INSTALLED_CARD = 'notch:installed';
 import { notchJobDeps } from "./notch-jobs.ts";
 import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
@@ -770,6 +774,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   let notchReal: NotchReal | null = null;
   /** The product's own switch for watching, as the notch's day one uses it. Null until it is there, and where there is none. */
   let notchSetWatching: ((on: boolean) => Promise<boolean>) | null = null;
+  /** Completes the product's own first setup from the notch's day one. Null until what it starts can be started. */
+  let notchFinishSetup: (() => Promise<void>) | null = null;
 
   // File sink, installed here - the first thing after the config is readable
   // and before anything else boots - so the log captures startup too. A hosted
@@ -4813,7 +4819,38 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             on: () => (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false && isDesktopEnabled(),
             get set() { return notchSetWatching; },
           },
-          openSetup: (sidecarId, setUp) => { if (setUp) notchOpenDashboard(sidecarId); else notchOpenPage(sidecarId, 'llm'); },
+          // The page where an AI is chosen and its key is given, in a window
+          // of its own. It opens before the dashboard's own first steps are
+          // done: day one is those steps, with the notch on.
+          openSetup: (sidecarId) => notchOpenPage(sidecarId, 'llm'),
+          // What makes out speech has a page and a key of its own.
+          openVoice: (sidecarId) => notchOpenPage(sidecarId, 'voice'),
+          finishSetup: async () => { await notchFinishSetup?.(); },
+          // "Pillow is installed": a small window in the middle of the
+          // screen, of each computer that shows the notch, that takes no
+          // click and no key. An older desktop app opens it where it likes.
+          card: {
+            show: () => {
+              for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                void sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
+                  id: NOTCH_INSTALLED_CARD,
+                  url: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}?card=installed`,
+                  title: NOTCH_NAME,
+                  bounds: { x: -1, y: -1, w: 400, h: 112 },
+                  frameless: true,
+                  always_on_top: true,
+                  center: true,
+                  resizable: false,
+                  multi_instance: false,
+                }).catch((err) => { console.warn('[notch] the card that says it is installed could not be shown:', err instanceof Error ? err.message : err); });
+              }
+            },
+            hide: () => {
+              for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                void sidecarManager.dispatchRPC(sidecar.id, 'panel.close', { id: NOTCH_INSTALLED_CARD }).catch(() => { /* it was not up */ });
+              }
+            },
+          },
           // First names of the people a reply is prepared for. Null while mail is not read at all.
           waiting: () => (notchReal?.mail ? notchReal.mail.store.ready().map((row) => row.who.name || row.who.address.split('@')[0] || '') : null),
           meetings: async () => {
@@ -4853,6 +4890,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
             return null;
           },
+          // What it read of a file is remembered, one line each, where it can be seen and forgotten.
+          remember: (place, name, line) => notchRememberFile(getDb(), place, name, line),
           // The product's own reader of PDFs: apart from the daemon, and under a deadline.
           pdf: async (bytes) => {
             const { decodeAttachment } = await import('../brief/attachments.ts');
@@ -6530,6 +6569,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
     });
     apiContext.startPostSetupServices = postSetupServices.start;
+    // Day one on the notch is the first setup, with the notch on (pass 12).
+    // When an AI is in, it marks that setup as done the way the dashboard's
+    // own "skip" does (the profile and the tour are the dashboard's, and are
+    // not asked again), and starts what was waiting for it. Nothing happens
+    // on a brain that is set up already.
+    notchFinishSetup = async () => {
+      if (jarvisConfig.onboarding?.setup_completed_at) return;
+      const { saveUserSection } = await import('./user-settings.ts');
+      const now = Date.now();
+      jarvisConfig.onboarding = {
+        ...jarvisConfig.onboarding,
+        setup_completed_at: now,
+        tutorial_completed_at: jarvisConfig.onboarding?.tutorial_completed_at ?? null,
+        tutorial_dismissed_at: jarvisConfig.onboarding?.tutorial_dismissed_at ?? now,
+        setup_skipped_profile: true,
+      };
+      saveUserSection('onboarding', jarvisConfig.onboarding);
+      apiContext.config.onboarding = jarvisConfig.onboarding;
+      console.log('[notch] day one has an AI: the first setup is marked as done, and what waited for it starts');
+      try { await apiContext.startPostSetupServices?.(); } catch (err) {
+        console.warn('[notch] what waits for the setup could not be started; it starts with the next start of the brain:', err instanceof Error ? err.message : err);
+      }
+    };
     startAwarenessIfNeeded = postSetupServices.startAwarenessIfNeeded;
     apiContext.isPostSetupServicesReady = () => bgAgent !== null;
     apiContext.onboardingServiceReadiness = postSetupServices.readiness;

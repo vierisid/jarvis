@@ -81,7 +81,7 @@ describe('where on the screen an approval would land', () => {
     expect(notchPlaceSentence({ window_title: '', process_name: 'steam' }, false)).toBe('a window of steam');
     expect(notchPlaceSentence({ window_title: '', process_name: 'steam' }, true)).toBe('the window in front (steam)');
     expect(notchPlaceSentence({ element_role: 'Image', element_name: 'Play', process_name: 'steam' }, false)).toBe('Image "Play" in a window of steam');
-    expect(notchPlaceSentence({ own: true, window_title: 'Jarvis' }, false)).toBe("one of Jarvis's own windows");
+    expect(notchPlaceSentence({ own: true, window_title: 'Jarvis' }, false)).toBe('one of my own windows');
     expect(notchPlaceSentence({}, true)).toBeNull();
     expect(notchPlaceSentence(null, true)).toBeNull();
     expect(notchPlaceSentence('Send', true)).toBeNull();

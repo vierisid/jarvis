@@ -566,7 +566,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
 
     const turns = door();
-    if (!turns || !turns.ready()) { refuse(ask, 'Jarvis is starting up. Ask again in a moment.'); return; }
+    if (!turns || !turns.ready()) { refuse(ask, 'I am still starting up. Ask again in a moment.'); return; }
     let ref: BriefTurnRef;
     try {
       ref = { conversationId: turns.conversation(), turnId: `notch-${ask.id}`, requestId: `notch-${ask.source}-${ask.id}` };
@@ -734,7 +734,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.phase = 'stopped';
     } else {
       ask.note = error?.code === 'interrupted'
-        ? 'Jarvis restarted in the middle of it. Nothing is tried again.'
+        ? 'I restarted in the middle of it. Nothing is tried again.'
         : (error?.message ?? 'It could not finish.');
       ledger.finish(ask.id, 'failed', { note: ask.note });
       ask.phase = 'failed';
@@ -1166,11 +1166,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         if (row.state === 'running' && row.kind === 'turn' && !turns) continue;
         if (row.state !== 'running') {
           // It never ran, and now it never will.
-          ledger.dismiss(row.id, 'Jarvis restarted before it ran.');
+          ledger.dismiss(row.id, 'I restarted before it ran.');
           // If its words were already in, the person is told: they said
           // something and nothing came of it.
           if (row.heard.trim() && Date.now() - row.createdAt < 15 * 60_000) {
-            const parts: NotchPart[] = ['Jarvis restarted before it started on: ', em(shortened(row.heard, 70)), '. Say it again.'];
+            const parts: NotchPart[] = ['I restarted before I started on: ', em(shortened(row.heard, 70)), '. Say it again.'];
             const id = `ask-lost-${row.id}`;
             inbox.add({
               id, subject: id, class: 'person', speaks: true, once: true, asked: true,
@@ -1193,7 +1193,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           ask.whole = seen.text;
           byTurn.set(ref.turnId, ask);
           inbox.add(item(ask, false));
-        } else ledger.finish(row.id, 'failed', { note: 'Jarvis restarted in the middle of it. Nothing is tried again.' });
+        } else ledger.finish(row.id, 'failed', { note: 'I restarted in the middle of it. Nothing is tried again.' });
       }
       for (const row of ledger.unseen()) {
         if (live.has(row.id)) continue;

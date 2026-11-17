@@ -1842,13 +1842,14 @@ animation, the line, day one animation."
 133. **Every step of day one is real, or says what is true.** The name is
     kept as what the assistant calls the person, in `cfg.user`, and the
     profile the dashboard's first steps ask about is not touched. What is
-    said at step 4 is taken as the answer whatever the words are, before
-    any other reading of them, and needs no model; with nothing to make
-    words of a voice it says so and goes on. "May I watch?": yes leaves
-    watching on, and a no switches it off through the product's own
-    switch; "Open my eyes" in "What I see" switches it back. At step 6 the
-    first real look is the lesson and nothing else comes of it. An AI is
-    set up in the dashboard's own setup, which is opened and waited for;
+    said at the talking step is taken as the answer whatever the words
+    are, before any other reading of them, and needs no model; with
+    nothing to make words of a voice it says so and goes on. "May I
+    watch?": yes leaves watching on, and a no switches it off through the
+    product's own switch; "Open my eyes" in "What I see" switches it back.
+    At the showing step the first real look is the lesson and nothing else
+    comes of it. An AI is set up on the product's own AI page, which is
+    opened and waited for (145);
     one that is there is named and nothing is asked. Mail and calendar are
     reached by signing in to Google in Jarvis's own browser, opened where
     it can be seen and waited for. Looking around reads what can already
@@ -1904,7 +1905,8 @@ run: "it says it couldn't go through the document", and "I was on my
 desktop, I didn't have any windows open, which will be something that a lot
 of people will have, and so it couldn't perform anything."
 
-139. **The newest files are opened, said in a line each, and not kept.** The
+139. **The newest files are opened and said in a line each. What is in
+    them is not kept.** The
     newest four of the desktop and two of the documents that are made of
     words (text, a web page, Word, Excel, PowerPoint, a PDF, code) are
     handed over by the person's own computer (`notch.file`), read in the
@@ -1913,8 +1915,9 @@ of people will have, and so it couldn't perform anything."
     What is in a file is outside text: it travels inside the wrapper all
     outside text travels in, with the rule said beside it, and a line of
     the answer that carries a link, an address or markup is not shown at
-    all. Nothing that was read is written anywhere: not to memory, not to
-    a log. With no AI nothing is opened.
+    all. Nothing of what is in a file is written anywhere: not to memory,
+    not to a log. The one line about it is remembered (146). With no AI
+    nothing is opened.
 
 140. **A private file is never opened, and the computer it is on decides
     that.** The desktop app marks a file as private from its name alone
@@ -1943,6 +1946,58 @@ of people will have, and so it couldn't perform anything."
     thing could not be pointed at, day one says so, and never that it
     pointed.
 
+The owner, the same night: "One thing we totally forgot from the POC is
+that when you start Jarvis for the first time, you get that little thing
+that says Jarvis installed, look up." Then: "Don't say look up. Don't use
+Jarvis as the name. Use Pillow with the new brand name." On whether what
+was read should be remembered: "yes, it should remember what it read." And:
+"it makes sense to have the AI step at the beginning, because a lot of it
+will use AI."
+
+143. **On the notch it calls itself Pillow, in one place.** The name is one
+    constant (`src/notch/name.ts`), used by every line the notch says about
+    itself, the card, and the labels a screen reader hears. Where it speaks
+    it says "I". The product around it is not renamed here: the dashboard,
+    the tray, the installer, the windows' titles and the hosted plan's
+    model ("Jarvis AI") keep the name they have.
+
+144. **A card says it is installed, once, and takes nothing.** When day one
+    begins by itself on its first step, a small window in the middle of
+    the screen says "Pillow is installed." and "It lives at the top of your
+    screen.", with the brand's own mark. It is the notch's page in another
+    mode (`?card=installed`), opened as a panel that is asked to be centred
+    (`center`, `sidecar/panels_centre.go`). It goes when the first line is
+    answered, by itself after two minutes, and when the brain stops. It is
+    not shown when day one is asked for again, or goes on from a later
+    step. It never says "look up".
+
+145. **The AI is the second step, and day one is the first setup.** Straight
+    after hello it names the AI that is there, or asks which to use and
+    opens the product's AI page in a window of its own
+    (`/?settingsTab=llm#/_panel_settings`, which is not behind the
+    dashboard's first steps) and waits. Once an AI is there, day one marks
+    the product's own first setup as done, as the dashboard's "skip" does
+    for the profile and the tour, and starts what waited for it
+    (`notchFinishSetup` in `src/daemon/index.ts`). On a brain that is set
+    up already that does nothing. Said "later", the setup stays open, day
+    one goes on, and each step that needs an AI says so. What makes out
+    speech has a key of its own (`cfg.stt`): with an AI in and nothing to
+    hear with, the same step asks for that too, opens the voice page and
+    waits, reading the same settings the talking reads. It is asked once
+    at the beginning, not found missing at the talking step. A no to it is
+    "later", and the talking step then says what is true.
+
+146. **What it read on day one is remembered as one line, and Forget
+    holds.** For each file that was opened and said, one fact is kept in
+    the product's memory: the file's name, where it lies, and the line
+    (`notchRememberFile` in `src/daemon/notch-dayone.ts`). Its source is
+    the file (`notch:files:<place>:<name>`), shown in Memory as "a file I
+    opened", and it counts as inferred, never as the owner's own words. A
+    file that is remembered already keeps its first line. The line about a
+    file is worded anew each time, so the product's guard against learning
+    the same sentence twice would not stop it: once anything about a file
+    was forgotten, nothing is written about that file again.
+
 138. **"What I can do" promises nothing the product does not take.** One
     sheet names everything the notch does, with the words that start each
     (`src/notch/cando.ts`). Day one ends on it, the settings lead to it,
@@ -1959,16 +2014,24 @@ What is not done, or not proven, in pass 12:
   right. The product has no dock: it is a convention, not where the app is.
 - **Where the lip leans is told from the window, not the screen.** Exact
   for a window that fills the screen, the right side for any other.
-- **Day one's AI step opens the dashboard.** The prototype chose an AI in
-  the notch. The product's keys and models are set in its own setup, so
-  the notch opens that and waits. Both choices open the same setup.
+- **Day one's AI step opens the AI page.** The prototype chose an AI in
+  the notch. The product's keys and models are set on its own page, so
+  the notch opens that and waits. Both choices open the same page. That it
+  opens on a brain that was never set up was checked against the router
+  and never seen on a screen.
+- **The card has never been on a screen.** Its window is written for
+  Windows: centred, without a frame, with round corners where Windows 11
+  gives them. On a Mac, and on an older desktop app, it opens where a
+  panel opens.
+- **Only the notch says Pillow.** Everything else a person sees still
+  says Jarvis.
 - **Day one has no "3 things you repeat".** Nothing is known of anyone's
   habits in their first five minutes. It says how they will be found.
 - **Looking around opens a few files and no more.** The newest four of the
   desktop and two of the documents. It does not go down into a folder, read
   a picture, a film or a sound, or read browser history or the list of
-  programs. What it reads is not kept, so it is not remembered afterwards:
-  whether it should be is the owner's to decide.
+  programs. It remembers one line about each file it opened, and nothing
+  about the ones it only saw the names of.
 - **Which files are private is told from their names.** A private file
   with a plain name is opened. A harmless one with a private-sounding name
   is not.
@@ -2200,6 +2263,7 @@ What is not done, or not proven, in pass 12:
 | brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `type`: `win`, `text` (up to 4000 signs), typed where the keyboard is when that window is the one in front. `find`: `win`, `app?`, `front?`: the window a step named as it is now, or the topmost window of that program at the same size, brought forward with `front`; adds `{win, app}`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |
 | brain to desktop app | `notch.hold` | `{what, ms}` (up to five minutes), or `{}` to hold nothing | `{held}`. With the talk keys down, "Put (what) here" stands beside the pointer over a place that can take it |
 | brain to desktop app | `recorder_start` field `quiet` | `true` for a recording started from the notch | The pebble's line and the two notifications are left out for that recording. Its `ui_interaction` events now also carry `press_keys` steps, and for a click `win`, `pt` and `mods` |
+| brain to desktop app | `panel.spawn` field `center` | `true` for the card that says it is installed | The panel is placed in the middle of the main screen, a little above the centre, whatever `bounds` says of its place. Without a frame it also gets round corners where the system gives them. An older desktop app ignores the field |
 | brain to desktop app | `register_ack` field `notch` | `true` when the switch is on; absent otherwise | The desktop app does not open the microphone for the wake word |
 
 The page talks to the desktop app through seven functions on `window`:
@@ -2303,6 +2367,24 @@ scripts/notch/try.sh
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.
   `NOTCH_DATA_DIR`, `NOTCH_PORT`, `NOTCH_WIN_DIR` and `NOTCH_MAC_DIR` override
   the defaults.
+
+### A fully empty try
+
+To see what a new person sees (the card, day one from its first word, no AI,
+no mail, nothing remembered):
+
+```sh
+scripts/notch/fresh.sh
+```
+
+It wipes two folders of its own and then does what `try.sh --token` does
+with them: brain data in `~/.jarvis-notch-fresh`, and the desktop app in
+`JarvisNotchFresh` in the user folder. The usual test data and test build are
+not touched. Both use the same port, so the usual test brain has to be
+stopped, and its desktop app quit from the tray, first: the script says so
+and wipes nothing while one is running. A fresh build left over from the
+last try is stopped by its own path. `--check` says what it would do and
+does nothing.
 
 ### Playing the demo
 
