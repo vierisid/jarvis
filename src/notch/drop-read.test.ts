@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { deflateRawSync } from 'node:zlib';
 import {
-  NOTCH_DROP_TEXT_MAX, NOTCH_DROP_UNPACK_MAX, decodeEntities, docxText, htmlToText, pptxText, readDropped, tidyText, xlsxText, zipParts, zipRead,
+  NOTCH_DROP_TEXT_MAX, NOTCH_DROP_UNPACK_MAX, decodeEntities, docxText, htmlToText, plainText, pptxText, readDropped, tidyText, xlsxText, zipParts, zipRead,
 } from './drop-read.ts';
 
 /** A zip as Office writes one: each part deflated, then the list of parts, then the end record. */
@@ -180,5 +180,65 @@ describe('a dropped file, read as what its name says it is', () => {
     expect(readDropped('text', new Uint8Array(400).fill(0xff))).toBeNull();
     expect(readDropped('docx', bytes('this is not a zip, whatever the end of its name says about it'))).toBeNull();
     expect(readDropped('xlsx', docx('<w:p/>'))).toBeNull();
+  });
+});
+
+// The hardening audit, 17 November 2026. All of this runs on the brain's one thread. A web page with comments
+// that are never closed took 25 seconds at 512 KB, code with one long run of blanks 3.7 seconds at 64 KB, and
+// a 130 KB deck became 92 MB of text before it was cut. Nothing else ran meanwhile: no approval, no agent.
+describe('whatever a dropped file holds, it is gone through once', () => {
+  const quick = <T>(run: () => T): T => {
+    const began = performance.now();
+    const out = run();
+    // A wide margin on any machine: each of these took seconds to minutes before.
+    expect(performance.now() - began).toBeLessThan(1500);
+    return out;
+  };
+
+  test('a web page with comments, scripts, titles and tags that are never closed', () => {
+    for (const piece of ['<!--x', '<script ', '<title>', '<li ', '<', '<p>a</p><style>']) {
+      const page = `<p>Before.</p>${piece.repeat(Math.ceil(2_000_000 / piece.length))}`;
+      const words = quick(() => htmlToText(page));
+      expect(words.startsWith('Before.')).toBe(true);
+    }
+    // And what it reads is what it read before.
+    expect(htmlToText('<title>T</title><p>One <b>bold</b> word</p><!-- no --><script>x()</script><ul><li>a<li>b</ul><table><tr><td>1</td><td>2</td></tr></table>'))
+      .toBe('T\n\nOne bold word\n- a\n- b\n1 | 2 |');
+  });
+
+  test('code with a long run of blanks, and nothing but blanks', () => {
+    const run = ' '.repeat(300_000);
+    expect(quick(() => plainText(`select 1;${run}x\n${run}\nselect 2;${run}`))).toBe(`select 1;${run}x\n\nselect 2;`);
+    expect(quick(() => plainText(`\n\n\n${'\t'.repeat(200_000)}\n\n\n\n\n\nend\n\n`))).toBe('end');
+    // Lines keep how far they are set in, and at most two empty lines stand between two.
+    expect(plainText('a\n  b  \n\n\n\n\nc\n')).toBe('a\n  b\n\n\nc');
+  });
+
+  test('a very large text file is read from its start, and says so', () => {
+    const got = quick(() => readDropped('text', new TextEncoder().encode(`${'line of words\n'.repeat(120_000)}THE END`)))!;
+    expect(got.cut).toBe(true);
+    expect(got.text.length).toBeLessThan(NOTCH_DROP_TEXT_MAX + 100);
+    expect(got.text).not.toContain('THE END');
+    expect(got.text.endsWith('(The file goes on. Only this first part was read.)')).toBe(true);
+  });
+
+  test('a small deck whose slides unpack to megabytes is not unpacked past what is kept', () => {
+    const slide = `<p:sld>${`<a:p><a:r><a:t>${'word '.repeat(40)}</a:t></a:r></a:p>`.repeat(30_000)}</p:sld>`;
+    const deck = zip(Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`ppt/slides/slide${i + 1}.xml`, slide])));
+    expect(deck.length).toBeLessThan(1_000_000);
+    const words = quick(() => pptxText(deck))!;
+    expect(words.startsWith('Slide 1:')).toBe(true);
+    // It was 92 MB. What is kept is 120,000 characters.
+    expect(words.length).toBeLessThan(NOTCH_DROP_TEXT_MAX * 2 + 10_000);
+    expect(readDropped('pptx', deck)!.cut).toBe(true);
+  });
+
+  test('Office parts with tags that are never closed', () => {
+    const open = '<a:t>'.repeat(400_000);
+    expect(quick(() => pptxText(zip({ 'ppt/slides/slide1.xml': `<a:p><a:t>Title</a:t></a:p>${open}` })))).toBe('Slide 1:\nTitle');
+    const cells = '<c r="A1" t="inlineStr"><is><t>'.repeat(100_000);
+    expect(quick(() => xlsxText(zip({ 'xl/workbook.xml': '<workbook><sheets><sheet name="S" sheetId="1"/></sheets></workbook>', 'xl/worksheets/sheet1.xml': `<row r="1"><c r="A1"><v>7</v></c></row><row r="2">${cells}` }))))
+      .toBe('Sheet: S\n7');
+    expect(quick(() => docxText(zip({ 'word/document.xml': `<w:p><w:r><w:t>Hello</w:t></w:r></w:p>${'<w:t>'.repeat(400_000)}` })))).toBe('Hello');
   });
 });

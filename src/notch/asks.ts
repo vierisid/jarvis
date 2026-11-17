@@ -512,9 +512,13 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.phase = 'done';
       // What it set off shows itself: this instruction has no line of its own.
       ask.silent = true;
-      try { side.run(); } catch (error) {
-        log(`[notch] something the notch does itself failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      // It runs when the line that carried these words has left the notch: what it opens (the settings, a
+      // sheet, day one) cannot take the notch from under that line, and was refused, so nothing opened.
+      inbox.after(() => {
+        try { side.run(); } catch (error) {
+          log(`[notch] something the notch does itself failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
       return;
     }
     if (!deps.modelReady()) { refuse(ask, 'no_model'); return; }

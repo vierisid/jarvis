@@ -71,13 +71,13 @@ export function attachNotchPause(surface: NotchSurface, inbox: NotchInbox, deps:
       if (tell) {
         // It shakes for the stop, and zips its lip: it will stay quiet.
         surface.act({ gesture: 'shake', lip: 'zip' });
-        inbox.present('stopped', (stage) => stage.say(['Everything is stopped. Nothing runs until you wake me.'], 3600, { mood: 'closed' }));
+        inbox.present('stopped', (stage) => stage.say(['Everything is stopped. Nothing runs until you wake me.'], 3600, { mood: 'closed' }), { held: true });
       }
       return;
     }
     // Killed. A yes at rest says what this is, and wakes nothing.
     const explain = (): boolean => {
-      inbox.present('killed', (stage) => stage.say(['Stopped with Kill. Reset it in the dashboard, under Authority.'], 4200, { mood: 'closed' }));
+      inbox.present('killed', (stage) => stage.say(['Stopped with Kill. Reset it in the dashboard, under Authority.'], 4200, { mood: 'closed' }), { held: true });
       return true;
     };
     inbox.setOpener(explain);

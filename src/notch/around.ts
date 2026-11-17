@@ -141,7 +141,7 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
         // After this script has ended: the notch shows one thing at a time.
         if (show) clock.setTimeout(() => { if (!stopped) inbox.open(); }, 0);
       }
-    });
+    }, { held: true });
     if (!offered) release();
   }
 
