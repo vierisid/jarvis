@@ -119,7 +119,10 @@ export interface NotchAsksDeps {
    * such a question, or the window has no answer: then they run as any other
    * instruction.
    */
-  point?: (question: string, during?: NotchPointDuring) => Promise<NotchPointed | null>;
+  point?: ((question: string, during?: NotchPointDuring) => Promise<NotchPointed | null>) & {
+    /** Whether these words would go on with a walk that stopped before its end ("go on", "and now?"). */
+    goesOn?: (text: string) => boolean;
+  };
   /**
    * Words the notch acts on itself, with no model and no turn (./teach.ts):
    * "Watch me", "done" while it watches, "run it on nine rows", "undo that".
@@ -615,7 +618,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // that, not about where something is. The window is read beside the line
     // that says so, not in its way: it can be stopped like anything running.
     const point = deps.point;
-    if (point && !ask.files?.length && whereQuestion(ask.heard)) {
+    // "Go on" after a walk that stopped before its end is that walk again, from where the person is.
+    if (point && !ask.files?.length && (whereQuestion(ask.heard) || point.goesOn?.(ask.heard) === true)) {
       ask.activity = 'Looking for it in the window.';
       const stop = new AbortController();
       ask.walk = () => stop.abort();
@@ -633,7 +637,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         ask.walk = undefined;
         if (ask.phase !== 'running') return;
-        if (!ask.stopAsked && pointed?.ok !== 'stopped') { try { deps.pointed?.(pointed?.ok === true); } catch { /* a sign, and nothing depends on it */ } }
+        // A walk that stopped before its end is not "shown": what is said and kept says how far it came.
+        const whole = pointed?.ok === true && (pointed.ended === undefined || pointed.ended === 'shown' || pointed.ended === 'finished' || pointed.ended === 'there');
+        const some = pointed?.ok === true && (whole || (pointed.steps ?? 0) > 0);
+        if (!ask.stopAsked && pointed?.ok !== 'stopped') { try { deps.pointed?.(some); } catch { /* a sign, and nothing depends on it */ } }
         if (ask.stopAsked || pointed?.ok === 'stopped') {
           // Taken off the screen by something that was not Esc (a line was drawn round something): nothing is said.
           if (!ask.stopAsked) ask.silent = true;
@@ -642,7 +649,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           ask.phase = 'stopped';
         } else if (pointed?.ok === true) {
           byTurn.delete(ref.turnId);
-          ledger.did(ask.id, 'Showed it on the screen.');
+          const steps = pointed.steps ?? 0;
+          ledger.did(ask.id, whole ? 'Showed it on the screen.' : steps > 0 ? `Showed ${steps} ${steps === 1 ? 'step' : 'steps'} on the screen, then stopped before the end.` : 'Could not show it on the screen.');
           ask.answer = pointed.said;
           ledger.finish(ask.id, 'done', { answer: ask.answer });
           ask.phase = 'done';

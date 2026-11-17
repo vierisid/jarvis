@@ -306,7 +306,7 @@ describe('the grammar, by doing each thing once', () => {
     await h.upTo('talk');
     expect(h.day.unheard('no_stt')).toBe(true);
     await settle();
-    expect(h.said()).toBe('I heard a voice. I cannot make out words until speech-to-text is set up. It is under Voice in Settings.');
+    expect(h.said()).toBe('I heard a voice. I cannot make out words until speech-to-text is set up. It is in Settings, under Channels.');
     await h.seen();
     expect(h.day.step()).toBe(S.watch);
   });
@@ -449,7 +449,7 @@ describe('what it works with', () => {
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'set up', step: of('brain') });
     await h.reply('yes');
     expect(h.did).toEqual(['finish setup', 'voice on pc']);
-    expect(h.said()).toBe('I opened the voice settings. Choose a speech-to-text service there, and give its key.');
+    expect(h.said()).toBe('I opened the settings at Voice Transcription. Choose a service there, and give its key.');
     await h.pass(6000);
     expect(h.line()?.kind).toBe('work');
     h.world.voice = true;
@@ -475,7 +475,7 @@ describe('what it works with', () => {
     await no.upTo('brain');
     await no.seen();
     await no.reply('no');
-    expect(no.said()).toBe('Later then. Until then I cannot make out what you say. It is under Voice in Settings.');
+    expect(no.said()).toBe('Later then. Until then I cannot make out what you say. It is in Settings, under Channels.');
     expect(no.did).toEqual(['finish setup']);
     await no.seen();
     expect(no.day.step()).toBe(S.notNow);
@@ -486,7 +486,7 @@ describe('what it works with', () => {
     await esc.reply('yes');
     await esc.reply('stop');
     await esc.pass(2000);
-    expect(esc.said()).toBe('Later then. Until then I cannot make out what you say. It is under Voice in Settings.');
+    expect(esc.said()).toBe('Later then. Until then I cannot make out what you say. It is in Settings, under Channels.');
   });
 
   test('speech that is already made out is not asked about, and neither is it with no AI', async () => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import type {
   STTProvider,
@@ -6,6 +6,7 @@ import type {
   TTSProvider,
 } from "../useSettingsData";
 import { allowedFieldText, allowedToSend, parseDiscordIds, parseTelegramIds } from "./channel-ids";
+import { settingsFocusFromHref } from "../../../shell/settings-tab-request";
 import { ownerNotice, recipientNotice } from "./channel-recipient";
 
 import { UJ_VOICES, EDGE_VOICES } from "../../../../../../src/comms/voice-options";
@@ -97,6 +98,18 @@ export function ChannelsTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const { channelStatus, channelCfg, sttCfg, ttsCfg } = data;
+
+  // A link can ask for speech-to-text to be what is in view
+  // (`?settingsFocus=stt`): it is the third part of a long tab, below two
+  // chat channels a person who wants to be heard never asked about. Once per
+  // opening, and only when the part is on the page.
+  const sttSection = useRef<HTMLElement | null>(null);
+  const sttShown = useRef(false);
+  useEffect(() => {
+    if (sttShown.current || !sttSection.current || typeof window === "undefined" || settingsFocusFromHref(window.location.href) !== "stt") return;
+    sttShown.current = true;
+    sttSection.current.scrollIntoView({ block: "start" });
+  });
 
   // Telegram form
   const [tgToken, setTgToken] = useState("");
@@ -336,7 +349,7 @@ export function ChannelsTab({
       </section>
 
       {/* STT */}
-      <section className="v2-set__section">
+      <section className="v2-set__section" ref={sttSection} data-settings-focus="stt">
         <div className="v2-set__section-head">
           <div>
             <h3 className="v2-set__section-title">Voice Transcription (STT)</h3>

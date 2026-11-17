@@ -45,6 +45,18 @@ export function settingsTabFromHref(href: string): SettingsTab | null {
   return isRoomTab("settings", tab) ? tab : null;
 }
 
+/**
+ * What a deep link asks to be in view inside the tab it opens
+ * (`?settingsTab=channels&settingsFocus=stt`). A tab reads it for the parts
+ * it knows; anything else is ignored.
+ */
+export function settingsFocusFromHref(href: string): string | null {
+  const url = new URL(href, "http://localhost");
+  if (!["#/_room_settings", "#/_panel_settings"].includes(url.hash)) return null;
+  const focus = url.searchParams.get("settingsFocus");
+  return focus && /^[a-z]{1,24}$/.test(focus) ? focus : null;
+}
+
 /** Sidecar data changed by an action (an update request); pollers refresh. */
 export const SIDECARS_CHANGED_EVENT = "jarvis:sidecars-changed";
 

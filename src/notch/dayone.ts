@@ -33,8 +33,9 @@
  *   2   an AI is set up on the product's own AI page, which this opens in a
  *       window of its own and waits for. One that is already there is named,
  *       and nothing is asked. Said "later", the steps that need one say so.
- *       With an AI in, it asks for what makes out speech too, on the voice
- *       page: that has a key of its own, and the talking needs it;
+ *       With an AI in, it asks for what makes out speech too, where that
+ *       is set (the Channels page, at Voice Transcription): it has a key of
+ *       its own, and the talking needs it;
  *   4   the name is kept, and is what the assistant calls the person;
  *   5   what they say is heard by the same keys as ever. With no AI it
  *       cannot be made into words, and the step says so and goes on;
@@ -336,7 +337,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         missed = null;
         if (why === 'no_stt') {
           hearing = false;
-          await stage.say(['I heard a voice. I cannot make out words until speech-to-text is set up. It is under Voice in Settings.'], 4400, { mood: 'look' });
+          await stage.say(['I heard a voice. I cannot make out words until speech-to-text is set up. It is in Settings, under Channels.'], 4400, { mood: 'look' });
           return 'on';
         }
         if (++tries >= 2) { hearing = false; await stage.say(['I did not catch it. It will come. On we go.'], 2600, { mood: 'look' }); return 'on'; }
@@ -437,12 +438,12 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       const said = await ask(stage, 'brain', ['To hear you I need speech-to-text too. Set that up now?'], 'set up');
       if (said === 'left') return 'left';
       const notYet = async (): Promise<Went> => {
-        await stage.say(['Later then. Until then I cannot make out what you say. It is under Voice in Settings.'], 4400, { mood: 'careful' });
+        await stage.say(['Later then. Until then I cannot make out what you say. It is in Settings, under Channels.'], 4400, { mood: 'careful' });
         return 'on';
       };
       if (said === 'no') return notYet();
       voice.setUp(stage.from());
-      const heard = await waitFor(stage, ['I opened the voice settings. Choose a speech-to-text service there, and give its key.'], 2000, () => voice.ready());
+      const heard = await waitFor(stage, ['I opened the settings at Voice Transcription. Choose a service there, and give its key.'], 2000, () => voice.ready());
       if (!heard) return notYet();
       await stage.say(['Now I can hear you.'], 2200, { mood: 'happy', mark: 'check' });
       return 'on';

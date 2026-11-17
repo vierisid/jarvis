@@ -939,7 +939,7 @@ function MultiTierSection({
 
 // ─── Model selector (provider + model dropdowns) ───────────────────────────
 
-function ModelSelector({
+export function ModelSelector({
   label,
   sub,
   value,
@@ -985,9 +985,18 @@ function ModelSelector({
   const parsed = useMemo(() => parseModelRef(value), [value]);
   const providerNames = Object.keys(providers).sort();
 
-  const [selectedProvider, setSelectedProvider] = useState<string>(
+  const [pickedProvider, setSelectedProvider] = useState<string>(
     parsed?.provider ?? providerNames[0] ?? "",
   );
+  // The provider this picker lists models for. What was picked stands while
+  // it is a configured provider, or is what the saved choice names. Otherwise
+  // it is the first one there is: on an install with no provider yet this
+  // picker is on the page before the first provider exists, and it kept
+  // "none" after one was added, so it offered a bare text field whose input
+  // was thrown away, until changing the mode made a new picker.
+  const selectedProvider = providers[pickedProvider] || (parsed && parsed.provider === pickedProvider)
+    ? pickedProvider
+    : providerNames[0] ?? pickedProvider;
   const [selectedModel, setSelectedModel] = useState<string>(parsed?.model ?? "");
   const [customModel, setCustomModel] = useState<string>(
     parsed?.model && !providerModels(providers, parsed.provider, ollamaModels, providerCatalogs).includes(parsed.model)

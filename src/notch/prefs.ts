@@ -31,6 +31,12 @@ const word = (name: string, value: string, options: readonly string[], more: Par
   ({ word: { name, value, options: [...options], ...more } });
 
 /** The two pairs of keys of one machine, as its desktop app names them: "ctrl", "alt", "meta", "shift". */
+/**
+ * A page of the dashboard's settings the notch can open in a window of its
+ * own. `speech` is where speech-to-text is chosen and its key is given.
+ */
+export type NotchSettingsPage = 'voice' | 'llm' | 'integrations' | 'speech';
+
 export interface NotchKeyPairs { talk: [string, string]; yes: [string, string]; mac: boolean }
 
 const KEY_NAMES: Record<string, [windows: string, mac: string]> = { ctrl: ['Ctrl', 'Ctrl'], alt: ['Alt', 'Option'], meta: ['Win', 'Cmd'], shift: ['Shift', 'Shift'] };
@@ -117,7 +123,7 @@ export interface NotchPrefsDeps {
   /** Takes the person to where one is connected: a sign-in window, or its page in the dashboard. */
   connect?: (id: string, sidecarId: string | null) => void | Promise<void>;
   /** Opens the dashboard, at one of its pages when it can. */
-  openDashboard?: (sidecarId: string | null, page?: 'voice' | 'llm' | 'integrations') => void;
+  openDashboard?: (sidecarId: string | null, page?: NotchSettingsPage) => void;
   log?: (line: string) => void;
 }
 
@@ -179,7 +185,8 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
           if (answer.button === 'moves' && deps.moves) { await deps.moves(stage); again = true; break; }
           if (answer.button === 'cando' && deps.canDo) { await deps.canDo(stage); again = true; break; }
           if (answer.button === 'dayone' && deps.dayOne) { deps.dayOne(); return; }
-          if (answer.button === 'voice' && deps.openDashboard) { deps.openDashboard(stage.from(), 'voice'); return; }
+          // What makes out speech is set at "Voice Transcription", not on the page of the voice it speaks with.
+          if (answer.button === 'voice' && deps.openDashboard) { deps.openDashboard(stage.from(), 'speech'); return; }
           continue;
         }
         if (answer.act !== 'word') continue;

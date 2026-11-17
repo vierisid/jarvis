@@ -53,7 +53,7 @@ import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type 
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
 import { attachNotchMoves, type NotchMoves } from './moves.ts';
-import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps } from './prefs.ts';
+import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
 import { whereQuestion } from './point.ts';
@@ -73,7 +73,7 @@ export interface NotchRealDeps {
     connections?: NotchPrefsDeps['connections'];
     connect?: NotchPrefsDeps['connect'];
     /** Opens the dashboard at one of its settings pages. */
-    openPage?: (sidecarId: string | null, page: 'voice' | 'llm' | 'integrations') => void;
+    openPage?: (sidecarId: string | null, page: NotchSettingsPage) => void;
   };
   /**
    * Day one in the notch (pass 12): the first five minutes, on a brain that

@@ -1131,9 +1131,46 @@ listed under the invariants.
     The notch's line says the step. It ends when the last step is clicked,
     when the model says the person is there, on Esc, on a new question
     (which is not told "I am still on the last thing"), when a line is drawn
-    round something, after 60 seconds with no click, after three clicks
-    somewhere else, and after eight steps. Nothing in it knows one program
+    round something, after 60 seconds with no click, and after three clicks
+    in a row somewhere else. Nothing in it knows one program
     from another: it works wherever a program describes its own controls.
+
+    The owner, 17 November 2026: "if I ask where do I do a certain thing
+    that takes many different clicks and many different steps, that has to
+    work." So, since pass 13 (`src/notch/point.ts`):
+    - **A way can be long.** 24 clicks in one go (it was 8, and a click
+      beside the thing used one up). A click beside the thing is not a step:
+      the same step is shown again under its own number.
+    - **A window is given its time.** After a click the window is read
+      again until it shows a change and reads the same twice, for up to five
+      seconds (it was one fixed wait of 450 ms, and a slow dialog was read
+      as the window before it). The notch says "Looking for the next step."
+      meanwhile.
+    - **A field is a step, not the end.** The model says what to type or
+      choose there ("then type the file name") and the way goes on. A step
+      is the last only when the model says so in so many words; unsaid, a
+      "how do I" goes on and a "where is" is the one thing.
+    - **It can ask for a scroll**, takes the ring off, and goes on when the
+      window has moved.
+    - **Greyed-out things are told to the model** as off, and it is told
+      never to choose them.
+    - **A click that changes nothing is not shown twice**, and going back
+      and forth between two things ends with a line that says so.
+    - **It never stops without saying how far it came**, and such a walk is
+      kept for ten minutes: "go on", "and now?", "e adesso?" take it up
+      from where the person is, with the steps counted on. The ledger says
+      "Showed 3 steps on the screen, then stopped before the end.", not
+      that it was shown.
+    - **A click that lands in another program** ends it with a line. A
+      click on the thing that opens another program is the way itself.
+    - **In a window run as administrator** the click cannot be seen: the
+      step is shown and it says why it does not wait.
+    - **A question is known in the many ways it is asked** (`whereKind`):
+      103 of the 109 an audit collected, among them "so, where is…", "I
+      can't find the … button", "is there a way to…", and Italian, German,
+      French, Spanish and Portuguese. What is asked of a thing no screen
+      has ("show me the mail from Sam") stays an instruction.
+    - **One question to the model has 25 seconds**, and Esc ends it at once.
     The choice of the next click is asked of the middle model tier, not the
     smallest, because it rests on knowing the program as much as on reading
     the screen. The owner, 16 November 2026: "the little cursor that goes to
