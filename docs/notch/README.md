@@ -1998,6 +1998,23 @@ will use AI."
     the same sentence twice would not stop it: once anything about a file
     was forgotten, nothing is written about that file again.
 
+The first fully empty try, the same night, had no notch at all: "could not
+create the window".
+
+147. **The notch's window does not depend on a folder being there, and is
+    asked for again.** A web view keeps its data under the profile's roaming
+    application data and asks Windows where that is without asking for it
+    to be made; in a profile that lacks the folder Windows answers "path
+    not found" and no window can be made. A test build's stand-in profile
+    lacks it on its first start. So the folder is made in three places: by
+    the start file that makes the stand-in profile
+    (`scripts/integration/start-sidecar.cmd`), by the desktop app before
+    its first web view (`sidecar/panels_webview_windows.go`), and, should a
+    window fail for any other passing reason, the brain asks for the notch
+    again after 2 s and after 6 s (`NOTCH_SPAWN_AGAIN_MS` in
+    `src/notch/attach.ts`). After three tries it is left until that desktop
+    app connects again, and the log says why each time.
+
 138. **"What I can do" promises nothing the product does not take.** One
     sheet names everything the notch does, with the words that start each
     (`src/notch/cando.ts`). Day one ends on it, the settings lead to it,
