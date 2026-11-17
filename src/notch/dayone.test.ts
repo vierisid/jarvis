@@ -26,13 +26,14 @@ interface World {
   mailReached: boolean;
   reply: string | null;
   sources: NotchAroundSource[] | null;
+  canPoint: boolean;
   db: Database;
 }
 
 function harness(given: Partial<World> = {}) {
   const world: World = {
     fresh: true, name: '', model: { ready: true, name: 'gpt-test', hosted: false }, watching: true, canSwitch: true,
-    mailReached: false, reply: null, sources: null, db: new Database(':memory:'), ...given,
+    mailReached: false, reply: null, sources: null, canPoint: true, db: new Database(':memory:'), ...given,
   };
   const pushed: NotchToPage[] = [];
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -61,6 +62,10 @@ function harness(given: Partial<World> = {}) {
     model: { ready: () => world.model.ready, name: () => world.model.name, hosted: () => world.model.hosted, setUp: (id) => { did.push(`set up on ${id}`); } },
     watching: { on: () => world.watching, set: (on) => { did.push(`watch ${on}`); if (world.canSwitch) world.watching = on; return world.watching; } },
     canLook: () => true,
+    canDrop: () => true,
+    canPoint: () => world.canPoint,
+    isWhere: (words) => /^(where|how do i)\b/i.test(words),
+    canDo: async (stage, more) => { did.push(`can do, with ${more.yes}`); await stage.sheet(['What I can do'], [], { yes: more.yes }); },
     mail: { reached: async () => world.mailReached, open: async () => { did.push('open mail'); } },
     told: async (what) => { did.push(`told ${what}`); return world.reply; },
     ...(world.sources ? { around: () => world.sources! } : {}),
@@ -99,7 +104,7 @@ describe('when it begins', () => {
     expect(h.line()).toBeNull();
     await h.pass(1);
     expect(h.said()).toBe('Hi. I am Jarvis. I live up here. Say hello?');
-    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'hello', mood: 'curious', step: 'step 1/11', fold: NOTCH_DAY_ONE_FOLD_MS });
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'hello', mood: 'curious', step: 'step 1/13', fold: NOTCH_DAY_ONE_FOLD_MS });
     expect(h.day.step()).toBe(1);
   });
 
@@ -120,7 +125,7 @@ describe('when it begins', () => {
     h.day.cameUp();
     await h.pass(NOTCH_DAY_ONE_AFTER_MS);
     // It has gone on to the second step, and not back to the first.
-    expect(h.line()).toMatchObject({ step: 'step 2/11' });
+    expect(h.line()).toMatchObject({ step: 'step 2/13' });
   });
 
   test('when it is asked for, whatever was kept: "day one", and from the settings', async () => {
@@ -148,7 +153,7 @@ describe('the grammar, by doing each thing once', () => {
     expect(h.said()).toBe('That was a yes. One tap.');
     await h.seen();
     expect(h.said()).toBe('For not now, press esc, or just ignore me. I never mind. Try it.');
-    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'esc', step: 'step 2/11', fold: 8000 });
+    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'esc', step: 'step 2/13', fold: 8000 });
   });
 
   test('1: Esc there is the second lesson already learned, and step 2 is passed over', async () => {
@@ -157,7 +162,7 @@ describe('the grammar, by doing each thing once', () => {
     await h.reply('no');
     expect(h.said()).toBe('That was a not now. It is all it takes.');
     await h.seen();
-    expect(h.line()).toMatchObject({ step: 'step 3/11' });
+    expect(h.line()).toMatchObject({ step: 'step 3/13' });
   });
 
   test('2: a yes shakes and says so on the same line; Esc is the answer; so is being ignored', async () => {
@@ -202,7 +207,7 @@ describe('the grammar, by doing each thing once', () => {
     const h = harness({ reply: 'A founder. I will look for leads, invoices and follow-ups.' });
     await h.upTo(4);
     expect(h.said()).toBe('Now tell me what you do. Out loud.');
-    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'talk', yes: 'hold and talk', mood: 'listen', step: 'step 4/11' });
+    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'talk', yes: 'hold and talk', mood: 'listen', step: 'step 4/13' });
     // Words that would otherwise make an agent are, here, what they do.
     const route = h.day.route('Every Monday I send Sam the numbers');
     expect(route?.did).toBe('Told Jarvis what they do, on day one.');
@@ -292,8 +297,9 @@ describe('the grammar, by doing each thing once', () => {
   test('6: any real look is the lesson, named by what was shown, and nothing else comes of it', async () => {
     const h = harness();
     await h.upTo(6);
-    expect(h.said()).toBe('Now show me something. Hold [talk] and circle a thing with the mouse.');
-    expect(h.line()).toMatchObject({ keys: 'talk', yes: 'hold and circle', step: 'step 6/11' });
+    // It says how: the keys held down, then the mouse pressed and dragged.
+    expect(h.said()).toBe('Now show me something. Keep [talk] held down, then click and drag a circle round a thing.');
+    expect(h.line()).toMatchObject({ keys: 'talk', yes: 'hold, then drag', step: 'step 6/13' });
     expect(h.day.shown({ app: 'notepad', things: [{ name: '' }, { name: 'Quarterly numbers' }] })).toBe(true);
     // The keys were held to circle, so a recording with nothing in it comes too: that is not answered.
     expect(h.day.unheard('silence')).toBe(true);
@@ -309,7 +315,7 @@ describe('the grammar, by doing each thing once', () => {
     const h = harness();
     await h.upTo(6);
     await h.reply('yes');
-    expect(h.said()).toBe('Keep [talk] down and draw a circle round anything.');
+    expect(h.said()).toBe('Both at once: [talk] held down, and the mouse pressed and dragged round the thing.');
     await h.reply('no');
     expect(h.said()).toBe('Later then. It is always there.');
   });
@@ -330,7 +336,7 @@ describe('what Jarvis works with', () => {
     const h = harness({ model: { ready: false, name: '', hosted: false } });
     await h.upTo(7);
     expect(h.said()).toBe('Which AI should I use?');
-    expect(h.line()).toMatchObject({ kind: 'offer', options: ['My own AI account', 'AI on this computer'], step: 'step 7/11' });
+    expect(h.line()).toMatchObject({ kind: 'offer', options: ['My own AI account', 'AI on this computer'], step: 'step 7/13' });
     await h.reply('pick', { option: 'My own AI account', index: 0 });
     expect(h.did).toEqual(['set up on pc']);
     expect(h.said()).toBe('I opened the setup. Add your account there.');
@@ -386,10 +392,10 @@ describe('what Jarvis works with', () => {
   test('9: looking around draws what each place holds as it is read, and one thing is never drawn twice', async () => {
     const h = harness({ sources: SOURCES });
     await h.upTo(9);
-    expect(h.said()).toBe('May I look around what I can reach, and show you what I find?');
+    expect(h.said()).toBe('May I look around? Your mail, your calendar, and the files on this computer. I read their names and open none.');
     await h.reply('yes');
     expect(h.said()).toBe('Looking around');
-    expect(h.line()).toMatchObject({ kind: 'sheet', mood: 'search', stay: true, yes: 'continue', no: 'skip', step: 'step 9/11' });
+    expect(h.line()).toMatchObject({ kind: 'sheet', mood: 'search', stay: true, yes: 'continue', no: 'skip', step: 'step 9/13' });
     // It starts with the person alone, and the places it will read.
     expect(map(h.line()).nodes.map((node) => node.label)).toEqual(['You', 'Sam']);
     await h.pass(4000);
@@ -420,16 +426,132 @@ describe('what Jarvis works with', () => {
   test('9: with nothing to look around in, the step is not there', async () => {
     const h = harness();
     await h.upTo(9);
-    expect(h.said()).toBe('When I see you do the same thing twice, I will offer to take it over.');
+    expect(h.line()).toMatchObject({ step: 'step 10/13' });
   });
 
-  test('10 and 11: what it will take over is said, the one rule is agreed, and it is over for good', async () => {
+  test('9: the files of the desktop are drawn by name, a long name is cut, and each place says a sentence under the map', async () => {
+    const h = harness({ sources: [
+      { name: 'Desktop', read: async () => ({
+        found: '14 files', tool: true,
+        things: [{ label: 'Budget for the fourth quarter final.xlsx', kind: 'thing' }, { label: 'Pitch.pptx', kind: 'thing' }],
+        say: [{ em: '14 files' }, ' and ', { em: '3 folders' }, '. Mostly spreadsheets.'],
+      }) },
+      { name: 'Downloads', read: async () => ({ found: 'not reached', things: [] }) },
+    ] });
+    await h.upTo(9);
+    await h.reply('yes');
+    await h.pass(4000);
+    const sheet = h.line() as Extract<NotchLine, { kind: 'sheet' }>;
+    expect(map(sheet).nodes.map((node) => `${node.kind}:${node.label}`)).toEqual(['me:You', 'tool:Desktop', 'thing:Budget for the …', 'thing:Pitch.pptx']);
+    // The files hang from the desktop, not from the person.
+    expect(map(sheet).links).toEqual([['you', 'tool1'], ['tool1', 'thing1'], ['tool1', 'thing2']]);
+    const rows = sheet.blocks.filter((b): b is Extract<NotchBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.map((row) => `${row.lead}: ${text(row.say)}`)).toEqual(['Desktop: 14 files and 3 folders. Mostly spreadsheets.']);
+    const note = sheet.blocks.find((b): b is Extract<NotchBlock, { kind: 'note' }> => b.kind === 'note')!;
+    expect(text(note.say)).toBe('That is what I can reach today. I read names, and opened no file. Ask me about any of it.');
+  });
+
+  test('10: a real file dropped on it is the lesson, and day one says so only when the file has been asked about', async () => {
     const h = harness();
     await h.upTo(10);
+    expect(h.said()).toBe('Now hand me a file. Drag any file from your desktop onto me.');
+    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'esc', step: 'step 10/13' });
+    // A yes is not a file: it says where to drag it, on the same line.
+    const id = h.line()!.id;
+    await h.reply('yes');
+    expect(h.said()).toBe('Drag it here, onto me. I open my mouth when it is over me.');
+    expect(h.line()!.id).toBe(id);
+    // The file is dropped: what is wanted from it takes the notch, as for any file, and day one has it back after.
+    h.inbox.add({ id: 'drop-1', subject: 'drop', class: 'person', speaks: true, urgent: true, asked: true, returns: true, title: () => ['A file.'],
+      play: async (stage) => { await stage.offer(['What do you want from it?'], 'ask'); return 'settled'; } });
+    h.day.gave();
+    await settle();
+    expect(h.said()).toBe('What do you want from it?');
+    await h.reply('yes');
+    await h.pass(600);
+    expect(h.said()).toBe('That is all there is to it: drop it, then ask.');
+    await h.seen();
+    expect(h.day.step()).toBe(11);
+    // A file dropped at any other time is nobody's lesson.
+    h.day.gave();
+    await settle();
+    expect(h.day.step()).toBe(11);
+  });
+
+  test('10: its line is said to the end, even when what was asked about the file takes the notch in between', async () => {
+    const h = harness();
+    await h.upTo(10);
+    h.day.gave();
+    await settle();
+    // Before it has said a word, an instruction takes the notch.
+    h.inbox.add({ id: 'ask-1', subject: 'ask-1', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['Working.'],
+      play: async (stage) => { await stage.offer(['Summarising it.'], 'ok'); return 'settled'; } });
+    await settle();
+    expect(h.said()).toBe('Summarising it.');
+    expect(h.day.step()).toBe(10);
+    await h.reply('yes');
+    await h.pass(600);
+    expect(h.said()).toBe('That is all there is to it: drop it, then ask.');
+  });
+
+  test('10 and 11: with no AI they say what each needs, and ask for nothing', async () => {
+    const h = harness({ model: { ready: false, name: '', hosted: false } });
+    await h.upTo(10);
+    expect(h.said()).toBe('Drag any file onto me and ask about it. That needs the AI, so it waits until I have one.');
+    await h.seen();
+    expect(h.said()).toBe('Ask me where something is, or how to do something, and I point at it. That needs the AI, so it waits until I have one.');
+    await h.seen();
+    expect(h.day.step()).toBe(12);
+  });
+
+  test('11: a real "where is" is the lesson: it is answered as ever, and day one only notes that it was asked', async () => {
+    const h = harness();
+    await h.upTo(11);
+    expect(h.said()).toBe('Now ask me where something is. Hold [talk] and say: where do I close this window?');
+    expect(h.line()).toMatchObject({ kind: 'offer', keys: 'talk', yes: 'hold and ask', step: 'step 11/13' });
+    // Nothing is taken from the question: it goes on to be pointed at.
+    expect(h.day.route('where do I close this window')).toBeNull();
+    h.inbox.add({ id: 'ask-1', subject: 'ask-1', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['Pointing.'],
+      play: async (stage) => { await stage.say(['Close is top right. I am pointing at it.'], 1000); return 'settled'; } });
+    await settle();
+    await h.reply('done');
+    expect(h.said()).toBe('That works in any window. Ask "how do I…" and I walk you through it, a step at a time.');
+    await h.seen();
+    expect(h.day.step()).toBe(12);
+  });
+
+  test('11: something else said there is answered as ever too, and the step is still there', async () => {
+    const h = harness();
+    await h.upTo(11);
+    expect(h.day.route('what is two plus two')).toBeNull();
+    h.inbox.add({ id: 'ask-1', subject: 'ask-1', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['Four.'],
+      play: async (stage) => { await stage.say(['Four.'], 1000); return 'settled'; } });
+    await settle();
+    await h.reply('done');
+    expect(h.said()).toBe('Now ask me where something is. Hold [talk] and say: where do I close this window?');
+    expect(h.day.step()).toBe(11);
+  });
+
+  test('11: with its eyes closed, or nothing to point with, it says what that needs', async () => {
+    const closed = harness({ watching: false });
+    await closed.upTo(11);
+    expect(closed.said()).toBe('Ask me where something is, or how to do something, and I point at it. That needs my eyes open.');
+    const none = harness({ canPoint: false });
+    await none.upTo(11);
+    expect(none.said()).toBe('Ask me where something is, or how to do something, and I point at it. That needs my eyes open.');
+  });
+
+  test('12 and 13: what it will take over is said, the one rule is agreed, everything it can do is shown, and it is over for good', async () => {
+    const h = harness();
+    await h.upTo(12);
     expect(h.said()).toBe('When I see you do the same thing twice, I will offer to take it over.');
     await h.seen();
     expect(h.said()).toBe('One rule to start: every new agent asks before it acts.');
-    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'agreed', mood: 'careful', step: 'step 11/11' });
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'agreed', mood: 'careful', step: 'step 13/13' });
+    await h.reply('yes');
+    // Everything else it does, on one sheet, before it lets them go.
+    expect(h.did).toEqual(['can do, with done']);
+    expect(h.said()).toBe('What I can do');
     await h.reply('yes');
     expect(h.said()).toBe('That is all. I speak up when something needs you. Hold [talk] and talk, any time.');
     await h.seen();
@@ -479,6 +601,6 @@ describe('left alone, and come back to', () => {
     h.day.route('I run a small studio in Lisbon')!.run();
     await settle();
     expect(h.logs.join('\n')).not.toMatch(/Sam|studio|Lisbon/);
-    expect(h.logs.some((line) => line.includes('step 3 of 11 is done'))).toBe(true);
+    expect(h.logs.some((line) => line.includes('step 3 of 13 is done'))).toBe(true);
   });
 });
