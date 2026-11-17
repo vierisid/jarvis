@@ -402,12 +402,19 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   /** How far back something that was built and never switched on is still offered. */
   const PENDING_MS = 48 * 3_600_000;
 
-  /** What was built lately, is switched off, and is no agent yet. */
+  /**
+   * What was built lately and is no agent yet. Switched off, it waits to be
+   * switched on. Switched on somewhere else (the dashboard), it runs with no
+   * name: the owner, 17 November 2026, had done just that, "the only way for
+   * me to enable it is to go to the dashboard, so it doesn't give me a name".
+   * It is not made an agent behind their back, since an agent asks first and
+   * this one does not today: it waits here for one click.
+   */
   function pending(): ReturnType<NotchAgentWorkflows['madeSince']> {
     let made: ReturnType<NotchAgentWorkflows['madeSince']>;
     try { made = deps.workflows.madeSince(now() - PENDING_MS); } catch { return []; }
     const known = new Set(store.list().map((agent) => agent.flowId));
-    return made.filter((one) => !one.enabled && !known.has(one.flowId)).slice(0, 5);
+    return made.filter((one) => !known.has(one.flowId)).slice(0, 5);
   }
 
   /** Switches on something that was built, and makes it an agent: a name, and the first rung. */
@@ -479,7 +486,11 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         : 'No agents yet. Tell me what to take over: "Every Monday, send Sam the numbers."'] });
       // What was built lately and never switched on: one click makes it an agent.
       for (const draft of pending()) {
-        blocks.splice(blocks.length - 1, 0, {
+        blocks.splice(blocks.length - 1, 0, draft.enabled ? {
+          // Running already, switched on somewhere else: one click gives it its name. Nothing here deletes a thing that runs.
+          kind: 'row', id: draft.flowId, lead: 'New', say: [`${draft.job}${/[.!?]$/.test(draft.job) ? '' : '.'}`], small: 'Running, no name yet',
+          buttons: [{ id: 'on', label: 'Make it an agent' }],
+        } : {
           kind: 'row', id: draft.flowId, lead: 'New', say: [`${draft.job}${/[.!?]$/.test(draft.job) ? '' : '.'}`], small: draft.ready ? 'Not switched on' : 'Needs setting up',
           buttons: [...(draft.ready ? [{ id: 'on', label: 'Switch on' }] : []), { id: 'drop', label: 'Discard', quiet: true }],
         });
@@ -498,7 +509,12 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       if (answer.button === 'on' || answer.button === 'drop') {
         const draft = pending().find((one) => one.flowId === answer.row);
         if (!draft) continue;
-        if (answer.button === 'drop') { try { await deps.workflows.remove(draft.flowId); } catch { /* it stays in the list, and can be tried again */ } continue; }
+        if (answer.button === 'drop') {
+          // Only what never ran is discarded from here. One that runs is let go as an agent, with its own ask.
+          if (!draft.enabled) { try { await deps.workflows.remove(draft.flowId); } catch { /* it stays in the list, and can be tried again */ } }
+          continue;
+        }
+        if (!draft.enabled && !draft.ready) continue;
         const said = switchOn(draft);
         await stage.say(said.parts, said.ms, said.extras);
         return;
@@ -601,10 +617,15 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     },
     row() {
       const count = store.list().length;
-      if (count) return { kind: 'row', id: 'agents', go: true, say: [em(`${count} ${count === 1 ? 'agent' : 'agents'}`), ' on duty.'] };
-      // None on duty, and one that was built waits to be switched on: the way to it is here too.
-      const waiting = pending().length;
-      return waiting ? { kind: 'row', id: 'agents', go: true, say: [em(`${waiting} ${waiting === 1 ? 'agent' : 'agents'}`), ' built, not switched on.'] } : null;
+      const waiting = pending();
+      const many = (n: number): string => `${n} ${n === 1 ? 'agent' : 'agents'}`;
+      // Some on duty: what waits for a click is said beside them, so it is not lost behind them.
+      if (count) return { kind: 'row', id: 'agents', go: true, say: [em(many(count)), waiting.length ? ` on duty. ${waiting.length} more ${waiting.length === 1 ? 'waits' : 'wait'} for you.` : ' on duty.'] };
+      if (!waiting.length) return null;
+      // None on duty, and one that was built waits: the way to it is here too.
+      const running = waiting.filter((one) => one.enabled).length;
+      const how = running === waiting.length ? ' running without a name.' : running === 0 ? ' built, not switched on.' : ' built, waiting for you.';
+      return { kind: 'row', id: 'agents', go: true, say: [em(many(waiting.length)), how] };
     },
     open,
     adopt,

@@ -531,6 +531,45 @@ describe('what the assistant builds is an agent like any other', () => {
     expect(h.agents.store.rung(built.flowId)).toBe('asks first');
   });
 
+  test('one switched on in the dashboard runs with no name, and one click on the notch makes it an agent', async () => {
+    const h = harness();
+    // Built before, switched on somewhere else: no turn of the assistant's brings it here.
+    const built = h.assistantBuilds('Daily AI news briefing', { enabled: true });
+    expect(h.agents.store.list()).toEqual([]);
+    expect(h.agents.row()).toEqual({ kind: 'row', id: 'agents', go: true, say: [{ em: '1 agent' }, ' running without a name.'] });
+    await h.speak('my agents');
+    const blocks = (h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks;
+    // Nothing on this row deletes a thing that runs.
+    expect(blocks[0]).toEqual({
+      kind: 'row', id: built.flowId, lead: 'New', say: ['Daily AI news briefing.'], small: 'Running, no name yet',
+      buttons: [{ id: 'on', label: 'Make it an agent' }],
+    });
+    // Until the click it is no agent: nothing about how it runs has changed.
+    expect(h.agents.store.rung(built.flowId)).toBeNull();
+    await h.reply('button', { row: built.flowId, button: 'on' });
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    // It was on already: it is not switched on again.
+    expect(h.did).toEqual([]);
+    expect(h.agents.store.list()).toMatchObject([{ flowId: built.flowId, name: 'Tony', rung: 'asks first' }]);
+    expect(h.agents.row()).toMatchObject({ say: [{ em: '1 agent' }, ' on duty.'] });
+  });
+
+  test('a running one with no name is never deleted from its row, whatever the page sends', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing', { enabled: true });
+    await h.speak('my agents');
+    await h.reply('button', { row: built.flowId, button: 'drop' });
+    expect(h.did).toEqual([]);
+  });
+
+  test('with agents on duty, what still waits for a click is said beside them', async () => {
+    const h = harness();
+    await h.makes();
+    await h.pass(9000);
+    h.assistantBuilds('Daily AI news briefing');
+    expect(h.agents.row()).toEqual({ kind: 'row', id: 'agents', go: true, say: [{ em: '1 agent' }, ' on duty. 1 more waits for you.'] });
+  });
+
   test('a turn that built nothing changes nothing, and an agent made on the notch is not offered again', async () => {
     const h = harness();
     await h.makes();
