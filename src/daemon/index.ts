@@ -175,6 +175,7 @@ import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
+import { notchDayOneDeps } from "./notch-dayone.ts";
 import { notchJobDeps } from "./notch-jobs.ts";
 import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
@@ -767,6 +768,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   let notchDemo: NotchDemo | null = null;
   // The real things on the notch: approvals and the rest (src/notch/real.ts).
   let notchReal: NotchReal | null = null;
+  /** The product's own switch for watching, as the notch's day one uses it. Null until it is there, and where there is none. */
+  let notchSetWatching: ((on: boolean) => Promise<boolean>) | null = null;
 
   // File sink, installed here - the first thing after the config is readable
   // and before anything else boots - so the log captures startup too. A hosted
@@ -1745,6 +1748,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (spawnedOn.has(sidecar.id)) return;
         spawnedOn.add(sidecar.id);
+        // With the notch on, the Pebble's cursor follower is retired (pass
+        // 12): the notch is where Jarvis lives, the pair of keys is how it
+        // is spoken to, and day one is in the notch, so the dashboard is not
+        // opened over it either. One that is still up from before the
+        // switch was turned on is closed. Only the overlay goes: the desktop
+        // app's microphone and its small status dots are not part of it.
+        if (notchEnabled()) {
+          try {
+            await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {});
+            pebbleHotkeysRequested.delete(sidecar.id);
+          } catch { /* none was up, or an older desktop app: nothing to close */ }
+          console.log(`[ambient-ui] the notch is on: no pebble follows the cursor on ${sidecar.id}`);
+          return;
+        }
         try {
           // Resolved against the SIDECAR's OS, not process.platform: a hosted
           // brain runs on a Linux VPS while the machine with the keyboard is
@@ -2244,6 +2261,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // awareness.enabled in config (persists), starts/stops the awareness
       // service in place (no daemon restart), and pushes the visual state
       // to every connected pebble. Speaks a confirmation through TTS.
+      // The notch's day one asks "May I watch?", and a no there is this same
+      // switch (pass 12): kept, applied in place, and shown on every machine.
+      // No pebble was pressed, so none is waited for and nothing is spoken.
+      notchSetWatching = async (nextEnabled: boolean): Promise<boolean> => {
+        const { persistAwarenessChoice } = await import('./user-settings.ts');
+        (jarvisConfig.awareness as { enabled?: boolean }).enabled = nextEnabled;
+        persistAwarenessChoice(nextEnabled);
+        if (awarenessService) awarenessService.toggle(nextEnabled);
+        if (!nextEnabled) closeSwitchedOffWorkflowCards();
+        void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled())).catch(() => {});
+        void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(nextEnabled, isDesktopEnabled())));
+        notchReal?.where?.refresh();
+        console.log(`[notch] watching was switched ${nextEnabled ? 'on' : 'off'} from the notch`);
+        return nextEnabled && isDesktopEnabled();
+      };
+
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'pebble.blind_toggle') return;
         try {
@@ -4628,6 +4661,33 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // A capture that was on its way when the desktop app started looking
       // away is not kept (awareness/capture-guard.ts).
       setCaptureGuard((id, app) => notchReal?.where?.mayKeep(id, app) ?? true);
+      // The dashboard's own window, on the machine named or on every one.
+      const notchOpenDashboard = (sidecarId: string | null): void => {
+        const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
+        for (const id of targets) {
+          void sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {}).catch((err) => {
+            console.warn('[notch] the dashboard could not be opened:', err instanceof Error ? err.message : err);
+          });
+        }
+      };
+      // A settings page of the dashboard, in a window of its own: the
+      // dashboard's main window may be open on something else, and is not
+      // moved. Where that cannot be opened, the dashboard is.
+      const notchOpenPage = (sidecarId: string | null, page: 'voice' | 'llm' | 'integrations'): void => {
+        const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
+        for (const id of targets) {
+          void sidecarManager.dispatchRPC(id, 'panel.spawn', {
+            id: `notch:settings:${page}`,
+            url: `${pebblePanelOrigin}/?settingsTab=${page}#/_panel_settings`,
+            title: 'JARVIS',
+            bounds: { x: -1, y: -1, w: 1100, h: 760 },
+            resizable: true,
+            multi_instance: false,
+          }).catch(() => sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {})).catch((err) => {
+            console.warn('[notch] a page of the dashboard could not be opened:', err instanceof Error ? err.message : err);
+          });
+        }
+      };
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         approvalManager,
@@ -4649,6 +4709,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         where: {
           port: sidecarManager,
           watching: () => (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false && isDesktopEnabled(),
+          // "Open my eyes" in What I see: the product's own switch, where there is one.
+          openEyes: async () => (notchSetWatching ? notchSetWatching(true) : null),
         },
         // A workflow step that stopped to ask a person: a few short options
         // become a row of choices, approve-or-reject becomes one yes, and
@@ -4738,14 +4800,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           llm: () => agentService.getLLMManager(),
           modelReady: () => notchModelReady(agentService.getLLMManager()),
         }),
-        openDashboard: (sidecarId) => {
-          const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
-          for (const id of targets) {
-            void sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {}).catch((err) => {
-              console.warn('[notch] the dashboard could not be opened:', err instanceof Error ? err.message : err);
-            });
-          }
-        },
+        openDashboard: notchOpenDashboard,
+        // Day one in the notch (pass 12): on a brain that was never set up
+        // it starts by itself, once. An AI is set up in the dashboard's own
+        // first steps, which it opens and waits for: while this brain was
+        // never set up the dashboard shows them by itself, and after that
+        // the AI page is the place.
+        dayOne: notchDayOneDeps({
+          config: () => agentService.getConfig(),
+          llm: () => agentService.getLLMManager(),
+          watching: {
+            on: () => (jarvisConfig.awareness as { enabled?: boolean } | undefined)?.enabled !== false && isDesktopEnabled(),
+            get set() { return notchSetWatching; },
+          },
+          openSetup: (sidecarId, setUp) => { if (setUp) notchOpenDashboard(sidecarId); else notchOpenPage(sidecarId, 'llm'); },
+          // First names of the people a reply is prepared for. Null while mail is not read at all.
+          waiting: () => (notchReal?.mail ? notchReal.mail.store.ready().map((row) => row.who.name || row.who.address.split('@')[0] || '') : null),
+          meetings: async () => {
+            const events = await notchReal?.mail?.calendar(Date.now(), Date.now() + 7 * 86_400_000).catch(() => null);
+            return events ? events.filter((event) => !event.allDay && event.withOthers !== false).map((event) => event.summary) : null;
+          },
+          agents: () => notchReal?.agents?.store.list().map((agent) => agent.name) ?? [],
+        }),
         // The back office that fits in a sheet (pass 12): memory with the
         // product's own Forget, this machine's keys, what makes out speech,
         // and what is connected.
@@ -4761,24 +4837,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             if (!browser) throw new Error('no desktop app with a browser is connected');
             await browser.navigate('https://mail.google.com/', { headless: false });
           },
-          // A settings page of the dashboard, in a window of its own: the
-          // dashboard's main window may be open on something else, and is
-          // not moved. Where that cannot be opened, the dashboard is.
-          openPage: (sidecarId, page) => {
-            const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
-            for (const id of targets) {
-              void sidecarManager.dispatchRPC(id, 'panel.spawn', {
-                id: `notch:settings:${page}`,
-                url: `${pebblePanelOrigin}/?settingsTab=${page}#/_panel_settings`,
-                title: 'JARVIS',
-                bounds: { x: -1, y: -1, w: 1100, h: 760 },
-                resizable: true,
-                multi_instance: false,
-              }).catch(() => sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {})).catch((err) => {
-                console.warn('[notch] a page of the dashboard could not be opened:', err instanceof Error ? err.message : err);
-              });
-            }
-          },
+          openPage: notchOpenPage,
         }),
       });
     }

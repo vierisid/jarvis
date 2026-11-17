@@ -9,7 +9,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 12; i++) await P
 // A 1 by 1 PNG, as base64.
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-function harness(options: { watching?: boolean } = {}) {
+function harness(options: { watching?: boolean; openEyes?: 'works' | 'desktop off' | 'no switch' } = {}) {
   const pushed: NotchToPage[] = [];
   const rpcs: { id: string; method: string; params: Record<string, unknown> }[] = [];
   let pageEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -44,7 +44,17 @@ function harness(options: { watching?: boolean } = {}) {
       never = params.watch ? never.filter((app) => app !== params.app) : [...never, String(params.app)];
       return { never };
     },
-  }, { asleep: () => asleep, sleep: () => { asleep = true; }, watching: () => watching, log: (line) => logs.push(line) });
+  }, {
+    asleep: () => asleep, sleep: () => { asleep = true; }, watching: () => watching, log: (line) => logs.push(line),
+    ...(options.openEyes ? {
+      openEyes: async () => {
+        if (options.openEyes === 'no switch') return null;
+        if (options.openEyes === 'desktop off') return false;
+        watching = true;
+        return true;
+      },
+    } : {}),
+  });
   const line = (): NotchLine | null => surface.current().line;
   const text = (l: NotchLine | null): string => (l?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const rowText = (block: unknown): string => {
@@ -353,5 +363,45 @@ describe('hearing which site is in front', () => {
     const { heard, chrome } = told(true);
     chrome('mail.google.com');
     expect(heard).toEqual([]);
+  });
+});
+
+describe('pass 12: watching that was switched off can be switched on again here', () => {
+  const buttons = (h: ReturnType<typeof harness>): string[] =>
+    h.blocks().flatMap((block) => (block.kind === 'buttons' ? block.buttons.map((button) => button.label) : []));
+
+  test('with watching off the sheet offers to open its eyes, and they open', async () => {
+    const h = harness({ watching: false, openEyes: 'works' });
+    h.tell({ app: 'notepad', name: 'Notepad', title: 'notes', look: '' });
+    await h.open();
+    expect(h.rowText(h.blocks()[0])).toBe('Not watching: Watching is switched off in the settings. I see nothing.');
+    expect(buttons(h)).toContain('Open my eyes');
+    await h.answer('button', { button: 'watch' });
+    expect(h.rowText(h.blocks()[0])).toMatch(/^Notepad: /);
+    expect(buttons(h)).not.toContain('Open my eyes');
+  });
+
+  test('with watching on there is nothing to open', async () => {
+    const h = harness({ openEyes: 'works' });
+    h.tell({ app: 'notepad', name: 'Notepad', title: 'notes', look: '' });
+    await h.open();
+    expect(buttons(h)).not.toContain('Open my eyes');
+  });
+
+  test('where the switch cannot be reached, or desktop control is off, it says so and claims nothing', async () => {
+    const none = harness({ watching: false, openEyes: 'no switch' });
+    await none.open();
+    await none.answer('button', { button: 'watch' });
+    expect(none.said()).toBe('I cannot switch that from here. It is in the dashboard, under Settings.');
+    const off = harness({ watching: false, openEyes: 'desktop off' });
+    await off.open();
+    await off.answer('button', { button: 'watch' });
+    expect(off.said()).toBe('Watching is on, but desktop control is off in the dashboard, so I still see nothing.');
+  });
+
+  test('a brain with no switch at all offers none', async () => {
+    const h = harness({ watching: false });
+    await h.open();
+    expect(buttons(h)).not.toContain('Open my eyes');
   });
 });

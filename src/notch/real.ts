@@ -54,6 +54,7 @@ import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.
 import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
 import { attachNotchMoves, type NotchMoves } from './moves.ts';
 import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps } from './prefs.ts';
+import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -72,6 +73,11 @@ export interface NotchRealDeps {
     /** Opens the dashboard at one of its settings pages. */
     openPage?: (sidecarId: string | null, page: 'voice' | 'llm' | 'integrations') => void;
   };
+  /**
+   * Day one in the notch (pass 12): the first five minutes, on a brain that
+   * was never set up, and again whenever it is asked for.
+   */
+  dayOne?: Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'watching' | 'told' | 'around'>;
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
@@ -145,7 +151,7 @@ export interface NotchRealDeps {
    * Where the person is (pass 6): the desktop apps that say which app is in
    * front, and whether watching is switched on at all.
    */
-  where?: { port: NotchWherePort; watching?: () => boolean };
+  where?: { port: NotchWherePort; watching?: () => boolean; openEyes?: () => Promise<boolean | null> };
   /**
    * Mail (pass 7): Jarvis looks at the mailbox by itself, prepares a reply
    * where a person is waiting, and puts it on the notch. Everything it needs
@@ -223,6 +229,10 @@ export interface NotchReal {
   prefs: NotchPrefs | null;
   /** Every movement, playable by hand (pass 12). */
   moves: NotchMoves | null;
+  /** Day one (pass 12), when the brain was given what it needs. */
+  dayOne: NotchDayOne | null;
+  /** The agents (pass 11), when the brain was given the product's workflows. */
+  agents: NotchAgents | null;
   /** Whether the person is there, when pass 8 is on. */
   presence: NotchPresence | null;
   /** Calls and the connection, when a desktop app can tell. */
@@ -321,6 +331,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       asleep: () => (deps.emergency ? deps.emergency.getState() !== 'normal' : false),
       sleep: () => deps.emergency?.pause(),
       watching: deps.where.watching,
+      openEyes: deps.where.openEyes,
       // Coming to Gmail is where a prepared reply speaks up (pass 7).
       arrived: (site) => mail?.arrived(site),
       // Their hands: still, away, back, the first time today (pass 8).
@@ -376,6 +387,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   // The back office that fits in a sheet (pass 12): what is remembered, the notch's own settings,
   // what is connected, and every movement, playable by hand. Reached from the foot of Home, and by saying so.
   const office = deps.office;
+  // Made further down, when what it leans on is there. Reached through this until then.
+  let dayOne: NotchDayOne | null = null;
   const memory: NotchMemory | null = office?.memory ? attachNotchMemory({ inbox, list: office.memory.list, forget: office.memory.forget, log }) : null;
   const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
   const openPage = office?.openPage;
@@ -386,6 +399,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     voice: office?.voice,
     see: where ? (stage) => where.see(stage) : undefined,
     moves: (stage) => moves.open(stage),
+    dayOne: deps.dayOne ? () => dayOne?.again() : undefined,
     connections: office?.connections,
     connect: office?.connect,
     // A page of the dashboard when it can be opened at one, the dashboard itself when not.
@@ -409,8 +423,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // because "tell me when" and "get Sam's answer" are theirs.
       // First of all: with a draft of a reply open, what is said is what that reply is to say.
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
-      side: (text) => mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
+      // Before all of them: while day one waits to hear the person, whatever they say is its answer.
+      side: (text) => dayOne?.route(text) ?? mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
         ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? null,
+      unheard: (why) => dayOne?.unheard(why) ?? false,
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
       more: {
         buttons: () => [
@@ -465,7 +481,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         modelReady: deps.asks.look.modelReady ?? deps.asks.modelReady,
         paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
         // What was shown is held for a while, and a place pointed at meanwhile is where it goes (pass 10).
-        shown: put ? (sidecarId, looked) => put!.shown(sidecarId, looked) : undefined,
+        // On day one, the first look anyone takes is the lesson, and nothing else comes of it.
+        shown: (sidecarId, looked) => dayOne?.shown(looked) === true || (put?.shown(sidecarId, looked) ?? false),
         // The blink is the shutter, and what was circled is swallowed.
         seen: () => surface.act({ gesture: 'blink', kick: 230 }),
         log,
@@ -609,9 +626,28 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   // Looking must not keep the process alive.
   timer.unref?.();
 
+  // Day one (pass 12). Made last: it leans on the look, the mail layer and the way to a sign-in.
+  if (deps.dayOne && settings && asks) {
+    const emergency = deps.emergency;
+    const layer = mail;
+    const made = attachNotchDayOne({
+      inbox, settings, clock: deps.clock, log,
+      ...deps.dayOne,
+      canLook: () => lookAt !== null,
+      mail: layer && office?.connect ? {
+        reached: () => layer.reached(),
+        open: async (sidecarId) => { await office.connect!('gmail', sidecarId); },
+      } : undefined,
+      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+    });
+    dayOne = made;
+    // A notch has come up: on a brain that is due it, day one begins a moment later.
+    surface.onHello(() => made.cameUp());
+  }
+
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
-    jobs, catcher, teach, put, memory, prefs, moves,
+    jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -619,6 +655,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       if (questionTimer) clearInterval(questionTimer);
       stopPromises(); stopPause();
       asks?.stop();
+      dayOne?.stop();
       lookAt?.stop();
       drop?.stop();
       where?.stop();

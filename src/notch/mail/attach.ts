@@ -74,6 +74,8 @@ export interface NotchMailLayer {
   look(kind: MailLookKind): ReturnType<MailWatch['look']>;
   /** Whether the month still has to be gone through. */
   monthDue(): boolean;
+  /** Whether the mailbox can be read now, by any way: Jarvis's own browser is signed in, or a connection reads it. Nothing is read. */
+  reached(): Promise<boolean>;
   /** The owner's calendar between two moments, by whichever way reaches it, or null. */
   calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>;
   /** What an eye and a chase need of the mailbox (../standing.ts). */
@@ -202,6 +204,12 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     })),
     look,
     monthDue: () => monthDue,
+    async reached() {
+      try {
+        if (await deps.connection?.()) return true;
+        return (await mailbox()?.reader()) != null;
+      } catch { return false; }
+    },
     calendar,
     standing: {
       onRead: (listener) => { readListeners.push(listener); },
