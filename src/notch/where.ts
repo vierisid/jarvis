@@ -54,6 +54,13 @@ export interface NotchWhereDeps {
   /** Whether watching is switched on at all (the product's awareness setting). Taken as on when not given. */
   watching?(): boolean;
   /**
+   * Switches watching back on (pass 12): day one asks "May I watch?", and a
+   * no there switches it off, so the way back has to be on the notch too.
+   * Comes back with whether Jarvis sees again, or null where there is no
+   * switch to reach.
+   */
+  openEyes?(): Promise<boolean | null>;
+  /**
    * The site in front has changed: the person has come to a site in their
    * browser ("mail.google.com"), or left one ("" when what is in front is no
    * site, or the desktop app looks away and the site is not known). Told once
@@ -299,6 +306,8 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
                 : ['Nothing I can name is in front.'];
     const never = (now?.never ?? []).map((entry) => (entry.startsWith(NOTCH_SITE_MARK) ? entry.slice(NOTCH_SITE_MARK.length) : entry));
     const buttons = [
+      // Watching is switched off: the way back on is here.
+      ...(!asleep && !watchingOn() && deps.openEyes ? [{ id: 'watch', label: 'Open my eyes' }] : []),
       ...(asleep ? [] : [{ id: 'sleep', label: 'Sleep' }]),
       ...(about && !asleep ? [{ id: 'never', label: about.listed ? `Watch ${about.label} again` : `Never watch ${about.label}` }] : []),
     ];
@@ -318,6 +327,16 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
         // Sleeping takes the notch: this sheet ends under it.
         deps.sleep();
         return;
+      }
+      if (answer.button === 'watch' && deps.openEyes) {
+        let sees: boolean | null = null;
+        try { sees = await deps.openEyes(); } catch (error) {
+          if (error instanceof NotchStageEnded) throw error;
+          log(`[notch] watching could not be switched on: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        refresh();
+        if (sees !== true) await stage.say([sees === null ? 'I cannot switch that from here. It is in the dashboard, under Settings.' : 'Watching is on, but desktop control is off in the dashboard, so I still see nothing.'], 4200, { mood: 'careful' });
+        continue;
       }
       if (answer.button === 'never') {
         const machine = front;

@@ -434,6 +434,13 @@ export function createNotchSurface(
     rest();
   };
 
+  /** Where in a sequence a line is, in small words after its keys: "step 3/11". */
+  function stepNote(l: NotchLine, instant: boolean): void {
+    if (typeof l.step !== 'string' || !l.step) return;
+    hintEl.append(el('span', 'count', [...l.step].slice(0, 24).join('')));
+    shape.fit(instant, true);
+  }
+
   function showLine(l: NotchLine, instant = false): void {
     dropKeyboard();
     line = l;
@@ -478,8 +485,7 @@ export function createNotchSurface(
         show({ body: 'line', say: l.say, hint: [{ act: l.yes ?? 'yes' }, { cap: 'esc', label: 'not now', touch: true }], ...common }, instant);
         startFold(l.fold ?? 9000);
       }
-      // Where in a sequence this is, in small words after the keys.
-      if (typeof l.step === 'string' && l.step) { hintEl.append(el('span', 'count', [...l.step].slice(0, 24).join(''))); shape.fit(instant, true); }
+      stepNote(l, instant);
       return;
     }
     if (l.kind === 'sheet') {
@@ -491,6 +497,7 @@ export function createNotchSurface(
         ...(l.stay ? { pairYes: true } : {}),
         hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: l.no ?? 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
       }, instant);
+      stepNote(l, instant);
       return;
     }
     if (l.kind === 'ask') {
