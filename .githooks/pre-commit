@@ -40,11 +40,15 @@ bun run scripts/onboarding-next-ui-manifest.ts --check
 #
 # The timeout stays, for the reason it was added: not a slow test -- bun's
 # own per-test timeout fails those -- but a runner that never exits because
-# something spawned a child and never reaped it (#501). 180s is far above a
-# related-tests run and still bounds a hang. --kill-after bounds shutdown,
-# not runtime, so it does not scale with the cap; the 15s covers the engine
-# shim's own post-SIGTERM grace, since timeout signals the whole group.
-TEST_TIMEOUT_S=180
+# something spawned a child and never reaped it (#501). It was 180s until a
+# commit touching end-to-end.test.ts and its siblings ran 17 related files in
+# ~188s and was killed with every test passing. 420s gives a large related run
+# room on a slow or loaded machine and still ends a hang within minutes; a
+# related run that gets near it is a test to make faster, not a reason to raise
+# this again. --kill-after bounds shutdown, not runtime, so it does not scale
+# with the cap; the 15s covers the engine shim's own post-SIGTERM grace, since
+# timeout signals the whole group.
+TEST_TIMEOUT_S=420
 
 # Staged, still-present files: A/C/M/R only, so a deletion contributes
 # nothing. NUL-delimited, so a path with a space cannot split into two.

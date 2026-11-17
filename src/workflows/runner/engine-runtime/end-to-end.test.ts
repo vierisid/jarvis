@@ -64,6 +64,13 @@ const PIECE_AGENT_NAME = "@jarvispieces/piece-jarvis-agent";
 const PIECE_TRIGGER_NAME = "@jarvispieces/piece-jarvis-trigger";
 const PIECE_VERSION = "0.0.1";
 
+// Every run here spawns its own engine and releases it, and release waits out
+// the engine's post-SIGTERM flush window, which is derived from killGraceMs
+// (default 2s: ~1.6s per release, most of this file's runtime). Each run has
+// finished and persisted before its release, so nothing here depends on that
+// window; engine-lifecycle and engine-runtime tests cover the shutdown itself.
+const KILL_GRACE_MS = 200;
+
 describe("Engine end-to-end (F gate)", () => {
   let api: SandboxApi;
   let runtime: EngineRuntime | null = null;
@@ -89,7 +96,7 @@ describe("Engine end-to-end (F gate)", () => {
     if (buildOptIn) {
       await buildAllJarvisPieces();
     }
-    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
+    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest, killGraceMs: KILL_GRACE_MS });
     const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
     try {
       const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });
@@ -187,6 +194,8 @@ describe("Engine end-to-end (F gate)", () => {
   // F-08: the default-value step takes a missing reference as empty; text around a reference does not,
   // and no other step does, even for an optional input of the same piece.
   const defaultValue = (value: string) => ({ actionName: 'defaultValue', input: { value, defaultString: 'fb' } });
+  // Built once for the three fixtures below, by whichever runs first.
+  let textHelperBuild: Promise<unknown> | null = null;
   for (const fixture of [
     { label: 'a missing reference gets the default', ...defaultValue('{{trigger.missing}}'), payload: {}, succeeds: true },
     { label: 'a missing reference inside text still fails', ...defaultValue('Hi {{trigger.missing}}'), payload: {}, succeeds: false },
@@ -194,7 +203,7 @@ describe("Engine end-to-end (F gate)", () => {
   ]) {
     test.skipIf(skipE2eTests)(`F-08: ${fixture.label}`, async () => {
       const textHelper = resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/text-helper');
-      if (buildOptIn) await buildPiece(textHelper);
+      if (buildOptIn) await (textHelperBuild ??= buildPiece(textHelper));
       const flow = createFlow();
       const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'fallback', type: 'PIECE', settings: { pieceName: '@activepieces/piece-text-helper', pieceVersion: '0.4.15', actionName: fixture.actionName, input: fixture.input } } };
       const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
@@ -448,7 +457,7 @@ describe("Engine end-to-end (F gate)", () => {
     const shared = mkdtempSync(join(tmpdir(), 'appsumo-shared-'));
     mkdirSync(join(shared, 'node_modules'));
     const bundle = findCachedBundle()!;
-    const hosted = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, customPiecesPaths: [shared] });
+    const hosted = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, customPiecesPaths: [shared], killGraceMs: KILL_GRACE_MS });
     const prompt = 'Return exactly two action items: Maya sends a proposal Tuesday. Lee reviews it Wednesday.';
     const flow = createFlow();
     const version = createDraftVersion({ flowId: flow.id, displayName: 'AppSumo QA Report', trigger: {
@@ -736,7 +745,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
     if (!cached && buildOptIn) cached = await buildEngineBundle();
     if (!cached) return;
     if (buildOptIn) await buildAllJarvisPieces();
-    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest });
+    runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath, expectedDigest: cached.digest, killGraceMs: KILL_GRACE_MS });
     const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
     try {
       const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });
