@@ -69,7 +69,8 @@ export function attachNotchPause(surface: NotchSurface, inbox: NotchInbox, deps:
         return true;
       });
       if (tell) {
-        surface.act({ gesture: 'shake' });
+        // It shakes for the stop, and zips its lip: it will stay quiet.
+        surface.act({ gesture: 'shake', lip: 'zip' });
         inbox.present('stopped', (stage) => stage.say(['Everything is stopped. Nothing runs until you wake me.'], 3600, { mood: 'closed' }));
       }
       return;

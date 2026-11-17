@@ -180,3 +180,16 @@ describe('the pause, whoever made it', () => {
     expect(h.faces().at(-1)).toBe('idle');
   });
 });
+
+describe('pass 12: the stop is seen as well as said', () => {
+  test('it shakes for the stop and zips its lip, and stretches awake when it is woken', async () => {
+    const h = harness();
+    const acts = (): Record<string, unknown>[] => h.pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+    await h.stop();
+    expect(acts()).toEqual([{ gesture: 'shake', lip: 'zip' }]);
+    await h.answer('done');
+    await h.open();
+    expect(h.controller.getState()).toBe('normal');
+    expect(acts()).toEqual([{ gesture: 'shake', lip: 'zip' }, { gesture: 'wake' }]);
+  });
+});

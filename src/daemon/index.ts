@@ -167,13 +167,14 @@ import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
-import { notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
+import { notchMailBrowser, notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
 import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
+import { notchOfficeDeps } from "./notch-office.ts";
 import { notchJobDeps } from "./notch-jobs.ts";
 import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
@@ -4745,6 +4746,40 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             });
           }
         },
+        // The back office that fits in a sheet (pass 12): memory with the
+        // product's own Forget, this machine's keys, what makes out speech,
+        // and what is connected.
+        office: notchOfficeDeps({
+          db: getDb(),
+          config: () => agentService.getConfig(),
+          sidecars: sidecarManager,
+          google: () => googleAuth,
+          // Whether its own browser read the mailbox at the last look. Null before any look.
+          mailRead: () => { const last = notchReal?.mail?.watch.lastLook(); return last ? last.look.through !== null : null; },
+          openMail: async () => {
+            const browser = notchMailBrowser(sidecarManager);
+            if (!browser) throw new Error('no desktop app with a browser is connected');
+            await browser.navigate('https://mail.google.com/', { headless: false });
+          },
+          // A settings page of the dashboard, in a window of its own: the
+          // dashboard's main window may be open on something else, and is
+          // not moved. Where that cannot be opened, the dashboard is.
+          openPage: (sidecarId, page) => {
+            const targets = sidecarId ? [sidecarId] : sidecarManager.getConnectedSidecars().map((sc) => sc.id);
+            for (const id of targets) {
+              void sidecarManager.dispatchRPC(id, 'panel.spawn', {
+                id: `notch:settings:${page}`,
+                url: `${pebblePanelOrigin}/?settingsTab=${page}#/_panel_settings`,
+                title: 'JARVIS',
+                bounds: { x: -1, y: -1, w: 1100, h: 760 },
+                resizable: true,
+                multi_instance: false,
+              }).catch(() => sidecarManager.dispatchRPC(id, 'notch.open_dashboard', {})).catch((err) => {
+                console.warn('[notch] a page of the dashboard could not be opened:', err instanceof Error ? err.message : err);
+              });
+            }
+          },
+        }),
       });
     }
 

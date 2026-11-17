@@ -118,10 +118,10 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       if (!words) return 'settled';
       options.told?.();
       if (!options.show) {
-        await stage.say(words, options.ms ?? 5200, { mood: options.mood ?? 'idle' });
+        await stage.say(words, options.ms ?? 5200, { mood: options.mood ?? 'idle', comes: 'pair' });
         return 'settled';
       }
-      const answer = await stage.offer(words, 'show', { mood: options.mood ?? 'idle' });
+      const answer = await stage.offer(words, 'show', { mood: options.mood ?? 'idle', comes: 'pair' });
       if (answer.act === 'yes') await options.show(stage);
       return 'settled';
     },

@@ -23,7 +23,7 @@
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
-import type { NotchBlock, NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchButton, NotchPart } from './protocol.ts';
 import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
@@ -148,6 +148,10 @@ export interface NotchAsksDeps {
   withdrawApproval?: (approvalId: string) => void;
   /** A small sign that the notch heard and will not act (a shake), for when no line can be shown. */
   attention?: () => void;
+  /** What was said was made out: the notch nods as it takes it. */
+  nod?: () => void;
+  /** The pointer is leaving for a thing: the lip leans toward it (0 to 1 along the lower edge). */
+  reach?: (aim: number) => void;
   openDashboard?: (sidecarId: string | null) => void;
   /** Rows for Home, under the text field: what was done today. */
   today?: () => NotchBlock[];
@@ -162,6 +166,13 @@ export interface NotchAsksDeps {
   mail?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /** The person's quiet hours (quiet.ts): Home's line about them and its button, and what a change there does. */
   quiet?: NotchQuietHome;
+  /**
+   * The quiet links at the foot of Home (pass 12): Memory, Connections,
+   * Settings, the dashboard. `press` opens what a link leads to and comes
+   * back with whether Home is to be drawn again after it (`stay`) or is over
+   * (`leave`). Null when the button is not one of these.
+   */
+  more?: { buttons(): NotchButton[]; press(stage: NotchStage, button: string): Promise<'stay' | 'leave' | null> };
   heardMs?: number;
   log?: (line: string) => void;
 }
@@ -603,6 +614,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             signal: stop.signal,
             // One step of the way is being shown: the line says which, for as long as its click is waited for.
             step: (said) => { if (ask.phase === 'running') { ask.activity = said; bump(ask); } },
+            toward: (aim) => { if (ask.phase === 'running') deps.reach?.(aim); },
           });
         } catch (error) {
           log(`[notch] a "where is" could not be answered by pointing: ${error instanceof Error ? error.message : String(error)}`);
@@ -969,7 +981,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           ...standingRows,
           ...today,
           ...(deps.quiet ? [deps.quiet.note()] : []),
-          { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }, ...(deps.quiet ? [deps.quiet.button()] : [])] },
+          { kind: 'buttons', buttons: [{ id: 'asked', label: 'What you asked', quiet: true }, ...(deps.quiet ? [deps.quiet.button()] : []), ...(deps.more?.buttons() ?? [])] },
         ],
       });
       const answer = await stage.answer(id, ['ask', 'no', 'button', 'go', 'word']);
@@ -977,6 +989,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       // The quiet hours, changed where they are shown: Home is drawn again with what they are now.
       if (answer.act === 'word') { deps.quiet?.word(answer.word ?? '', answer.value ?? ''); continue; }
       if (answer.act === 'button' && deps.quiet?.press(answer.button ?? '')) continue;
+      if (answer.act === 'button' && deps.more) {
+        const went = await deps.more.press(stage, answer.button ?? '');
+        if (went === 'leave') return;
+        if (went === 'stay') continue;
+      }
       if (answer.act === 'go' && answer.row === 'last' && recent) {
         const again = stage.id();
         stage.put({ id: again, kind: 'sheet', say: [recent.source === 'spoken' ? 'You said' : 'You typed'], blocks: ledgerDetail(recent), stay: true });
@@ -1093,6 +1110,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (!ledger.heard(ask.id, text)) { sync(ask); bump(ask); return; }
       ask.phase = 'heard';
       ask.heard = text;
+      // It nods as it takes the words. Not for words cut short: those are asked about first.
+      if (!more?.cut) { try { deps.nod?.(); } catch { /* a sign, and nothing depends on it */ } }
       if (more?.cut) ask.cut = true;
       if (more?.files?.length) ask.files = more.files;
       bump(ask);
@@ -1103,6 +1122,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (!ledger.missed(ask.id, why)) { sync(ask); bump(ask); return; }
       ask.phase = 'missed';
       ask.missed = why;
+      // Nothing was made out: it shakes, as it does for anything it could not take.
+      try { deps.attention?.(); } catch { /* a sign, and nothing depends on it */ }
       bump(ask);
     },
     dropped(talkId) {

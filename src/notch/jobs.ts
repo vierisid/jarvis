@@ -560,6 +560,8 @@ interface LiveJob {
   /** The run's own promise: it ends when the desktop app has answered the last step. */
   running: Promise<void> | null;
   waiters: Set<() => void>;
+  /** Its cursor has been seen to leave the notch: the lip pushes out for it once, not each time the line comes back. */
+  launched?: boolean;
   /** Its place in what waits for the notch. */
   item(): NotchItem;
 }
@@ -630,6 +632,8 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
       if (job.end === null) {
         const id = stage.id();
         stage.put({ id, kind: 'work', say: workSay(plan), steps: plan.total ?? 0, done: Math.min(plan.done(), plan.total ?? 0), mood: 'track' });
+        // The edge gives birth to its cursor: the lip pushes out where it leaves.
+        if (!job.launched) { job.launched = true; stage.surface.act({ lip: 'reach', aim: .5, kick: 150 }); }
         const stop = stage.answer(id, ['stop']).then(() => 'stop' as const);
         stop.catch(() => {});
         while (job.end === null) {
@@ -646,6 +650,8 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
         continue;
       }
       const end = job.end;
+      // The cursor is back in the notch: a gulp.
+      if (job.launched) { job.launched = false; stage.surface.act({ kick: 260 }); }
       if (end.how === 'done') {
         const n = plan.done();
         const tail = end.ranOut === 'empty' ? ' The next one was empty.' : end.ranOut === 'edge' ? ' That is as far as the window goes.' : '';

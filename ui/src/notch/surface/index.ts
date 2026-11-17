@@ -7,7 +7,7 @@
  * away: `show` below is the prototype's `show`, and each kind of line maps to
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
-import { NOTCH_APPS, NOTCH_MOODS, notchWhereApp } from '../../../../src/notch/protocol.ts';
+import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_MOODS, notchWhereApp } from '../../../../src/notch/protocol.ts';
 import type {
   NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp, NotchWord,
 } from '../../../../src/notch/protocol.ts';
@@ -394,7 +394,11 @@ export function createNotchSurface(
     show({ body: 'rest' }, instant);
   }
 
+  /** What of a map is on the screen now, for the line that is up: it is drawn again with more in it, not from nothing. */
+  let mapKnown = new Set<string>(), mapFor = '';
   const blocksOf = (blocks: readonly NotchBlock[]): HTMLElement => renderBlocks(blocks, {
+    known: mapKnown,
+    still: reduce,
     plain: (parts) => sentence.plain(parts),
     button: (id, row) => { if (cur && !cur.done) answer('button', row === undefined ? { button: id } : { button: id, row }); },
     go: (row) => { if (cur && !cur.done) answer('go', { row }); },
@@ -434,10 +438,14 @@ export function createNotchSurface(
     dropKeyboard();
     line = l;
     cur = { id: l.id };
+    // Another line: whatever map the last one drew is gone with it.
+    if (l.id !== mapFor) { mapFor = l.id; mapKnown.clear(); }
     stopFold();
     const common = { mood: l.mood, mark: l.mark, who: l.who, src: l.src } satisfies Partial<View>;
     const me = cur;
-    const yes = (): void => { sounds.sfx('yes'); answer('yes'); settle(); };
+    // A yes is seen: the eyes nod and the bottom edge gulps, as it is given.
+    const nod = (): void => { sounds.sfx('yes'); if (!reduce) { shape.kick(240); eyes.gesture('nodg'); } };
+    const yes = (): void => { nod(); answer('yes'); settle(); };
 
     if (l.kind === 'say') {
       me.onYes = () => { answer('yes'); rest(); };
@@ -453,14 +461,25 @@ export function createNotchSurface(
         const options = l.options;
         show({
           body: 'choices', say: l.say, hint: { cap: 'esc', act: 'not now', touch: true }, ...common,
-          opts: options.map((label, index) => ({ label, pick: () => { if (me.done) return; sounds.sfx('yes'); answer('pick', { option: label, index }); settle(); } })),
+          opts: options.map((label, index) => ({ label, pick: () => { if (me.done) return; nod(); answer('pick', { option: label, index }); settle(); } })),
         }, instant);
         startFold(l.fold ?? 14000);
+      } else if (l.keys === 'esc') {
+        // Only Esc is shown. A yes is told and nothing more: the brain says what it says to that, on this same line.
+        me.onYes = () => { answer('yes'); };
+        show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'not now' }, ...common }, instant);
+        startFold(l.fold ?? 9000);
+      } else if (l.keys === 'talk') {
+        me.onYes = yes;
+        show({ body: 'line', say: l.say, hint: [{ cap: 'jk', act: l.yes ?? 'hold and talk', mute: true }, { cap: 'esc', label: 'not now', touch: true }], ...common }, instant);
+        startFold(l.fold ?? 9000);
       } else {
         me.onYes = yes;
         show({ body: 'line', say: l.say, hint: [{ act: l.yes ?? 'yes' }, { cap: 'esc', label: 'not now', touch: true }], ...common }, instant);
         startFold(l.fold ?? 9000);
       }
+      // Where in a sequence this is, in small words after the keys.
+      if (typeof l.step === 'string' && l.step) { hintEl.append(el('span', 'count', [...l.step].slice(0, 24).join(''))); shape.fit(instant, true); }
       return;
     }
     if (l.kind === 'sheet') {
@@ -536,8 +555,9 @@ export function createNotchSurface(
         later(Math.max(0, l.ms), () => {
           if (me.done) return;
           wrap.classList.remove('fusing');
-          // It leaves along the edge, the way it would have come.
-          edge.depart(false);
+          // It leaves along the edge, toward where it is going: to the side
+          // its app is on, and to the right when it goes to a person.
+          edge.depart(leftOf(l.src));
           answer('done');
           settle();
         });
@@ -643,8 +663,18 @@ export function createNotchSurface(
     }
   }
 
+  /**
+   * Which side of the notch an app's things come from and go to. The
+   * prototype had a dock, and an app's side was where it stood in it; here
+   * the same apps keep the same sides. What comes from no app comes from the
+   * left, and what goes to no app (to a person) goes to the right.
+   */
+  function leftOf(src: NotchApp | undefined): boolean {
+    return src !== undefined && (['desk', 'mail', 'sheets', 'pay', 'cal'] as readonly string[]).includes(src);
+  }
+
   function act(m: Extract<NotchToPage, { type: 'act' }>): void {
-    if (m.sound !== undefined) sounds.set(m.sound);
+    if (m.sound !== undefined) sounds.set(m.sound === true);
     if (m.eye !== undefined) {
       if (m.eye) { nin.dataset.eye = 'eye'; shape.kick(-140); } else delete nin.dataset.eye;
     }
@@ -662,7 +692,17 @@ export function createNotchSurface(
       }
       eyes.gesture(m.gesture);
     }
-    if (m.lip) shape.morphPlay(m.lip);
+    if (m.lip) {
+      const aim = typeof m.aim === 'number' && Number.isFinite(m.aim) ? Math.max(.14, Math.min(.86, m.aim)) : undefined;
+      shape.morphPlay(m.lip, aim === undefined ? undefined : { aim });
+    }
+    if (typeof m.kick === 'number' && Number.isFinite(m.kick)) shape.kick(Math.max(-400, Math.min(400, m.kick)));
+    if (m.body === 'nod') shape.kick(250);
+    else if (m.body === 'hops') { shape.kick(-200); timers.after(270, () => shape.kick(-180)); }
+    else if (m.body === 'duck' && !cur) edge.duck();
+    if (m.edge === 'depart') edge.depart(m.side !== 'right');
+    else if (m.edge === 'bud') edge.bud(m.side !== 'right');
+    else if (m.edge === 'carry') edge.carry(m.side === 'right', m.side !== 'right');
     if (m.mouth) mouth(m.mouth);
     if (m.park !== undefined) edge.park(m.park);
     // A birth only when there is nothing on the notch: it starts from the eyes.
@@ -683,6 +723,8 @@ export function createNotchSurface(
           front = notchWhereApp(message.where);
           // An eye that was being kept is still kept: the brain remembers it for a page that comes back.
           if (message.eye) nin.dataset.eye = 'eye'; else delete nin.dataset.eye;
+          // And whether it makes its small sounds: the person's own choice, kept by the brain.
+          sounds.set(message.sound === true);
           if (message.line) {
             edge.appear();
             showLine(structuredClone(message.line), true);
@@ -699,7 +741,7 @@ export function createNotchSurface(
         }
         case 'show':
           if (!born) return;
-          if (message.line.arrive && !reduce) {
+          if (message.line.arrive && (NOTCH_ARRIVALS as readonly string[]).includes(message.line.arrive) && !reduce) {
             const next = structuredClone(message.line), mine = ++tok;
             edge.arrive(message.line.arrive, () => { if (mine === tok) showLine(next); });
           } else showLine(structuredClone(message.line));

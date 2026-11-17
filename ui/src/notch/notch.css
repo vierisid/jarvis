@@ -307,7 +307,24 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .row.go:hover { color: var(--n-ink); }
 .row.go > svg { width: 14px; height: 14px; flex: none; opacity: .45; align-self: center; margin-right: 6px; }
 .row.go:hover > svg { opacity: 1; }
+.row.gone .mn { text-decoration: line-through; color: var(--n-dim); }
 .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* the look-around map: what it found, drawn as it finds it */
+.map { display: block; width: 100%; height: auto; margin: 2px 0 8px; overflow: visible; }
+.map line { stroke: #39404B; stroke-width: 1; stroke-dasharray: 320; stroke-dashoffset: 320; animation: edge .55s var(--ease) forwards, edgec 1.3s var(--ease) forwards; }
+@keyframes edge { to { stroke-dashoffset: 0; } }
+@keyframes edgec { 0%, 35% { stroke: var(--citron); } 100% { stroke: #39404B; } }
+.map circle { fill: var(--n-ink2); transform-box: fill-box; transform-origin: center; animation: pop .34s var(--ease) both; }
+.map .me circle { fill: var(--citron); } .map .person circle { fill: var(--n-ink); } .map .thing circle, .map .co circle { fill: var(--n-dim); }
+.map text { font: 500 12px var(--sans); fill: var(--n-ink2); paint-order: stroke; stroke: var(--notch); stroke-width: 4px; stroke-linejoin: round; animation: word .4s var(--ease) both; }
+.map .person text, .map .me text { fill: var(--n-ink); font-weight: 600; }
+/* what was already drawn stays as it is when the map is sent again with more in it */
+.map line.was { animation: none; stroke-dashoffset: 0; } .map .was circle, .map .was text { animation: none; }
+.map .tour { fill: none; stroke: var(--citron); stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.srcs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 4px 4px; }
+.src { display: inline-flex; gap: 6px; align-items: baseline; padding: 6px 8px; border-radius: var(--corner-xs); box-shadow: inset 0 0 0 1px var(--notch-rule); font: 500 12px/1 var(--sans); color: var(--n-dim); transition: color .2s var(--ease), background-color .2s var(--ease); }
+.src i { font: 400 12px/1 var(--sans); font-style: normal; display: none; color: var(--n-ink2); }
+.src.on { color: var(--n-ink); background: var(--notch-raise); } .src.done i { display: inline; }
 .sheet > div > .acts { padding: 10px 4px 2px; }
 .note { margin: 4px 0 0; padding: 10px 4px 0; border-top: 1px solid var(--notch-line); font: 400 12px/16px var(--sans); color: var(--n-dim); text-wrap: pretty; }
 /* A line that says what the paper under it is about: read before the paper, so it is not dimmed like a footnote. */
