@@ -103,14 +103,14 @@ test('Today counts document decisions only from a settled read or cached rows', 
 test('Today recent activity lists real workflow runs with plain statuses and opens the run', async () => {
   const provider = { readiness: () => 'ready' as const };
   const caps = new BriefCapabilities([{ id: 'reconciliation', provider }, { id: 'goalMeasurements', provider }], ['reconciliation', 'goalMeasurements']).snapshot();
-  const runFor = (flowId: string, status: string, startTime: number) => ({ runId: `run-${flowId}`, flowId, flowVersionId: `v-${flowId}`, name: `Flow ${flowId}`, status, startTime, created: startTime, steps: { private: 'CANARY' } });
+  const runFor = (flowId: string, status: string, startTime: number) => ({ id: `run-${flowId}`, flowId, flowVersionId: `v-${flowId}`, displayName: `Flow ${flowId}`, environment: 'PRODUCTION', status, startTime, created: startTime, steps: { private: 'CANARY' } });
   let extra: unknown[] = [];
   const requested: string[] = [];
   const transport = createHostTransport((async (path: string) => {
     requested.push(path);
     if (path === '/api/brief/goals') return Response.json({ state: 'empty', data: [], asOf: 1 });
     if (path === '/api/brief/initial-goal') return Response.json({ state: 'none' });
-    if (path === '/api/workflow-runs/recent?limit=5') return Response.json({ items: [...extra, runFor('ok', 'SUCCEEDED', 3000), runFor('bad', 'FAILED', 2000), { ...runFor('wait', 'PAUSED', 1000), waitingOn: 'person' }] });
+    if (path === '/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true&limit=5') return Response.json({ items: [...extra, runFor('ok', 'SUCCEEDED', 3000), runFor('bad', 'FAILED', 2000), { ...runFor('wait', 'PAUSED', 1000), waitingOn: 'person' }] });
     return Response.json({ state: 'unavailable' }, { status: 503 });
   }) as unknown as typeof fetch);
   const reconciliation = new BriefReconciliationClient({ capabilities: async () => caps, pollMs: 3_600_000 });
@@ -129,7 +129,7 @@ test('Today recent activity lists real workflow runs with plain statuses and ope
     expect(host.textContent).not.toContain('No workflow has run yet');
     expect(host.textContent).not.toContain('CANARY');
     // One bounded read, never a per-workflow fan-out.
-    expect(requested.filter(path => path.startsWith('/api/workflow')) ).toEqual(['/api/workflow-runs/recent?limit=5']);
+    expect(requested.filter(path => path.startsWith('/api/workflow')) ).toEqual(['/api/workflows/recent-runs?environment=PRODUCTION&topLevel=true&limit=5']);
     await React.act(async () => rows()[0]!.querySelector('button')!.click());
     expect(navigated).toEqual([{ room: 'workflow', selection: { flowId: 'ok', versionId: 'v-ok', runId: 'run-ok' } }]);
     // A run that finishes while Today is open appears without a reload.

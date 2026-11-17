@@ -290,8 +290,9 @@ is unchanged.
   renders "unavailable". `RecentActivity` takes a plain view binding of the matching source and does not
   depend on those capabilities. No live provider is wired for Outcomes yet.
 - Today's Recent activity is built by `today/activity/model.ts` from one bounded read,
-  `GET /api/workflow-runs/recent?limit=5` (`today/activity/read.ts`): the latest production, top-level run of
-  each workflow in the caller's project, newest first. Test runs, single-step tests and subflow child runs are
+  `GET /api/workflows/recent-runs?environment=PRODUCTION&topLevel=true&limit=5` (`today/activity/read.ts`):
+  the latest production, top-level run of each workflow in the caller's project, newest first. The reader
+  cleans and caps the name with `forCard` (120 characters). Test runs, single-step tests and subflow child runs are
   never candidates, and a removed workflow is left out as the Workflows room leaves it out. The read costs one
   index seek per workflow, not a pass over run history. It is a reconciliation projection over the `runs` and
   `today` domains, so workflow events and the client's regular polling refresh it while Today is open.
