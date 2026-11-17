@@ -1769,6 +1769,131 @@ What is not done, or not proven, in pass 11:
   rung, as before this pass: a rung can only be applied where the product
   judges a step.
 
+## Open Jarvis, day one, settings, and how it moves
+
+Pass 12. The notch already held most of the prototype's motion on its
+page, and hardly played it. The owner, 17 November 2026: "include also a
+lot of the animation that we have built in the proof of concept, because
+one of the things that will give a lot of reusability to Jarvis will be all
+of this animation. I'm talking like, you know, popping out animation, eyes
+animation, the line, day one animation."
+
+126. **A line Jarvis brings by itself comes in along the edge. A line that
+    was asked for is just there.** The first line of a script that started
+    by itself (`unasked`) is given a way of arriving (`notchArrival` in
+    `src/notch/stage.ts`): from the side its app is on, hopping when an
+    agent speaks, twice and fast when it is urgent or something failed. A
+    line that tells of several things (the morning, back and evening
+    lines) comes from both sides at once. A script can say how its line
+    comes (`comes`), and that word does nothing for a line that was asked
+    for: in a round, or opened from the count, it is not brought again.
+    The page ignores a way of arriving it does not know and shows the line.
+
+127. **The movements are asked for at the moment they mean something, and
+    nowhere else.** A yes and a pick nod (the page, as they are given). Yes
+    at rest that starts a round nods; one that finds nothing does not.
+    Spoken words that were made out nod; nothing made out shakes. A new
+    agent is met with a wink and buds off the notch 0.7 s later. What was
+    sent leaves toward the side its app is on. Stopping everything shakes
+    and zips the lip. After a call what waited on the edge is pulled in
+    and it stretches, but never with its eyes closed or turned aside. A
+    look is taken with a blink and a gulp. A chase that is done, or stuck,
+    lands with a gulp. The lip pushes out where its cursor leaves and gulps
+    when it is back, once a job and not each time its line returns. Where
+    it points, the lip leans toward the thing (`pointAim`).
+
+128. **Every start is a different birth.** The brain picks one of the six
+    that is not the one before (`notchBirthAfter`) and keeps which, so it
+    holds across restarts. A page that comes back is not born again.
+
+129. **"How I move" plays movements and changes nothing.** All 36
+    animations, 22 looks and 9 movements of the prototype, one button each
+    (`src/notch/moves.ts`). Its captions are captions: nothing is read,
+    sent or changed, and after each the face the notch really has at rest
+    is given back.
+
+130. **Forgetting from the notch is the product's own Forget, and is said
+    twice.** The Memory sheet lists the product's facts, read each time,
+    with who each is about and where it came from. "Forget" turns its row
+    into "Forget for good" and "Keep"; only "Forget for good" on that same
+    row forgets (`MemoryForget`: the fact and its evidence go, a receipt is
+    kept, and the same thing is not learned again from the same place). The
+    row stays, struck through. A fact that could not be forgotten says
+    "still here". The prototype forgot on one press; the product's Forget
+    asks that it was meant, and a delete is one of the two things on the
+    notch that may ask.
+
+131. **The keys are one machine's own, and the notch only asks.** The talk
+    and yes pairs are kept by the desktop app in its own settings file.
+    The settings sheet asks that machine for another pair (`notch.keys`)
+    and shows what it answers. The same two keys for both, or words that
+    are not two of its keys, are refused, and the word goes back with why
+    beside it. A change holds at once: the keyboard watch and the hints
+    follow it without a restart. An older desktop app that does not know
+    the question says where its keys are instead.
+
+132. **Day one begins by itself once, and only on a brain that was never
+    set up.** It is kept which step it is on (`notch_settings`, `dayone`).
+    A step that is ignored for 45 s waits in the count and is the same
+    step when opened. A brain that stops in the middle goes on from that
+    step. Once over it never begins by itself again; "day one" and the
+    settings begin it again from the first step.
+
+133. **Every step of day one is real, or says what is true.** The name is
+    kept as what the assistant calls the person, in `cfg.user`, and the
+    profile the dashboard's first steps ask about is not touched. What is
+    said at step 4 is taken as the answer whatever the words are, before
+    any other reading of them, and needs no model; with nothing to make
+    words of a voice it says so and goes on. "May I watch?": yes leaves
+    watching on, and a no switches it off through the product's own
+    switch; "Open my eyes" in "What I see" switches it back. At step 6 the
+    first real look is the lesson and nothing else comes of it. An AI is
+    set up in the dashboard's own setup, which is opened and waited for;
+    one that is there is named and nothing is asked. Mail and calendar are
+    reached by signing in to Google in Jarvis's own browser, opened where
+    it can be seen and waited for. Looking around reads what can already
+    be reached and draws it as it is found; a place that cannot be read
+    says "not reached" and the looking goes on. Nobody's habits are known
+    on day one: it says how they will be found and asks nothing.
+
+134. **Day one gives way to the person.** While it waits to hear or to be
+    shown, the talking takes the notch and day one has it back afterwards,
+    also when the talking came to nothing (`NotchInbox.remove` hands the
+    notch back to what was interrupted).
+
+135. **With the notch on, no Pebble follows the cursor, and the dashboard
+    is not opened over day one.** The brain does not spawn the Pebble's
+    overlay, and closes one that is still up. The desktop app's microphone
+    and its status dots are not part of the overlay and stay.
+
+What is not done, or not proven, in pass 12:
+
+- **None of it has run on a real machine.** Day one has never run on a
+  brain that was never set up. The key change has not been tried on a real
+  keyboard. The page's new motion was not looked at on a screen here.
+- **The side a thing comes from is the prototype's dock, kept.** Mail,
+  sheets, payments and the calendar come from the left, the rest from the
+  right. The product has no dock: it is a convention, not where the app is.
+- **Where the lip leans is told from the window, not the screen.** Exact
+  for a window that fills the screen, the right side for any other.
+- **Day one's AI step opens the dashboard.** The prototype chose an AI in
+  the notch. The product's keys and models are set in its own setup, so
+  the notch opens that and waits. Both choices open the same setup.
+- **Day one has no "3 things you repeat".** Nothing is known of anyone's
+  habits in their first five minutes. It says how they will be found.
+- **Looking around reads nothing new.** Memory, the mail that waits, the
+  week's meetings and the agents. It does not read files, history or the
+  apps of the computer, which the prototype's map showed.
+- **"Give me a file" is not in Home.** A file is dropped on the notch.
+- **Goals are not in Home.** They are in the dashboard.
+- **Voice is shown, not changed.** Which service makes out speech, and in
+  which language, is changed in the dashboard. There is no choice of
+  microphone anywhere in the product.
+- **Duck has no moment of its own.** It is in "How I move" only, as in the
+  prototype.
+- **The Mac side of the key change is the same shared code**, and has not
+  run there.
+
 ## The keys
 
 | What | Keys | How it is told |
@@ -1968,6 +2093,7 @@ What is not done, or not proven, in pass 11:
 | desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
+| brain to desktop app | `notch.keys` | `{}` to ask, or `{talk?: string, yes?: string}` with a pair written as `ctrl+meta` to change one or both | `{talk: [key, key], yes: [key, key], mac: boolean}`, the pairs as they now are. Refused when a pair is not two different modifier keys, or both would be the same two keys |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
 | brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |
 | brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away What the program has open on top of it (a menu, a dropped-down list) comes first in `elements`, counted in `popups`. |
@@ -2008,14 +2134,14 @@ time; a new `show` replaces it.
 | From | Message | Meaning |
 |---|---|---|
 | page | `hello {v}` | The page is up. Answered with `state` |
-| brain | `state {line, count, born, face, where}` | Everything the notch should show, at once |
+| brain | `state {line, count, born, face, where, eye, sound}` | Everything the notch should show, at once |
 | brain | `show {line}` | Put this on the notch |
 | brain | `rest` | Back to the eyes |
 | brain | `count {count}` | How many things wait |
 | brain | `face {mood}` | The face the notch has at rest until told otherwise: `closed` while it sees nothing (asleep, an app never to be watched, watching off), `away` while it looks away by itself. Kept by the brain, unlike a mood given with `act` |
 | brain | `where {app}` | The app in front, `{name, icon}`, for the icon beside the resting eyes; `null` takes it away. The icon is a PNG data URL. Kept by the brain |
 | brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
-| brain | `act {...}` | A face, a movement, a birth, the watching eye, the mouth, sounds. Not remembered |
+| brain | `act {...}` | A face, a movement of the eyes, the lip (with `aim` for where it reaches), the body (`nod`, `hops`, `duck`), a `kick`, the edge (`depart`, `bud`, `carry`, with `side`), a birth, the watching eye, the mouth, how many wait on the edge, sounds. Not remembered, but for the eye and the sounds, which the brain keeps |
 | page | `answer {id, act, ...}` | What the person did with the line `id` |
 | page | `open` | A click on the resting notch, or yes with nothing on it |
 | page | `stop` | Esc twice: stop everything, and start nothing until told |
@@ -2027,7 +2153,16 @@ A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 of plain words, `em` words, keycaps and lit words the person can change.
 
 A line marked `unasked` came by itself: the page takes no yes on it for
-0.7 s.
+0.7 s. A line with `arrive` comes in along the top edge before it is shown:
+`left`, `right`, `urgent` (two, fast), `hop` or `pair` (one from each side).
+A line with `step` says where in a sequence it is, in small words after its
+keys. An offer with `keys` shows other keys than yes and Esc: `esc` alone, or
+the pair that is held to `talk`.
+
+A sheet is made of rows, a sheet of paper, notes, buttons, a file, and a
+`map`: dots with names, lines between them, and a chip for each place that
+was read. A map that is sent again with more in it keeps still what was
+already drawn. A row that is `gone` is struck through.
 
 After `no`, `fold`, and a `say` that finished, the page has gone to rest by
 itself. After any other answer it keeps the line until the brain says what

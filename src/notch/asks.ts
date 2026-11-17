@@ -152,6 +152,12 @@ export interface NotchAsksDeps {
   nod?: () => void;
   /** The pointer is leaving for a thing: the lip leans toward it (0 to 1 along the lower edge). */
   reach?: (aim: number) => void;
+  /**
+   * Nothing was made out of what was said. True when that is another part's
+   * to answer (day one, waiting to hear the person for the first time): then
+   * nothing is said about it here.
+   */
+  unheard?: (why: NotchMissReason) => boolean;
   openDashboard?: (sidecarId: string | null) => void;
   /** Rows for Home, under the text field: what was done today. */
   today?: () => NotchBlock[];
@@ -1119,6 +1125,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     nothing(talkId, why) {
       const ask = ofTalk(talkId);
       if (!ask) return;
+      let taken = false;
+      try { taken = deps.unheard?.(why) === true; } catch { taken = false; }
+      if (taken) { turnAway(ask, 'Nothing was made out, and it was answered elsewhere.'); return; }
       if (!ledger.missed(ask.id, why)) { sync(ask); bump(ask); return; }
       ask.phase = 'missed';
       ask.missed = why;

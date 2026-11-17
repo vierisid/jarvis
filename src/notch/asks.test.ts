@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { attachNotchDayOne, type NotchDayOne } from './dayone.ts';
+import { NotchSettings } from './settings.ts';
 import { Database } from 'bun:sqlite';
 import type { BriefChatEvent, BriefChatPayload, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { NOTCH_HEARD_MS, NOTCH_NOT_CAUGHT, NotchFilesNotKept, answerShape, attachNotchAsks, ledgerDetail, ledgerWord, plainLines, rememberSentence } from './asks.ts';
@@ -1246,5 +1248,72 @@ describe('pass 12: what was said is seen to land', () => {
     h.asks.released('t1');
     h.asks.words('t1', 'send the numbers to', { cut: true });
     expect(nods).toBe(0);
+  });
+});
+
+describe('pass 12: day one and talking share the notch', () => {
+  const now = { setTimeout: (fn: () => void) => { fn(); return 0; }, clearTimeout: () => {} };
+  function dayOne(step: number) {
+    let day: NotchDayOne | null = null;
+    const told: string[] = [];
+    // No model at all: day one's lessons need none.
+    const h = harness({ deps: { modelReady: () => false, side: (text) => day?.route(text) ?? null, unheard: (why) => day?.unheard(why) ?? false } });
+    const settings = new NotchSettings(h.db);
+    settings.set('dayone', { step, done: false });
+    day = attachNotchDayOne({
+      inbox: h.inbox, settings, clock: now, log: () => {},
+      fresh: () => true,
+      model: { ready: () => false, name: () => '', hosted: () => false, setUp: () => {} },
+      told: async (what) => { told.push(what); return null; },
+    });
+    day.cameUp();
+    return { h, day, told };
+  }
+
+  test('while day one waits to hear the person, what they say is its answer: no model is asked, and day one has the notch back', async () => {
+    const { h, day, told } = dayOne(4);
+    await h.advance(0);
+    expect(h.said()).toBe('Now tell me what you do. Out loud.');
+    // The keys go down: the talking takes the notch from day one.
+    h.asks.listen('t1');
+    await h.advance(0);
+    expect(h.line()?.kind).toBe('listen');
+    h.asks.released('t1');
+    h.asks.words('t1', 'Every Monday I send Sam the numbers');
+    await h.advance(3000);
+    await h.advance(3000);
+    // Taken as what they do: not as an agent to make, and not refused for want of a model.
+    expect(told).toEqual(['Every Monday I send Sam the numbers']);
+    expect(h.said()).toBe('Heard. That is how you tell me anything.');
+    expect(row(h).state).toBe('done');
+    expect(row(h).answer).toBe('Told Jarvis what they do, on day one.');
+    await h.answer('done');
+    expect(day.step()).toBe(5);
+    expect(h.said()).toBe('May I watch which app you are in? Close my eyes any time.');
+  });
+
+  test('with nothing to make words of the voice, day one says what is true, and the usual "I did not catch that" is not said as well', async () => {
+    const { h, day } = dayOne(4);
+    await h.advance(0);
+    h.asks.listen('t1');
+    await h.advance(0);
+    h.asks.released('t1');
+    h.asks.nothing('t1', 'no_stt');
+    await h.advance(3000);
+    expect(h.said()).toBe('I heard a voice. I cannot make out words until I have an AI. That is step 7.');
+    // It shook for nothing: nothing of the usual refusal happened.
+    expect(h.shakes()).toBe(0);
+    await h.answer('done');
+    expect(day.step()).toBe(5);
+  });
+
+  test('at a step that is not listening, talking is talking as ever', async () => {
+    const { h, told } = dayOne(5);
+    await h.advance(0);
+    await h.speak('t1', 'what is two plus two');
+    await h.advance(3000);
+    expect(told).toEqual([]);
+    // No model is set up, and it says so, as it always did.
+    expect(row(h).state).not.toBe('done');
   });
 });

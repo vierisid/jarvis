@@ -235,6 +235,15 @@ export class NotchInbox {
       // The line leaves by itself. In a round, the next one comes.
       const was = this.halt();
       if (was?.round && this.next(was.round)) return true;
+      // It had taken the notch from something that was being waited on
+      // (`returns`): that has the notch back now, as it would have had this
+      // ended by itself. Without this, a thing that was interrupted by
+      // talking would stay in the count when the talking came to nothing.
+      const then = was?.then;
+      if (then && this.entries.includes(then) && this.holds.size === 0) {
+        this.start(then, { unasked: false }, null);
+        return true;
+      }
     }
     this.pushCount();
     return true;
