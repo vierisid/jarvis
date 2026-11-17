@@ -55,6 +55,8 @@ import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './mem
 import { attachNotchMoves, type NotchMoves } from './moves.ts';
 import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
+import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
+import { whereQuestion } from './point.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -391,6 +393,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let dayOne: NotchDayOne | null = null;
   const memory: NotchMemory | null = office?.memory ? attachNotchMemory({ inbox, list: office.memory.list, forget: office.memory.forget, log }) : null;
   const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
+  // Everything it does, on one sheet: day one ends on it, the settings lead to it, "what can you do" opens it.
+  const canDo: NotchCanDo = attachNotchCanDo({ inbox });
   const openPage = office?.openPage;
   const prefs: NotchPrefs | null = settings ? attachNotchPrefs({
     inbox, settings, log,
@@ -399,6 +403,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     voice: office?.voice,
     see: where ? (stage) => where.see(stage) : undefined,
     moves: (stage) => moves.open(stage),
+    canDo: (stage) => canDo.open(stage),
     dayOne: deps.dayOne ? () => dayOne?.again() : undefined,
     connections: office?.connections,
     connect: office?.connect,
@@ -425,7 +430,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
       side: (text) => dayOne?.route(text) ?? mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
-        ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? null,
+        ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
       unheard: (why) => dayOne?.unheard(why) ?? false,
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
       more: {
@@ -496,6 +501,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       ask: (text, files) => { owner.typed(text, files); },
       tell: (parts, mood) => { owner.tell(parts, mood); },
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+      // On day one, the first file anyone drops is the lesson, and is asked about as any file is.
+      taken: () => dayOne?.gave(),
       log,
     });
   }
@@ -634,6 +641,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, settings, clock: deps.clock, log,
       ...deps.dayOne,
       canLook: () => lookAt !== null,
+      canDrop: () => drop !== null,
+      canPoint: () => deps.asks?.point !== undefined,
+      isWhere: whereQuestion,
+      canDo: (stage, more) => canDo.open(stage, more),
       mail: layer && office?.connect ? {
         reached: () => layer.reached(),
         open: async (sidecarId) => { await office.connect!('gmail', sidecarId); },

@@ -108,6 +108,8 @@ export interface NotchPrefsDeps {
   see?: (stage: NotchStage) => Promise<void>;
   /** "How I move" (./moves.ts). */
   moves?: (stage: NotchStage) => Promise<void>;
+  /** "What I can do" (./cando.ts). */
+  canDo?: (stage: NotchStage) => Promise<void>;
   /** Starts day one again (./dayone.ts). */
   dayOne?: () => void;
   /** What Jarvis is connected to, as it stands now. */
@@ -144,6 +146,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
       const blocks = (): NotchBlock[] => {
         const voice = deps.voice?.() ?? null;
         const links: NotchButton[] = [
+          ...(deps.canDo ? [{ id: 'cando', label: 'What I can do', quiet: true }] : []),
           ...(deps.moves ? [{ id: 'moves', label: 'How I move', quiet: true }] : []),
           ...(deps.dayOne ? [{ id: 'dayone', label: 'Day one again', quiet: true }] : []),
         ];
@@ -174,6 +177,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
         if (answer.act === 'go' && answer.row === 'see' && deps.see) { await deps.see(stage); again = true; break; }
         if (answer.act === 'button') {
           if (answer.button === 'moves' && deps.moves) { await deps.moves(stage); again = true; break; }
+          if (answer.button === 'cando' && deps.canDo) { await deps.canDo(stage); again = true; break; }
           if (answer.button === 'dayone' && deps.dayOne) { deps.dayOne(); return; }
           if (answer.button === 'voice' && deps.openDashboard) { deps.openDashboard(stage.from(), 'voice'); return; }
           continue;

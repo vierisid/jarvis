@@ -1866,6 +1866,44 @@ animation, the line, day one animation."
     overlay, and closes one that is still up. The desktop app's microphone
     and its status dots are not part of the overlay and stay.
 
+The owner went through day one on 17 November 2026 and said: "he should
+actually go through kind of the files that he can see in the desktop. I
+think that would be a massive selling point", "it doesn't specify that you
+need to click the hotkey and then click and drag around the circle", and
+"there is a lot of functionalities that are not shown. For example,
+dropping a file into it or asking where something is and how do I do
+certain things. All of that should be put in, and I'm pretty sure I'm
+missing some." Day one has thirteen steps since then.
+
+136. **Looking around goes through the files of the person's own computer,
+    by name, and opens none.** The desktop app tells what lies at the top
+    of the desktop, the documents and the downloads (`notch.files`,
+    `sidecar/notch_files.go`): how many files and folders, of what kinds,
+    and the names of the six that were changed last. A kind is told from
+    the ending of a name. Nothing of what is in a file is read, by the
+    desktop app or by the brain, and no name is put to a model. It does not
+    go down into folders. Shortcuts are counted and not named; what the
+    system keeps on a desktop for itself is not seen at all. A folder the
+    person has blocked is not looked into, and a desktop app that may not
+    read files does not answer: the place is then "not reached". The brain
+    cannot name a folder to look in. Day one asks before it looks, in those
+    words: "I read their names and open none."
+
+137. **The two lessons that were added are the real thing.** At step 10 a
+    file that is dropped is taken by the same code as any dropped file and
+    asked about in the same way; day one only hears that one was taken, and
+    says its line when that is over, to the end, whatever took the notch in
+    between. At step 11 a question about where something is, or how to do
+    something, is answered as ever, by pointing; day one takes nothing from
+    it and only notes that it was asked. With no AI, or with its eyes
+    closed, each says what it needs and asks for nothing.
+
+138. **"What I can do" promises nothing the product does not take.** One
+    sheet names everything the notch does, with the words that start each
+    (`src/notch/cando.ts`). Day one ends on it, the settings lead to it,
+    and "what can you do" opens it. Every sentence it quotes is put, in a
+    test, to the code that reads it.
+
 What is not done, or not proven, in pass 12:
 
 - **None of it has run on a real machine.** Day one has never run on a
@@ -1881,9 +1919,16 @@ What is not done, or not proven, in pass 12:
   the notch opens that and waits. Both choices open the same setup.
 - **Day one has no "3 things you repeat".** Nothing is known of anyone's
   habits in their first five minutes. It says how they will be found.
-- **Looking around reads nothing new.** Memory, the mail that waits, the
-  week's meetings and the agents. It does not read files, history or the
-  apps of the computer, which the prototype's map showed.
+- **Looking around reads names, not what is in a file.** The top of the
+  desktop, the documents and the downloads, the mail that waits, the week's
+  meetings, memory and the agents. It does not open a file, go down into a
+  folder, or read browser history or the list of programs. Whether it
+  should open files is the owner's to decide.
+- **The look at the files has not run on a real desktop.** Where a cloud
+  drive keeps the desktop was written from how Windows does it and tried on
+  made-up folders only.
+- **Only three of what it does are lessons in day one**: the circle, a file,
+  and "where is". The rest is on the sheet day one ends on.
 - **"Give me a file" is not in Home.** A file is dropped on the notch.
 - **Goals are not in Home.** They are in the dashboard.
 - **Voice is shown, not changed.** Which service makes out speech, and in
@@ -2093,6 +2138,7 @@ What is not done, or not proven, in pass 12:
 | desktop app to brain | event `notch.talk` | `{phase: "start", talk_id}`; `{phase: "end", talk_id, voiced_ms, duration_ms, sample_rate, reason: "released" \| "cap"}` with the recording as 16-bit mono PCM, or with none when it is too little; `{phase: "cancelled", talk_id}`; `{phase: "refused", reason: "muted" \| "busy" \| "error" \| "none"}` | none |
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
+| brain to desktop app | `notch.files` | none. Only on a desktop app that may read files | `{places: [{place: "desktop" \| "documents" \| "downloads", reached, files, folders, shortcuts, kinds: {kind: count}, recent: [{name, kind, changed}], more}]}`: names, kinds and counts at the top of each place, and nothing of what is in any file |
 | brain to desktop app | `notch.keys` | `{}` to ask, or `{talk?: string, yes?: string}` with a pair written as `ctrl+meta` to change one or both | `{talk: [key, key], yes: [key, key], mac: boolean}`, the pairs as they now are. Refused when a pair is not two different modifier keys, or both would be the same two keys |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
 | brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |
