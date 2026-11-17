@@ -92,6 +92,8 @@ describe('finished work', () => {
     expect(h.said()).toMatch(/^Researcher finished: Compare three vendors/);
     expect(h.said().length).toBeLessThan(130);
     expect(h.line()).toMatchObject({ kind: 'say', mark: 'check' });
+    // Pass 12: an agent that is done comes hopping along the edge.
+    expect(h.line()).toMatchObject({ arrive: 'hop', unasked: true });
   });
 
   test('one that fails says so', async () => {

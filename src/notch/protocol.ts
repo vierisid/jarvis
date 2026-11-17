@@ -68,8 +68,29 @@ export type NotchLip = (typeof NOTCH_LIPS)[number];
 export const NOTCH_BIRTHS = ['run', 'meet', 'trace', 'bead', 'eye', 'gather'] as const;
 export type NotchBirth = (typeof NOTCH_BIRTHS)[number];
 
-/** How a line comes in along the top edge of the screen before it is said. */
-export type NotchArrival = 'left' | 'right' | 'urgent' | 'hop';
+/**
+ * How a line comes in along the top edge of the screen before it is said:
+ * from one side, two fast ones for something that cannot wait, hopping for
+ * an agent that is done, or one from each side at once for a line that tells
+ * of several things.
+ */
+export const NOTCH_ARRIVALS = ['left', 'right', 'urgent', 'hop', 'pair'] as const;
+export type NotchArrival = (typeof NOTCH_ARRIVALS)[number];
+
+/**
+ * What the body of the notch does by itself, apart from the eyes: a nod (the
+ * bottom edge gulps), two small hops, or a duck out of the way and back.
+ */
+export const NOTCH_BODIES = ['nod', 'hops', 'duck'] as const;
+export type NotchBody = (typeof NOTCH_BODIES)[number];
+
+/**
+ * What happens along the top edge of the screen, beside the notch: something
+ * that was sent leaves, a new agent buds off and hops away, or a thing is
+ * carried through Jarvis from one side to the other.
+ */
+export const NOTCH_EDGES = ['depart', 'bud', 'carry'] as const;
+export type NotchEdge = (typeof NOTCH_EDGES)[number];
 
 /** What is common to everything the notch can show. */
 interface NotchLineBase {
@@ -89,6 +110,8 @@ interface NotchLineBase {
    * for the first 0.7 seconds, so a tap meant for something else cannot.
    */
   unasked?: boolean;
+  /** A few small words beside the hints, saying where in a sequence this is: "step 3/11". */
+  step?: string;
 }
 
 /** A result. Nothing is asked; it leaves by itself after `ms`. */
@@ -108,6 +131,15 @@ export interface NotchOfferLine extends NotchLineBase {
   yes?: string;
   options?: string[];
   fold?: number;
+  /**
+   * Which keys the line shows, when it is not the usual yes and Esc (day
+   * one teaches them one at a time):
+   *   esc    only Esc is shown. A yes is still told to the brain, and the
+   *          line stays, for the brain to say what it says to that.
+   *   talk   the pair that is held to talk is shown, with `yes` as the word
+   *          for what holding it does ("hold and talk"), and Esc beside it.
+   */
+  keys?: 'esc' | 'talk';
 }
 
 /** A panel under a title. `yes` is the word for its main action, if any. */
@@ -196,14 +228,31 @@ export interface NotchButton {
 /** What a sheet is made of, top to bottom. */
 export type NotchBlock =
   /** A row: who or what on the left, a sentence, something small on the right. */
-  | { kind: 'row'; id?: string; lead?: string; say: NotchPart[]; tail?: string; small?: string; buttons?: NotchButton[]; go?: boolean }
+  | { kind: 'row'; id?: string; lead?: string; say: NotchPart[]; tail?: string; small?: string; buttons?: NotchButton[]; go?: boolean;
+    /** No longer there: drawn struck through. A memory that was just forgotten, a habit that was turned down. */
+    gone?: boolean }
   /** A white sheet of paper: a draft, an answer, a list. */
   | { kind: 'paper'; to?: NotchPart[]; lines: NotchPart[][]; numbered?: boolean; file?: { name: string; size: string } }
   /** A quiet line of explanation. */
   | { kind: 'note'; say: NotchPart[] }
   | { kind: 'buttons'; buttons: NotchButton[] }
   /** A file that was handed over. */
-  | { kind: 'file'; icon: 'doc' | 'image' | 'audio' | 'video' | 'sheet'; name: string; meta: string };
+  | { kind: 'file'; icon: 'doc' | 'image' | 'audio' | 'video' | 'sheet'; name: string; meta: string }
+  /**
+   * What Jarvis found when it looked around, drawn as it finds it: the person
+   * in the middle, the tools, people and things round them, and a line
+   * between two that belong together. Sent again with more in it as more is
+   * found: what was already drawn stays as it is, and only what is new comes
+   * in. `sources` are the places it reads, one chip each. `tour`, at the end,
+   * is one stroke drawn once through the things named.
+   */
+  | { kind: 'map'; nodes: NotchMapNode[]; links: [string, string][]; sources: NotchMapSource[]; tour?: string[] };
+
+/** One thing on the map. `x` and `y` are in a field 444 wide and 204 high. */
+export interface NotchMapNode { id: string; label: string; x: number; y: number; kind: 'me' | 'person' | 'tool' | 'co' | 'thing' }
+
+/** One place that is read: its name, what was found there once it is done, and whether it is being read now. */
+export interface NotchMapSource { name: string; found?: string; state?: 'on' | 'done' }
 
 /** The apps whose icon a line can carry. */
 export const NOTCH_APPS = ['desk', 'mail', 'sheets', 'pay', 'cal', 'slack', 'call', 'form', 'term', 'dash', 'bank'] as const;
@@ -238,7 +287,7 @@ export function notchWhereApp(value: unknown): NotchWhereApp | null {
 /** Brain to page. */
 export type NotchToPage =
   /** The answer to hello: everything the notch should be showing, at once. */
-  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood; where?: NotchWhereApp | null; eye?: boolean }
+  | { type: 'state'; line: NotchLine | null; count: number; born?: NotchBirth; face?: NotchMood; where?: NotchWhereApp | null; eye?: boolean; sound?: boolean }
   /**
    * The app in front, for the icon beside the resting eyes. Null: none is
    * shown (nothing is in front, or the notch is not watching it). The brain
@@ -264,6 +313,22 @@ export type NotchToPage =
   /** Something the notch does with its face or body, without saying anything. */
   | {
     type: 'act'; mood?: NotchMood; gesture?: NotchGesture; lip?: NotchLip; birth?: NotchBirth;
+    /**
+     * With the lip `reach`: where along the lower edge it reaches down, from
+     * 0 (its left end) to 1 (its right end). It leans toward the thing it
+     * means. The middle when not given.
+     */
+    aim?: number;
+    /** The body alone: a nod, two hops, a duck. */
+    body?: NotchBody;
+    /**
+     * A push on the bottom edge, as a speed: positive bulges it downward (a
+     * gulp), negative pulls it up (a small jump). Held to 400 either way.
+     */
+    kick?: number;
+    /** Along the top edge of the screen. `side` is where it goes: left when not given. */
+    edge?: NotchEdge;
+    side?: 'left' | 'right';
     /** The watching eye: the left eye turns round and citron. */
     eye?: boolean;
     /** The mouth that takes a file: open, open wide with the file over it, shut, or the gulp after a drop. */

@@ -486,8 +486,29 @@ export interface NotchPointDeps {
 export interface NotchPointDuring {
   /** A step is being shown: the line for it. */
   step?(said: string): void;
+  /**
+   * The pointer is leaving the notch for a thing: where along the notch's
+   * lower edge that thing lies, 0 (its left end) to 1 (its right end).
+   */
+  toward?(aim: number): void;
   /** Fires when the walk is to stop now. */
   signal?: AbortSignal;
+}
+
+/**
+ * Where along the notch's lower edge the lip reaches down for a thing. The
+ * notch hangs from the middle of the screen's top; a thing well to the left
+ * of it is reached for at the lip's left end, one well to the right at its
+ * right end, and only what is nearly under it in between. What is known here
+ * is the window, not the screen, so it is the middle of the window that
+ * stands for the middle: exact for a window that fills the screen, and the
+ * right side for any other.
+ */
+export function pointAim(rect: { x: number; w: number }, window: { x: number; w: number } | null): number {
+  if (!window || !(window.w > 0)) return .5;
+  const across = (rect.x + rect.w / 2 - window.x) / window.w;
+  if (!Number.isFinite(across)) return .5;
+  return Math.max(.14, Math.min(.86, .5 + (across - .5) * 6));
 }
 
 const AWAY: Record<string, string> = {
@@ -619,6 +640,8 @@ export function createNotchPoint(deps: NotchPointDeps): (question: string, durin
       }
       const { go, last, how } = choice;
       const rect = { x: go.x, y: go.y, w: go.w, h: go.h };
+
+      try { during.toward?.(pointAim(rect, window)); } catch { /* a sign, and nothing depends on it */ }
 
       // One thing on the screen answers it: pointed at, said, and done. Nothing is waited for.
       if (n === 1 && last) {

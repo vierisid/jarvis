@@ -37,8 +37,12 @@ export interface Edge {
   arrive(kind: NotchArrival, then: () => void): void;
   /** Something Jarvis sent leaves the same way. */
   depart(left: boolean): void;
-  /** A new agent: the notch swells and a piece of it hops away. */
-  bud(): void;
+  /** A new agent: the notch swells and a piece of it hops away, to that side. */
+  bud(left?: boolean): void;
+  /** From one side to the other, through Jarvis: it comes in, is swallowed, and leaves again. */
+  carry(fromLeft: boolean, toLeft: boolean, then?: () => void): void;
+  /** Out of the way: it sinks into the edge, and comes back after `ms`. */
+  duck(ms?: number): void;
   /** How many things wait on the edge beside the notch. */
   park(count: number): void;
   birth(kind: NotchBirth, then: () => void): void;
@@ -95,6 +99,14 @@ export function createEdge(deps: EdgeDeps): Edge {
     const land = (): void => { shape.kick(230); then(); };
     if (reduce) { timers.after(200, land); return; }
     const x0 = left ? -44 : deps.width() + 44, x1 = left ? box.left - 2 : box.right + 2;
+    if (kind === 'pair') {
+      // Two at once, one from each side: the line tells of more than one thing.
+      bump({ x0: deps.width() + 44, x1: box.right + 2, ms: 700 });
+      shape.N.vox -= 70;
+      shape.wake();
+      bump({ x0: -44, x1: box.left - 2, ms: 700 }, land);
+      return;
+    }
     // It leans toward what is coming.
     shape.N.vox += left ? -70 : 70;
     shape.wake();
@@ -115,13 +127,36 @@ export function createEdge(deps: EdgeDeps): Edge {
     bump({ x0: left ? box.left + 4 : box.right - 4, x1: left ? -50 : deps.width() + 50, ms: 640 });
   }
 
-  function bud(): void {
+  function bud(left = true): void {
     if (reduce) return;
     const box = shape.box();
     shape.N.vw += 260;
-    shape.N.vox -= 60;
+    shape.N.vox += left ? -60 : 60;
     shape.wake();
-    timers.after(240, () => bump({ x0: box.left + 6, x1: -50, ms: 1200, hop: true }));
+    timers.after(240, () => bump({ x0: left ? box.left + 6 : box.right - 6, x1: left ? -50 : deps.width() + 50, ms: 1200, hop: true }));
+  }
+
+  function carry(fromLeft: boolean, toLeft: boolean, then?: () => void): void {
+    arrive(fromLeft ? 'left' : 'right', () => {
+      timers.after(260, () => depart(toLeft));
+      then?.();
+    });
+  }
+
+  let ducked = 0;
+  function duck(ms = 1900): void {
+    // Not twice at once, and not while it is not there to duck.
+    if (reduce || hidden || ducked) return;
+    const w = shape.N.tw, h = shape.N.th;
+    nin.style.opacity = '0';
+    shape.morph(w * .7, 8);
+    ducked = timers.after(ms, () => {
+      ducked = 0;
+      nin.style.opacity = '';
+      // Measured again: what it shows may have changed while it was down.
+      shape.fit();
+      shape.kick(-90);
+    });
   }
 
   function park(count: number): void {
@@ -237,5 +272,5 @@ export function createEdge(deps: EdgeDeps): Edge {
     return out;
   }
 
-  return { arrive, depart, bud, park, birth, hide, appear, polygons, shown: () => !hidden, moving: () => live.size > 0 };
+  return { arrive, depart, bud, carry, duck, park, birth, hide, appear, polygons, shown: () => !hidden, moving: () => live.size > 0 };
 }

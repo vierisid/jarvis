@@ -328,6 +328,17 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     return out;
   }
 
+  /**
+   * "Meet Tony": said with a wink, and a moment later a piece of the notch
+   * buds off and hops away along the edge, to its job (the prototype's `bud`).
+   */
+  async function meet(stage: NotchStage, parts: NotchPart[], ms: number, extras: Parameters<NotchStage['say']>[2]): Promise<void> {
+    const said = stage.say(parts, ms, extras);
+    stage.surface.act({ gesture: 'wink' });
+    stage.wait(700).then(() => stage.surface.act({ edge: 'bud' }), () => {});
+    await said;
+  }
+
   const nextName = (): string => {
     const taken = new Set(store.list().map((agent) => agent.name));
     return NOTCH_AGENT_NAMES.find((name) => !taken.has(name)) ?? `Agent ${taken.size + 1}`;
@@ -393,7 +404,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         const name = nextName();
         store.add({ flowId: built.flowId, name, rung: 'asks first', sentence: full, madeAt: now(), rungAt: now(), askedAt: 0, toldRun: '' });
         log('[notch] an agent was made from a sentence, and asks first');
-        await stage.say(['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], 7000, { mood: 'proud', mark: 'check' });
+        await meet(stage, ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], 7000, { mood: 'proud', mark: 'check' });
         return 'settled';
       },
     });
@@ -418,7 +429,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   }
 
   /** Switches on something that was built, and makes it an agent: a name, and the first rung. */
-  function switchOn(built: { flowId: string; job: string; enabled?: boolean }): { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry'; mark?: 'check' | 'fail' } } {
+  function switchOn(built: { flowId: string; job: string; enabled?: boolean }): { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry'; mark?: 'check' | 'fail' }; born?: boolean } {
     if (!built.enabled) {
       const on = deps.workflows.enable(built.flowId);
       if (!on.ok) return { parts: ['I could not switch ', em(built.job), ' on: ', on.why.replace(/[.\s]+$/, ''), '.'], ms: 6000, extras: { mood: 'sorry', mark: 'fail' } };
@@ -426,8 +437,12 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     const name = nextName();
     store.add({ flowId: built.flowId, name, rung: 'asks first', sentence: built.job, madeAt: now(), rungAt: now(), askedAt: 0, toldRun: '' });
     log('[notch] something the assistant built was made an agent, and asks first');
-    return { parts: ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], ms: 7000, extras: { mood: 'proud', mark: 'check' } };
+    return { parts: ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], ms: 7000, extras: { mood: 'proud', mark: 'check' }, born: true };
   }
+
+  /** Says what switching on came to: the new agent is met, or why it could not be switched on. */
+  const saySwitched = (stage: NotchStage, said: ReturnType<typeof switchOn>): Promise<void> =>
+    (said.born ? meet(stage, said.parts, said.ms, said.extras) : stage.say(said.parts, said.ms, said.extras));
 
   function adopt(since: number): void {
     if (stopped) return;
@@ -450,7 +465,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     if (built.enabled) {
       const said = switchOn(built);
       deps.inbox.add({ id, subject: id, class: 'person', speaks: true, once: true, asked: true, title: () => said.parts,
-        play: async (stage) => { await stage.say(said.parts, said.ms, said.extras); return 'settled'; } });
+        play: async (stage) => { await saySwitched(stage, said); return 'settled'; } });
       return;
     }
     const line: NotchPart[] = ['Switch ', em(built.job), ' on as an agent?'];
@@ -465,7 +480,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         if (answer.act !== 'yes') return 'settled';
         if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'waits'; }
         const said = switchOn(built);
-        await stage.say(said.parts, said.ms, said.extras);
+        await saySwitched(stage, said);
         return 'settled';
       },
     });
@@ -516,7 +531,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         }
         if (!draft.enabled && !draft.ready) continue;
         const said = switchOn(draft);
-        await stage.say(said.parts, said.ms, said.extras);
+        await saySwitched(stage, said);
         return;
       }
       const agent = list.find((one) => one.flowId === answer.row);

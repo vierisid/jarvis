@@ -8,7 +8,7 @@
  * and ends all of them at once when something else takes the notch.
  */
 import type { NotchAnswer, NotchSurface } from './surface.ts';
-import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart } from './protocol.ts';
+import type { NotchAnswerAct, NotchArrival, NotchBlock, NotchLine, NotchPart } from './protocol.ts';
 
 /** Thrown inside a script when its stage has ended: something else took the notch. */
 export class NotchStageEnded extends Error {}
@@ -23,10 +23,41 @@ export const realNotchClock: NotchClock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-export type NotchLineExtras = Partial<Pick<NotchLine, 'mood' | 'mark' | 'who' | 'src' | 'arrive'>>;
+export type NotchLineExtras = Partial<Pick<NotchLine, 'mood' | 'mark' | 'who' | 'src' | 'arrive'>> & {
+  /**
+   * How the line comes in along the edge when it comes by itself, where that
+   * is not the usual way for such a line (./stage.ts `notchArrival`). Unlike
+   * `arrive` it does nothing for a line that was asked for: in a round, or
+   * opened from the count, the same line is just there.
+   */
+  comes?: NotchArrival;
+};
 
 /** How long past its time a line is waited for before the script goes on without the page's word. */
 const LATE = 1500;
+
+/** The apps whose things come from the left of the notch. The rest come from the right. */
+const FROM_LEFT: ReadonlySet<string> = new Set(['desk', 'mail', 'sheets', 'pay', 'cal']);
+
+/**
+ * How a line that Jarvis brings by itself comes in along the top edge of the
+ * screen (the prototype's `arriveFrom`): the eyes turn to that side, a bump
+ * of the notch's own ink runs in and is swallowed, and then it is said.
+ *
+ *   - something that went wrong, or cannot wait: two, fast;
+ *   - an agent speaking: it comes hopping;
+ *   - anything else: from the side its app is on, and from the left when it
+ *     is about no app.
+ *
+ * A line somebody asked for is not brought: it is the answer, and is just
+ * there. So this is only ever used for the first line of a script that
+ * started by itself (`unasked`).
+ */
+export function notchArrival(line: Pick<NotchLine, 'mood' | 'mark' | 'who' | 'src'>): NotchArrival {
+  if (line.mood === 'urgent' || line.mark === 'fail') return 'urgent';
+  if (line.who) return 'hop';
+  return line.src && !FROM_LEFT.has(line.src) ? 'right' : 'left';
+}
 
 export class NotchStage {
   private n = 0;
@@ -104,11 +135,14 @@ export class NotchStage {
   }
 
   /** Puts a line of this script on the notch. A stage that has ended shows nothing. */
-  put(line: NotchLine): void {
+  put(given: NotchLine & { comes?: NotchArrival }): void {
     if (this.stopped) throw new NotchStageEnded();
+    const { comes, ...rest } = given;
+    const line = rest as NotchLine;
     if (this.unasked) {
       this.unasked = false;
-      this.surface.show({ ...line, unasked: true });
+      // It came by itself: it comes in along the edge, and takes no yes for its first moment.
+      this.surface.show({ ...line, unasked: true, arrive: line.arrive ?? comes ?? notchArrival(line) });
       return;
     }
     this.surface.show(line);

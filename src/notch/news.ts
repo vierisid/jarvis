@@ -58,7 +58,8 @@ export function attachNotchNews(inbox: NotchInbox, deps: NotchNewsDeps = {}): No
     id, subject: id, class: 'rest', speaks: true, once: true,
     title: () => say,
     play: async (stage) => {
-      await stage.say(say, ms, ok ? { mood: 'happy', mark: 'check' } : { mood: 'worried', mark: 'fail' });
+      // What an agent finished comes hopping along the edge; what went wrong comes fast, twice.
+      await stage.say(say, ms, ok ? { mood: 'happy', mark: 'check', comes: 'hop' } : { mood: 'worried', mark: 'fail' });
       return 'settled';
     },
   });

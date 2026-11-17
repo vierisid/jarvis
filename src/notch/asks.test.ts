@@ -1222,3 +1222,29 @@ describe('Home, with jobs in it (pass 10)', () => {
     expect(undone).toEqual(['abc']);
   });
 });
+
+describe('pass 12: what was said is seen to land', () => {
+  test('it nods as it takes the words, and shakes when nothing was made out', async () => {
+    let nods = 0;
+    const h = harness({ deps: { nod: () => { nods++; } } });
+    h.asks.listen('t1');
+    h.asks.released('t1');
+    h.asks.words('t1', 'what is two plus two');
+    expect(nods).toBe(1);
+    expect(h.shakes()).toBe(0);
+    h.asks.listen('t2');
+    h.asks.released('t2');
+    h.asks.nothing('t2', 'silence');
+    expect(nods).toBe(1);
+    expect(h.shakes()).toBe(1);
+  });
+
+  test('words that were cut short are asked about first: no nod for those', async () => {
+    let nods = 0;
+    const h = harness({ deps: { nod: () => { nods++; } } });
+    h.asks.listen('t1');
+    h.asks.released('t1');
+    h.asks.words('t1', 'send the numbers to', { cut: true });
+    expect(nods).toBe(0);
+  });
+});

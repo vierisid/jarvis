@@ -842,6 +842,29 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		}
 		return &RPCResult{Result: map[string]any{"never": list}}, nil
 	})
+	// The two pairs of keys, from the notch's own settings: asked for with
+	// nothing, changed with a pair for talk, for yes, or both. They are this
+	// machine's, kept in its settings file, and a change holds at once: the
+	// keyboard watch and the hints on the notch follow it without a restart.
+	c.setConnHandler("notch.keys", func(params map[string]any) (*RPCResult, error) {
+		talk, _ := params["talk"].(string)
+		yes, _ := params["yes"].(string)
+		if talk != "" || yes != "" {
+			pairs, err := notchPairsWanted(notch.KeyPairs(), talk, yes)
+			if err != nil {
+				return nil, fmt.Errorf("notch.keys: %w", err)
+			}
+			if err := c.editConfig(func(cfg *SidecarConfig) {
+				cfg.Preferences.NotchTalkKeys = pairs.Talk.String()
+				cfg.Preferences.NotchYesKeys = pairs.Yes.String()
+			}); err != nil {
+				return nil, fmt.Errorf("notch.keys: the keys could not be saved: %w", err)
+			}
+			notch.SetKeyPairs(pairs)
+			log.Printf("[notch] keys changed from the notch: %s to talk, %s for yes", pairs.Talk, pairs.Yes)
+		}
+		return &RPCResult{Result: notchPairsAnswer(notch.KeyPairs(), runtime.GOOS)}, nil
+	})
 	// Bounded by sendUIEvent (#1160) and nothing else: not obsCtx, which the
 	// first update_config cancels (reloadConfig calls c.obsCancel, this
 	// connection's obsCancel), and which would then fail every tap, and

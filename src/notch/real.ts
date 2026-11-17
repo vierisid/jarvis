@@ -41,7 +41,7 @@ import { NotchQuiet, notchQuietHome } from './quiet.ts';
 import { NotchSettings } from './settings.ts';
 import { attachNotchSoon, type NotchSoon } from './soon.ts';
 import type { NotchClock } from './stage.ts';
-import type { NotchSurface } from './surface.ts';
+import { notchBirthAfter, type NotchSurface } from './surface.ts';
 import { attachNotchSuggestions } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
 import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
@@ -51,10 +51,27 @@ import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
 import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from './standing.ts';
 import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
+import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
+import { attachNotchMoves, type NotchMoves } from './moves.ts';
+import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps } from './prefs.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
   busy?: () => boolean;
+  /**
+   * The back office that fits in a sheet (pass 12): the product's memory with
+   * its own Forget, the keys of the machine a sheet is open on, what makes
+   * out speech, and what is connected.
+   */
+  office?: {
+    memory?: Pick<NotchMemoryDeps, 'list' | 'forget'>;
+    keys?: NotchPrefsDeps['keys'];
+    voice?: NotchPrefsDeps['voice'];
+    connections?: NotchPrefsDeps['connections'];
+    connect?: NotchPrefsDeps['connect'];
+    /** Opens the dashboard at one of its settings pages. */
+    openPage?: (sidecarId: string | null, page: 'voice' | 'llm' | 'integrations') => void;
+  };
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
@@ -200,6 +217,12 @@ export interface NotchReal {
   mail: NotchMailLayer | null;
   /** The person's quiet hours, when pass 8 is on. */
   quiet: NotchQuiet | null;
+  /** What is remembered, with forget (pass 12), when the brain was given its memory. */
+  memory: NotchMemory | null;
+  /** The notch's own settings and the connections (pass 12). */
+  prefs: NotchPrefs | null;
+  /** Every movement, playable by hand (pass 12). */
+  moves: NotchMoves | null;
   /** Whether the person is there, when pass 8 is on. */
   presence: NotchPresence | null;
   /** Calls and the connection, when a desktop app can tell. */
@@ -248,6 +271,16 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   // whether a line may come up; what they set off is made after it and reached through these.
   const dayNow = deps.day?.now ?? Date.now;
   const settings = deps.day ? new NotchSettings(deps.day.db) : null;
+  if (settings) {
+    // Every start is a different birth, never the same twice running, across restarts too.
+    surface.setBirths(() => {
+      const born = notchBirthAfter(settings.get<unknown>('birth', null));
+      settings.set('birth', born);
+      return born;
+    });
+    // Its small sounds are the person's own choice, and are kept.
+    surface.setSound(settings.get<unknown>('sound', false) === true);
+  }
   const quiet = settings ? new NotchQuiet(settings, dayNow) : null;
   let day: NotchDay | null = null;
   let calmed: () => void = () => {};
@@ -340,6 +373,26 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       agentsTimer.unref?.();
     }
   }
+  // The back office that fits in a sheet (pass 12): what is remembered, the notch's own settings,
+  // what is connected, and every movement, playable by hand. Reached from the foot of Home, and by saying so.
+  const office = deps.office;
+  const memory: NotchMemory | null = office?.memory ? attachNotchMemory({ inbox, list: office.memory.list, forget: office.memory.forget, log }) : null;
+  const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
+  const openPage = office?.openPage;
+  const prefs: NotchPrefs | null = settings ? attachNotchPrefs({
+    inbox, settings, log,
+    setSound: (on) => surface.setSound(on),
+    keys: office?.keys,
+    voice: office?.voice,
+    see: where ? (stage) => where.see(stage) : undefined,
+    moves: (stage) => moves.open(stage),
+    connections: office?.connections,
+    connect: office?.connect,
+    // A page of the dashboard when it can be opened at one, the dashboard itself when not.
+    openDashboard: openPage || deps.openDashboard
+      ? (sidecarId, page) => { if (page && openPage) openPage(sidecarId, page); else deps.openDashboard?.(sidecarId); }
+      : undefined,
+  }) : null;
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -355,7 +408,25 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // "Every Monday send Sam the numbers": an agent. An eye and a chase are asked before it,
       // because "tell me when" and "get Sam's answer" are theirs.
       // First of all: with a draft of a reply open, what is said is what that reply is to say.
-      side: (text) => mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text) ?? null,
+      // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
+      side: (text) => mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
+        ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? null,
+      // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
+      more: {
+        buttons: () => [
+          ...(memory ? [{ id: 'memory', label: 'Memory', quiet: true }] : []),
+          ...(prefs && office?.connections ? [{ id: 'connections', label: 'Connections', quiet: true }] : []),
+          ...(prefs ? [{ id: 'settings', label: 'Settings', quiet: true }] : []),
+          ...(deps.openDashboard ? [{ id: 'dashboard', label: 'Dashboard', quiet: true }] : []),
+        ],
+        press: async (stage, button) => {
+          if (button === 'memory' && memory) { await memory.open(stage); return 'stay'; }
+          if (button === 'connections' && prefs) { await prefs.connections(stage); return 'stay'; }
+          if (button === 'settings' && prefs) { await prefs.settings(stage); return 'stay'; }
+          if (button === 'dashboard' && deps.openDashboard) { deps.openDashboard(stage.from()); return 'leave'; }
+          return null;
+        },
+      },
       // What the assistant built in a turn is an agent like any other: switched on and named here.
       afterTurn: (since) => agents?.adopt(since),
       standing: {
@@ -372,6 +443,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // The instruction is over: what it was still asking for is asked no more.
       withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },
       attention: () => surface.act({ gesture: 'shake' }),
+      nod: () => surface.act({ gesture: 'nodg', kick: 240 }),
+      reach: (aim) => surface.act({ lip: 'reach', aim }),
       openDashboard: deps.openDashboard,
       today: () => notchTodayBlocks(notchToday(todayDeps)),
       see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
@@ -393,6 +466,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
         // What was shown is held for a while, and a place pointed at meanwhile is where it goes (pass 10).
         shown: put ? (sidecarId, looked) => put!.shown(sidecarId, looked) : undefined,
+        // The blink is the shutter, and what was circled is swallowed.
+        seen: () => surface.act({ gesture: 'blink', kick: 230 }),
         log,
       });
     }
@@ -536,7 +611,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
 
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
-    jobs, catcher, teach, put,
+    jobs, catcher, teach, put, memory, prefs, moves,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);

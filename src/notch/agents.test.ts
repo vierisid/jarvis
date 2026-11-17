@@ -16,8 +16,9 @@ type Built = Awaited<ReturnType<NotchAgentWorkflows['build']>>;
 
 function harness(options: { build?: (sentence: string) => Built | Promise<Built>; enable?: { ok: false; why: string }; paused?: () => boolean; db?: Database } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+  const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
-    dispatchRPC(_sidecarId, _method, _params) { void (_params as { message: NotchToPage }); return Promise.resolve({}); },
+    dispatchRPC(_sidecarId, _method, _params) { pushed.push((_params as { message: NotchToPage }).message); return Promise.resolve({}); },
     onEvent(listener) { toSurface = listener; },
     onSidecarDisconnected() {},
   };
@@ -95,7 +96,9 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   };
   /** A yes at rest: the first thing that waits is opened. */
   const opens = async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); };
-  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, advance: (ms: number) => { now += ms; } };
+  /** What the notch was asked to do with its face and body, in order. */
+  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, advance: (ms: number) => { now += ms; } };
 }
 
 describe('a sentence that asks for an agent', () => {
@@ -593,5 +596,34 @@ describe('what the assistant builds is an agent like any other', () => {
     await h.reply('yes'); note();
     expect(seen.length).toBeGreaterThan(3);
     expect(seen.join(' ').toLowerCase()).not.toContain('workflow');
+  });
+});
+
+describe('pass 12: a new agent is met the way the prototype met it', () => {
+  test('a wink as it is named, and a moment later a piece of the notch buds off and hops away', async () => {
+    const h = harness();
+    await h.speak('Every Monday at 9, send Sam the numbers');
+    await h.reply('yes');
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.acts()).toEqual([{ gesture: 'wink' }]);
+    await h.pass(700);
+    expect(h.acts()).toEqual([{ gesture: 'wink' }, { edge: 'bud' }]);
+  });
+
+  test('one that is switched on from the list is met the same way; one that cannot be switched on is not', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    await h.speak('my agents');
+    await h.reply('button', { row: built.flowId, button: 'on' });
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    await h.pass(700);
+    expect(h.acts()).toEqual([{ gesture: 'wink' }, { edge: 'bud' }]);
+
+    const no = harness({ enable: { ok: false, why: 'the trigger could not be set' } });
+    const stuck = no.assistantBuilds('Daily AI news briefing');
+    await no.speak('my agents');
+    await no.reply('button', { row: stuck.flowId, button: 'on' });
+    await no.pass(700);
+    expect(no.acts()).toEqual([]);
   });
 });
