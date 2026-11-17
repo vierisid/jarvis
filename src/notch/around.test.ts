@@ -280,3 +280,33 @@ describe('the connection', () => {
     expect(h.line()).toBeNull();
   });
 });
+
+describe('pass 12: after a call', () => {
+  test('what waited on the edge is pulled in and it stretches awake', async () => {
+    const h = harness();
+    await h.tell({ call: true });
+    await h.pass(NOTCH_CALL_AFTER_MS);
+    await h.answer('done');
+    h.inbox.add(h.item('mail'));
+    await h.pass(2100);
+    await h.tell({ call: false });
+    await h.pass(60_000);
+    const acts = h.pushed.filter((m) => m.type === 'act');
+    expect(acts.some((m) => m.type === 'act' && m.park === 0 && m.gesture === 'wake')).toBe(true);
+  });
+
+  test('with its eyes closed it does not: waking would open them', async () => {
+    const h = harness();
+    await h.tell({ call: true });
+    await h.pass(NOTCH_CALL_AFTER_MS);
+    await h.answer('done');
+    h.inbox.add(h.item('mail'));
+    await h.pass(2100);
+    h.surface.setFace('closed');
+    await h.tell({ call: false });
+    await h.pass(60_000);
+    const acts = h.pushed.filter((m) => m.type === 'act');
+    expect(acts.some((m) => m.type === 'act' && m.gesture === 'wake')).toBe(false);
+    expect(acts.some((m) => m.type === 'act' && m.park === 0)).toBe(true);
+  });
+});

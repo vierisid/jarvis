@@ -12,7 +12,7 @@
  * See docs/notch/README.md and ./protocol.ts.
  */
 import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, notchWhereApp, parseNotchFromPage } from './protocol.ts';
-import type { NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp } from './protocol.ts';
+import type { NotchBirth, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp } from './protocol.ts';
 
 /** The desktop app event that carries one message from the page. */
 export const NOTCH_MESSAGE_EVENT = 'notch.message';
@@ -34,6 +34,8 @@ export class NotchSurface {
   private face: NotchMood = 'idle';
   private where: NotchWhereApp | null = null;
   private eye = false;
+  private sound = false;
+  private nextBirth: (() => NotchBirth) | null = null;
   /** Desktop apps whose page has said hello on its present connection. */
   private readonly pages = new Set<string>();
   /** Desktop apps whose page has been seen at all since the brain started. */
@@ -84,6 +86,11 @@ export class NotchSurface {
     this.push({ type: 'face', mood });
   }
 
+  /** The face the notch has at rest now. */
+  resting(): NotchMood {
+    return this.face;
+  }
+
   /** The app in front, for the icon at rest. It is kept, like the face. Null takes the icon away. */
   setWhere(app: NotchWhereApp | null): void {
     const next = app ? notchWhereApp(app) : null;
@@ -101,6 +108,25 @@ export class NotchSurface {
     if (on === this.eye) return;
     this.eye = on;
     this.push({ type: 'act', eye: on });
+  }
+
+  /**
+   * Whether the notch makes its small sounds. The person's own choice
+   * (./home.ts keeps it): kept here like the face, so a page that comes back
+   * is as loud as it was.
+   */
+  setSound(on: boolean): void {
+    if (on === this.sound) return;
+    this.sound = on;
+    this.push({ type: 'act', sound: on });
+  }
+
+  /**
+   * How the notch is born the next time a page first appears. Without this
+   * the six ways are gone through in order from the first.
+   */
+  setBirths(next: () => NotchBirth): void {
+    this.nextBirth = next;
   }
 
   /** Changes the line on the notch. Ignored unless `id` is that line. */
@@ -174,10 +200,13 @@ export class NotchSurface {
       if (this.face !== 'idle') state.face = this.face;
       if (this.where) state.where = this.where;
       if (this.eye) state.eye = true;
+      if (this.sound) state.sound = true;
       // The first time a page appears with nothing to say, the notch is born.
       // A page that comes back, or comes up in the middle of a line, just is.
       if (!this.met.has(sidecarId) && !this.line) {
-        state.born = NOTCH_BIRTHS[this.births++ % NOTCH_BIRTHS.length];
+        let born: NotchBirth | undefined;
+        try { born = this.nextBirth?.(); } catch { born = undefined; }
+        state.born = born && (NOTCH_BIRTHS as readonly string[]).includes(born) ? born : NOTCH_BIRTHS[this.births++ % NOTCH_BIRTHS.length];
       }
       this.met.add(sidecarId);
       this.push(state, sidecarId);
@@ -219,6 +248,17 @@ export class NotchSurface {
       });
     }
   }
+}
+
+/**
+ * A birth that is not the one before it: "every start is a different birth,
+ * never the same twice", so starting Jarvis does not get old (the
+ * prototype's `anyBirth`). `last` is the one before, as it was kept;
+ * `random` is a number from 0 up to 1.
+ */
+export function notchBirthAfter(last: unknown, random: () => number = Math.random): NotchBirth {
+  const others = NOTCH_BIRTHS.filter((birth) => birth !== last);
+  return others[Math.min(others.length - 1, Math.max(0, Math.floor(random() * others.length)))]!;
 }
 
 /** Sets a lit word's value wherever it stands in the line. */

@@ -395,7 +395,8 @@ export class NotchInbox {
     if (this.surface.current().line) return;
     if (this.opener?.()) return;
     if (this.holds.size > 0) return;
-    if (this.entries.length > 0 && this.next({ seen: new Set() })) return;
+    // A round begins: the yes is seen, as a yes on a line is.
+    if (this.entries.length > 0 && this.next({ seen: new Set() })) { this.surface.act({ gesture: 'nodg', kick: 240 }); return; }
     const home = this.options.home;
     if (home) this.present('home', home);
   }

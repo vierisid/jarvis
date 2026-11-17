@@ -369,6 +369,8 @@ export interface NotchLookDeps {
    * neither answers nor goes with any words.
    */
   shown?: (sidecarId: string, looked: NotchLooked) => boolean;
+  /** A look was taken and read: the notch blinks, as a shutter does, and swallows it. */
+  seen?: () => void;
   now?: () => number;
   graceMs?: number;
   takeMs?: number;
@@ -555,6 +557,7 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
       id, how, refused, app: body?.app ?? '', title: body?.title ?? '', around: body?.around ?? [], things: body?.things ?? [],
       picture: body?.picture ?? null, window: body?.window ?? null, ...(place ? { at: place } : {}),
     };
+    if (!refused) { try { deps.seen?.(); } catch { /* a sign, and nothing depends on it */ } }
     let taken = false;
     try { taken = deps.shown?.(sidecarId, look.looked) === true; } catch (error) {
       log(`[notch] a look could not be held: ${error instanceof Error ? error.message : String(error)}`);

@@ -507,7 +507,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     deps.inbox.add({
       id, subject: id, class: 'person', speaks: true, once: true,
       title: () => parts,
-      play: async (stage) => { await stage.say(parts, 4600, { mood: 'proud', mark: 'check', src: 'mail' }); return 'settled'; },
+      play: async (stage) => { stage.surface.act({ kick: 220 }); await stage.say(parts, 4600, { mood: 'proud', mark: 'check', src: 'mail' }); return 'settled'; },
     });
   }
 
@@ -528,6 +528,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       title: () => head,
       check: () => store.chase(chase.id)?.state === 'stuck',
       play: async (stage) => {
+        stage.surface.act({ kick: 200 });
         const pick = await stage.choose(head, options, { fold: 0, mood: 'worried' });
         if (pick.act !== 'pick' || !pick.option) return 'waits';
         const fresh = store.chase(chase.id);

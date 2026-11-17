@@ -83,6 +83,8 @@ describe('the morning line', () => {
     await settle();
     expect(h.said()).toBe('Morning. 2 things done overnight. 3 need you.');
     expect(h.line()).toMatchObject({ kind: 'offer', yes: 'show' });
+    // Pass 12: it tells of several things, so it comes in from both sides at once.
+    expect(h.line()).toMatchObject({ arrive: 'pair', unasked: true });
     // Counted from when they left, to now.
     expect(h.state.asked.at(-1)).toEqual([NINE - 14 * 60 * MIN, NINE]);
     // The replies it counted have been told of: they do not each speak up after it.

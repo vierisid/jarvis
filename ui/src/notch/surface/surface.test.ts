@@ -722,3 +722,176 @@ describe('pass 6 on the page: where you are, beside the eyes', () => {
     expect(shown()).toBe(false);
   });
 });
+
+describe('pass 12 on the page: the movements of the prototype, played for real', () => {
+  // These need motion: the tests above run with it reduced.
+  let moving: NotchSurface, stage: HTMLElement, told: NotchFromPage[];
+  const m = <T extends Element = HTMLElement>(selector: string): T | null => stage.querySelector<T>(selector);
+  const bumps = (): number => stage.querySelectorAll('.line .bumps path').length;
+  beforeEach(() => {
+    stage = document.createElement('div');
+    document.body.append(stage);
+    told = [];
+    moving = createNotchSurface(stage, (message) => told.push(message), { reducedMotion: false });
+    moving.receive({ type: 'state', line: null, count: 0 });
+  });
+  afterEach(() => { moving.destroy(); stage.remove(); });
+
+  test('a yes is seen: the eyes nod as it is given', () => {
+    moving.receive({ type: 'show', line: { id: 'o', kind: 'offer', say: ['Reply?'], yes: 'send' } });
+    expect(m('.eyes')!.classList.contains('nodg')).toBe(false);
+    stage.querySelector<HTMLElement>('.hint .key')!.click();
+    expect(told).toEqual([{ type: 'answer', id: 'o', act: 'yes' }]);
+    expect(m('.eyes')!.classList.contains('nodg')).toBe(true);
+  });
+
+  test('a pick nods too, and a no shakes', () => {
+    moving.receive({ type: 'show', line: { id: 'c', kind: 'offer', say: ['Which?'], options: ['Friday', 'Monday'] } });
+    stage.querySelector<HTMLElement>('.opts .btn')!.click();
+    expect(m('.eyes')!.classList.contains('nodg')).toBe(true);
+    moving.receive({ type: 'show', line: { id: 'o', kind: 'offer', say: ['Reply?'], yes: 'send' } });
+    moving.key('esc');
+    expect(m('.eyes')!.classList.contains('shake')).toBe(true);
+  });
+
+  test('a wink is one of the eyes\' own movements', () => {
+    moving.receive({ type: 'act', gesture: 'wink' });
+    expect(m('.eyes')!.classList.contains('wink')).toBe(true);
+  });
+
+  test('something leaves along the edge at once, and a new agent buds off a moment after the notch swells', async () => {
+    moving.receive({ type: 'act', edge: 'depart', side: 'right' });
+    expect(bumps()).toBe(1);
+    moving.receive({ type: 'act', edge: 'bud' });
+    expect(bumps()).toBe(1);
+    await wait(300);
+    expect(bumps()).toBeGreaterThanOrEqual(1);
+  });
+
+  test('a line that tells of several things comes in from both sides, and is said when they land', async () => {
+    moving.receive({ type: 'show', line: { id: 'p', kind: 'say', say: ['Two things.'], ms: 4000, arrive: 'pair' } });
+    // Not said yet: it is still on its way along the edge.
+    expect(m('.nin')!.dataset.body).toBe('rest');
+    expect(bumps()).toBe(2);
+    await wait(1100);
+    expect(m('.nin')!.dataset.body).toBe('line');
+    expect(bumps()).toBe(0);
+  });
+
+  test('a way of arriving the page does not know is no reason to hold the line back', () => {
+    moving.receive({ type: 'show', line: { id: 'x', kind: 'say', say: ['Here.'], ms: 4000, arrive: 'teleport' as 'left' } });
+    expect(m('.nin')!.dataset.body).toBe('line');
+    expect(bumps()).toBe(0);
+  });
+
+  test('it ducks out of the way only at rest, and what it shows is unseen while it is down', () => {
+    moving.receive({ type: 'act', body: 'duck' });
+    expect(m('.nin')!.style.opacity).toBe('0');
+  });
+
+  test('with a line up it does not duck: the line stays readable', () => {
+    moving.receive({ type: 'show', line: { id: 'o', kind: 'offer', say: ['Reply?'], yes: 'send' } });
+    moving.receive({ type: 'act', body: 'duck' });
+    expect(m('.nin')!.style.opacity).toBe('');
+  });
+
+  test('a nod, two hops, a kick and a reach with nonsense for numbers do not break it', () => {
+    for (const act of [{ body: 'nod' }, { body: 'hops' }, { kick: 9e9 }, { kick: Number.NaN }, { lip: 'reach', aim: -4 }, { lip: 'reach', aim: 'left' }, { edge: 'carry', side: 'right' }, { edge: 'fly' }, { body: 'dance' }]) {
+      moving.receive({ type: 'act', ...act } as never);
+    }
+    moving.receive({ type: 'show', line: { id: 's', kind: 'say', say: ['Still here.'], ms: 4000 } });
+    expect(m('.nin')!.dataset.body).toBe('line');
+  });
+});
+
+describe('pass 12 on the page: day one, the map and a row that is gone', () => {
+  test('a row that is gone is drawn struck through', () => {
+    show({ id: 'm', kind: 'sheet', say: ['What I remember'], blocks: [
+      { kind: 'row', id: 'f1', lead: 'Sam', say: ['prefers calls'], small: 'forgotten', gone: true },
+      { kind: 'row', id: 'f2', lead: 'Anna', say: ['works at Northwind'], buttons: [{ id: 'forget', label: 'Forget', quiet: true }] },
+    ] });
+    const rows = all('.sheet .row');
+    expect(rows[0]!.classList.contains('gone')).toBe(true);
+    expect(rows[1]!.classList.contains('gone')).toBe(false);
+  });
+
+  test('where in a sequence a line is, is said in small words after its keys', () => {
+    show({ id: 'd', kind: 'offer', say: ['Say hello?'], yes: 'hello', step: 'step 1/11' });
+    expect($('.hint .count')?.textContent).toBe('step 1/11');
+    show({ id: 'e', kind: 'offer', say: ['Reply?'], yes: 'send' });
+    expect($('.hint .count')).toBeNull();
+  });
+
+  test('a line that shows only Esc tells a yes to the brain and stays, for the brain to answer it there', async () => {
+    show({ id: 'd', kind: 'offer', say: ['For not now, press esc. Try it.'], keys: 'esc' });
+    expect(all('.hint .key').map((key) => key.textContent)).toEqual(['escnot now']);
+    // A yes cannot land in the first moment of any line.
+    await wait(400);
+    surface.key('yes');
+    surface.key('yes');
+    // Told each time, and never settled: Esc still answers it.
+    expect(sent).toEqual([{ type: 'answer', id: 'd', act: 'yes' }, { type: 'answer', id: 'd', act: 'yes' }]);
+    expect($('.nin')?.classList.contains('answered')).toBe(false);
+    surface.key('esc');
+    expect(sent.at(-1)).toEqual({ type: 'answer', id: 'd', act: 'no' });
+  });
+
+  test('a line that is answered by talking shows the pair that is held, with its word', () => {
+    show({ id: 'd', kind: 'offer', say: ['Now tell me what you do. Out loud.'], yes: 'hold and talk', keys: 'talk' });
+    const keys = all('.hint .key');
+    expect(keys[0]!.querySelector('.duo.talk')).not.toBeNull();
+    expect(keys[0]!.textContent).toContain('hold and talk');
+  });
+
+  const MAP = {
+    kind: 'map' as const,
+    nodes: [
+      { id: 'you', label: 'You', x: 222, y: 104, kind: 'me' as const },
+      { id: 'gmail', label: 'Gmail', x: 222, y: 28, kind: 'tool' as const },
+      { id: 'sam', label: 'Sam', x: 128, y: 58, kind: 'person' as const },
+    ],
+    links: [['you', 'gmail'], ['gmail', 'sam'], ['you', 'nobody']] as [string, string][],
+    sources: [{ name: 'Gmail', found: '12 people', state: 'done' as const }, { name: 'Calendar', state: 'on' as const }, { name: 'Memory' }],
+  };
+
+  test('the map draws a dot and a name for each thing, a line between two that are both there, and a chip for each place read', () => {
+    show({ id: 'scan', kind: 'sheet', say: ['Looking around'], blocks: [MAP] });
+    expect(all('.map g g text').map((t) => t.textContent)).toEqual(['You', 'Gmail', 'Sam']);
+    expect(root.querySelectorAll('.map circle').length).toBe(3);
+    // The link to something that is not on the map is not drawn.
+    expect(root.querySelectorAll('.map line').length).toBe(2);
+    expect(root.querySelector('.map .me circle')?.getAttribute('r')).toBe('5');
+    expect(all('.srcs .src').map((chip) => `${chip.className}|${chip.textContent}`)).toEqual(['src on done|Gmail12 people', 'src on|Calendar', 'src|Memory']);
+  });
+
+  test('sent again with more in it, what was already drawn stays still and only the new comes in', () => {
+    // Motion on: with it reduced nothing comes in at all.
+    const stage = document.createElement('div');
+    document.body.append(stage);
+    const moving = createNotchSurface(stage, () => {}, { reducedMotion: false });
+    moving.receive({ type: 'state', line: null, count: 0 });
+    moving.receive({ type: 'show', line: { id: 'scan', kind: 'sheet', say: ['Looking around'], blocks: [{ ...MAP, nodes: MAP.nodes.slice(0, 2), links: [['you', 'gmail']] }] } });
+    // The sheet that is up, not the one that is fading away under it.
+    const was = (): string[] => [...stage.querySelectorAll('.sheet:not(.ghostly) .map g g')].map((g) => g.getAttribute('class') ?? '');
+    expect(was()).toEqual(['me', 'tool']);
+    moving.receive({ type: 'update', id: 'scan', blocks: [MAP] });
+    expect(was()).toEqual(['me was', 'tool was', 'person']);
+    expect([...stage.querySelectorAll('.sheet:not(.ghostly) .map line')].map((line) => line.getAttribute('class'))).toEqual(['was', null]);
+    // Another line: its map starts from nothing.
+    moving.receive({ type: 'show', line: { id: 'scan2', kind: 'sheet', say: ['Looking around'], blocks: [MAP] } });
+    expect(was()).toEqual(['me', 'tool', 'person']);
+    moving.destroy();
+    stage.remove();
+  });
+
+  test('a map made of nonsense draws what it can and breaks nothing', () => {
+    show({ id: 'bad', kind: 'sheet', say: ['Looking around'], blocks: [{
+      kind: 'map', nodes: [{ id: 'a', label: '<img src=x onerror=alert(1)>', x: 9e9, y: Number.NaN, kind: 'spaceship' }, null, { id: 7 }], links: 'none', sources: [null, { name: 4 }],
+    } as never] });
+    expect(all('.map g g text').map((t) => t.textContent)).toEqual(['<img src=x onerror=alert(1)>']);
+    expect(root.querySelector('.map img')).toBeNull();
+    // A kind it does not know is a thing. (Motion is reduced in these tests: nothing comes in, so it "was" there.)
+    expect(root.querySelector('.map g g')?.getAttribute('class')).toBe('thing was');
+    expect(body()).toBe('sheet');
+  });
+});

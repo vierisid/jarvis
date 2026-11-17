@@ -88,6 +88,43 @@ func notchParsePair(text string) (notchPair, error) {
 	return pair, nil
 }
 
+// notchPairsWanted is the two pairs after a change that names one of them, or
+// both. One that is not named stays as it is. Each must be two different
+// modifier keys, and the two pairs cannot be the same two keys: a tap would
+// then be a yes and the start of talking at once.
+func notchPairsWanted(now notchKeyPairs, talk, yes string) (notchKeyPairs, error) {
+	pairs := now
+	if talk != "" {
+		t, err := notchParsePair(talk)
+		if err != nil {
+			return now, fmt.Errorf("the talk keys: %v", err)
+		}
+		pairs.Talk = t
+	}
+	if yes != "" {
+		y, err := notchParsePair(yes)
+		if err != nil {
+			return now, fmt.Errorf("the yes keys: %v", err)
+		}
+		pairs.Yes = y
+	}
+	if !pairs.valid() {
+		return now, fmt.Errorf("talk and yes cannot be the same two keys")
+	}
+	return pairs, nil
+}
+
+// notchPairsAnswer is the pairs as the brain is told them: the names of the
+// two keys of each, and whether this is a Mac, where they are called and
+// drawn differently.
+func notchPairsAnswer(pairs notchKeyPairs, goos string) map[string]any {
+	return map[string]any{
+		"talk": []string{notchModName(pairs.Talk[0]), notchModName(pairs.Talk[1])},
+		"yes":  []string{notchModName(pairs.Yes[0]), notchModName(pairs.Yes[1])},
+		"mac":  goos == "darwin",
+	}
+}
+
 // String writes a pair the way notchParsePair reads it.
 func (p notchPair) String() string {
 	return notchModName(p[0]) + "+" + notchModName(p[1])
