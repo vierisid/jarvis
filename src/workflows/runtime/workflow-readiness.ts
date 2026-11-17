@@ -261,7 +261,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       issue(node, path, 'LIMIT', 'Property schema validation exceeds its traversal budget'); return;
     }
     if (!object(schema)) {
-      issue(node, path, 'UNRESOLVED_CHECK', 'Jarvis could not prepare this field for the current settings. Save the step again after choosing its options (for example the authentication or body type). If it still cannot be published, this field is not supported yet: clear it.');
+      issue(node, path, 'UNRESOLVED_CHECK', 'Jarvis could not prepare this field for the current settings. Save the step again after choosing its options (for example the authentication or body type). If it still cannot be turned on, this field is not supported yet: clear it.');
       return;
     }
     const resolved = value === UNKNOWN_INPUT ? { known: false, value } : staticInput(value);
@@ -605,7 +605,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
       if (!role.known || typeof role.value !== 'string' || !context.roles?.().has(role.value)) issue(node, 'settings.input.role', 'ROLE_BINDING', 'Select an existing specialist role before activation');
     }
     if (root && pieceName === '@activepieces/piece-schedule' && settings.triggerName === 'cron_expression') {
-      if (emptyInput(input?.cronExpression)) needsSetup(node,'settings.input.cronExpression','Choose the schedule execution time before publishing or running');
+      if (emptyInput(input?.cronExpression)) needsSetup(node,'settings.input.cronExpression','Choose the schedule execution time before turning it on or running it');
       else try {
         if (typeof input?.cronExpression !== 'string') throw new Error('Schedule requires a static cron expression');
         validateCronExpression(input.cronExpression);
@@ -627,7 +627,7 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         try { validateCronDstPolicy(input?.dst_policy); }
         catch (error) { issue(node, 'settings.input.dst_policy', 'DST_POLICY', (error as Error).message); }
         const cron = input?.cron_expression || input?.cronExpression || input?.expression;
-        if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before publishing or running');
+        if (emptyInput(cron)) needsSetup(node,'settings.input.cron_expression','Choose the schedule execution time before turning it on or running it');
         else try {
           if (typeof cron !== 'string') throw new Error('Schedule requires a static cron expression');
           validateCronExpression(cron);
