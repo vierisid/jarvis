@@ -329,7 +329,9 @@ describe('LLM output contract through the real engine', () => {
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
+    // A short kill grace: each run's engine is released after the run has persisted, and the
+    // default 2s grace makes every release wait ~1.6s for a shutdown flush nothing here needs.
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, killGraceMs: 200 });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
