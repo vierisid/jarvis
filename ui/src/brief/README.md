@@ -773,7 +773,10 @@ actions only change local fixture state.
 - One count: `host/needs-you.tsx` `needsYouCount` (document decisions with an action, other queued rows
   still asking, workflow input requests, and `listedNoticeCount`: the unread notification rows the room
   lists from the same snapshot, saved workflow reminders included, plus voice confirmation cards) feeds
-  Today's request count, the sidebar badge and the room heading. Read notices are history and not counted;
+  Today's request count, Today's setup all-clear line, the sidebar badge and the room heading, read from one
+  poll of the other decisions. The all-clear reads `settledNeedsYouCount`: the same number, but null until the
+  documents, other decisions, input requests and notices have all been read, so "Nothing needs you" is never
+  shown by default. While Jarvis cannot be reached, the badge and Today's count are hidden. Read notices are history and not counted;
   a pending approval listed there (decisions off) counts until it resolves. A disconnected list shows
   nothing and counts nothing. A held-runs note (`kind: 'held'`) is never counted. Approved rows waiting to run or running (`awaiting_execution`, `in_flight`) are not counted and
   show in an "In progress" group. Card titles never show raw tool ids (`plainDecisionTitle`). Workflow

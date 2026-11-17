@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, afterEach, afterAll, expect, mock, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { HostDescriptor } from './owner';
+import { GETTING_STARTED_IDS } from '../../../../src/brief/getting-started-contract';
 
 const self: HostDescriptor = { schemaVersion: 1, scopeId: 'project', workspaceId: 'workspace', generation: 'boot', installMode: 'self',
   dashboard: 'legacy', capabilities: { contractVersion: 1, capabilities: {} } };
@@ -208,4 +209,53 @@ test('Retry reconnects the socket at once, and a socket that comes back first ne
   await settle();
   expect(element.textContent).not.toContain('Jarvis is not reachable');
   expect(element.textContent).not.toContain('Emergency status is unavailable');
+}, 15000);
+
+const ready = { supported: true, ready: true, enabled: true, state: 'ready', reason: null };
+const withSetup: HostDescriptor = { ...hosted, capabilities: { contractVersion: 1, asOf: 1, capabilities: {
+  reconciliation: ready, decisions: ready, profileSettings: ready, navigationCompatibility: ready } } };
+test('Today\'s request count, its all-clear line and the sidebar badge are one count', async () => {
+  sockets = []; globalThis.WebSocket = ControlledSocket as never;
+  let inputs: 'ok' | 'down' = 'down';
+  // One asking permission, one approved and waiting to run, and one held-runs note: only the first asks anything.
+  const rows = [{ decisionId: 'approval:a', revision: 'r1', title: 'Send report', state: 'pending', kind: 'permission', supportedActions: ['approve_permission'] },
+    { decisionId: 'approval:b', revision: 'r1', title: 'Post update', state: 'awaiting_execution', kind: 'permission', supportedActions: [] },
+    { decisionId: 'held:f', revision: 'r1', title: 'Held runs', state: 'pending', kind: 'held', supportedActions: [] }];
+  globalThis.fetch = (async (path: RequestInfo | URL) => {
+    const url = String(path); calls.push(url);
+    if (url === '/api/brief/host') return Response.json(withSetup);
+    if (url === '/api/onboarding/status') return Response.json({ setup_completed: true, profile_completed: true, tutorial_completed: true });
+    if (url === '/api/authority/status') return Response.json({ enabled: true, emergency_state: 'normal' });
+    if (url === '/api/brief/getting-started') return Response.json({ revision: 1, completed: GETTING_STARTED_IDS, hidden: false });
+    if (url === '/api/brief/decisions?limit=50') return Response.json({ state: 'ready', data: { items: rows, nextCursor: null } });
+    const doc = /^\/api\/brief\/decisions\/([^/]+)\/document$/.exec(url);
+    if (doc) { const row = rows.find(r => r.decisionId === decodeURIComponent(doc[1]!))!; return Response.json({ decision: { ...row, actions: [] }, actions: [], document: null }); }
+    if (url === '/api/workflow-inputs?limit=50') return inputs === 'ok' ? Response.json({ requests: [{ id: 'r1', status: 'pending' }], pendingTotal: 1 }) : new Response('down', { status: 500 });
+    // A reminder a workflow saved while no dashboard was open.
+    if (url === '/api/dashboard-notifications') return Response.json({ notifications: [{ id: 'n1', message: '**Stand-up**\nStart at 9:00', priority: 'urgent', created_at: 1000 }] });
+    return new Response(null, { status: 404 });
+  }) as typeof fetch;
+  const settle = () => React.act(async () => { await new Promise(r => setTimeout(r, 30)); });
+  const until = async (done: () => boolean) => { for (let i = 0; i < 100 && !done(); i++) await settle(); return done(); };
+  const text = () => element.textContent ?? '';
+  const badge = () => element.querySelector('.brief-nav-count[data-attention="true"]')?.textContent ?? '';
+  const expand = async () => { const more = [...element.querySelectorAll('button')].find(b => b.textContent?.includes('Continue setting up Jarvis'));
+    if (more) await React.act(async () => more.click()); };
+  await open('#/'); await settle();
+  const socket = sockets.at(-1)!; socket.readyState = 1;
+  await React.act(async () => { await socket.onopen?.(); });
+  // The asking permission and the saved reminder, while the input queue cannot be read.
+  expect(await until(() => text().includes('Review 2 requests'))).toBe(true);
+  expect(badge()).toBe('2');
+  await expand();
+  // The input queue cannot be read: the all-clear waits rather than say nothing needs you.
+  expect(text()).not.toContain('Nothing needs you');
+  expect(text()).toContain('Checking what needs you');
+
+  inputs = 'ok'; await React.act(async () => window.dispatchEvent(new Event('focus')));
+  // The asking permission, the input request and the saved reminder; neither the in-progress row nor the held note.
+  expect(await until(() => text().includes('Review 3 requests'))).toBe(true);
+  await expand();
+  expect(text()).toContain('3 items need you.');
+  expect(badge()).toBe('3');
 }, 15000);
