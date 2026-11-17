@@ -17,7 +17,7 @@ export interface VerifiedManifest {
 
 export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
   "claude": {
-    version: "0.8.0",
+    version: "0.9.0",
     actions: [
       {"name":"ask_claude","classification":"READ","props":["image","maxTokens","model","prompt","roles","systemPrompt","temperature","thinkingMode","thinkingModeParams"]},
       {"name":"cancel_message_batch","classification":"WRITE","props":["messageBatchId"]},
@@ -34,7 +34,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "discord": {
-    version: "0.8.2",
+    version: "0.8.5",
     actions: [
       {"name":"add_role_to_member","classification":"WRITE","props":["guild_id","role_id","user_id"]},
       {"name":"ban_guild_member","classification":"DESTRUCTIVE","props":["ban_reason","guild_id","user_id"]},
@@ -123,7 +123,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "gmail": {
-    version: "0.18.3",
+    version: "0.19.0",
     actions: [
       {"name":"create_draft_reply","classification":"WRITE","props":["attachment","attachment_name","body","body_type","include_original_message","message_id","reply_type","sender_name"]},
       {"name":"custom_api_call","classification":"WRITE","props":["body","body_type","failsafe","followRedirects","headers","method","queryParams","response_is_binary","timeout","url"]},
@@ -165,7 +165,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "google-calendar": {
-    version: "0.13.3",
+    version: "0.14.0",
     actions: [
       {"name":"create_google_calendar_event","classification":"WRITE","props":["attendees","calendar_id","colorId","create_meet_link","description","end_date_time","guests_can_invite_others","guests_can_modify","guests_can_see_other_guests","location","send_notifications","start_date_time","title"]},
       {"name":"create_quick_event","classification":"WRITE","props":["calendar_id","send_updates","text"]},
