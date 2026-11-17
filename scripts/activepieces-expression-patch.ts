@@ -281,6 +281,13 @@ export const expressionPatches = {
     ["\n    return js2xml(JSON.parse(JSON.stringify(json)), { attributes_key, header });\n  },\n",
       "\n    const data = JSON.parse(JSON.stringify(json));\n    // Jarvis (F-12)\n    prepareXml(data, attributes_key, '');\n    return js2xml(data, { attributes_key, header });\n  },\n"],
   ],
+  // F-09: markdown_to_html output is sanitised.
+  "packages/pieces/core/text-helper/src/lib/actions/markdown-to-html.ts": [
+    ["import { z, type ZodTypeAny } from 'zod';\n",
+      "import { z, type ZodTypeAny } from 'zod';\nimport { JSDOM } from 'jsdom';\n\n// === JARVIS PATCH (F-09): the HTML is an allowlist-sanitised fragment ===\n// Markdown may carry raw HTML. Left as is, a <script>, an on* handler or a\n// javascript: link in the input is in the output, and the output may be shown\n// in a page or an email. The fragment is parsed (never run) and rebuilt from an\n// allowlist of tags and attributes. Comments are dropped too: Outlook renders\n// the HTML inside a conditional comment (<!--[if mso]>...<![endif]-->).\nconst SAFE_TAGS = new Set(['a', 'abbr', 'b', 'blockquote', 'br', 'caption', 'cite', 'code', 'col', 'colgroup', 'dd', 'del', 'details', 'dfn', 'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'ins', 'kbd', 'li', 'mark', 'ol', 'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'summary', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'var', 'wbr']);\nconst DROP_WITH_CONTENT = new Set(['script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'link', 'meta', 'base', 'noscript', 'template', 'svg', 'math', 'title', 'head', 'form', 'textarea', 'select', 'button', 'audio', 'video']);\nconst SAFE_ATTRS = new Set(['align', 'alt', 'checked', 'class', 'colspan', 'disabled', 'height', 'href', 'id', 'rel', 'rowspan', 'span', 'src', 'start', 'target', 'title', 'type', 'width']);\nconst SAFE_URL = /^(?:https?:|mailto:|tel:|[^a-z]|[a-z0-9+.-]*(?:[/?#]|$))/i;\n// Showdown writes a table column's alignment as style=\"text-align:...\", and\n// style is not kept, so it is carried over as the align attribute.\nconst TEXT_ALIGN = /^\\s*text-align\\s*:\\s*(left|center|right)\\s*;?\\s*$/i;\n\nfunction sanitizeHtml(html: string): string {\n  const { document } = new JSDOM(`<!doctype html><body>${html}`).window;\n  const walk = (parent: Element): void => {\n    for (const node of Array.from(parent.childNodes)) {\n      if (node.nodeType !== 1) {\n        // Text stays (serialised escaped); comments and anything else go.\n        if (node.nodeType !== 3) node.remove();\n        continue;\n      }\n      const el = node as Element;\n      const tag = el.tagName.toLowerCase();\n      if (DROP_WITH_CONTENT.has(tag)) {\n        el.remove();\n        continue;\n      }\n      walk(el);\n      if (!SAFE_TAGS.has(tag)) {\n        el.replaceWith(...Array.from(el.childNodes));\n        continue;\n      }\n      const align = (tag === 'td' || tag === 'th') && !el.hasAttribute('align') ? TEXT_ALIGN.exec(el.getAttribute('style') ?? '') : null;\n      for (const attr of Array.from(el.attributes)) {\n        const name = attr.name.toLowerCase();\n        // Control characters and spaces are ignored inside a URL scheme by browsers.\n        const url = attr.value.replace(/[\\u0000-\\u0020\\u007f-\\u009f]+/g, '');\n        if (!SAFE_ATTRS.has(name) || ((name === 'href' || name === 'src') && !SAFE_URL.test(url))) el.removeAttribute(attr.name);\n      }\n      if (align) el.setAttribute('align', align[1].toLowerCase());\n      if (tag === 'input' && el.getAttribute('type') !== 'checkbox') el.remove();\n      else if (el.hasAttribute('target')) el.setAttribute('rel', 'noopener noreferrer');\n    }\n  };\n  walk(document.body);\n  return document.body.innerHTML;\n}\n// === END JARVIS PATCH ===\n\n"],
+    ["    return converter.makeHtml(context.propsValue.markdown);\n",
+      "    // Jarvis (F-09): see sanitizeHtml above.\n    return sanitizeHtml(converter.makeHtml(context.propsValue.markdown));\n"],
+  ],
   // F-18: Text to PDF and Add Text to PDF explain, rather than fail with the PDF
   // library's WinAnsi error, when the font cannot show a character; Text to PDF
   // can print a ? instead. Covered by core-pdf-piece.test.ts.
@@ -350,6 +357,9 @@ export const expressionPatches = {
       "        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')\n        return result\n    }))"],
     ["        console.warn('[evalInScope] Error evaluating variable', resultError)\n        return ''",
       '        // Jarvis: an unsupported expression must stop the step before any effect.\n        throw resultError'],
+    // A reference with no value is named in the error (absentReferenceError).
+    ["import { workflowInterpolationText } from", "import { absentReferenceError, workflowInterpolationText } from"],
+    ["throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')", "throw absentReferenceError(js)"],
   ],
   'packages/server/engine/src/lib/variables/props-processor.ts': [
     ["import { getAuthPropertyForValue,",
@@ -439,6 +449,60 @@ export const expressionPatches = {
                     throw new EngineGenericError('UnsupportedOperatorError', \`Router condition operator \${String(operator)} is not supported\`)
                 // === END JARVIS PATCH ===
 `],
+    // Jarvis: a router that cannot resolve an operand, or whose number condition has an operand that is
+    // not a number, fails as the router step, not as an engine error or the fallback branch.
+    [`export const routerExecuter: BaseExecutor<RouterAction> = {
+    async handle({
+        action,
+        executionState,
+        constants,
+    }) {`,
+      `export const routerExecuter: BaseExecutor<RouterAction> = {
+    async handle(params) {
+        // === JARVIS PATCH: a router that cannot resolve an operand, or whose number condition has an operand that is not a number, fails as the router step ===
+        // Without this the error escaped as an engine error naming no step
+        // (a reference with no value ended the run on "<engine>"). Only resolving
+        // and evaluating the conditions is caught: the chosen branch runs after,
+        // outside it, so an error there keeps the steps that ran and is not
+        // blamed on the router.
+        let runBranches: () => Promise<FlowExecutorContext>
+        try {
+            runBranches = await resolveRoute(params)
+        }
+        catch (error) {
+            const { action, executionState } = params
+            // A number condition's own message already names the operand as the run
+            // records it (censored), so it is kept as it is and no input is recorded.
+            const nonNumeric = error instanceof NonNumericOperandError
+            const message = error instanceof NonNumericOperandError ? error.message : utils.formatError(error as Error)
+            return executionState
+                .upsertStep(action.name, RouterStepOutput.init({ input: nonNumeric ? {} : action.settings }).setStatus(StepOutputStatus.FAILED).setErrorMessage(message))
+                .setVerdict({ status: FlowRunStatus.FAILED, failedStep: { name: action.name, displayName: action.displayName, message } })
+        }
+        return runBranches()
+        // === END JARVIS PATCH ===
+    },
+}
+
+const resolveRoute = async ({
+    action,
+    executionState,
+    constants,
+}: Parameters<BaseExecutor<RouterAction>['handle']>[0]): Promise<() => Promise<FlowExecutorContext>> => {`],
+    // The branches run when the router step returns, not inside its resolution.
+    ['                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })',
+      '                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_ALL_MATCH })'],
+    ['                return handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })',
+      '                return () => handleRouterExecution({ action, executionState, constants, censoredInput, resolvedInput, routerExecutionType: RouterExecutionType.EXECUTE_FIRST_MATCH })'],
+    [`        }
+    },
+}
+
+async function handleRouterExecution`,
+      `        }
+}
+
+async function handleRouterExecution`],
     // F-32: a number condition with an operand that is not a number fails the
     // router step instead of falling to the fallback branch.
     ['                case BranchOperator.NUMBER_IS_GREATER_THAN: {\n                    const firstValue = parseStringToNumber(castedCondition.firstValue)\n                    const secondValue = parseStringToNumber(castedCondition.secondValue)\n                    andGroup = andGroup && firstValue > secondValue\n                    break\n                }\n                case BranchOperator.NUMBER_IS_LESS_THAN: {\n                    const firstValue = parseStringToNumber(castedCondition.firstValue)\n                    const secondValue = parseStringToNumber(castedCondition.secondValue)\n                    andGroup = andGroup && firstValue < secondValue\n                    break\n                }\n                case BranchOperator.NUMBER_IS_EQUAL_TO: {\n                    const firstValue = parseStringToNumber(castedCondition.firstValue)\n                    const secondValue = parseStringToNumber(castedCondition.secondValue)\n                    andGroup = andGroup && firstValue == secondValue\n                    break\n                }\n',
@@ -449,8 +513,6 @@ export const expressionPatches = {
       "                    // === JARVIS PATCH: a number condition names its operand as the run records it ===\n                    // The censored operand, so a connection value reads **REDACTED**.\n                    try {\n                        matched = evaluateConditions([[result.resolvedInput]])\n                    }\n                    catch (error) {\n                        if (!(error instanceof NonNumericOperandError)) throw error\n                        const censored = result.censoredInput as { firstValue?: unknown, secondValue?: unknown }\n                        throw new NonNumericOperandError(error.which, shownOperand(error.which === 'first' ? censored.firstValue : censored.secondValue))\n                    }\n                    // === END JARVIS PATCH ===\n"],
     ['function parseStringToNumber(str: string): number | string {\n    const num = Number(str)\n    return isNaN(num) ? str : num\n}\n\n',
       "// === JARVIS PATCH: a number condition with an operand that is not a number fails the step ===\n// Upstream kept a non-numeric operand as a string, so \"abc\" > 5 was simply false\n// and the run silently took the fallback branch. The step now fails and names\n// the operand instead (`routerExecuter.handle` makes this the router step's\n// own failure, with this message as it is). The operand is attached where the\n// censored input is at hand; without one the message names no value.\nclass NonNumericOperandError extends Error {\n    constructor(readonly which: 'first' | 'second', shown?: string) {\n        super(`The ${which} value${shown === undefined ? '' : ` ${shown}`} is not a number. A number condition needs a number on both sides.`)\n    }\n}\n\n// The operand on one line, at most 60 characters: text in double quotes, any\n// other value as its JSON. Control characters, line and paragraph separators\n// and bidirectional controls are written as escapes, so the value cannot break\n// or reorder the message it is echoed into.\nfunction shownOperand(value: unknown): string {\n    let text: string\n    if (typeof value === 'string') text = value\n    else {\n        try {\n            text = JSON.stringify(value) ?? String(value)\n        }\n        catch {\n            text = String(value)\n        }\n    }\n    const chars = Array.from(text.slice(0, 121))\n    const clipped = chars.slice(0, 60).join('')\n    const shown = (typeof value === 'string' ? JSON.stringify(clipped) : clipped)\n        .replace(/[\\u0000-\\u001f\\u007f-\\u009f\\u061c\\u200e\\u200f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069]/g, (c) => `\\\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)\n    return chars.length > 60 ? `${shown}...` : shown\n}\n\nfunction parseStringToNumber(value: unknown, which: 'first' | 'second'): number {\n    const num = Number(value)\n    if (Number.isNaN(num)) throw new NonNumericOperandError(which)\n    return num\n}\n// === END JARVIS PATCH ===\n\n"],
-    ['export const routerExecuter: BaseExecutor<RouterAction> = {\n    async handle({',
-      '// === JARVIS PATCH: a number condition with an operand that is not a number fails the router step ===\nexport const routerExecuter: BaseExecutor<RouterAction> = {\n    async handle(params) {\n        try {\n            return await routerBranchExecuter.handle(params)\n        }\n        catch (error) {\n            if (!(error instanceof NonNumericOperandError)) throw error\n            const failedStepOutput = RouterStepOutput.init({ input: {} }).setStatus(StepOutputStatus.FAILED)\n            return params.executionState.upsertStep(params.action.name, failedStepOutput).setVerdict({ status: FlowRunStatus.FAILED, failedStep: {\n                name: params.action.name,\n                displayName: params.action.displayName,\n                message: error.message,\n            } })\n        }\n    },\n}\n\nconst routerBranchExecuter: BaseExecutor<RouterAction> = {\n    async handle({'],
   ],
   // Jarvis: a failed HTTP request's bodies and headers never reach engine
   // stderr (the daemon log and the per-run log buffer). Upstream's

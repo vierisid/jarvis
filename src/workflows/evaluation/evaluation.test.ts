@@ -151,12 +151,20 @@ test('missing usage remains unknown and network error tracing redacts the suppli
   const saved = globalThis.fetch;
   try {
     globalThis.fetch = (async () => Response.json({ model: 'terra-test', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] })) as unknown as typeof fetch;
-    const provider = new MeasuredHostedProvider('https://example.invalid', 'synthetic-secret', 2);
-    await expect(provider.chat([{ role: 'user', content: 'hello' }])).rejects.toThrow();
+    const provider = new MeasuredHostedProvider('https://example.invalid', 'synthetic-secret', 3, undefined, { maxTokens: 1000 });
+    // The reply is delivered (its usage reads as 0 to the manager), but the
+    // evaluation counts the attempt as unknown and refuses to spend further.
+    const reply = await provider.chat([{ role: 'user', content: 'hello' }]);
+    expect(reply.content).toBe('ok');
     expect(provider.attempts[0]!.usage).toBeNull();
+    expect(estimatedCost(provider.attempts, providerProfile)).toEqual({ complete: false, usd: null });
+    await expect(provider.chat([{ role: 'user', content: 'more' }])).rejects.toThrow('reported no usage');
+    expect(provider.stops.map(s => s.reason)).toEqual(['unaccounted_usage']);
+    expect(provider.attempts).toHaveLength(1);
+    const plain = new MeasuredHostedProvider('https://example.invalid', 'synthetic-secret', 2);
     globalThis.fetch = (async () => { throw new Error('network synthetic-secret'); }) as unknown as typeof fetch;
-    await expect(provider.chat([{ role: 'user', content: 'again' }])).rejects.toThrow();
-    expect(provider.attempts[1]!.error).not.toContain('synthetic-secret');
+    await expect(plain.chat([{ role: 'user', content: 'again' }])).rejects.toThrow();
+    expect(plain.attempts[0]!.error).not.toContain('synthetic-secret');
   } finally { globalThis.fetch = saved; }
 });
 

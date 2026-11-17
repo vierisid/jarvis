@@ -2,6 +2,7 @@ import { jsonInputBase, jsonInputScope, type JsonInputDraft } from './json-input
 import { useEditCopy, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 import { keptEdits, serializeEdits, staleEditsTime } from "./edit-copy";
 import { describeSaveFailure, WORKFLOW_REMOVED_TEXT, workflowGone } from "./save-failure";
+import { refusalMessage } from "./readiness-text";
 import { runStepTest, type StepTestResult } from "./step-test";
 /**
  * Hook for the workflow visual editor.
@@ -677,6 +678,8 @@ export function useWorkflowEditor(flowId: string | null) {
 
   const removeRouterBranch = useCallback(
     (stepName: string, branchIndex: number): void => {
+      // The branch's steps go with it, so this is undoable like a step delete.
+      snapshotForUndo(`remove branch from ${stepName}`);
       mutateAnyStep(stepName, (target) => {
         if (target.type !== "ROUTER") return;
         const branches = [...(target.settings?.branches ?? [])];
@@ -688,7 +691,7 @@ export function useWorkflowEditor(flowId: string | null) {
         target.children = children;
       });
     },
-    [mutateAnyStep],
+    [mutateAnyStep, snapshotForUndo],
   );
 
   /**
@@ -1299,7 +1302,8 @@ export function useWorkflowEditor(flowId: string | null) {
       if (!res.ok) {
         const body = await safeJson(res);
         if (workflowGone(body)) { setWorkflowRemoved(true); return { ok: false, message: WORKFLOW_REMOVED_TEXT }; }
-        return { ok: false, message: body?.error ?? `save failed: ${res.status}` };
+        const names = new Map([draftTrigger, ...draftOrphans.map((o) => o.node)].flatMap((root) => flattenSteps(root).map(({ step }) => [step.name, step.displayName ?? step.name] as const)));
+        return { ok: false, message: refusalMessage(body, (name) => names.get(name), res.status) ?? body?.error ?? `save failed: ${res.status}` };
       }
       const updated = (await res.json()) as FlowVersion;
       ignoreNextLoadRef.current = true;
