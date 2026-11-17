@@ -204,6 +204,8 @@ export interface NotchDropDeps {
   tell(parts: NotchPart[], mood?: 'careful' | 'confused' | 'sorry'): void;
   /** Everything is stopped (Esc twice). */
   paused?: () => boolean;
+  /** A file was taken, and what is wanted from it is being asked. Day one, waiting for a file, hears of it here. */
+  taken?: () => void;
   holdMs?: number;
   gotMs?: number;
   log?: (line: string) => void;
@@ -379,6 +381,7 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       // Swallowed: one gulp, then what it got and what is wanted from it.
       shut('gulp');
       show();
+      try { deps.taken?.(); } catch { /* a sign, and nothing depends on it */ }
       return { taken: true };
     },
     holding: () => held.length > 0,

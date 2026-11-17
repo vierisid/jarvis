@@ -7,6 +7,13 @@
  * and one rule. The first six teach the grammar by having the person do each
  * thing once. The rest set up what Jarvis works with.
  *
+ * Two steps were added on 17 November 2026, when the owner had gone through
+ * it: "there is a lot of functionalities that are not shown. For example,
+ * dropping a file into it or asking where something is." So after the setup
+ * the person hands it a file, and asks it where something is: the two that
+ * are a movement of the hands. Everything else it does is on one sheet that
+ * day one ends on (./cando.ts). Thirteen steps.
+ *
  * Here every step is real. Nothing is pretended, so where the product cannot
  * do what the prototype played, the step says what is true:
  *
@@ -14,14 +21,19 @@
  *   4   what they say is heard by the same keys as ever. With no AI yet it
  *       cannot be made into words, and the step says so and goes on;
  *   5   yes leaves watching on, and a no switches it off;
- *   6   any real look is the lesson;
+ *   6   any real look is the lesson. It says how: the keys held down, then
+ *       the mouse pressed and dragged round the thing;
  *   7   an AI is set up in the dashboard's own setup, which this opens and
  *       waits for. One that is already there is named, and nothing is asked;
  *   8   mail and calendar are reached by signing in to Google in Jarvis's
  *       own browser, which this opens and waits for;
- *   9   looking around reads what Jarvis can already reach and draws it as
- *       it is found. It reads nothing new on this computer;
- *   10  nobody's habits are known on day one. It says how they will be
+ *   9   looking around reads the mail that waits, the week's meetings, and
+ *       the names of the files on the desktop and in the documents and
+ *       downloads, and draws them as they are found. It opens no file;
+ *   10  a real file dropped on it is the lesson, and is asked about as any
+ *       dropped file is;
+ *   11  a real "where is…" is the lesson, and is pointed at as ever;
+ *   12  nobody's habits are known on day one. It says how they will be
  *       found, and asks nothing.
  *
  * It starts by itself once, on a brain that was never set up, a moment after
@@ -46,7 +58,7 @@ const cut = (text: string, most: number): string => {
   return [...flat].length > most ? `${[...flat].slice(0, most - 1).join('')}…` : flat;
 };
 
-export const NOTCH_DAY_ONE_STEPS = 11;
+export const NOTCH_DAY_ONE_STEPS = 13;
 /** How long a step waits to be answered before it goes to the count. */
 export const NOTCH_DAY_ONE_FOLD_MS = 45_000;
 /** How long after the notch first comes up day one says its first line: after the birth, and the stretch. */
@@ -59,8 +71,13 @@ const KEPT = 'dayone';
 /** One place Jarvis reads when it looks around, and what it found there. */
 export interface NotchAroundSource {
   name: string;
-  /** Reads it. `found` is said on its chip; `things` are drawn, a few at most; `tool` is drawn for the place itself. */
-  read(): Promise<{ found: string; tool?: boolean; things: { label: string; kind: 'person' | 'co' | 'thing' }[] }>;
+  /**
+   * Reads it. `found` is said on its chip; `things` are drawn, a few at most
+   * (a person, a meeting or an agent as `co`, a file as `thing`); `tool` is
+   * drawn for the place itself; `say` is one sentence about what was found,
+   * said under the map when the looking is over.
+   */
+  read(): Promise<{ found: string; tool?: boolean; things: { label: string; kind: 'person' | 'co' | 'thing' }[]; say?: NotchPart[] }>;
 }
 
 export interface NotchDayOneDeps {
@@ -76,6 +93,14 @@ export interface NotchDayOneDeps {
   watching?: { on(): boolean; set(on: boolean): Promise<boolean> | boolean };
   /** Whether a desktop app can take a look (step 6). */
   canLook?: () => boolean;
+  /** Whether a file can be dropped on the notch and asked about (step 10). */
+  canDrop?: () => boolean;
+  /** Whether "where is…" can be answered by pointing (step 11). */
+  canPoint?: () => boolean;
+  /** Whether words are a question about where something is, or how to do something, in the window in front. */
+  isWhere?: (text: string) => boolean;
+  /** Everything the notch can do, on one sheet: day one ends on it. */
+  canDo?: (stage: NotchStage, more: { yes: string }) => Promise<void>;
   /** Mail and calendar: whether they are within reach now, and the window to sign in. */
   mail?: { reached(): Promise<boolean>; open(sidecarId: string | null): Promise<void> | void };
   /** What they said they do: kept, and answered in one line. Null when there is nothing to answer with. */
@@ -99,6 +124,8 @@ export interface NotchDayOne {
   shown(looked: { app: string; things: { name?: string }[] }): boolean;
   /** Nothing was made out of what was said. True when day one was waiting to hear something: it says what is true. */
   unheard(why: string): boolean;
+  /** A file was dropped on the notch and taken. Day one, waiting for one, knows its lesson is learned. */
+  gave(): void;
   /** The step it is on, or 0 when it is over or never began. */
   step(): number;
   /** Looks around, apart from day one. */
@@ -122,11 +149,16 @@ export function aroundRequest(text: string): boolean {
 
 /** Where things stand on the map, by what they are: the prototype's places. */
 const SLOTS: Record<'tool' | 'person' | 'co' | 'thing', [number, number][]> = {
-  tool: [[222, 28], [292, 152], [120, 150], [56, 100]],
-  person: [[128, 58], [318, 54], [356, 126], [176, 150]],
-  co: [[404, 70], [196, 186], [40, 178]],
-  thing: [[40, 30], [408, 188], [300, 24]],
+  // The places themselves: mail, the calendar, the desktop.
+  tool: [[222, 28], [292, 152], [120, 150]],
+  person: [[128, 58], [318, 54], [356, 126], [56, 100]],
+  // Meetings and agents, on the right.
+  co: [[404, 70], [408, 188]],
+  // Files, on the left and below: far enough apart for a name each.
+  thing: [[40, 30], [40, 178], [196, 186]],
 };
+/** The longest name a thing has on the map. A file's name is often longer, and is cut. */
+const MAP_NAME = 16;
 const ME: NotchMapNode = { id: 'you', label: 'You', x: 222, y: 104, kind: 'me' };
 
 export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
@@ -140,6 +172,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   let tries = 0;
   /** Whether the step on the notch is waiting to hear, or to be shown. */
   let hearing = false, looking = false;
+  /** Step 10: waiting for a file, and one came. Step 11: waiting to be asked where something is, and it was asked. */
+  let feeding = false, fed = false, asking = false, asked = false;
 
   const kept = (): Kept | null => {
     const raw = deps.settings.get<Partial<Kept> | null>(KEPT, null);
@@ -274,8 +308,10 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       looking = true;
       const id = stage.id();
       stage.put({
-        id, kind: 'offer', keys: 'talk', yes: 'hold and circle', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(6),
-        say: nudged ? ['Keep ', { key: 'talk' }, ' down and draw a circle round anything.'] : ['Now show me something. Hold ', { key: 'talk' }, ' and circle a thing with the mouse.'],
+        id, kind: 'offer', keys: 'talk', yes: 'hold, then drag', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(6),
+        // The owner, 17 November 2026: "it doesn't specify that you need to click the hotkey and then click and drag around the circle."
+        say: nudged ? ['Both at once: ', { key: 'talk' }, ' held down, and the mouse pressed and dragged round the thing.']
+          : ['Now show me something. Keep ', { key: 'talk' }, ' held down, then click and drag a circle round a thing.'],
       });
       const answer = await stage.answer(id, ['yes', 'no', 'fold']);
       if (answer.act === 'fold') return 'left';
@@ -358,7 +394,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     const rows: NotchBlock[] = [];
     let tour: string[] | undefined;
     const place = (kind: 'tool' | 'person' | 'co' | 'thing', label: string, from: string): string | null => {
-      const text = cut(label, 22);
+      const text = cut(label, MAP_NAME);
       const same = nodes.find((node) => node.label.toLowerCase() === text.toLowerCase());
       if (same) { if (!links.some(([a, b]) => (a === from && b === same.id) || (a === same.id && b === from)) && same.id !== from) links.push([from, same.id]); return null; }
       const slot = SLOTS[kind][used[kind]!];
@@ -394,6 +430,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       chips[at]!.state = 'done';
       chips[at]!.found = cut(read.found, 28);
+      // What it found there, in a sentence: said under the map, when the looking is over.
+      if (read.say?.length) rows.push({ kind: 'row', lead: cut(sources[at]!.name, 20), say: read.say });
       redraw();
       await stage.wait(240);
     }
@@ -402,7 +440,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     log(`[notch] looked around: ${sources.length} place(s), ${nodes.length - 1} thing(s) drawn`);
     // One stroke through everything it found.
     if (nodes.length > 2) tour = [...nodes.slice(1).map((node) => node.id), ME.id];
-    rows.push({ kind: 'note', say: [nodes.length > 1 ? `That is what I can reach today: ${found === 1 ? '1 thing' : `${found} things`} round you. It fills as you connect more.` : 'I can reach nothing yet. It fills as you connect things.'] });
+    rows.push({ kind: 'note', say: [nodes.length > 1 ? 'That is what I can reach today. I read names, and opened no file. Ask me about any of it.' : 'I can reach nothing yet. It fills as you connect things.'] });
     stage.surface.update(id, { blocks: blocks() });
     stage.surface.act({ mood: 'proud' });
     // It stays to be read, until it is closed or gone on from.
@@ -412,10 +450,77 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   async function lookAround(stage: NotchStage): Promise<Went> {
     if (!deps.around) return 'on';
-    const said = await ask(stage, 9, ['May I look around what I can reach, and show you what I find?'], 'allow', 'curious');
+    const said = await ask(stage, 9, ['May I look around? Your mail, your calendar, and the files on this computer. I read their names and open none.'], 'allow', 'curious');
     if (said === 'left') return 'left';
     if (said === 'yes') await around(stage, { yes: 'continue', step: counter(9) });
     return 'on';
+  }
+
+  /** Step 10: hand it a file. The dropping, and what is asked about the file, are the real thing (./drop.ts). */
+  async function drop(stage: NotchStage): Promise<Went> {
+    if (deps.canDrop && !deps.canDrop()) return 'on';
+    if (!deps.model.ready()) {
+      feeding = false;
+      await stage.say(['Drag any file onto me and ask about it. That needs the AI, so it waits until I have one.'], 4200, { mood: 'look' });
+      return 'on';
+    }
+    for (;;) {
+      if (fed) {
+        feeding = false;
+        // A beat first: what was asked about the file may be starting this very moment, and takes the notch.
+        await stage.wait(600);
+        await stage.say(['That is all there is to it: drop it, then ask.'], 3000, { mood: 'happy' });
+        // Only now is the lesson over: said to the end, whatever took the notch in between.
+        fed = false;
+        return 'on';
+      }
+      feeding = true;
+      const id = stage.id();
+      stage.put({ id, kind: 'offer', keys: 'esc', say: ['Now hand me a file. Drag any file from your desktop onto me.'], mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(10) });
+      // While a file is over it, and while it is asked about, the file has the notch: this ends under it.
+      for (;;) {
+        const answer = await stage.answer(id, ['yes', 'no', 'fold']);
+        if (answer.act === 'yes') { stage.surface.update(id, { say: ['Drag it here, onto me. I open my mouth when it is over me.'] }); continue; }
+        if (answer.act === 'fold') return 'left';
+        feeding = false;
+        await stage.say(['Later then. Any file, any time.'], 2200);
+        return 'on';
+      }
+    }
+  }
+
+  /** Step 11: ask it where something is. The pointing is the real thing (./point.ts). */
+  async function whereIs(stage: NotchStage): Promise<Went> {
+    const can = (!deps.canPoint || deps.canPoint()) && (!deps.watching || deps.watching.on());
+    if (!can || !deps.model.ready()) {
+      asking = false;
+      await stage.say(deps.model.ready()
+        ? ['Ask me where something is, or how to do something, and I point at it. That needs my eyes open.']
+        : ['Ask me where something is, or how to do something, and I point at it. That needs the AI, so it waits until I have one.'], 4600, { mood: 'look' });
+      return 'on';
+    }
+    let other = 0;
+    for (;;) {
+      if (asked) {
+        asking = false;
+        await stage.say(['That works in any window. Ask "how do I…" and I walk you through it, a step at a time.'], 4400, { mood: 'happy' });
+        asked = false;
+        return 'on';
+      }
+      // They said something else, twice: it is theirs to try later.
+      if (asking && ++other > 2) { asking = false; return 'on'; }
+      asking = true;
+      const id = stage.id();
+      stage.put({
+        id, kind: 'offer', keys: 'talk', yes: 'hold and ask', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(11),
+        say: ['Now ask me where something is. Hold ', { key: 'talk' }, ' and say: ', em('where do I close this window?')],
+      });
+      const answer = await stage.answer(id, ['yes', 'no', 'fold']);
+      if (answer.act === 'fold') return 'left';
+      asking = false;
+      await stage.say(['Later then. "Where is…" and "how do I…" work in any window.'], 3000);
+      return 'on';
+    }
   }
 
   async function habits(stage: NotchStage): Promise<Went> {
@@ -424,11 +529,14 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   }
 
   async function rule(stage: NotchStage): Promise<Went> {
-    const said = await ask(stage, 11, ['One rule to start: every new agent asks before it acts.'], 'agreed', 'careful');
-    return said === 'left' ? 'left' : 'on';
+    const said = await ask(stage, 13, ['One rule to start: every new agent asks before it acts.'], 'agreed', 'careful');
+    if (said === 'left') return 'left';
+    // Everything else it does, on one sheet, before it lets them go.
+    if (deps.canDo) await deps.canDo(stage, { yes: 'done' });
+    return 'on';
   }
 
-  const STEPS = [hello, notNow, litWord, talk, watch, show, brain, connect, lookAround, habits, rule];
+  const STEPS = [hello, notNow, litWord, talk, watch, show, brain, connect, lookAround, drop, whereIs, habits, rule];
 
   async function play(stage: NotchStage): Promise<NotchItemEnd> {
     for (;;) {
@@ -438,7 +546,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       const step = STEPS[state.step - 1];
       if (!step) {
         keep({ step: state.step, done: true });
-        hearing = false; looking = false;
+        hearing = false; looking = false; feeding = false; asking = false;
         log('[notch] day one is over');
         await stage.say(['That is all. I speak up when something needs you. Hold ', { key: 'talk' }, ' and talk, any time.'], 5200, { mood: 'happy' });
         return 'settled';
@@ -463,7 +571,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   function again(): void {
     if (stopped) return;
-    told = missed = showed = null; tries = 0; hearing = looking = false;
+    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false;
     keep({ step: 1, done: false });
     log('[notch] day one was started');
     present();
@@ -486,6 +594,9 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         // Whatever they say now is the answer to "tell me what you do".
         return { did: 'Told Jarvis what they do, on day one.', run: () => { told = cut(text, 400); present(); } };
       }
+      // Step 11 waits to be asked where something is. Such a question is answered as ever, by pointing, and
+      // day one only notes that it was asked: nothing is taken from it here.
+      if (asking && stepNow() === 11 && deps.isWhere?.(text)) asked = true;
       if (dayOneRequest(text)) return { did: 'Start day one.', run: () => again() };
       if (aroundRequest(text) && deps.around) return { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } };
       return null;
@@ -504,6 +615,12 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       missed = why;
       present();
       return true;
+    },
+    gave() {
+      if (stopped || !feeding || stepNow() !== 10) return;
+      // It is asked about as any dropped file is, and day one has the notch back after that.
+      fed = true;
+      present();
     },
     step: stepNow,
     around,

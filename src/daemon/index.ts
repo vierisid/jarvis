@@ -175,7 +175,7 @@ import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
-import { notchDayOneDeps } from "./notch-dayone.ts";
+import { notchDayOneDeps, notchFilePlaces } from "./notch-dayone.ts";
 import { notchJobDeps } from "./notch-jobs.ts";
 import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
@@ -4821,6 +4821,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             return events ? events.filter((event) => !event.allDay && event.withOthers !== false).map((event) => event.summary) : null;
           },
           agents: () => notchReal?.agents?.store.list().map((agent) => agent.name) ?? [],
+          // The files on the desktop and in the documents and downloads, by
+          // name: asked of the person's own computer, which is the only one
+          // that knows where they are. A desktop app from before this, or
+          // one that may not read files, does not answer, and the place is
+          // said to be not reached.
+          files: async () => {
+            for (const sidecar of sidecarManager.getConnectedSidecars()) {
+              try {
+                const places = notchFilePlaces(await sidecarManager.dispatchRPC(sidecar.id, 'notch.files', {}, { initial: 8000, max: 8000 }));
+                if (places) return places;
+              } catch { /* this one cannot tell */ }
+            }
+            return null;
+          },
         }),
         // The back office that fits in a sheet (pass 12): memory with the
         // product's own Forget, this machine's keys, what makes out speech,

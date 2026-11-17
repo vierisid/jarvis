@@ -420,3 +420,74 @@ describe('the request a dropped file arrives in', () => {
     expect((await notchRoutes(true, {})[NOTCH_DROP_PATH]!.POST(request({}))).status).toBe(404);
   });
 });
+
+describe('pass 12: day one hears of a file that was taken', () => {
+  test('the real drop with the real day one: the file is asked about as ever, and day one goes on after it', async () => {
+    const { attachNotchDayOne } = await import('./dayone.ts');
+    const { NotchSettings } = await import('./settings.ts');
+    const { Database } = await import('bun:sqlite');
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC() { return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const timers: { fn: () => void; at: number }[] = [];
+    let now = 0;
+    const clock = {
+      setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; },
+      clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+    };
+    const pass = async (ms: number): Promise<void> => {
+      const until = now + ms;
+      for (;;) {
+        const next = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!next) break;
+        now = next.at; timers.splice(timers.indexOf(next), 1); next.fn();
+        await settle();
+      }
+      now = until;
+      await settle();
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const inbox = new NotchInbox(surface, { clock, log: () => {} });
+    const settings = new NotchSettings(new Database(':memory:'));
+    settings.set('dayone', { step: 10, done: false });
+    const day = attachNotchDayOne({
+      inbox, settings, clock, log: () => {}, fresh: () => true,
+      model: { ready: () => true, name: () => 'test', hosted: () => false, setUp: () => {} },
+    });
+    const asked: string[] = [];
+    const drop = attachNotchDrop(surface, inbox, {
+      ask: (words) => { asked.push(words); },
+      tell: () => {},
+      taken: () => day.gave(),
+      gotMs: 10, log: () => {},
+    });
+    const said = (): string => text(surface.current().line?.say ?? []);
+    day.cameUp();
+    await pass(5000);
+    expect(said()).toBe('Now hand me a file. Drag any file from your desktop onto me.');
+    // A file that is refused is no lesson: day one is still waiting for one.
+    expect(drop.take({ name: 'film.mov', mediaType: 'video/quicktime', size: 10, bytes: new Uint8Array(10), count: 1 }).taken).toBe(false);
+    await settle();
+    expect(day.step()).toBe(10);
+    // A file that is taken: what is wanted from it takes the notch.
+    expect(drop.take({ name: 'notes.txt', mediaType: 'text/plain', size: 4, bytes: new Uint8Array(4), count: 1 }).taken).toBe(true);
+    await settle();
+    expect(said()).toBe('Got notes.txt.');
+    await pass(2000);
+    expect(surface.current().line?.kind).toBe('ask');
+    // The first of the three questions is picked: the file goes with it, and day one has the notch back.
+    fromPage({ type: 'answer', id: surface.current().line!.id, act: 'button', button: 'ask0' });
+    await settle();
+    expect(asked.length).toBe(1);
+    await pass(600);
+    expect(said()).toBe('That is all there is to it: drop it, then ask.');
+    fromPage({ type: 'answer', id: surface.current().line!.id, act: 'done' });
+    await settle();
+    expect(day.step()).toBe(11);
+  });
+});

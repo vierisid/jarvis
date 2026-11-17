@@ -150,6 +150,12 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["notch.hold"] = makeNotchHoldHandler(notchLooker)
 		registry["notch.watch"] = makeNotchWatchHandler()
 		registry["notch.act"] = makeNotchActHandler()
+		// Pass 12, day one: what lies on the desktop and in the documents and
+		// downloads, by name and kind. Only on a desktop app that may read
+		// files at all, and nothing of what is in a file (notch_files.go).
+		if caps[CapFilesystem] {
+			registry["notch.files"] = makeNotchFilesHandler(cfg)
+		}
 	}
 
 	if caps[CapSubPebble] && subPebble != nil {
