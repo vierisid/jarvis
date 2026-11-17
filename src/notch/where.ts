@@ -116,7 +116,21 @@ export interface NotchWhere {
    * app is known. The window's title is not part of it (48).
    */
   front(): { name: string; site: string } | null;
+  /**
+   * Whether the person is on the bare desktop: the system's own shell is in
+   * front, and no window of a program. Null when what is in front is not
+   * known. Day one asks, so that its "where is" has something to point at.
+   */
+  onDesktop(): boolean | null;
   stop(): void;
+}
+
+/** The system's own shell, as the desktop app names it: Explorer on Windows, the Finder on a Mac. */
+const SHELLS: ReadonlySet<string> = new Set(['explorer', 'finder']);
+
+/** A shell with no folder open in front: the desktop itself, or the bar along its edge. */
+export function whereIsDesktop(app: string, title: string): boolean {
+  return SHELLS.has(app) && (title.trim() === '' || title.trim() === 'Program Manager');
 }
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -383,6 +397,10 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
       const now = here();
       if (deps.asleep() || face() !== 'idle' || !now?.app || !now.name) return null;
       return { name: now.name, site: now.site };
+    },
+    onDesktop() {
+      const now = here();
+      return now?.app ? whereIsDesktop(now.app, now.title) : null;
     },
     stop() { stopped = true; },
   };

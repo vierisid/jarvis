@@ -155,6 +155,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		// files at all, and nothing of what is in a file (notch_files.go).
 		if caps[CapFilesystem] {
 			registry["notch.files"] = makeNotchFilesHandler(cfg)
+			registry["notch.file"] = makeNotchFileHandler(cfg)
 		}
 	}
 

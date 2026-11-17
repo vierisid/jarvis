@@ -153,6 +153,12 @@ export interface NotchAsksDeps {
   /** The pointer is leaving for a thing: the lip leans toward it (0 to 1 along the lower edge). */
   reach?: (aim: number) => void;
   /**
+   * A question about where something is has been answered: by pointing at
+   * it on the screen (true), or not (false: nothing to point at was found,
+   * and it went on as any other question). Day one, which teaches it, asks.
+   */
+  pointed?: (shown: boolean) => void;
+  /**
    * Nothing was made out of what was said. True when that is another part's
    * to answer (day one, waiting to hear the person for the first time): then
    * nothing is said about it here.
@@ -627,6 +633,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         ask.walk = undefined;
         if (ask.phase !== 'running') return;
+        if (!ask.stopAsked && pointed?.ok !== 'stopped') { try { deps.pointed?.(pointed?.ok === true); } catch { /* a sign, and nothing depends on it */ } }
         if (ask.stopAsked || pointed?.ok === 'stopped') {
           // Taken off the screen by something that was not Esc (a line was drawn round something): nothing is said.
           if (!ask.stopAsked) ask.silent = true;

@@ -27,13 +27,15 @@ interface World {
   reply: string | null;
   sources: NotchAroundSource[] | null;
   canPoint: boolean;
+  onDesktop: boolean | null;
+  system: 'windows' | 'mac' | null;
   db: Database;
 }
 
 function harness(given: Partial<World> = {}) {
   const world: World = {
     fresh: true, name: '', model: { ready: true, name: 'gpt-test', hosted: false }, watching: true, canSwitch: true,
-    mailReached: false, reply: null, sources: null, canPoint: true, db: new Database(':memory:'), ...given,
+    mailReached: false, reply: null, sources: null, canPoint: true, onDesktop: false, system: 'windows', db: new Database(':memory:'), ...given,
   };
   const pushed: NotchToPage[] = [];
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -65,6 +67,8 @@ function harness(given: Partial<World> = {}) {
     canDrop: () => true,
     canPoint: () => world.canPoint,
     isWhere: (words) => /^(where|how do i)\b/i.test(words),
+    onDesktop: () => world.onDesktop,
+    system: () => world.system,
     canDo: async (stage, more) => { did.push(`can do, with ${more.yes}`); await stage.sheet(['What I can do'], [], { yes: more.yes }); },
     mail: { reached: async () => world.mailReached, open: async () => { did.push('open mail'); } },
     told: async (what) => { did.push(`told ${what}`); return world.reply; },
@@ -392,7 +396,7 @@ describe('what Jarvis works with', () => {
   test('9: looking around draws what each place holds as it is read, and one thing is never drawn twice', async () => {
     const h = harness({ sources: SOURCES });
     await h.upTo(9);
-    expect(h.said()).toBe('May I look around? Your mail, your calendar, and the files on this computer. I read their names and open none.');
+    expect(h.said()).toBe('May I look around? Your mail, your calendar, and the files on your desktop. I open the newest few to see what they are, and skip anything private.');
     await h.reply('yes');
     expect(h.said()).toBe('Looking around');
     expect(h.line()).toMatchObject({ kind: 'sheet', mood: 'search', stay: true, yes: 'continue', no: 'skip', step: 'step 9/13' });
@@ -448,7 +452,27 @@ describe('what Jarvis works with', () => {
     const rows = sheet.blocks.filter((b): b is Extract<NotchBlock, { kind: 'row' }> => b.kind === 'row');
     expect(rows.map((row) => `${row.lead}: ${text(row.say)}`)).toEqual(['Desktop: 14 files and 3 folders. Mostly spreadsheets.']);
     const note = sheet.blocks.find((b): b is Extract<NotchBlock, { kind: 'note' }> => b.kind === 'note')!;
-    expect(text(note.say)).toBe('That is what I can reach today. I read names, and opened no file. Ask me about any of it.');
+    expect(text(note.say)).toBe('That is what I can reach today. Of what I opened, nothing is kept. Ask me about any of it.');
+  });
+
+  test('9: each file that was opened gets a line of its own under the sentence about them', async () => {
+    const h = harness({ sources: [
+      { name: 'Reading', read: async () => ({
+        found: '2 files opened', things: [],
+        say: ['I opened the newest 2, to see what they are.'],
+        rows: [{ lead: 'Budget Q4.xlsx', say: ['Revenue by month for the fourth quarter.'] }, { lead: 'Pitch.pptx', say: ['A pitch for investors, twelve slides.'] }],
+      }) },
+    ] });
+    await h.upTo(9);
+    await h.reply('yes');
+    await h.pass(4000);
+    const sheet = h.line() as Extract<NotchLine, { kind: 'sheet' }>;
+    const rows = sheet.blocks.filter((b): b is Extract<NotchBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.map((row) => `${row.lead}: ${text(row.say)}`)).toEqual([
+      'Reading: I opened the newest 2, to see what they are.',
+      'Budget Q4.xlsx: Revenue by month for the fourth quarter.',
+      'Pitch.pptx: A pitch for investors, twelve slides.',
+    ]);
   });
 
   test('10: a real file dropped on it is the lesson, and day one says so only when the file has been asked about', async () => {
@@ -514,9 +538,43 @@ describe('what Jarvis works with', () => {
     h.inbox.add({ id: 'ask-1', subject: 'ask-1', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['Pointing.'],
       play: async (stage) => { await stage.say(['Close is top right. I am pointing at it.'], 1000); return 'settled'; } });
     await settle();
+    h.day.pointed(true);
     await h.reply('done');
-    expect(h.said()).toBe('That works in any window. Ask "how do I…" and I walk you through it, a step at a time.');
+    expect(h.said()).toBe('I point, you click. It works in any window. Ask "how do I…" and I walk you through it, a step at a time.');
     await h.seen();
+    expect(h.day.step()).toBe(12);
+  });
+
+  test('11: on a bare desktop the question is about something every desktop has, by its system', async () => {
+    const windows = harness({ onDesktop: true, system: 'windows' });
+    await windows.upTo(11);
+    expect(windows.said()).toBe('Now ask me where something is. Hold [talk] and say: where is the Start button?');
+    const mac = harness({ onDesktop: true, system: 'mac' });
+    await mac.upTo(11);
+    expect(mac.said()).toBe('Now ask me where something is. Hold [talk] and say: where is the Trash?');
+    const other = harness({ onDesktop: true, system: null });
+    await other.upTo(11);
+    expect(other.said()).toBe('Now ask me where something is. Hold [talk] and say: where is the clock?');
+    // When it is not known what is in front, the question is the one about a window.
+    const unknown = harness({ onDesktop: null });
+    await unknown.upTo(11);
+    expect(unknown.said()).toBe('Now ask me where something is. Hold [talk] and say: where do I close this window?');
+  });
+
+  test('11: when the thing could not be pointed at, it says so, and never that it pointed', async () => {
+    const h = harness();
+    await h.upTo(11);
+    expect(h.day.route('where is the export button')).toBeNull();
+    h.inbox.add({ id: 'ask-1', subject: 'ask-1', class: 'person', speaks: true, urgent: true, asked: true, title: () => ['An answer.'],
+      play: async (stage) => { await stage.say(['I cannot see one here.'], 1000); return 'settled'; } });
+    await settle();
+    h.day.pointed(false);
+    await h.reply('done');
+    expect(h.said()).toBe('I could not find that one here. In any window, ask "where is…" or "how do I…" and I point, a step at a time.');
+    await h.seen();
+    expect(h.day.step()).toBe(12);
+    // What is told of pointing at any other time is nobody's lesson.
+    h.day.pointed(true);
     expect(h.day.step()).toBe(12);
   });
 

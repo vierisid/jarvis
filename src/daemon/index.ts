@@ -4821,6 +4821,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             return events ? events.filter((event) => !event.allDay && event.withOthers !== false).map((event) => event.summary) : null;
           },
           agents: () => notchReal?.agents?.store.list().map((agent) => agent.name) ?? [],
+          system: () => {
+            const os = String(sidecarManager.listSidecars().find((sidecar) => sidecar.connected)?.os ?? '').toLowerCase();
+            return os.startsWith('win') ? 'windows' : os === 'darwin' || os.startsWith('mac') ? 'mac' : null;
+          },
           // The files on the desktop and in the documents and downloads, by
           // name: asked of the person's own computer, which is the only one
           // that knows where they are. A desktop app from before this, or
@@ -4834,6 +4838,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               } catch { /* this one cannot tell */ }
             }
             return null;
+          },
+          // One file, handed over by the person's own computer to be read
+          // here and said in a line. That computer decides what it hands
+          // over: never a file that is private by its name.
+          openFile: async (place, name) => {
+            for (const sidecar of sidecarManager.getConnectedSidecars()) {
+              try {
+                const answer = await sidecarManager.dispatchRPC(sidecar.id, 'notch.file', { place, name }, { initial: 15_000, max: 15_000 }) as
+                  { opened?: unknown; _binary?: { data?: unknown } } | null;
+                const data = answer?.opened === true ? answer._binary?.data : null;
+                if (typeof data === 'string' && data.length > 0 && data.length <= 24 * 1024 * 1024) return new Uint8Array(Buffer.from(data, 'base64'));
+              } catch { /* this one cannot hand it over */ }
+            }
+            return null;
+          },
+          // The product's own reader of PDFs: apart from the daemon, and under a deadline.
+          pdf: async (bytes) => {
+            const { decodeAttachment } = await import('../brief/attachments.ts');
+            return decodeAttachment(bytes, 'application/pdf');
           },
         }),
         // The back office that fits in a sheet (pass 12): memory with the

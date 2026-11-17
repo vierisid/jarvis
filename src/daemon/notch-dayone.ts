@@ -10,6 +10,7 @@ import type { JarvisConfig } from '../config/types.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { NotchAroundSource } from '../notch/dayone.ts';
+import { NOTCH_FILES_OPEN_DESKTOP, NOTCH_FILES_OPEN_DOCUMENTS, fileBeginning, fileReader, filesMessages, filesSaid } from '../notch/files.ts';
 import type { NotchPart } from '../notch/protocol.ts';
 import type { NotchRealDeps } from '../notch/real.ts';
 import { NOTCH_OWNER_NAME, NOTCH_TOLD_SOURCE } from '../notch/remember.ts';
@@ -41,8 +42,8 @@ export interface NotchFilePlace {
   files: number;
   folders: number;
   kinds: Record<string, number>;
-  /** The newest first. Never more than a name, a kind and a date. */
-  recent: { name: string; kind: string }[];
+  /** The newest first. Never more than a name, a kind, a size, and whether its name says it is private. */
+  recent: { name: string; kind: string; size: number; private: boolean }[];
   more: boolean;
 }
 
@@ -64,7 +65,10 @@ export function notchFilePlaces(answer: unknown): NotchFilePlace[] | null {
       for (const [kind, many] of Object.entries(one.kinds as Record<string, unknown>).slice(0, 20)) if (/^[a-z]{1,12}$/.test(kind)) kinds[kind] = count(many);
     }
     const recent = (Array.isArray(one.recent) ? one.recent : []).slice(0, 8)
-      .map((seen) => ({ name: fileName((seen as { name?: unknown } | null)?.name), kind: String((seen as { kind?: unknown } | null)?.kind ?? '').slice(0, 12) }))
+      .map((seen) => {
+        const one = (seen ?? {}) as { name?: unknown; kind?: unknown; size?: unknown; private?: unknown };
+        return { name: fileName(one.name), kind: String(one.kind ?? '').slice(0, 12), size: count(one.size), private: one.private === true };
+      })
       .filter((seen) => seen.name);
     out.push({ place: one.place as NotchFilePlace['place'], reached: one.reached === true, files: count(one.files), folders: count(one.folders), kinds, recent, more: one.more === true });
   }
@@ -119,13 +123,26 @@ export interface NotchDayOneOptions {
   meetings(): Promise<string[] | null>;
   /** The agents on duty, by name. */
   agents(): string[];
+  /** Which system the person's computer runs, as its desktop app said when it connected. Null when none is connected, or it is another. */
+  system(): 'windows' | 'mac' | null;
   /**
    * What lies on the person's desktop and in their documents and downloads,
    * as their own computer's desktop app tells it: names, kinds and counts,
    * and nothing of what is in any file. Null when no desktop app can tell.
    */
   files(): Promise<NotchFilePlace[] | null>;
+  /**
+   * One file from the top of one of those places, as its bytes, for the
+   * brain to read and say what it is. Null when that computer does not hand
+   * it over: it is private by its name, gone, too large, or not a plain file.
+   */
+  openFile(place: NotchFilePlace['place'], name: string): Promise<Uint8Array | null>;
+  /** The words of a PDF, read apart and under a deadline. Null, or a throw, when it cannot be read. */
+  pdf(bytes: Uint8Array): Promise<string | null>;
 }
+
+/** How long the reading of the files may take in all before the look around goes on without it. */
+const READING_MOST_MS = 60_000;
 
 export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchRealDeps['dayOne']> {
   const first = (name: string): string => name.replace(/\s+/g, ' ').trim().split(' ')[0] ?? '';
@@ -135,6 +152,51 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
     const place = async (name: NotchFilePlace['place']): Promise<NotchFilePlace | undefined> => {
       asked ??= options.files().catch(() => null);
       return (await asked)?.find((one) => one.place === name);
+    };
+    /** The newest files of a place that can be opened: not private by their name, and of a kind made of words. */
+    const openable = (found: NotchFilePlace | undefined, most: number): { place: NotchFilePlace['place']; name: string; size: number }[] =>
+      (found?.reached ? found.recent : []).filter((seen) => seen.kind !== 'folder' && !seen.private && fileReader(seen.name, seen.size) !== null)
+        .slice(0, most).map((seen) => ({ place: found!.place, name: seen.name, size: seen.size }));
+    /**
+     * Opens the newest files and says what each one is: one line each, from
+     * one request to the owner's own model. Nothing of them is kept.
+     */
+    const reading = async (): Promise<{ found: string; rows: { lead: string; say: NotchPart[] }[]; say?: NotchPart[] }> => {
+      const desk = await place('desktop'), docs = await place('documents');
+      const listed = [...(desk?.recent ?? []), ...(docs?.recent ?? [])].filter((seen) => seen.kind !== 'folder');
+      const held = listed.filter((seen) => seen.private).length;
+      const closed: NotchPart[] = held ? [` ${held === 1 ? '1 file I left' : `${held} files I left`} closed: private, by ${held === 1 ? 'its name' : 'their names'}.`] : [];
+      const picked = [...openable(desk, NOTCH_FILES_OPEN_DESKTOP), ...openable(docs, NOTCH_FILES_OPEN_DOCUMENTS)];
+      if (!desk?.reached && !docs?.reached) return { found: 'not reached', rows: [] };
+      if (picked.length === 0) return { found: 'nothing to read', rows: [], say: ['None of the newest files is one I can read.', ...closed] };
+      const llm = options.llm();
+      if (!notchModelReady(llm)) return { found: 'needs the AI', rows: [], say: ['I can open them and say what each is once I have an AI.', ...closed] };
+      const read: { name: string; text: string }[] = [];
+      for (const file of picked) {
+        const reader = fileReader(file.name, file.size);
+        if (!reader) continue;
+        let bytes: Uint8Array | null = null;
+        try { bytes = await options.openFile(file.place, file.name); } catch { bytes = null; }
+        if (!bytes) continue;
+        const text = await fileBeginning(reader, bytes, options.pdf);
+        if (text) read.push({ name: file.name, text });
+      }
+      // How many, never which.
+      console.log(`[notch] looking around: ${read.length} of ${picked.length} file(s) could be read, ${held} left closed as private`);
+      if (read.length === 0) return { found: 'nothing to read', rows: [], say: ['I could not read the newest files.', ...closed] };
+      let answer = '';
+      try {
+        answer = await runWithOrigin('user', async () => (await llm.chatTier('low', 'notch_files_open', filesMessages(read), { max_tokens: 60 * read.length + 40, temperature: 0 })).content);
+      } catch (error) {
+        console.warn('[notch] looking around: the files could not be put to the model:', error instanceof Error ? error.message : error);
+        return { found: `${many(read.length, 'file', 'files')} opened`, rows: [], say: ['I opened them, but the AI did not answer, so I cannot say what they are.', ...closed] };
+      }
+      const said = filesSaid(answer, read.length);
+      const rows = read.flatMap((file, at) => (said[at] ? [{ lead: file.name, say: [said[at]!] satisfies NotchPart[] }] : []));
+      return {
+        found: `${many(read.length, 'file', 'files')} opened`, rows,
+        say: [rows.length ? `I opened the newest ${read.length === 1 ? 'one' : read.length}, to see what ${read.length === 1 ? 'it is' : 'they are'}.` : 'I opened them and could not tell what they are.', ...closed],
+      };
     };
     /** The newest files of a place, by name: what is drawn on the map. */
     const newest = (found: NotchFilePlace | undefined, most: number): { label: string; kind: 'thing' }[] =>
@@ -180,6 +242,18 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       },
     },
     {
+      // The owner, asked whether it should open the files: "Yes, it should."
+      name: 'Reading',
+      async read() {
+        const late = new Promise<Awaited<ReturnType<typeof reading>>>((resolve) => {
+          const timer = setTimeout(() => resolve({ found: 'took too long', rows: [], say: ['Reading them took too long. Ask me about any of them.'] }), READING_MOST_MS);
+          (timer as { unref?: () => void }).unref?.();
+        });
+        const got = await Promise.race([reading(), late]);
+        return { found: got.found, things: [], say: got.say, rows: got.rows };
+      },
+    },
+    {
       name: 'Memory',
       async read() {
         const facts = findFacts({}).length;
@@ -215,6 +289,7 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       hosted: () => hasUsejarvisAi(options.config()),
       setUp: (sidecarId) => options.openSetup(sidecarId, !options.config().onboarding?.setup_completed_at),
     },
+    system: options.system,
     watching: {
       on: options.watching.on,
       set: async (on) => (options.watching.set ? options.watching.set(on) : options.watching.on()),

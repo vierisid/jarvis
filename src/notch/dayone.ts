@@ -28,8 +28,10 @@
  *   8   mail and calendar are reached by signing in to Google in Jarvis's
  *       own browser, which this opens and waits for;
  *   9   looking around reads the mail that waits, the week's meetings, and
- *       the names of the files on the desktop and in the documents and
- *       downloads, and draws them as they are found. It opens no file;
+ *       the files on the desktop and in the documents and downloads, and
+ *       draws them as they are found. The newest few are opened, and each
+ *       is said in a line (./files.ts). A file whose name says it is
+ *       private is never opened, and nothing of what was opened is kept;
  *   10  a real file dropped on it is the lesson, and is asked about as any
  *       dropped file is;
  *   11  a real "where is…" is the lesson, and is pointed at as ever;
@@ -75,9 +77,13 @@ export interface NotchAroundSource {
    * Reads it. `found` is said on its chip; `things` are drawn, a few at most
    * (a person, a meeting or an agent as `co`, a file as `thing`); `tool` is
    * drawn for the place itself; `say` is one sentence about what was found,
-   * said under the map when the looking is over.
+   * said under the map when the looking is over; `rows` are more lines under
+   * that one, each about one thing (a file that was opened, and what it is).
    */
-  read(): Promise<{ found: string; tool?: boolean; things: { label: string; kind: 'person' | 'co' | 'thing' }[]; say?: NotchPart[] }>;
+  read(): Promise<{
+    found: string; tool?: boolean; things: { label: string; kind: 'person' | 'co' | 'thing' }[];
+    say?: NotchPart[]; rows?: { lead: string; say: NotchPart[] }[];
+  }>;
 }
 
 export interface NotchDayOneDeps {
@@ -99,6 +105,10 @@ export interface NotchDayOneDeps {
   canPoint?: () => boolean;
   /** Whether words are a question about where something is, or how to do something, in the window in front. */
   isWhere?: (text: string) => boolean;
+  /** Whether the person is on the bare desktop, with no window of a program in front. Null when that is not known. */
+  onDesktop?: () => boolean | null;
+  /** Which system their computer runs, when it is known: what is always on its desktop differs. */
+  system?: () => 'windows' | 'mac' | null;
   /** Everything the notch can do, on one sheet: day one ends on it. */
   canDo?: (stage: NotchStage, more: { yes: string }) => Promise<void>;
   /** Mail and calendar: whether they are within reach now, and the window to sign in. */
@@ -126,6 +136,8 @@ export interface NotchDayOne {
   unheard(why: string): boolean;
   /** A file was dropped on the notch and taken. Day one, waiting for one, knows its lesson is learned. */
   gave(): void;
+  /** A "where is" was answered, by pointing at the thing or not. Day one, waiting to be asked one, says which. */
+  pointed(shown: boolean): void;
   /** The step it is on, or 0 when it is over or never began. */
   step(): number;
   /** Looks around, apart from day one. */
@@ -174,6 +186,20 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   let hearing = false, looking = false;
   /** Step 10: waiting for a file, and one came. Step 11: waiting to be asked where something is, and it was asked. */
   let feeding = false, fed = false, asking = false, asked = false;
+  /** Step 11: whether the thing that was asked about was pointed at. Null when that was never told. */
+  let shown: boolean | null = null;
+
+  /**
+   * The question step 11 suggests. It has to have an answer where the person
+   * is. The owner, 17 November 2026: "I was on my desktop, I didn't have any
+   * windows open, which will be something that a lot of people will have."
+   * So on a bare desktop it is about something every desktop has.
+   */
+  const example = (): string => {
+    if (deps.onDesktop?.() !== true) return 'where do I close this window?';
+    const system = deps.system?.() ?? null;
+    return system === 'windows' ? 'where is the Start button?' : system === 'mac' ? 'where is the Trash?' : 'where is the clock?';
+  };
 
   const kept = (): Kept | null => {
     const raw = deps.settings.get<Partial<Kept> | null>(KEPT, null);
@@ -432,6 +458,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       chips[at]!.found = cut(read.found, 28);
       // What it found there, in a sentence: said under the map, when the looking is over.
       if (read.say?.length) rows.push({ kind: 'row', lead: cut(sources[at]!.name, 20), say: read.say });
+      for (const row of (read.rows ?? []).slice(0, 8)) rows.push({ kind: 'row', lead: cut(row.lead, 40), say: row.say });
       redraw();
       await stage.wait(240);
     }
@@ -440,7 +467,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     log(`[notch] looked around: ${sources.length} place(s), ${nodes.length - 1} thing(s) drawn`);
     // One stroke through everything it found.
     if (nodes.length > 2) tour = [...nodes.slice(1).map((node) => node.id), ME.id];
-    rows.push({ kind: 'note', say: [nodes.length > 1 ? 'That is what I can reach today. I read names, and opened no file. Ask me about any of it.' : 'I can reach nothing yet. It fills as you connect things.'] });
+    rows.push({ kind: 'note', say: [nodes.length > 1 ? 'That is what I can reach today. Of what I opened, nothing is kept. Ask me about any of it.' : 'I can reach nothing yet. It fills as you connect things.'] });
     stage.surface.update(id, { blocks: blocks() });
     stage.surface.act({ mood: 'proud' });
     // It stays to be read, until it is closed or gone on from.
@@ -450,7 +477,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   async function lookAround(stage: NotchStage): Promise<Went> {
     if (!deps.around) return 'on';
-    const said = await ask(stage, 9, ['May I look around? Your mail, your calendar, and the files on this computer. I read their names and open none.'], 'allow', 'curious');
+    const said = await ask(stage, 9, ['May I look around? Your mail, your calendar, and the files on your desktop. I open the newest few to see what they are, and skip anything private.'], 'allow', 'curious');
     if (said === 'left') return 'left';
     if (said === 'yes') await around(stage, { yes: 'continue', step: counter(9) });
     return 'on';
@@ -503,8 +530,11 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     for (;;) {
       if (asked) {
         asking = false;
-        await stage.say(['That works in any window. Ask "how do I…" and I walk you through it, a step at a time.'], 4400, { mood: 'happy' });
-        asked = false;
+        // It says what happened: pointed at, or not found this time. Never that it pointed when it did not.
+        await stage.say(shown === false
+          ? ['I could not find that one here. In any window, ask "where is…" or "how do I…" and I point, a step at a time.']
+          : ['I point, you click. It works in any window. Ask "how do I…" and I walk you through it, a step at a time.'], 4600, { mood: shown === false ? 'look' : 'happy' });
+        asked = false; shown = null;
         return 'on';
       }
       // They said something else, twice: it is theirs to try later.
@@ -513,7 +543,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       const id = stage.id();
       stage.put({
         id, kind: 'offer', keys: 'talk', yes: 'hold and ask', mood: 'curious', fold: NOTCH_DAY_ONE_FOLD_MS, step: counter(11),
-        say: ['Now ask me where something is. Hold ', { key: 'talk' }, ' and say: ', em('where do I close this window?')],
+        say: ['Now ask me where something is. Hold ', { key: 'talk' }, ' and say: ', em(example())],
       });
       const answer = await stage.answer(id, ['yes', 'no', 'fold']);
       if (answer.act === 'fold') return 'left';
@@ -571,7 +601,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
 
   function again(): void {
     if (stopped) return;
-    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false;
+    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false; shown = null;
     keep({ step: 1, done: false });
     log('[notch] day one was started');
     present();
@@ -596,7 +626,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       // Step 11 waits to be asked where something is. Such a question is answered as ever, by pointing, and
       // day one only notes that it was asked: nothing is taken from it here.
-      if (asking && stepNow() === 11 && deps.isWhere?.(text)) asked = true;
+      if (asking && stepNow() === 11 && deps.isWhere?.(text)) { asked = true; shown = null; }
       if (dayOneRequest(text)) return { did: 'Start day one.', run: () => again() };
       if (aroundRequest(text) && deps.around) return { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } };
       return null;
@@ -621,6 +651,10 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       // It is asked about as any dropped file is, and day one has the notch back after that.
       fed = true;
       present();
+    },
+    pointed(was) {
+      if (stopped || !asked || stepNow() !== 11) return;
+      shown = was;
     },
     step: stepNow,
     around,
