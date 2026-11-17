@@ -75,6 +75,7 @@ export function notchAgentWorkflows(options: NotchAgentOptions): NotchAgentWorkf
       return seen ? { job: short(seen.name, 90), enabled: seen.enabled } : null;
     },
     runs: (flowId, limit) => agentRunEnds(flowId, limit),
+    madeSince: (at) => actions().madeSince(at).map((made) => ({ flowId: made.id, job: short(made.name, 90), ready: made.ready, missing: short(made.missing), enabled: made.enabled })),
   };
 }
 

@@ -1687,6 +1687,38 @@ applied).
     writes the likely answer and says under the draft which way it wrote
     it ("I did not know: Whether you accept. I wrote a yes.").
 
+125. **However it is put, asking for an agent is asking the notch, and
+    nobody is sent to the dashboard to switch one on.** The owner's first
+    agent, 17 November 2026, began "Can you make an agent that every day at
+    5.10 sends me a notification…". It was not taken as the notch's own, so
+    it went to the assistant, which built a workflow that was switched off,
+    had no name, and asked "shall I enable it?" with only the dashboard to
+    answer in. "The only way for me to enable it is to go to the dashboard,
+    so it doesn't give me a name. Also keeps on calling workflow. I'd like
+    to make fully that switch to agents with their own name." So:
+    - `agentSentence` takes a request however it is put ("can you make",
+      "I want", "set up a new", "new agent:"), with the word agent,
+      workflow, automation, routine or bot, put as a question or not. The
+      schedule may stand anywhere in it, a time may be written "5.10", and
+      an hour from one to six with no "am" is the afternoon. "An agent that
+      sends…" is read back as what to do: "Every day at 17:10, send…". One
+      asked for with no schedule is read back as it was put: "An agent that
+      replies to new leads."
+    - Said without the word agent, a sentence is one only when it begins
+      with its schedule: "I go to the gym every day" is not something to
+      take over.
+    - What the assistant builds in a turn all the same is an agent like any
+      other (`NotchAgents.adopt`, called when a turn ends): the notch asks
+      "Switch … on as an agent?", and a yes switches it on, names it and
+      puts it on the first rung. One it had switched on itself is named and
+      asks first from then on. One that cannot run yet is said once.
+    - What was built in the last two days and never switched on stands in
+      "Your agents" with "Switch on" and "Discard", and Home leads to it.
+    - On the notch it is an agent, never a workflow: in the notch's own
+      lines, and in what the assistant is told for a turn that came from
+      the notch (`NOTCH_TURN_NOTE`), which also tells it not to ask whether
+      to enable one and not to send the owner to the dashboard.
+
 What is not done, or not proven, in pass 11:
 
 - **None of it has run on a real machine or against a real mailbox.** The
@@ -1714,8 +1746,15 @@ What is not done, or not proven, in pass 11:
 - **The agent's name and Esc as undo are not on the line that announces
   it.** The prototype made the name a word and let Esc take the agent back.
   Here the name is given, and "Let go" in the list removes it.
-- **A workflow made in the dashboard is not an agent.** Only one made by a
-  sentence on the notch has a name and a rung.
+- **A workflow made in the dashboard is not an agent**, unless it was made
+  in the last two days and is still switched off: then it stands in "Your
+  agents" to be switched on. One that already runs is left as it is: making
+  it an agent would put it on "asks first", and it would start asking for
+  things it does alone today. That is the owner's to decide.
+- **The dashboard itself still says "workflow".** Only the notch, and what
+  the assistant says on it, call it an agent.
+- **Whether the assistant keeps to the word is its own doing.** It is told
+  to; nothing rewrites what it says.
 - **Community connectors that have no governed adapter never ask**, at any
   rung, as before this pass: a rung can only be applied where the product
   judges a step.

@@ -1403,6 +1403,21 @@ export function workflowActions(deps: ManageWorkflowDeps, project: string = DEFA
     setStatus: (flowId: string, status: 'ENABLED' | 'DISABLED') => actSetStatus(flowOf(flowId), status, deps),
     run: (flowId: string) => actRun(flowOf(flowId)),
     remove: (flowId: string) => actDelete(flowOf(flowId), deps, project),
+    /** What was built since a moment, newest first: what it is called, whether it is on, and whether it could run. */
+    madeSince(at: number): { id: string; name: string; enabled: boolean; ready: boolean; missing: string }[] {
+      const out: { id: string; name: string; enabled: boolean; ready: boolean; missing: string }[] = [];
+      for (const flow of listFlows(project, { limit: 50 })) {
+        if (flow.created < at) continue;
+        const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+        if (!versionId) continue;
+        const readiness = versionReadiness(flow.id, versionId);
+        out.push({
+          id: flow.id, name: String(summarizeFlow(flow).name ?? flow.id), enabled: flow.status === 'ENABLED',
+          ready: readiness.ready, missing: readiness.ready ? '' : String(readiness.issues[0]?.message ?? 'something in it is not set up'),
+        });
+      }
+      return out;
+    },
     /** What a workflow is called and whether it is on. Null when it is gone. */
     look(flowId: string): { name: string; enabled: boolean } | null {
       const flow = getFlowInProject(project, flowId);
