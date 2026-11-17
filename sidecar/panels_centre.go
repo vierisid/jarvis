@@ -7,6 +7,10 @@ package main
 // are looking, which is the middle of the display they work on, not wherever
 // the system happens to put a new window.
 
+// platformBeforeWebview is run before a window's web view is made, where the
+// system needs something put in place for it first. Nil where it does not.
+var platformBeforeWebview func()
+
 // platformPrimaryScreenSize is the size of the display a person works on,
 // where the system can tell that apart from all its displays together. Nil
 // where it cannot: then all of them together are taken as one.

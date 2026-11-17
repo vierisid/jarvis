@@ -225,6 +225,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
+		if platformBeforeWebview != nil {
+			platformBeforeWebview()
+		}
 		wv = newPanelWebview(debug)
 		if wv == nil {
 			log.Printf("[panels] spawn(%s): could not create the webview — no display, webview runtime missing, or its init failed", spec.ID)

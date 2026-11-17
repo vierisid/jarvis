@@ -10,6 +10,10 @@ if /I "%~1"=="--check" (
   exit /b
 )
 if not exist "%USERPROFILE%" mkdir "%USERPROFILE%"
+rem Windows gives every real profile these folders. The desktop app's windows
+rem keep their data in the first, and no window can be made without it.
+if not exist "%USERPROFILE%\AppData\Roaming" mkdir "%USERPROFILE%\AppData\Roaming"
+if not exist "%USERPROFILE%\AppData\Local" mkdir "%USERPROFILE%\AppData\Local"
 if exist "%USERPROFILE%\.jarvis\sidecar.yaml" (
   start "" /D "%~dp0bin" "%~dp0bin\jarvis.exe"
   exit /b

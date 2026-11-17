@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { NOTCH_CAPABILITY, attachNotch, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
+import { NOTCH_CAPABILITY, NOTCH_SPAWN_AGAIN_MS, attachNotch, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
 
 /** A sidecar manager that records what it is asked to do. */
 function fakePort(answer: () => Promise<unknown> = async () => ({ configured: true, enabled: true, surface: 'none' })) {
@@ -55,6 +55,73 @@ describe('attachNotch', () => {
       { sidecarId: 's1', method: 'notch.spawn', params: { url: 'http://localhost:3143/notch.html' } },
     ]);
     expect(lines.at(-1)).toBe('[notch] "desk" is showing the notch');
+  });
+
+  /** A desktop app whose window cannot be made the first `fails` times it is asked for. */
+  function stubborn(fails: number) {
+    const calls: string[] = [];
+    const listeners: Array<(sidecar: NotchSidecar) => void> = [];
+    let asked = 0;
+    const port: NotchSidecarPort = {
+      onSidecarConnected(listener) { listeners.push(listener); },
+      async dispatchRPC(_sidecarId, method) {
+        calls.push(method);
+        if (method !== 'notch.spawn') return { configured: true, enabled: true, surface: 'window' };
+        if (++asked <= fails) throw new Error('HANDLER_ERROR: panel.spawn[notch]: could not create the window');
+        return { spawned: true, already: false };
+      },
+    };
+    const waits: number[] = [];
+    const held: Array<() => void> = [];
+    const wait = (ms: number): Promise<void> => { waits.push(ms); return new Promise<void>((done) => { held.push(done); }); };
+    /** The wait that is on is over. */
+    const pass = async (): Promise<void> => { held.shift()?.(); await settle(); };
+    return { port, calls, waits, wait, pass, connect(sidecar: NotchSidecar) { for (const listener of listeners) listener(sidecar); } };
+  }
+
+  // The first start of a new profile: the window could not be made, once.
+  // Without the second try that computer had no notch until its desktop app
+  // was started again.
+  test('a window that could not be made is asked for again, and the notch is there at the second try', async () => {
+    const fake = stubborn(1);
+    const lines: string[] = [];
+    attachNotch(fake.port, { enabled: true, pageUrl: 'http://localhost:3143/notch.html', log: (line) => lines.push(line), wait: fake.wait });
+    fake.connect(capable);
+    await settle();
+    expect(fake.calls).toEqual(['notch.configure', 'notch.spawn']);
+    expect(fake.waits).toEqual([NOTCH_SPAWN_AGAIN_MS[0]!]);
+    expect(lines.at(-1)).toBe('[notch] "desk" could not show the notch: HANDLER_ERROR: panel.spawn[notch]: could not create the window. Trying again in 2 s');
+    await fake.pass();
+    expect(fake.calls).toEqual(['notch.configure', 'notch.spawn', 'notch.spawn']);
+    expect(lines.at(-1)).toBe('[notch] "desk" is showing the notch, at try 2');
+  });
+
+  test('three tries in all, then it is left and says so', async () => {
+    const fake = stubborn(99);
+    const lines: string[] = [];
+    attachNotch(fake.port, { enabled: true, pageUrl: 'http://localhost:3143/notch.html', log: (line) => lines.push(line), wait: fake.wait });
+    fake.connect(capable);
+    await settle();
+    await fake.pass();
+    await fake.pass();
+    await fake.pass();
+    expect(fake.calls.filter((method) => method === 'notch.spawn').length).toBe(NOTCH_SPAWN_AGAIN_MS.length + 1);
+    expect(fake.waits).toEqual([...NOTCH_SPAWN_AGAIN_MS]);
+    expect(lines.at(-1)).toBe('[notch] "desk" could not show the notch: HANDLER_ERROR: panel.spawn[notch]: could not create the window');
+  });
+
+  test('a desktop app that connected again while a try waited is asked by its new connection only', async () => {
+    const fake = stubborn(1);
+    attachNotch(fake.port, { enabled: true, pageUrl: 'http://localhost:3143/notch.html', log: () => {}, wait: fake.wait });
+    fake.connect(capable);
+    await settle();
+    // It connects again before the second try: that connection asks, and gets its window.
+    fake.connect(capable);
+    await settle();
+    expect(fake.calls.filter((method) => method === 'notch.spawn').length).toBe(2);
+    // The old connection's wait ends: it asks for nothing more.
+    await fake.pass();
+    expect(fake.calls.filter((method) => method === 'notch.spawn').length).toBe(2);
   });
 
   // A desktop app that only understands the switch must not be asked for a
