@@ -41,7 +41,7 @@ import {
 } from './install-method.ts';
 import { stopDaemonGracefully, type StopResult } from './daemon-control.ts';
 import { modelExecRestartWarning } from '../util/model-exec-marker.ts';
-import { daemonStartFlags, readLaunchRecord } from './lifecycle.ts';
+import { daemonStartFlags, readLaunchRecord, writeLaunchRecord } from './lifecycle.ts';
 
 export interface SpawnResult {
   exitCode: number;
@@ -74,9 +74,10 @@ export interface UpdateDeps {
   restartDaemon?: boolean;
   /**
    * Injectable for tests: receives the `jarvis` argv (from `start` on) of the
-   * restart instead of a detached daemon being spawned with it.
+   * restart instead of a detached daemon being spawned with it, and returns
+   * the pid the launch record is written under.
    */
-  launchDaemon?: (jarvisArgs: string[]) => void;
+  launchDaemon?: (jarvisArgs: string[]) => number | undefined;
   /**
    * Injectable for tests. Defaults to detectSystemdUnit(): the systemd user
    * unit the running daemon is the main process of, if any. Not detected at
@@ -131,7 +132,7 @@ export function defaultSpawn(cmd: string[], options: { cwd?: string; timeoutMs?:
  * sink's first compaction would rename a new file over the path and leave this
  * descriptor appending to an unlinked inode forever.
  */
-function restartDaemonDetached(packageRoot: string, jarvisArgs: string[]): void {
+function restartDaemonDetached(packageRoot: string, jarvisArgs: string[]): number | undefined {
   const logPath = getLogPath();
   const logFd = openSync(logPath, 'a');
   const child = spawn('bun', [join(packageRoot, 'bin/jarvis.ts'), ...jarvisArgs], {
@@ -140,6 +141,7 @@ function restartDaemonDetached(packageRoot: string, jarvisArgs: string[]): void 
     env: { ...process.env },
   });
   child.unref();
+  return child.pid;
 }
 
 // ── Per-method handlers ─────────────────────────────────────────────
@@ -487,8 +489,23 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
         console.log(c.yellow('  The running daemon did not record its start options; restarting with the defaults.'));
         console.log(c.dim('  If it was started with --port, --data-dir, --no-local-tools or --system-config, run `jarvis stop` and start it again with them.'));
       }
-      if (deps.launchDaemon) deps.launchDaemon(jarvisArgs);
-      else restartDaemonDetached(deps.packageRoot, jarvisArgs);
+      const childPid = deps.launchDaemon
+        ? deps.launchDaemon(jarvisArgs)
+        : restartDaemonDetached(deps.packageRoot, jarvisArgs);
+      // Recorded for the child the way `jarvis start -d` does it: the child
+      // keeps a record already under its pid instead of writing its own
+      // foreground one, so a later `jarvis restart` stays detached.
+      if (childPid !== undefined) {
+        writeLaunchRecord({
+          pid: childPid,
+          detached: true,
+          noOpen: startOptions?.noOpen ?? false,
+          noLocalTools: startOptions?.noLocalTools ?? false,
+          port: startOptions?.port,
+          dataDir: startOptions?.dataDir,
+          systemConfigPath: startOptions?.systemConfigPath,
+        });
+      }
     } else {
       // The old daemon still holds the lock, so a spawned replacement would
       // fail acquireLock() and die into the log while the user reads

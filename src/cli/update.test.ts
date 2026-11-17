@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runUpdate, type Spawner, type SpawnResult } from './update.ts';
-import { writeLaunchRecord } from './lifecycle.ts';
+import { readLaunchRecord, restartStartArgs, writeLaunchRecord } from './lifecycle.ts';
 import type { InstallMethod, InstallMethodInfo } from './install-method.ts';
 
 let workDir: string;
@@ -334,6 +334,7 @@ describe('runUpdate — script install', () => {
 describe('runUpdate - restart keeps the start options', () => {
   const lsRemote = (tag: string): string => `${'0'.repeat(40)}\trefs/tags/${tag}\n`;
   const runningPid = 4242;
+  const childPid = 4343;
 
   async function updateAndRestart(): Promise<string[][]> {
     const { spawn } = recordingSpawner([
@@ -347,11 +348,38 @@ describe('runUpdate - restart keeps the start options', () => {
       detect: () => fakeInfo('script'),
       checkRunning: () => runningPid,
       stopDaemon: async () => ({ wasRunning: true, pid: runningPid, graceful: true, stopped: true }),
-      launchDaemon: (args) => { launched.push(args); },
+      launchDaemon: (args) => { launched.push(args); return childPid; },
     });
     expect(result.exitCode).toBe(0);
     return launched;
   }
+
+  test('records the restarted daemon as detached, so a later restart stays detached', async () => {
+    const dataDir = join(workDir, 'data');
+    writeLaunchRecord({ pid: runningPid, detached: false, noOpen: false, port: 4100, dataDir, noLocalTools: true, systemConfigPath: '/etc/jarvis/system.yaml' });
+
+    await updateAndRestart();
+
+    const record = readLaunchRecord(childPid);
+    expect(record).toEqual({
+      pid: childPid, detached: true, noOpen: false, noLocalTools: true,
+      port: 4100, dataDir, systemConfigPath: '/etc/jarvis/system.yaml',
+    });
+    expect(restartStartArgs(record, [])).toEqual([
+      '--detach', '--no-local-tools', '--port', '4100', '--data-dir', dataDir, '--system-config', '/etc/jarvis/system.yaml',
+    ]);
+  });
+
+  test('records a detached daemon with the defaults when the stopped one recorded nothing', async () => {
+    await updateAndRestart();
+
+    const record = readLaunchRecord(childPid);
+    expect(record).toEqual({
+      pid: childPid, detached: true, noOpen: false, noLocalTools: false,
+      port: undefined, dataDir: undefined, systemConfigPath: undefined,
+    });
+    expect(restartStartArgs(record, [])).toEqual(['--detach']);
+  });
 
   test('restarts with the flags the stopped daemon recorded', async () => {
     const dataDir = join(workDir, 'data');
