@@ -154,7 +154,7 @@ work again, rerun it in Jarvis.
 | --- | --- |
 | Started | 200 `{ ok, outcome: "started", fireId, runId }` |
 | Repeat | 200 `{ ok, outcome: "duplicate", duplicate: true, fireId, runId }` |
-| Readiness refused | 200 `{ ok, outcome: "blocked", reason }`; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
+| Readiness refused (a connection changed, a piece removed) | 503 with `Retry-After: 300` and `{ error, outcome: "blocked", fireId }`, a plain reason that names nothing of the workflow; the delivery is kept on a failed run for a person to decide, and its retries are repeats |
 | Workflow turned off | 404 `{ error }` saying the workflow is turned off (a Webhook-trigger workflow only; past 60 such lookups a minute across all ids the reply is `Webhook not found`); a retry after it is turned back on runs |
 | Workflow changed or gone | 404 `Webhook not found`, as for an id that never existed |
 | Queue full | 503 with `Retry-After` |

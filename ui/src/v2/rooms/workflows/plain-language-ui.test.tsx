@@ -170,7 +170,8 @@ test('a plain step no longer carries the "Programmed" label, and its piece shows
   expect(host.textContent).not.toContain('Programmed');
   expect(host.textContent).not.toContain('@activepieces');
   expect(host.textContent).not.toContain('piece-');
-  expect(host.textContent).toContain('not installed');
+  // A piece missing from the catalog reads as removed, in its plain name.
+  expect(host.textContent).toContain('Not Installed (removed)');
   // A step that is AI judgment still says so.
   await renderNode({ name: 'step_2', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-agent', actionName: 'ask' } });
   expect(host.textContent).toContain('AI judgment');

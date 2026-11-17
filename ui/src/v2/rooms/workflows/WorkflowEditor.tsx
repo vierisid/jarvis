@@ -123,6 +123,7 @@ import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 import { isHumanInputStep } from "../../../../../src/workflows/runtime/human-input-contract";
 import { CONTINUE_UNAVAILABLE_MESSAGE, NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
+import { plainActionName, plainPieceName } from "../../../../../src/workflows/pieces-library/plain-piece-name";
 import { accessibleText } from "./accessible-text";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
@@ -3282,11 +3283,14 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
   const isRouter = step.type === "ROUTER";
   const piece = catalog.find((p) => p.name === step.settings?.pieceName);
   const subAction = isTrigger ? step.settings?.triggerName : step.settings?.actionName;
+  const removedPiece = !!step.settings?.pieceName && !piece && catalog.length > 0
+    && (step.type === "PIECE" || step.type === "PIECE_TRIGGER")
+    && step.settings.pieceName !== "schedule" && step.settings.pieceName !== "webhook";
   const subDisplayName = piece
     ? (isTrigger
         ? piece.triggers.find((t) => t.name === subAction)?.displayName
         : piece.actions.find((a) => a.name === subAction)?.displayName) ?? subAction
-    : subAction;
+    : subAction && removedPiece ? plainActionName(subAction) : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
   const notApprovalGated = stepNotApprovalGated(step, catalog);
 
@@ -3456,7 +3460,9 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
           <span className="wf-node__piece">{describeSchedule(step.settings)}</span>
         ) : step.settings?.pieceName ? (
           <>
-            <span className="wf-node__piece">{piece?.displayName ?? humanizePieceName(step.settings.pieceName)}</span>
+            <span className="wf-node__piece" title={removedPiece ? "This piece is not installed. Reinstall it from the Library." : undefined}>
+              {piece?.displayName ?? (removedPiece ? `${plainPieceName(step.settings.pieceName)} (removed)` : humanizePieceName(step.settings.pieceName))}
+            </span>
             {subDisplayName ? <span className="wf-node__sep">·</span> : null}
             {subDisplayName ? <span className="wf-node__action">{subDisplayName}</span> : null}
           </>

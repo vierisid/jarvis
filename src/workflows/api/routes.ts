@@ -116,9 +116,11 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfRevokedCodeSteps, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { deleteWorkflow } from "../db/repos/flow-deletion";
-import { connectionDependents, dependentsSentence, missingDependency, workflowsCalling } from "../db/repos/flow-dependents";
+import { connectionDependents, dependentsSentence, enabledWorkflowsUsingPiece, missingDependency, removedPieceReason, uninstallSentence, workflowsCalling } from "../db/repos/flow-dependents";
+import { workflowReadinessServices } from "../db/repos/readiness-services";
 import { claimContinuation } from "../runtime/continuation";
 import { flowBindingBlock } from "../runtime/binding-refusals";
+import { plainPieceName } from "../pieces-library/plain-piece-name";
 import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
@@ -1213,6 +1215,10 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             // In-catalog but not installed: idempotent no-op.
             return ok({ uninstalled: true, alreadyAbsent: true });
           }
+          // Read before the piece goes: the enabled workflows that use it
+          // stop working, and the caller is told which.
+          const usedBy = enabledWorkflowsUsingPiece(callerProject(req), target.npmPackage);
+          const warning = uninstallSentence(findCatalogEntry(id)?.displayName ?? plainPieceName(target.npmPackage), usedBy);
           await withLibraryLock(() => uninstallPiece(id));
           if (opts.onPieceLibraryChanged) {
             try {
@@ -1226,7 +1232,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               // catalog naturally.
             }
           }
-          return ok({ uninstalled: true });
+          return ok({ uninstalled: true, usedBy, ...(warning ? { warning } : {}) });
+        }),
+    },
+
+    // Who would be affected by uninstalling it, for the confirmation before DELETE.
+    "/api/workflows/pieces/library/:id/dependents": {
+      GET: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const target = (await readManifest()).pieces.find((p) => p.id === id);
+          if (!target) return ok({ usedBy: [] });
+          const usedBy = enabledWorkflowsUsingPiece(callerProject(req), target.npmPackage);
+          const warning = uninstallSentence(findCatalogEntry(id)?.displayName ?? plainPieceName(target.npmPackage), usedBy);
+          return ok({ usedBy, ...(warning ? { warning } : {}) });
         }),
     },
 
@@ -1749,6 +1768,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               // deleted cannot run, whatever its last run said.
               const missing = missingDependency(flow);
               if (missing) return { code: "DEPENDENCY_MISSING", kind: "readiness" as const, message: missing, runId: null, at: flow.updated };
+              // A piece uninstalled since it was published stops every run, so
+              // the list says so now, not after the next fire fails. It reads
+              // the live catalog, so it clears once the piece is back.
+              const removed = removedPieceReason(flow, workflowReadinessServices()?.pieces);
+              if (removed) return { code: "PIECE_REMOVED", kind: "readiness" as const, message: removed, runId: null, at: flow.updated };
               return flowBindingBlock(flow);
             } catch (error) { console.error(`[workflows] blocked state of ${flow.id} unreadable:`, error); return null; }
           };
