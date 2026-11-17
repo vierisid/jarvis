@@ -170,11 +170,25 @@ export function putForm(text: string): NotchPutForm | null {
   return null;
 }
 
-/** "Put it here", "paste that into the doc as a table": the thing that is held is to be put somewhere. */
+/**
+ * "Put it here", "paste that into the doc as a table": the thing that is
+ * held is to be put somewhere.
+ *
+ * The verb alone was enough, and for a minute and a half after any look
+ * every short instruction that began with put, paste, place, insert or drop
+ * pasted what had been looked at into the window in front, at once: "put a
+ * meeting with Sam on my calendar for Friday" pasted a number into a mail.
+ * So it has to speak of the thing ("it", "this", "that", "them", or what it
+ * is: the table, the rows, the numbers), or be the verb with only a place
+ * ("paste here").
+ */
 export function putRequest(text: string): boolean {
-  const said = text.trim();
+  const said = text.trim().replace(/[.!]+$/, '');
   if (!said || said.split(/\s+/).length > 14) return false;
-  return new RegExp(`^${LEAD}(?:put|paste|drop|insert|place)\\b`, 'i').test(said) || new RegExp(`^${LEAD}(?:mettilo|incollalo)\\b`, 'i').test(said);
+  const thing = '(?:it|this|that|them|these|those|the (?:table|rows?|numbers?|figures?|text|list|cells?|selection|lines?|names?|values?|data))';
+  return new RegExp(`^${LEAD}(?:put|paste|drop|insert|place)\\s+${thing}\\b`, 'i').test(said)
+    || new RegExp(`^${LEAD}(?:put|paste|drop|insert|place)(?:\\s+(?:here|there|in here|right here))?$`, 'i').test(said)
+    || new RegExp(`^${LEAD}(?:mettilo|mettila|mettili|incollalo|incollala|incollali)\\b`, 'i').test(said);
 }
 
 /** A few words that only answer "put it here?": a yes, or the form alone ("as a list"). */

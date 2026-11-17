@@ -204,7 +204,31 @@ export function notchRememberFile(db: Database, place: string, name: string, lin
 /** How long the reading of the files may take in all before the look around goes on without it. */
 const READING_MOST_MS = 60_000;
 
+/** How long the one small question that shows an AI answers may take, and how long a no is believed before it is asked again. */
+const AI_CHECK_MS = 20_000;
+const AI_CHECK_AGAIN_MS = 4000;
+
 export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchRealDeps['dayOne']> {
+  let worked = false;
+  let failedAt = 0;
+  /**
+   * Whether the AI that is set up answers: one small question put to it. A
+   * provider counts as "ready" as soon as it is registered, and a mistyped
+   * key is registered too. Once it has answered it is not asked again.
+   */
+  const works = async (): Promise<boolean> => {
+    if (worked) return true;
+    if (Date.now() - failedAt < AI_CHECK_AGAIN_MS) return false;
+    try {
+      await runWithOrigin('user', async () => options.llm().chatTier('low', 'notch_dayone_check', [{ role: 'user', content: 'Reply with the one word: ok' }], { max_tokens: 8, temperature: 0, signal: AbortSignal.timeout(AI_CHECK_MS) }));
+      worked = true;
+    } catch {
+      failedAt = Date.now();
+      // That it did not, and nothing of why: a provider's error can quote the key it was given.
+      console.warn('[notch] day one: the AI that is set up did not answer the check');
+    }
+    return worked;
+  };
   const first = (name: string): string => name.replace(/\s+/g, ' ').trim().split(' ')[0] ?? '';
   const around = (): NotchAroundSource[] => {
     // The computer is asked once for all three places, when the first of them is read.
@@ -222,7 +246,9 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
      * one request to the owner's own model. That line is remembered. What is
      * in a file is not kept anywhere.
      */
-    const reading = async (): Promise<{ found: string; rows: { lead: string; say: NotchPart[] }[]; say?: NotchPart[] }> => {
+    const reading = async (signal?: AbortSignal): Promise<{ found: string; rows: { lead: string; say: NotchPart[] }[]; say?: NotchPart[] }> => {
+      /** The looking was left, or this took too long: nothing more is opened, asked of the model or remembered. */
+      const dropped = { found: 'left', rows: [] };
       const desk = await place('desktop'), docs = await place('documents');
       const listed = [...(desk?.recent ?? []), ...(docs?.recent ?? [])].filter((seen) => seen.kind !== 'folder');
       const held = listed.filter((seen) => seen.private).length;
@@ -234,6 +260,7 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       if (!notchModelReady(llm)) return { found: 'needs the AI', rows: [], say: ['I can open them and say what each is once I have an AI.', ...closed] };
       const read: { place: NotchFilePlace['place']; name: string; text: string }[] = [];
       for (const file of picked) {
+        if (signal?.aborted) return dropped;
         const reader = fileReader(file.name, file.size);
         if (!reader) continue;
         let bytes: Uint8Array | null = null;
@@ -245,13 +272,17 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       // How many, never which.
       console.log(`[notch] looking around: ${read.length} of ${picked.length} file(s) could be read, ${held} left closed as private`);
       if (read.length === 0) return { found: 'nothing to read', rows: [], say: ['I could not read the newest files.', ...closed] };
+      if (signal?.aborted) return dropped;
       let answer = '';
       try {
-        answer = await runWithOrigin('user', async () => (await llm.chatTier('low', 'notch_files_open', filesMessages(read), { max_tokens: 60 * read.length + 40, temperature: 0 })).content);
+        answer = await runWithOrigin('user', async () => (await llm.chatTier('low', 'notch_files_open', filesMessages(read), { max_tokens: 60 * read.length + 40, temperature: 0, ...(signal ? { signal } : {}) })).content);
       } catch (error) {
+        if (signal?.aborted) return dropped;
         console.warn('[notch] looking around: the files could not be put to the model:', error instanceof Error ? error.message : error);
         return { found: `${many(read.length, 'file', 'files')} opened`, rows: [], say: ['I opened them, but the AI did not answer, so I cannot say what they are.', ...closed] };
       }
+      // Left while the model answered: what it said is shown to nobody, so it is not remembered either.
+      if (signal?.aborted) return dropped;
       const said = filesSaid(answer, read.length);
       const rows = read.flatMap((file, at) => (said[at] ? [{ lead: file.name, say: [said[at]!] satisfies NotchPart[] }] : []));
       // The line about each is remembered. One the owner has forgotten is said here, and not written again.
@@ -322,13 +353,24 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
     {
       // The owner, asked whether it should open the files: "Yes, it should."
       name: 'Reading',
-      async read() {
+      async read(signal) {
+        // Its own time, and the looking being left, both end the reading itself: it used to go on unseen, put
+        // the files to the model and write what came back into memory.
+        const over = new AbortController();
+        const stop = (): void => over.abort();
+        signal?.addEventListener('abort', stop, { once: true });
+        let timer: ReturnType<typeof setTimeout> | undefined;
         const late = new Promise<Awaited<ReturnType<typeof reading>>>((resolve) => {
-          const timer = setTimeout(() => resolve({ found: 'took too long', rows: [], say: ['Reading them took too long. Ask me about any of them.'] }), READING_MOST_MS);
+          timer = setTimeout(() => { over.abort(); resolve({ found: 'took too long', rows: [], say: ['Reading them took too long. Ask me about any of them.'] }); }, READING_MOST_MS);
           (timer as { unref?: () => void }).unref?.();
         });
-        const got = await Promise.race([reading(), late]);
-        return { found: got.found, things: [], say: got.say, rows: got.rows };
+        try {
+          const got = await Promise.race([reading(over.signal), late]);
+          return { found: got.found, things: [], say: got.say, rows: got.rows };
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', stop);
+        }
       },
     },
     {
@@ -367,6 +409,7 @@ export function notchDayOneDeps(options: NotchDayOneOptions): NonNullable<NotchR
       hosted: () => hasUsejarvisAi(options.config()),
       setUp: (sidecarId) => options.openSetup(sidecarId),
       finish: () => options.finishSetup(),
+      works,
     },
     // What the talking itself asks before it makes words of a voice (notch-asks.ts): the same reading of the same settings.
     ...(options.openVoice ? { voice: { ready: () => notchVoice(options.config()) !== null, setUp: (sidecarId: string | null) => options.openVoice!(sidecarId) } } : {}),

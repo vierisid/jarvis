@@ -102,8 +102,10 @@ export interface NotchAroundSource {
    * drawn for the place itself; `say` is one sentence about what was found,
    * said under the map when the looking is over; `rows` are more lines under
    * that one, each about one thing (a file that was opened, and what it is).
+   * The signal fires when the looking was left: what is still being read is
+   * dropped, and nothing more is asked of a model or written down for it.
    */
-  read(): Promise<{
+  read(signal?: AbortSignal): Promise<{
     found: string; tool?: boolean; things: { label: string; kind: 'person' | 'co' | 'thing' }[];
     say?: NotchPart[]; rows?: { lead: string; say: NotchPart[] }[];
   }>;
@@ -122,7 +124,15 @@ export interface NotchDayOneDeps {
    * first setup once an AI is there: asked for each time, and does nothing on
    * a brain that is set up already.
    */
-  model: { ready(): boolean; name(): string; hosted(): boolean; setUp(sidecarId: string | null): void; finish?(): Promise<void> | void };
+  model: {
+    ready(): boolean; name(): string; hosted(): boolean; setUp(sidecarId: string | null): void; finish?(): Promise<void> | void;
+    /**
+     * Whether the AI that is set up answers: one small question put to it.
+     * `ready` only says that one is set up, and a mistyped key is set up too.
+     * Not given: what is set up is taken to work.
+     */
+    works?(): Promise<boolean>;
+  };
   /**
    * What makes out speech: whether anything does, and the way to set it up.
    * It has a key of its own, apart from the AI's. Asked for straight after
@@ -222,6 +232,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   /** The talking step: what was said, or why nothing was made out. The showing step: what was shown. */
   let told: string | null = null, missed: string | null = null, showed: string | null = null;
   let tries = 0;
+  /** At the "where is" step: how often something else was said instead. */
+  let others = 0;
   /** The AI was named already: said once, also when its step is come back to for the hearing. */
   let thinks = false;
   /** Whether the step on the notch is waiting to hear, or to be shown. */
@@ -257,6 +269,30 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   const cardOff = (): void => {
     if (cardTimer !== null) { clock.clearTimeout(cardTimer); cardTimer = null; }
     try { deps.installed?.hide(); } catch { /* it leaves by itself */ }
+  };
+
+  /**
+   * With an AI in, the product's own first setup is over too: what waits for
+   * it starts. Asked for once, the first time an AI is seen, at whichever
+   * step that is. Never stands in day one's way.
+   */
+  let setUp = false;
+  /** Whether the AI that is set up answers. Asked of it once it does: a key that worked is not tried again. */
+  let answers = false;
+  const works = async (): Promise<boolean> => {
+    if (answers || !deps.model.works) return true;
+    try { answers = (await deps.model.works()) === true; } catch { answers = false; }
+    return answers;
+  };
+  const finishSetup = async (): Promise<void> => {
+    if (setUp || !deps.model.ready()) return;
+    // An AI that is set up and does not answer (a mistyped key) is not a setup that is finished.
+    if (!(await works())) return;
+    setUp = true;
+    try { await deps.model.finish?.(); } catch (error) {
+      setUp = false;
+      log(`[notch] day one could not finish the setup: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   /** A step's answer: go on, go on past the next one too, or it was left and waits in the count. */
@@ -405,28 +441,29 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   }
 
   /** Waits for something the person does in another window. True when it came about, false when they said later. */
-  async function waitFor(stage: NotchStage, parts: NotchPart[], every: number, there: () => boolean | Promise<boolean>): Promise<boolean> {
+  async function waitFor(stage: NotchStage, parts: NotchPart[], every: number, there: () => boolean | Promise<boolean>, meanwhile?: () => NotchPart[] | null): Promise<boolean> {
     const id = stage.id();
     let later = false;
     stage.answer(id, ['stop']).then(() => { later = true; }, () => {});
     stage.put({ id, kind: 'work', say: parts, steps: 0, done: 0, mood: 'work' });
     const until = now() + NOTCH_DAY_ONE_WAIT_MS;
+    let said = parts;
     while (!later && now() < until) {
       await stage.wait(every);
       if (later) break;
       let is = false;
       try { is = (await there()) === true; } catch { is = false; }
       if (is) return true;
+      // What stands in the way now, when that is known: the line says it, and goes on waiting.
+      const next = meanwhile?.() ?? parts;
+      if (!later && JSON.stringify(next) !== JSON.stringify(said)) { said = next; stage.surface.update(id, { say: next }); }
     }
     return false;
   }
 
   async function brain(stage: NotchStage): Promise<Went> {
     const model = deps.model;
-    /** With an AI in, the product's own first setup is over too: what waits for it starts. Never stands in day one's way. */
-    const finish = async (): Promise<void> => {
-      try { await model.finish?.(); } catch (error) { log(`[notch] day one could not finish the setup: ${error instanceof Error ? error.message : String(error)}`); }
-    };
+    const finish = finishSetup;
     /**
      * Hearing is an AI of its own, with its own key. With an AI to answer
      * what is said, the next thing is to make out what is said: asked for
@@ -448,7 +485,10 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       await stage.say(['Now I can hear you.'], 2200, { mood: 'happy', mark: 'check' });
       return 'on';
     };
-    if (model.ready()) {
+    // Set up and answering. One that is set up and does not answer is asked about below, like none at all:
+    // "Now I can think" was said of a mistyped key, and every step after it failed one by one without a word.
+    const broken = model.ready() && !(await works());
+    if (model.ready() && !broken) {
       await finish();
       if (!thinks) {
         thinks = true;
@@ -457,19 +497,34 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       return hear();
     }
-    const options = ['My own AI account', 'AI on this computer'];
-    const id = stage.id();
-    stage.put({ id, kind: 'offer', say: ['First, an AI to think with. Which one should I use?'], options, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('brain') });
-    const answer = await stage.answer(id, ['pick', 'no', 'fold']);
-    if (answer.act === 'fold') return 'left';
     const later = async (): Promise<Went> => {
       await stage.say(['Later then. Until I have one I can listen and show you round, but not think.'], 3800, { mood: 'careful' });
       return 'on';
     };
-    if (answer.act !== 'pick') return later();
+    const NOT_ANSWERING: NotchPart[] = ['The AI is set up but does not answer. Check its key and its model in the AI settings.'];
+    let local = false;
+    if (broken) {
+      const open = await ask(stage, 'brain', ['My AI does not answer: its key or its model may be wrong. Open the AI settings?'], 'open', 'careful');
+      if (open === 'left') return 'left';
+      if (open !== 'yes') return later();
+    } else {
+      const options = ['My own AI account', 'AI on this computer'];
+      const id = stage.id();
+      stage.put({ id, kind: 'offer', say: ['First, an AI to think with. Which one should I use?'], options, fold: NOTCH_DAY_ONE_FOLD_MS, step: counter('brain') });
+      const answer = await stage.answer(id, ['pick', 'no', 'fold']);
+      if (answer.act === 'fold') return 'left';
+      if (answer.act !== 'pick') return later();
+      local = answer.index === 1;
+    }
     model.setUp(stage.from());
-    const local = answer.index === 1;
-    const there = await waitFor(stage, [local ? 'I opened the AI settings. Choose the AI on this computer there.' : 'I opened the AI settings. Add your account and its key there.'], 2000, () => model.ready());
+    const there = await waitFor(
+      stage,
+      broken ? NOT_ANSWERING : [local ? 'I opened the AI settings. Choose the AI on this computer there.' : 'I opened the AI settings. Add your account and its key there.'],
+      2000,
+      async () => model.ready() && (await works()),
+      // One is in, and it does not answer: said on the line, which goes on waiting for one that does.
+      () => (model.ready() && !answers ? NOT_ANSWERING : null),
+    );
     if (!there) return later();
     await finish();
     thinks = true;
@@ -525,9 +580,12 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     const blocks = (): NotchBlock[] => [{ kind: 'map', nodes: [...nodes], links: [...links], sources: chips.map((chip) => ({ ...chip })), ...(tour ? { tour } : {}) }, ...rows];
     const id = stage.id();
     let closed = false;
+    const left = new AbortController();
     // One wait for the whole sheet: its yes ("continue") and its Esc both end the looking, wherever it has got to.
-    const closing = stage.answer(id, ['yes', 'no']).then(() => { closed = true; });
+    const closing = stage.answer(id, ['yes', 'no']).then(() => { closed = true; left.abort(); }, (error: unknown) => { closed = true; left.abort(); throw error; });
     closing.catch(() => {});
+    /** Ends when the looking is left, whichever way: a place that hangs does not hold the person in the sheet. */
+    const gone = closing.then(() => null, () => null);
     stage.put({ id, kind: 'sheet', say: ['Looking around'], blocks: blocks(), mood: 'search', stay: true, no: more.yes ? 'skip' : 'close', ...(more.yes ? { yes: more.yes } : {}), ...(more.step ? { step: more.step } : {}) });
     const redraw = (): void => { if (!closed) stage.surface.update(id, { blocks: blocks() }); };
     let found = 0;
@@ -535,7 +593,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       chips[at]!.state = 'on';
       redraw();
       let read: Awaited<ReturnType<NotchAroundSource['read']>> = { found: 'not reached', things: [] };
-      try { read = await sources[at]!.read(); } catch (error) {
+      try { read = (await Promise.race([sources[at]!.read(left.signal), gone])) ?? read; } catch (error) {
         log(`[notch] looking around: ${chips[at]!.name} could not be read: ${error instanceof Error ? error.message : String(error)}`);
       }
       if (closed) break;
@@ -617,7 +675,6 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         : ['Ask me where something is, or how to do something, and I point at it. That needs the AI, so it waits until I have one.'], 4600, { mood: 'look' });
       return 'on';
     }
-    let other = 0;
     for (;;) {
       if (asked) {
         asking = false;
@@ -629,7 +686,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         return 'on';
       }
       // They said something else, twice: it is theirs to try later.
-      if (asking && ++other > 2) { asking = false; return 'on'; }
+      if (asking && ++others > 2) { asking = false; return 'on'; }
       asking = true;
       const id = stage.id();
       stage.put({
@@ -673,9 +730,17 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         await stage.say(['That is all. I speak up when something needs you. Hold ', { key: 'talk' }, ' and talk, any time.'], 5200, { mood: 'happy' });
         return 'settled';
       }
+      // An AI that came later than its own step (the key was made while day one went on) finishes the setup
+      // just the same: before, only the AI's own step did, and the product stayed "never set up" for good.
+      await finishSetup();
       const went = await step(stage);
-      if (went === 'left') return 'waits';
-      tries = 0;
+      if (went === 'left') {
+        // Left in the count. It waits for nothing there: words said an hour later are not its answer, a look is
+        // not its lesson, a file is not handed to it. All of that is asked for again when it is opened.
+        hearing = false; looking = false; feeding = false; asking = false;
+        return 'waits';
+      }
+      tries = 0; others = 0;
       // Kept as soon as it is taken: a brain that stops here goes on from the next step.
       // (`past`: the step after this one has nothing to stand on, and is passed over. Only ever the one beside it.)
       keep({ ...(kept() ?? state), step: state.step + (went === 'past' ? 2 : 1), done: false });
@@ -684,17 +749,25 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     }
   }
 
-  const item = (): NotchItem => ({
-    id: ITEM, subject: ITEM, class: 'person', speaks: true, asked: true, returns: true,
+  /**
+   * `asked`: the person started it ("day one", the button) or it answers
+   * what they just did. Day one coming up by itself is not asked for: it
+   * waits for a still moment and for the quiet hours to end like anything
+   * else, and its line does not take a yes or an Esc in its first moment.
+   * (An Esc meant for a dialog once landed on "May I watch?" and switched
+   * watching off.)
+   */
+  const item = (asked: boolean): NotchItem => ({
+    id: ITEM, subject: ITEM, class: 'person', speaks: true, asked, returns: true,
     title: () => [`Day one, step ${Math.min(stepNow() || 1, NOTCH_DAY_ONE_STEPS)} of ${NOTCH_DAY_ONE_STEPS}.`],
     check: () => stepNow() > 0,
     play,
   });
-  const present = (): void => { if (!stopped && stepNow() > 0) deps.inbox.add(item()); };
+  const present = (asked = true): void => { if (!stopped && stepNow() > 0) deps.inbox.add(item(asked)); };
 
   function again(): void {
     if (stopped) return;
-    told = missed = showed = null; tries = 0; hearing = looking = feeding = fed = asking = asked = false; shown = null; thinks = false;
+    told = missed = showed = null; tries = 0; others = 0; hearing = looking = feeding = fed = asking = asked = false; shown = null; thinks = false;
     keep({ step: 1, done: false });
     log('[notch] day one was started');
     present();
@@ -715,7 +788,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
         try { deps.installed.show(); } catch { /* day one goes on without it */ }
         cardTimer = clock.setTimeout(() => { cardTimer = null; cardOff(); }, NOTCH_INSTALLED_CARD_MS);
       }
-      clock.setTimeout(() => present(), NOTCH_DAY_ONE_AFTER_MS);
+      clock.setTimeout(() => present(false), NOTCH_DAY_ONE_AFTER_MS);
     },
     route(text) {
       if (stopped) return null;

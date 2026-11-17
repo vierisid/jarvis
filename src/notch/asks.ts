@@ -237,6 +237,8 @@ interface Live {
   segment: string;
   whole: string;
   answer: string | null;
+  /** Something was done in this turn (an activity was recorded): what "Done." may be said of. */
+  didSomething?: boolean;
   note: string | null;
   missed: NotchMissReason | null;
   /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
@@ -690,6 +692,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (payload.activity.phase !== 'started') return;
       ask.activity = payload.activity.summary;
       ledger.did(ask.id, payload.activity.summary);
+      ask.didSomething = true;
       bump(ask);
       return;
     }
@@ -735,7 +738,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
     }
     if (state === 'completed') {
-      ask.answer = text || 'Done.';
+      // "Done." is said of something that was done. A turn that ended with no words and did nothing (a
+      // provider's hiccup) is not that.
+      ask.answer = text || (ask.didSomething ? 'Done.' : 'I have no answer for that. Ask me again.');
       ledger.finish(ask.id, 'done', { answer: ask.answer });
       ask.phase = 'done';
       try { deps.afterTurn?.(ask.began ?? Date.now() - 10 * 60_000); } catch (failure) {
