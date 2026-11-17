@@ -354,7 +354,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // "Tell me when Sam replies", "get Sam's answer by Friday": an eye, a chase (pass 11).
       // "Every Monday send Sam the numbers": an agent. An eye and a chase are asked before it,
       // because "tell me when" and "get Sam's answer" are theirs.
-      side: (text) => put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text) ?? null,
+      // First of all: with a draft of a reply open, what is said is what that reply is to say.
+      side: (text) => mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text) ?? null,
       standing: {
         rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? [])]; },
         open: async (stage, row) => {
