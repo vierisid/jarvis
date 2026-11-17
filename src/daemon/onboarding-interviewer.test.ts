@@ -151,6 +151,22 @@ describe('runInterviewTurn — happy path', () => {
     expect(session.done).toBe(true);
   });
 
+  test('a wrap_interview whose arguments did not parse does not end the interview', async () => {
+    const session = createInterviewSession();
+    const llm = fakeLLM([
+      toolResponse('', [{ id: 'call_wrap', name: 'wrap_interview', arguments: {}, argumentsError: 'not valid JSON' }]),
+      textResponse('Sorry, one more question first.'),
+    ]);
+
+    const result = await runInterviewTurn(session, llm, "I think that's everything for now");
+
+    expect(result.done).toBe(false);
+    expect(session.done).toBe(false);
+    expect(session.farewell).toBeUndefined();
+    const toolMessage = session.messages.find(m => m.role === 'tool');
+    expect(String(toolMessage?.content)).toContain('The tool did not run');
+  });
+
   test('subsequent turns on a done session return immediately without calling the LLM', async () => {
     const session = createInterviewSession();
     session.done = true;

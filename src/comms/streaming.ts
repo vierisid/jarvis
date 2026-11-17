@@ -112,7 +112,8 @@ export class StreamRelay {
 
           this.emit(message);
         } else if (event.type === 'tool_call') {
-          if (options?.mayAct?.(event.tool_call) ?? true) toolsRan = true;
+          // A call whose arguments did not parse is answered without running.
+          if (event.tool_call.argumentsError === undefined && (options?.mayAct?.(event.tool_call) ?? true)) toolsRan = true;
           // Broadcast tool call notification to clients
           const toolMessage: WSMessage = {
             type: 'stream',

@@ -301,6 +301,13 @@ const response = await manager.chatTier('medium', 'my_script', messages);
 
 `setPrimary` / `setFallbackChain` and the tier-less `chat()` / `stream()` still exist for older callers: `chat()` and `stream()` route through the medium tier when medium resolves (medium or high is assigned), and otherwise use the primary plus fallback chain.
 
+### Tool calls and unreadable replies
+
+- Tool arguments that are not valid JSON are the model's mistake, not a refused request. The call is delivered with `argumentsError` set (a fixed phrase, never the arguments or the parser's message), nothing runs, and the model gets a tool error saying so (as for a tool name that does not exist) and can send the call again. Other calls in the same reply still run. Every loop that dispatches tool calls (orchestrator, task tier, conversation router, sub-agents, onboarding interviewer, workflow composer) answers such a call before anything else reads it; a composer reply cut at the token limit still fails as truncated.
+- Tool call ids are unique within one assistant message. A repeated or empty id gets a new one, so each call runs once and the history stays valid for providers that key results on the id.
+- A turn may spend at most 200 provider calls on tool rounds. At the limit it stops, says so in plain words and ends as stopped (failed in Brief chat, with the steps already taken left in place), never as a completed turn.
+- A reply that is not a stream of events (a page served with a 200, `data:` lines that are not JSON) is a provider error, never an empty finished answer. A server that ignores `stream: true` and sends one JSON completion is read as that answer.
+
 ### Usage numbers
 
 A provider's token counts are checked before they are stored or added up (`cleanTokenCount` in `src/llm/provider.ts`). Only a finite, non-negative whole number up to 100 million per call is accepted; a missing, null, negative, fractional, text or larger value counts as 0 (unknown), never as a clamped number. The call is still recorded in `llm_usage`, so one buggy gateway cannot lose a call's record or corrupt the local Usage totals. A count that is present but rejected is logged once per provider, field and kind (for example `[LLM] openai reported completion_tokens that is null; counted as 0 (unknown)`), never with the value or the response body. A missing usage block is 0 for every adapter and the reply is still delivered. Hosted plan limits are metered by the proxy, not from these local counts.

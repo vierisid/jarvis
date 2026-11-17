@@ -57,6 +57,13 @@ test('without hosted detail nothing extra is added, and the detail is bounded an
   expect(long.message.length).toBeLessThan(1600);
 });
 
+test('a turn Jarvis stopped for looping on tools says so and asks to check the steps', () => {
+  const failure = briefChatFailure(new LLMProviderError('I stopped after 200 steps', 'tool_loop_limit'), true);
+  expect(failure.code).toBe('tool_loop_limit');
+  expect(failure.message).toContain('stopped after too many steps');
+  expect(failure.message).not.toContain('provider');
+});
+
 test('a provider that stopped answering is not described as unreachable', () => {
   const failure = briefChatFailure(new LLMProviderError("Provider 'p' failed after 1 attempt: LLM stream from p sent no data for 90s (timed out)", 'network'), false);
   expect(failure.code).toBe('provider_network');

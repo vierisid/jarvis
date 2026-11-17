@@ -121,6 +121,12 @@ test('browser sign-in failure keeps the setup instruction without claiming no ea
   expect(failure.headline).not.toContain('Private account');
 });
 
+test('a turn Jarvis stopped at its tool loop limit is not "nothing started": its earlier steps may have taken effect', () => {
+  const failure = projectFailure({ source: 'provider', code: 'tool_loop_limit', message: 'stopped' }, { label: 'Your request', sideEffects: true });
+  expect(failure.category).toBe('uncertain_effect');
+  expect(failure.effect).toBe('unknown');
+});
+
 describe('workflow step failure wording', () => {
   test('a step that failed with nothing taking effect reads as that, with its cause, and says to fix the step', () => {
     const failure = projectFailure({ source: 'local', message: 'Error: Second number cannot be zero\n    at run (/srv/engine/index.js:1:1)' },

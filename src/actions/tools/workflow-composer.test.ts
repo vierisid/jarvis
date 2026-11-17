@@ -2003,6 +2003,26 @@ describe("tool-loop composer", () => {
     expect(llm.chatCalls).toHaveLength(0);
   });
 
+  test("a report_blocked whose arguments did not parse is answered as malformed, not taken as a block", async () => {
+    const bad: ComposerToolCall = { ...tc("b", "report_blocked"), argumentsError: "not valid JSON" };
+    const llm = new StubToolLlm([
+      { tool_calls: [bad] },
+      { tool_calls: [tc("1", "submit_flow", validFlowArgs())] },
+    ]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
+    expect(result.ok).toBe(true);
+    expect(String(llm.toolTurns[1]!.messages.at(-1)!.content)).toContain("The tool did not run");
+  });
+
+  test("a submit_flow cut at the token cap fails as truncated, not as a malformed call to retry", async () => {
+    const cut: ComposerToolCall = { ...tc("s", "submit_flow"), argumentsError: "not valid JSON" };
+    const llm = new StubToolLlm([{ tool_calls: [cut], finish_reason: "length" }]);
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: "X", description: "x" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0]).toMatch(/truncated/);
+    expect(llm.toolTurns).toHaveLength(1);
+  });
+
   test("turn-1 transient/auth errors fail fast instead of falling back to one-shot", async () => {
     // A 429 on the first tool call isn't a rejected-tools-param signal;
     // dropping tools won't help and would hide the real cause. Surface it.

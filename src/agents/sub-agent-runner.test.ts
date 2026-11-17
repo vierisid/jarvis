@@ -106,6 +106,20 @@ describe('governed tool calls in a sub-agent', () => {
     expect(b.rows).toEqual([expect.objectContaining({ authority_decision: 'allowed', executed: false })]);
   });
 
+  test('a call whose arguments did not parse is answered as malformed: not run, not audited, not listed as used', async () => {
+    const a = authority([]);
+    const { r, runs } = registry();
+    const bad: LLMToolCall = { id: 'c1', name: 'write_file', arguments: {}, argumentsError: 'not valid JSON' };
+    const result = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: llm([[bad, read('c2')]]).manager,
+      toolRegistry: r, authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3 });
+    expect(result.terminationReason).toBe('completed');
+    expect(runs).toEqual(['read_file']);
+    expect(toolMessages(result)[0]![1]).toContain('The tool did not run');
+    expect(result.failedToolCalls).toEqual(['c1']);
+    expect(result.toolsUsed).toEqual(['read_file']);
+    expect(a.rows.map(row => row.tool_name)).toEqual(['read_file']);
+  });
+
   test('failures are marked on the result rather than inferred from text', async () => {
     const a = authority(['write_data']);
     const typed = await runSubAgent({ agent: agent(), task: 'read', context: '', llmManager: llm([[read('c1')]]).manager,

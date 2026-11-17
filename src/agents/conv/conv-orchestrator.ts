@@ -23,6 +23,7 @@ import type { TurnTaintLink } from '../turn-taint-carry.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall } from '../../llm/provider.ts';
+import { malformedArgumentsResult } from '../../llm/provider.ts';
 import { progressAcknowledgement } from '../progress.ts';
 import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
 import { recoverSerializedConvTools, visibleStreamText } from './conv-tool-recovery.ts';
@@ -474,6 +475,9 @@ export class ConvOrchestrator {
     turn: ConvTurn,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): Promise<{ envelope: unknown; taskId?: string }> {
+    // Arguments the model wrote that were not valid JSON: nothing ran, and the
+    // router is told so in the same shape as its other mistakes.
+    if (call.argumentsError !== undefined) return { envelope: { error: malformedArgumentsResult(call) } };
     switch (call.name) {
       case CONV_TOOL_NAMES.delegate: {
         const args = call.arguments as Partial<TaskRequest>;

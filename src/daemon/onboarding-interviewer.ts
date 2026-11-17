@@ -28,6 +28,7 @@
 
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMTool, LLMToolCall } from '../llm/provider.ts';
+import { malformedArgumentsResult } from '../llm/provider.ts';
 import { appendUserProfileFact, markInterviewWrapped } from '../vault/user-profile.ts';
 
 /** Hard cap on agent turns per session — defends against forget-to-wrap loops. */
@@ -371,6 +372,9 @@ function executeInterviewerTool(
   pendingFacts: ProfileFactInput[],
   staged = false,
 ): { message: string; wrapped: boolean } {
+  // Arguments that did not parse: nothing is recorded and the interview is not
+  // wrapped on the empty stand-in arguments. The model is told and can resend.
+  if (call.argumentsError !== undefined) return { message: malformedArgumentsResult(call), wrapped: false };
   if (call.name === 'record_profile_facts') {
     if (staged) {
       // Legacy tools tolerate malformed entries by dropping them. Durable

@@ -19,6 +19,11 @@ const providerCodes = new Set([
  */
 export function briefChatFailure(error: unknown, toolsRan: boolean): { code: string; message: string } {
   const code = error instanceof LLMProviderError ? getLLMErrorCode(error) : 'unknown';
+  // Jarvis stopped a turn that kept calling tools. Its steps ran, so say to check them.
+  if (code === 'tool_loop_limit') return {
+    code: 'tool_loop_limit',
+    message: 'This request stopped after too many steps without finishing. Check what the earlier steps did before sending another request, or ask for a smaller piece.',
+  };
   if (!providerCodes.has(code)) return {
     code: 'generation_failed',
     message: toolsRan
