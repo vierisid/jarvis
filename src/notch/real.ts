@@ -356,6 +356,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // because "tell me when" and "get Sam's answer" are theirs.
       // First of all: with a draft of a reply open, what is said is what that reply is to say.
       side: (text) => mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text) ?? null,
+      // What the assistant built in a turn is an agent like any other: switched on and named here.
+      afterTurn: (since) => agents?.adopt(since),
       standing: {
         rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? [])]; },
         open: async (stage, row) => {

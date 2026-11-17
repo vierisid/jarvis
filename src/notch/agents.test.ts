@@ -32,14 +32,14 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   fromPage({ type: 'hello', v: 1 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   /** The workflows of the product, as far as an agent needs them. */
-  const flows = new Map<string, { job: string; enabled: boolean; runs: { id: string; end: 'ok' | 'bad' | 'open'; at: number }[] }>();
+  const flows = new Map<string, { job: string; enabled: boolean; runs: { id: string; end: 'ok' | 'bad' | 'open'; at: number }[]; madeAt?: number; ready?: boolean; missing?: string }>();
   const did: string[] = [];
   let made = 0;
   const workflows: NotchAgentWorkflows = {
     async build(sentence) {
       did.push(`build ${sentence}`);
       const built = options.build ? await options.build(sentence) : { ok: true as const, flowId: `flow-${++made}`, job: sentence.replace(/\.$/, ''), ready: true, missing: '' };
-      if (built.ok) flows.set(built.flowId, { job: built.job, enabled: false, runs: [] });
+      if (built.ok) flows.set(built.flowId, { job: built.job, enabled: false, runs: [], madeAt: now, ready: built.ready, missing: built.missing });
       return built;
     },
     enable(flowId) { did.push(`enable ${flowId}`); if (options.enable) return options.enable; flows.get(flowId)!.enabled = true; return { ok: true }; },
@@ -48,6 +48,19 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
     async remove(flowId) { did.push(`remove ${flowId}`); flows.delete(flowId); return true; },
     look(flowId) { const flow = flows.get(flowId); return flow ? { job: flow.job, enabled: flow.enabled } : null; },
     runs(flowId, limit) { return (flows.get(flowId)?.runs ?? []).slice(0, limit); },
+    madeSince(at) {
+      return [...flows.entries()].filter(([, flow]) => (flow.madeAt ?? 0) >= at).sort((a, b) => (b[1].madeAt ?? 0) - (a[1].madeAt ?? 0))
+        .map(([flowId, flow]) => ({ flowId, job: flow.job, ready: flow.ready !== false, missing: flow.missing ?? '', enabled: flow.enabled }));
+    },
+  };
+  /** The assistant builds something in a turn, as it does when the words were not taken as the notch's own. */
+  const assistantBuilds = (job: string, more: { ready?: boolean; missing?: string; enabled?: boolean } = {}): { flowId: string; since: number } => {
+    const since = now;
+    now += 20_000;
+    const flowId = `flow-a${flows.size + 1}`;
+    flows.set(flowId, { job, enabled: more.enabled === true, runs: [], madeAt: now, ready: more.ready !== false, missing: more.missing ?? '' });
+    now += 5000;
+    return { flowId, since };
   };
   const logs: string[] = [];
   const agents = attachNotchAgents({ inbox, db: options.db ?? new Database(':memory:'), workflows, paused: options.paused, now: () => now, log: (line) => logs.push(line) });
@@ -82,7 +95,7 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   };
   /** A yes at rest: the first thing that waits is opened. */
   const opens = async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); };
-  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, advance: (ms: number) => { now += ms; } };
+  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, advance: (ms: number) => { now += ms; } };
 }
 
 describe('a sentence that asks for an agent', () => {
@@ -93,8 +106,37 @@ describe('a sentence that asks for an agent', () => {
     expect(agentSentence('Every morning tell me what changed overnight')).toEqual({ when: 'day at 9:00', job: 'tell me what changed overnight' });
     expect(agentSentence('each evening file the receipts of the day')).toEqual({ when: 'day at 18:00', job: 'file the receipts of the day' });
     expect(agentSentence('Daily, send Sam the numbers')).toEqual({ when: 'day at 9:00', job: 'send Sam the numbers' });
-    expect(agentSentence('Make an agent that sends Sam the numbers every week')).toEqual({ when: 'Monday at 9:00', job: 'sends Sam the numbers every week' });
+    // In "an agent that sends…" the schedule may stand anywhere, and what it does is read back as what to do.
+    expect(agentSentence('Make an agent that sends Sam the numbers every week')).toEqual({ when: 'Monday at 9:00', job: 'send Sam the numbers' });
+    expect(agentSentence('make me an agent to file my invoices every Friday')).toEqual({ when: 'Friday at 9:00', job: 'file my invoices' });
     expect(agentSentence('Create a workflow to every Friday at 4pm send Anna the report')).toEqual({ when: 'Friday at 16:00', job: 'send Anna the report' });
+  });
+
+  // The owner's first agent, 17 November 2026: "Can you make an agent that every day at 5.10 sends me a
+  // notification…". It was not taken as one, went to the assistant, and came back as a workflow that was
+  // switched off, had no name, and could only be switched on in the dashboard.
+  test('however it is put, asking for an agent is asking the notch', () => {
+    const news = { when: 'day at 17:10', job: 'send me a notification with the latest AI news' };
+    for (const said of [
+      'Can you make an agent that every day at 5.10 sends me a notification with the latest AI news',
+      'Can you make an agent that every day at 5.10 sends me a notification with the latest AI news?',
+      'could you please create an agent which sends me a notification with the latest AI news every day at 5:10 pm',
+      'I want an agent that sends me a notification with the latest AI news daily at 17.10',
+      'Hey Jarvis, set up a new workflow that every day at 17:10 sends me a notification with the latest AI news.',
+      'New agent: every day at 5.10pm send me a notification with the latest AI news',
+    ]) expect(agentSentence(said)).toEqual(news);
+    // With no "am", an hour from one to six is the afternoon. With one, it is what was said.
+    expect(agentSentence('every day at 5.10 am send me the news')).toEqual({ when: 'day at 5:10', job: 'send me the news' });
+    expect(agentSentence('every day at 9 send me the news')).toEqual({ when: 'day at 9:00', job: 'send me the news' });
+    expect(agentSentence('every day at 3 send me the news')).toEqual({ when: 'day at 15:00', job: 'send me the news' });
+    // Asked for as an agent with no schedule: it is one all the same, and is read back as one.
+    expect(agentSentence('I want an agent that replies to new leads')).toEqual({ when: null, job: 'replies to new leads', agent: true });
+    expect(agentFull({ when: null, job: 'replies to new leads', agent: true })).toBe('An agent that replies to new leads.');
+    expect(agentSentence('Can you build me an agent to keep my inbox at zero?')).toEqual({ when: null, job: 'to keep my inbox at zero', agent: true });
+    expect(agentFull({ when: null, job: 'to keep my inbox at zero', agent: true })).toBe('An agent to keep my inbox at zero.');
+    expect(agentFull(agentSentence('make an agent for my unpaid invoices')!)).toBe('An agent for my unpaid invoices.');
+    // "Can you", with a schedule and no word agent, is one too.
+    expect(agentSentence('Can you every Monday at 9 send Sam the numbers?')).toEqual({ when: 'Monday at 9:00', job: 'send Sam the numbers' });
   });
 
   test('one that waits for something to happen has no schedule to read back', () => {
@@ -107,6 +149,8 @@ describe('a sentence that asks for an agent', () => {
     for (const no of [
       'When is my next call?', 'when does Sam arrive', 'Every time', 'every invoice', 'Every 5 minutes check the build',
       'Make me a coffee', 'What do I do every Monday?', 'Tell me when Sam replies', "Get Sam's answer by Friday", 'When done', '',
+      // Said of oneself, with a schedule somewhere in it: not something to take over.
+      'I go to the gym every day at 6', 'Can you tell me what I do every Monday?', 'What is an agent?', 'Can you make this shorter?',
     ]) expect(agentSentence(no)).toBeNull();
   });
 
@@ -261,7 +305,7 @@ describe('your agents', () => {
     await h.makes();
     await h.speak('my agents');
     await h.reply('button', { row: 'flow-1', button: 'go' });
-    expect(h.said()).toBe('Let Tony go? The workflow is deleted too.');
+    expect(h.said()).toBe('Let Tony go? It is deleted for good.');
     await h.reply('no');
     expect(h.agents.store.list()).toHaveLength(1);
     await h.reply('button', { row: 'flow-1', button: 'go' });
@@ -408,5 +452,107 @@ describe('where the agents are kept', () => {
     db.run("UPDATE notch_agents SET rung = 'does anything' WHERE flow_id = 'flow-1'");
     expect(store.rung('flow-1')).toBe('asks first');
     expect(store.list()[0]!.rung).toBe('asks first');
+  });
+});
+
+// The owner, 17 November 2026: "the only way for me to enable it is to go to the dashboard, so it
+// doesn't give me a name. Also keeps on calling workflow. I'd like to make fully that switch to
+// agents with their own name."
+describe('what the assistant builds is an agent like any other', () => {
+  test('after its turn the notch offers to switch it on, and a yes gives it its name', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    h.agents.adopt(built.since);
+    await settle();
+    expect(h.said()).toBe('Switch Daily AI news briefing on as an agent?');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'switch on' });
+    // Nothing is switched on before the yes.
+    expect(h.did).toEqual([]);
+    await h.reply('yes');
+    expect(h.did).toEqual([`enable ${built.flowId}`]);
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.agents.store.rung(built.flowId)).toBe('asks first');
+    expect(h.agents.row()).toMatchObject({ say: [{ em: '1 agent' }, ' on duty.'] });
+    // Once: the same turn looked at again offers nothing more.
+    await h.pass(9000);
+    h.agents.adopt(built.since);
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('a no leaves it switched off, and it waits in the list, where it can be switched on or discarded', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    h.agents.adopt(built.since);
+    await settle();
+    await h.reply('no');
+    expect(h.did).toEqual([]);
+    expect(h.agents.store.list()).toEqual([]);
+    // Home says so, and leads to it.
+    expect(h.agents.row()).toEqual({ kind: 'row', id: 'agents', go: true, say: [{ em: '1 agent' }, ' built, not switched on.'] });
+    await h.speak('my agents');
+    const blocks = (h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks;
+    expect(blocks[0]).toEqual({
+      kind: 'row', id: built.flowId, lead: 'New', say: ['Daily AI news briefing.'], small: 'Not switched on',
+      buttons: [{ id: 'on', label: 'Switch on' }, { id: 'drop', label: 'Discard', quiet: true }],
+    });
+    await h.reply('button', { row: built.flowId, button: 'on' });
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.agents.store.list()).toMatchObject([{ flowId: built.flowId, name: 'Tony' }]);
+  });
+
+  test('Discard deletes what was built and never switched on', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    await h.speak('my agents');
+    await h.reply('button', { row: built.flowId, button: 'drop' });
+    expect(h.did).toEqual([`remove ${built.flowId}`]);
+    expect(h.agents.row()).toBeNull();
+  });
+
+  test('one that cannot run yet is said once, and is not offered to be switched on', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Mail Sam the numbers', { ready: false, missing: 'A Gmail account is not chosen for the step that sends.' });
+    h.agents.adopt(built.since);
+    await settle();
+    expect(h.said()).toBe('Mail Sam the numbers is built, but cannot run yet: A Gmail account is not chosen for the step that sends.');
+    await h.pass(9000);
+    await h.speak('my agents');
+    expect((h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks[0]).toMatchObject({ lead: 'New', small: 'Needs setting up', buttons: [{ id: 'drop' }] });
+  });
+
+  test('one the assistant switched on itself is named, and asks first from then on', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing', { enabled: true });
+    h.agents.adopt(built.since);
+    await settle();
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.did).toEqual([]);
+    expect(h.agents.store.rung(built.flowId)).toBe('asks first');
+  });
+
+  test('a turn that built nothing changes nothing, and an agent made on the notch is not offered again', async () => {
+    const h = harness();
+    await h.makes();
+    h.agents.adopt(0);
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.agents.store.list()).toHaveLength(1);
+  });
+
+  test('nothing the notch says about an agent calls it a workflow', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    const seen: string[] = [];
+    const note = (): void => { const line = h.line(); if (line) seen.push(JSON.stringify(line)); };
+    h.agents.adopt(built.since);
+    await settle(); note();
+    await h.reply('yes'); note();
+    await h.pass(9000);
+    await h.speak('my agents'); note();
+    await h.reply('button', { row: built.flowId, button: 'go' }); note();
+    await h.reply('yes'); note();
+    expect(seen.length).toBeGreaterThan(3);
+    expect(seen.join(' ').toLowerCase()).not.toContain('workflow');
   });
 });

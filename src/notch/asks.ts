@@ -134,6 +134,12 @@ export interface NotchAsksDeps {
    * what an eye is kept on. Each row leads to its list by its id.
    */
   standing?: { rows(): NotchBlock[]; open(stage: NotchStage, row: string): Promise<void> };
+  /**
+   * The assistant has carried out an instruction that began at `since`. What
+   * it built that runs by itself is the agents' to take in (pass 11): the
+   * notch switches it on and names it, and nobody is sent to the dashboard.
+   */
+  afterTurn?: (since: number) => void;
   /** Takes back what a job of today pasted: the Undo on its row in Home. */
   undoJob?: (jobId: string) => void;
   /** An approval this instruction's turn is waiting for should take the notch now. */
@@ -209,6 +215,8 @@ interface Live {
   missed: NotchMissReason | null;
   /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
   cut?: boolean;
+  /** When it began to be carried out. */
+  began?: number;
   /** What goes with the words: what was circled on the screen, a file that was dropped. */
   files?: NotchAskFile[];
   /** The person asked for it to stop. What has no turn to cancel yet ends by this. */
@@ -463,6 +471,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
    */
   async function run(ask: Live, stage?: NotchStage): Promise<void> {
     if (ask.phase !== 'heard') return;
+    ask.began ??= Date.now();
     if (deps.paused?.()) { refuse(ask, 'Everything is stopped. Wake me first.'); return; }
     // Words the notch acts on itself. No model is asked, so none is needed,
     // and what is running does not stand in their way: "done" is said while
@@ -692,6 +701,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.answer = text || 'Done.';
       ledger.finish(ask.id, 'done', { answer: ask.answer });
       ask.phase = 'done';
+      try { deps.afterTurn?.(ask.began ?? Date.now() - 10 * 60_000); } catch (failure) {
+        log(`[notch] what a turn built could not be looked at: ${failure instanceof Error ? failure.message : String(failure)}`);
+      }
     } else if (state === 'cancelled') {
       ledger.finish(ask.id, 'stopped');
       ask.phase = 'stopped';
