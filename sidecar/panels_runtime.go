@@ -323,6 +323,25 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				} else {
 					log.Printf("[panels] spawn(%s): positioned at saved (%d,%d)", spec.ID, spec.Bounds.X, spec.Bounds.Y)
 				}
+			} else if spec.Center && w > 0 && h > 0 {
+				// The middle of the display the person works on (panels_centre.go).
+				sw, sh := platformGetScreenSize()
+				if platformPrimaryScreenSize != nil {
+					sw, sh = platformPrimaryScreenSize()
+				}
+				// The size the window really has on this screen, where the
+				// system says it: on a scaled display that is more than what
+				// was asked for, and the middle is the middle of that.
+				cw, ch := w, h
+				if _, _, rw, rh, err := platformGetWindowRect(handle); err == nil && rw > 0 && rh > 0 {
+					cw, ch = rw, rh
+				}
+				if sw > 0 && sh > 0 {
+					x, y := panelCentred(sw, sh, cw, ch)
+					if err := platformMoveWindowKeepZOrder(handle, x, y); err != nil {
+						log.Printf("[panels] spawn(%s): move to the middle: %v", spec.ID, err)
+					}
+				}
 			}
 			if spec.Notch {
 				// Top centre of the main display, cut to nothing until the page

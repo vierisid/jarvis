@@ -49,6 +49,9 @@ type PanelSpec struct {
 	Transparent   bool        `json:"transparent"`
 	Resizable     bool        `json:"resizable"`
 	MultiInstance bool        `json:"multi_instance"`
+	// Center puts the window in the middle of the display the person works
+	// on, when no place was given for it (panels_centre.go).
+	Center bool `json:"center"`
 	// FollowCursor turns on the sidecar-side cursor-tracking goroutine
 	// that polls platformGetCursorPos() at ~60fps and moves the window
 	// to (cursor + offset). The page can pause tracking via the

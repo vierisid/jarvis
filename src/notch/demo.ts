@@ -9,6 +9,7 @@
  *
  * One moment plays at a time. Starting another replaces the one running.
  */
+import { NOTCH_NAME } from './name.ts';
 import type { NotchAnswer, NotchSurface } from './surface.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { NOTCH_BIRTHS, NOTCH_GESTURES, NOTCH_LIPS, NOTCH_MOODS } from './protocol.ts';
@@ -245,7 +246,7 @@ const MOMENTS: Record<string, Moment> = {
           { kind: 'paper', to: ['To ', em('Anna Rossi'), '  ·  Next steps'], lines: [['Hi Anna,'], ['Thanks for today. As agreed, pricing for 5 seats follows this week and the contract can start on 1 December.'], ['Sam']] },
           { kind: 'row', say: ['Send pricing for 5 seats'], small: 'Nora' },
           { kind: 'row', say: ['Draft the contract for 1 December'], small: 'you' },
-          { kind: 'row', say: ['Book the kickoff call'], small: 'Jarvis' },
+          { kind: 'row', say: ['Book the kickoff call'], small: NOTCH_NAME },
         ],
       });
       const answer = await s.answer(id, ['yes', 'no']);
@@ -410,7 +411,7 @@ const MOMENTS: Record<string, Moment> = {
         lines: [
           ['Send pricing for 5 seats on the Pro plan. Owner: Nora.'],
           ['The contract can start on 1 December. Owner: you.'],
-          ['Book the kickoff call. Owner: Jarvis.'],
+          [`Book the kickoff call. Owner: ${NOTCH_NAME}.`],
         ],
       }],
     });

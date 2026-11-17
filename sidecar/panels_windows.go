@@ -147,6 +147,16 @@ func platformGetScreenSize() (w, h int) {
 	return int(int32(cx)), int(int32(cy))
 }
 
+func init() {
+	// The main display alone: with two monitors the middle of both together
+	// is the gap between them (SM_CXSCREEN, SM_CYSCREEN).
+	platformPrimaryScreenSize = func() (w, h int) {
+		cx, _, _ := procGetSystemMetrics.Call(0)
+		cy, _, _ := procGetSystemMetrics.Call(1)
+		return int(int32(cx)), int(int32(cy))
+	}
+}
+
 // platformGetVirtualScreenOrigin returns the top-left corner of the virtual
 // screen — needed when secondary monitors extend left/up of the primary
 // monitor (origin can be negative).
@@ -215,6 +225,19 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 		style &^= wsCaption | wsThickFrame | wsSysMenu
 		style |= wsPopup
 		setWindowLong(hwnd, gwlStyle, style)
+	}
+
+	// A card in the middle of the screen (panels_centre.go) is given the
+	// system's own round corners, where the system has them. On a Windows
+	// that has none the call fails and the card is square.
+	if spec.Center && spec.Frameless {
+		corner := int32(dwmwcpRoundLarge)
+		procDwmSetWindowAttribute.Call(
+			hwnd,
+			uintptr(dwmWaWindowCornerPreference),
+			uintptr(unsafe.Pointer(&corner)),
+			unsafe.Sizeof(corner),
+		)
 	}
 
 	if spec.AlwaysOnTop {

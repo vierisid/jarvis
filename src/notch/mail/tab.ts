@@ -15,7 +15,7 @@ import { GOOGLE_SITES } from './page.ts';
 
 /** The browser is there and is not signed in to Google: this way to the mailbox is not here. */
 export class MailSignedOut extends Error {
-  constructor() { super('Jarvis\'s browser is not signed in to Google'); }
+  constructor() { super('The browser is not signed in to Google'); }
 }
 
 /** One call to the desktop app that has the tab. Throws when the call fails. */

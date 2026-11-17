@@ -584,8 +584,8 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         return 'waits';
       case 'held':
         await stage.say([outcome.state === 'paused'
-          ? 'Jarvis is paused, so this waits. Wake me, then say yes again.'
-          : 'Jarvis was stopped, so this cannot be approved.'], 3200, { mood: 'careful' });
+          ? 'I am paused, so this waits. Wake me, then say yes again.'
+          : 'I was stopped, so this cannot be approved.'], 3200, { mood: 'careful' });
         return 'waits';
       case 'denied':
         return 'settled';

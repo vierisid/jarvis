@@ -4,10 +4,14 @@
  */
 import { connectNotch, notchFocus, notchSend } from './bridge.ts';
 import { notchUpload, watchNotchDrops } from './drop.ts';
+import { drawInstalledCard, isInstalledCard } from './installed/card.ts';
 import { createNotchSurface } from './surface/index.ts';
 
 const root = document.getElementById('notch-root');
-if (root) {
+if (root && isInstalledCard(window.location.search)) {
+  // Not the notch: the small card in the middle of the screen that says it is installed.
+  drawInstalledCard(root);
+} else if (root) {
   const host = window as unknown as Parameters<typeof notchSend>[0];
   const send = notchSend(host);
   connectNotch(createNotchSurface(root, send, { focus: notchFocus(host) }), host);

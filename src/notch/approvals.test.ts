@@ -387,7 +387,7 @@ describe('what a key may not approve', () => {
     controller.pause();
     await h.answer('yes');
     await h.answer('done');
-    expect(h.said()).toContain('Jarvis is paused');
+    expect(h.said()).toContain('I am paused');
     expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
     expect(h.runs).toEqual([]);
     await h.answer('done');

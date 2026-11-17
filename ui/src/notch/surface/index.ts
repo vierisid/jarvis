@@ -7,6 +7,7 @@
  * away: `show` below is the prototype's `show`, and each kind of line maps to
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
+import { NOTCH_NAME } from '../../../../src/notch/name.ts';
 import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_MOODS, notchWhereApp } from '../../../../src/notch/protocol.ts';
 import type {
   NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp, NotchWord,
@@ -345,7 +346,7 @@ export function createNotchSurface(
       iconEl.replaceChildren();
       nin.dataset.icon = '0';
     }
-    eyesEl.setAttribute('aria-label', v.body === 'rest' ? 'Open Jarvis' : 'Jarvis');
+    eyesEl.setAttribute('aria-label', v.body === 'rest' ? `Open ${NOTCH_NAME}` : NOTCH_NAME);
     eyes.setMood(v.mood ?? (v.body === 'rest' ? restMood : DEFAULT_MOOD[v.body]));
     // Where the text starts: options and choices line up under it.
     nin.style.setProperty('--tx', lead.offsetLeft + lead.offsetWidth + 10 + 'px');

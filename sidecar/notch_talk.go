@@ -77,7 +77,7 @@ type notchTalkHeard struct {
 	Level float64
 	// The quiet tenth, the middle, the loud tenth and the loudest piece.
 	Quiet, Middle, Loud, Loudest float64
-	Pieces                        int
+	Pieces                       int
 }
 
 // notchTalkMeasure says how much voice there is in a recording.

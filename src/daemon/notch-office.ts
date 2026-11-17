@@ -33,7 +33,8 @@ export function notchMemoryFacts(): NotchMemoryFact[] {
       id: fact.id,
       about: nameOf(fact.subject_id) || 'Something',
       text: `${fact.predicate} ${fact.object}`.replace(/\s+/g, ' ').trim(),
-      source: fact.evidence[0]?.source ?? fact.source ?? '',
+      // What was read of a file says so: "llm extraction" would tell the owner nothing.
+      source: fact.evidence.some((evidence) => evidence.source_ref?.startsWith('notch:files:')) ? 'a file I opened' : fact.evidence[0]?.source ?? fact.source ?? '',
     }));
 }
 

@@ -49,12 +49,12 @@ const notchMessageMax = 64 * 1024
 // hours. This app carries the messages and reads none of them: what they say
 // is between the brain and the page.
 type NotchService struct {
-	enabled atomic.Bool
-	mu      sync.Mutex
-	panels  PanelService
-	toPage  func(script string) // runs a script in the page; nil while no page is up
-	toBrain func(text string)   // sends the brain one message; nil while not connected
-	dashboard func()            // opens the dashboard's window on this machine; nil when it cannot
+	enabled   atomic.Bool
+	mu        sync.Mutex
+	panels    PanelService
+	toPage    func(script string) // runs a script in the page; nil while no page is up
+	toBrain   func(text string)   // sends the brain one message; nil while not connected
+	dashboard func()              // opens the dashboard's window on this machine; nil when it cannot
 	// The keys (notch_keyboard.go). pairs is what the settings say; keys is
 	// the watch on the keyboard, which exists only while a page is up.
 	pairs notchKeyPairs

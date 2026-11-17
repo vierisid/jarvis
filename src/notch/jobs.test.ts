@@ -485,7 +485,7 @@ describe('the record of what was done', () => {
     expect(store.get(id)).toMatchObject({ state: 'running', done: 4, total: 9, puts: [{ win: SHEET, x: 300, y: 440, hash: 'h:x' }] });
     now = 2000;
     const again = new NotchJobStore(db, () => now);
-    expect(again.get(id)).toMatchObject({ state: 'stopped', note: 'Jarvis restarted in the middle of it.', endedAt: 2000 });
+    expect(again.get(id)).toMatchObject({ state: 'stopped', note: 'Pillow restarted in the middle of it.', endedAt: 2000 });
     // What did nothing is not in what was done; a taking back is not either.
     again.open('rounds', 'Pasted 0', null);
     const undo = again.open('undo', 'Took back', 1);

@@ -57,6 +57,7 @@
  * The reply speaks up by itself in one place for now: when the owner comes to
  * Gmail. Everywhere else it joins the count.
  */
+import { NOTCH_NAME } from '../name.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
 import type { NotchStage } from '../stage.ts';
@@ -178,7 +179,7 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   // written again with it. One word on the sheet takes that: beside what is missing, or beside what was told.
   // And what it says is the owner's to turn, always: the same word stands under every draft, with the
   // commonest turns one click away. Typed, clicked, or said with the talk keys while the draft is open.
-  const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [...MAIL_STEERS], label: 'Tell Jarvis', free: true, long: true } });
+  const tell = (value: string): NotchPart => ({ word: { name: MAIL_TOLD_WORD, value, options: [...MAIL_STEERS], label: `Tell ${NOTCH_NAME}`, free: true, long: true } });
   if (row.missing) blocks.push({ kind: 'note', say: ['I did not know: ', short(row.missing, 200), ...(row.told ? [] : [' ', tell(MAIL_TELL)])] });
   if (row.told) blocks.push({ kind: 'note', say: ['You told me: ', em(short(row.told, 200)), ' ', tell(MAIL_TELL_AGAIN)] });
   if (!row.missing && !row.told) blocks.push({ kind: 'note', say: ['Not what you would say? ', tell(MAIL_TELL)] });
@@ -486,7 +487,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // looked at, that is what is said.
     const words: NotchPart[] = look?.through
       ? ['Nobody in your mail is waiting for a reply.']
-      : ['I cannot see your mail right now. Jarvis\'s own browser may not be signed in to Gmail.'];
+      : ['I cannot see your mail right now. My own browser may not be signed in to Gmail.'];
     if (inbox.present('mail-nothing', (stage) => stage.say(words, 3600, { src: 'mail' }))) saidNothingAt = now();
     return 'said';
   }

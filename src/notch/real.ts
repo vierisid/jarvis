@@ -79,7 +79,7 @@ export interface NotchRealDeps {
    * Day one in the notch (pass 12): the first five minutes, on a brain that
    * was never set up, and again whenever it is asked for.
    */
-  dayOne?: Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'watching' | 'told' | 'around' | 'system'>;
+  dayOne?: Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'voice' | 'watching' | 'told' | 'around' | 'system' | 'installed'>;
   approvalManager: Pick<ApprovalManager, 'getPending' | 'getRequest' | 'getHistory' | 'createRequest'>;
   /** Approves through the product's one decision function, as the notch. */
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
