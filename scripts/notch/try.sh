@@ -160,11 +160,20 @@ EOS
 fi
 
 mkdir -p "$DATA_DIR"
+# The token that was just made, when one was. A desktop app that has never
+# been enrolled is started with it below, so there is nothing to paste: the
+# token is printed many lines above where the eye is once the brain talks.
+TOKEN=""
 if [ "$FRESH_TOKEN" = 1 ] || [ ! -f "$DATA_DIR/.notch-enrolled" ]; then
-  say "Enrolment token for the desktop app (paste it when the test build asks)"
-  JARVIS_NOTCH=1 bun run dev:local --data-dir "$DATA_DIR" --port "$PORT" --enroll "$DEVICE"
+  say "Enrolment token for the desktop app"
+  ENROLLED="$(JARVIS_NOTCH=1 bun run dev:local --data-dir "$DATA_DIR" --port "$PORT" --enroll "$DEVICE")"
+  printf '%s\n' "$ENROLLED"
+  TOKEN="$(printf '%s\n' "$ENROLLED" | grep -E '^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$' | tail -n 1 || true)"
   date > "$DATA_DIR/.notch-enrolled"
 fi
+# Whether this folder's desktop app has been enrolled before.
+NEW_APP=0
+if [ -n "${APP_DIR:-}" ] && [ ! -f "$APP_DIR/profile/.jarvis/sidecar.yaml" ]; then NEW_APP=1; fi
 
 # The demo endpoint wants a secret (src/notch/demo-gate.ts). One is made once
 # and kept beside the test data, where scripts/notch/demo.sh and fixture.sh
@@ -181,14 +190,25 @@ echo "Brain: http://localhost:$PORT"
 echo "Demo:  in a second terminal, run scripts/notch/demo.sh"
 echo "Real:  for real approvals and promises to test on, run scripts/notch/fixture.sh"
 if [ "$START" = 1 ] && [ "$TARGET" = "windows" ] && [ -f "$APP_DIR/bin/jarvis.exe" ]; then
-  echo "The test build starts by itself once the brain is up. The first time, a"
-  echo "window asks for the token above."
+  # A desktop app that was never enrolled gets the token that was just made,
+  # and asks for nothing. One that is enrolled starts as it always has.
+  START_ARGS=""
+  if [ "$NEW_APP" = 1 ] && [ -n "$TOKEN" ]; then
+    # Started as a double-click would, with its console window: a hidden one
+    # could hand its hiddenness on to the desktop app's own first window.
+    START_ARGS=" -ArgumentList '--token','$TOKEN'"
+    echo "The test build starts by itself once the brain is up, with the token"
+    echo "above. Nothing to paste."
+  else
+    echo "The test build starts by itself once the brain is up. If a window asks"
+    echo "for a token, it is the one above."
+  fi
   # Start-Process launches the start file the way a double-click would and
   # returns at once, so nothing here waits on the desktop app.
   (
     for _ in $(seq 1 90); do
-      if curl -fsS -o /dev/null "http://localhost:$PORT/health" 2>/dev/null; then
-        powershell.exe -NoProfile -Command "Start-Process -FilePath '$(wslpath -w "$APP_DIR/start-sidecar.cmd")'" >/dev/null 2>&1 || true
+      if curl -fsS -m 3 -o /dev/null "http://localhost:$PORT/health" 2>/dev/null; then
+        powershell.exe -NoProfile -Command "Start-Process -FilePath '$(wslpath -w "$APP_DIR/start-sidecar.cmd")'$START_ARGS" >/dev/null 2>&1 || true
         exit 0
       fi
       sleep 1

@@ -36,4 +36,8 @@ const command = enroll ? [process.execPath, '--no-env-file', 'run', 'bin/jarvis.
 console.error(`Jarvis development data: ${root}\nBrain: http://localhost:${port}\n${enroll ? 'Enrollment uses this same isolated vault.' : 'Enroll from a second terminal using the same --data-dir and --port, plus --enroll "local-acceptance".'}`);
 const child = Bun.spawn(command, { cwd: resolve(import.meta.dir, '../..'), env, stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => child.kill(signal));
+// A closed terminal hangs this launcher up. The daemon does not end on a
+// hang-up, so it outlived the launcher, kept the port, and had no terminal
+// left to stop it from. It is told to stop as it is on Ctrl-C.
+process.on('SIGHUP', () => child.kill('SIGTERM'));
 process.exit(await child.exited);

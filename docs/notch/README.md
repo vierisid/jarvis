@@ -2373,9 +2373,13 @@ scripts/notch/try.sh
 - **On WSL** it cross-builds the Windows desktop app into
   `%USERPROFILE%\JarvisNotchDev`, prints an enrolment token the first time,
   starts the brain on port 3143 with its data in `~/.jarvis-notch`, and then
-  starts the desktop app. The first time, a window asks for the token. An
+  starts the desktop app. A desktop app that was never enrolled is started
+  with the token that was just made, so nothing has to be pasted. An
   installed Jarvis has to be quit from the tray first; a test build that is
   still running is stopped and replaced.
+- **Closing the brain's terminal stops the brain.** The launcher tells it to
+  stop on a hang-up as on Ctrl-C. Before, the brain outlived a closed
+  terminal, kept the port, and had nothing left to press Ctrl-C in.
 - **On a Mac** it builds `~/JarvisNotchDev/Jarvis.app` and writes
   `start-sidecar.command` beside it. Quit Jarvis from the menu bar, then run
   that file and paste the token. The Mac path has not been run yet.
@@ -2396,12 +2400,17 @@ scripts/notch/fresh.sh
 
 It wipes two folders of its own and then does what `try.sh --token` does
 with them: brain data in `~/.jarvis-notch-fresh`, and the desktop app in
-`JarvisNotchFresh` in the user folder. The usual test data and test build are
-not touched. Both use the same port, so the usual test brain has to be
-stopped, and its desktop app quit from the tray, first: the script says so
-and wipes nothing while one is running. A fresh build left over from the
-last try is stopped by its own path. `--check` says what it would do and
-does nothing.
+`JarvisNotchFresh` in the user folder. Nothing has to be pasted. The usual
+test data and test build are not touched. Both use the same port, so the
+usual test brain has to be stopped, and its desktop app quit from the tray,
+first: the script says so, says how when that brain's terminal is gone, and
+wipes nothing while one is running.
+
+What is left of the last empty try it stops itself, so the one command is
+always enough: the empty brain, known by the lock file in its own data
+folder and never by its name, and the fresh build, by its own path.
+`--stop` stops the empty try and does nothing else. `--check` says what it
+would do and does nothing.
 
 ### Playing the demo
 
