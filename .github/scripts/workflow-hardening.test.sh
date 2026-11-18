@@ -2484,6 +2484,28 @@ if (rule === "license-scan") {
     const note = flatSteps(pjob.steps).map(({ st }) => st).find((st) => typeof st.run === "string" && /\$PROBLEMS\b/.test(st.run));
     if (!note || note.if !== NOTE_IF || note["continue-on-error"] || !String(note.env?.PR_BODY ?? "").endsWith("/catalog-sync/catalog-pr-body.md"))
       out.push(pname + ": no step under exactly " + NOTE_IF + " puts the license problems in the PR body");
+    // (#1166) A failed scan in a week with no catalog change opens no PR, so
+    // it showed only as a red scheduled run. Every run keeps one tracking
+    // issue: rewritten with the problem lines when the scan did not pass,
+    // closed when it passes. So the step runs unconditionally, and the
+    // problem lines are downloaded whenever the scan did not pass, not only
+    // when a PR opens.
+    const psteps = flatSteps(pjob.steps).map(({ st }) => st);
+    const track = psteps.filter((st) => typeof st.run === "string" && /^\s*label=pieces-license-scan$/m.test(st.run));
+    if (track.length !== 1) out.push(pname + ": expected exactly one step keeping the pieces-license-scan issue, found " + track.length);
+    else {
+      const t = track[0];
+      if (t.if !== undefined) out.push(pname + ": the license scan issue is kept only on some runs (if: " + t.if + ")");
+      if (t["continue-on-error"]) out.push(pname + ": the license scan issue step may fail without failing the run (continue-on-error)");
+      if (t.env?.LICENSES_RESULT !== "${{ needs." + scanJob + ".result }}")
+        out.push(pname + ": the license scan issue step does not read needs." + scanJob + ".result");
+      if (!/\bgh issue create\b/.test(t.run) || !/\bgh issue close\b/.test(t.run))
+        out.push(pname + ": the license scan issue step does not both open and close the issue");
+    }
+    const DL_IF = "needs." + scanJob + ".result != \x27success\x27";
+    const dl = psteps.find((st) => String(st.uses ?? "").startsWith("actions/download-artifact@") && st.with?.name === "license-problems");
+    if (!dl || dl.if !== DL_IF)
+      out.push(pname + ": the license problems are not downloaded under exactly " + DL_IF + ", so a run without a PR has none for the issue");
   }
 }
 if (rule === "pr-license-scan") {
@@ -4928,6 +4950,28 @@ expect_caught 'the license problems kept out of the PR body (#1177 follow-up)' l
 	$'      - name: Put the license problems at the top of the PR body\n        if: needs.generate.outputs.has_changes == \x27true\x27 && needs.licenses.result != \x27success\x27\n' \
 	$'      - name: Put the license problems at the top of the PR body\n        if: false\n' \
 	'puts the license problems in the PR body'
+expect_caught 'the license scan issue removed (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          label=pieces-license-scan' '          label=other' \
+	'expected exactly one step keeping the pieces-license-scan issue'
+expect_caught 'the license scan issue kept only when a PR opens (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Update or close the license scan issue\n' $'      - name: Update or close the license scan issue\n        if: needs.generate.outputs.has_changes == \x27true\x27\n' \
+	'the license scan issue is kept only on some runs'
+expect_caught 'the license scan issue step allowed to fail (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Update or close the license scan issue\n' $'      - name: Update or close the license scan issue\n        continue-on-error: true\n' \
+	'the license scan issue step may fail'
+expect_caught 'the license scan issue blind to the scan result (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          LICENSES_RESULT: ${{ needs.licenses.result }}
+          PROBLEMS: ${{ runner.temp }}/license-problems/license-problems.txt
+          PR_URL' '          LICENSES_RESULT: success
+          PROBLEMS: ${{ runner.temp }}/license-problems/license-problems.txt
+          PR_URL' \
+	'does not read needs.licenses.result'
+expect_caught 'the license scan issue never closed (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'              gh issue close "$open" --comment "The license scan' '              echo "$open" "The license scan' \
+	'does not both open and close the issue'
+expect_caught 'the license problems downloaded only when a PR opens (#1166)' license-scan "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'        if: needs.licenses.result != \x27success\x27\n        continue-on-error: true' $'        if: needs.generate.outputs.has_changes == \x27true\x27 && needs.licenses.result != \x27success\x27\n        continue-on-error: true' \
+	'the license problems are not downloaded under exactly'
 echo
 echo "a PR that changes the shared pieces tree or its license gate runs the license scan (#1177 follow-up)"
 expect_clean "test.yml: one license scan, gated only on the pieces-licenses paths" \
@@ -5033,7 +5077,7 @@ expect_caught 'the catalog write job checking out with the default, which persis
 	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
 	'publish: checkout leaves the write token in .git/config'
 expect_caught 'a job reading a PAT, with a read-only GITHUB_TOKEN, installing dependencies' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
-	$'    permissions:\n      contents: read\n      # The held-verified-bumps tracking issue.\n      issues: write\n    steps:\n' \
+	$'    permissions:\n      contents: read\n      # The held-verified-bumps and license scan tracking issues.\n      issues: write\n    steps:\n' \
 	$'    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n' \
 	'installs dependencies in a job holding a secret other than GITHUB_TOKEN'
 expect_caught 'a PAT in workflow-level env, reaching the jobs that install' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \

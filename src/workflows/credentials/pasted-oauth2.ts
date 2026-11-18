@@ -47,6 +47,13 @@ export const REFRESH_AHEAD_MS = 15 * 60_000;
 const DEFAULT_EXPIRES_IN_S = 60 * 60;
 /** Upstream's token request timeout at the same commit (`timeout: 20000`). */
 const TOKEN_TIMEOUT_MS = 20_000;
+/**
+ * How long an expired token's fetches fail at once after its token endpoint
+ * could not be reached, doubling with each failure in a row up to the cap,
+ * so an endpoint that comes back is tried again within minutes.
+ */
+export const UNREACHABLE_BACKOFF_MS = 30_000;
+export const UNREACHABLE_BACKOFF_MAX_MS = 5 * 60_000;
 /** A token response is a few hundred bytes; refuse anything absurd rather than buffer it. */
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
 
@@ -277,12 +284,20 @@ export interface StoredOAuth2Connection {
  * fetch. An unreachable endpoint is remembered for REFRESH_AHEAD_MS, and only
  * for a token not known to have expired, which is handed out meanwhile: a
  * black-holed endpoint would otherwise cost every fetch the full deadline. A
- * token known to have expired has nothing to hand out, so its fetches always
- * try again.
+ * token known to have expired has nothing to hand out, so its fetches try
+ * again, but behind a backoff (UNREACHABLE_BACKOFF_MS doubling per failure, up
+ * to UNREACHABLE_BACKOFF_MAX_MS): meanwhile they fail at once with the
+ * remembered reason instead of each waiting out the deadline.
  */
 export class PastedOAuth2Refresher {
   private readonly inflight = new Map<string, { start: Record<string, unknown>; promise: Promise<Record<string, unknown>> }>();
-  private readonly refused = new Map<string, { start: Record<string, unknown>; error: ConnectionCredentialError; until?: number }>();
+  private readonly refused = new Map<string, {
+    start: Record<string, unknown>; error: ConnectionCredentialError;
+    /** An unreachable endpoint, for a token not yet expired: hand the stored one out until then. */
+    until?: number;
+    /** An unreachable endpoint, for an expired token: fail at once until then, and how many failures in a row set it. */
+    retryAt?: number; failures?: number;
+  }>();
   private readonly now: () => number;
 
   constructor(private readonly transport: TokenTransport, opts: { now?: () => number } = {}) {
@@ -374,8 +389,11 @@ export class PastedOAuth2Refresher {
       grant = next;
     }
     const refused = this.refused.get(key);
-    if (refused && sameCredential(refused.start, conn.value) && (refused.until === undefined || (!expired && this.now() < refused.until))) {
-      throw refused.error;
+    if (refused && sameCredential(refused.start, conn.value)) {
+      const now = this.now();
+      const unreachable = refused.until !== undefined || refused.retryAt !== undefined;
+      if (!unreachable || (!expired && refused.until !== undefined && now < refused.until)
+        || (expired && refused.retryAt !== undefined && now < refused.retryAt)) throw refused.error;
     }
     const promise = this.refresh(conn, grant)
       .then((value) => { this.refused.delete(key); return value; },
@@ -384,7 +402,16 @@ export class PastedOAuth2Refresher {
             // One line, with no secret: which connection, which host, which typed reason.
             console.warn(`[workflow-credentials] refresh of connection ${JSON.stringify(conn.externalId)} at ${grant.tokenUrl.host} failed: ${error.code}`);
             if (error.code === "CONNECTION_EXPIRED") this.refused.set(key, { start: conn.value, error });
-            if (error.code === "CONNECTION_REFRESH_UNREACHABLE") this.refused.set(key, { start: conn.value, error, until: this.now() + REFRESH_AHEAD_MS });
+            if (error.code === "CONNECTION_REFRESH_UNREACHABLE") {
+              const now = this.now();
+              if (!expired) this.refused.set(key, { start: conn.value, error, until: now + REFRESH_AHEAD_MS });
+              else {
+                const before = this.refused.get(key);
+                const failures = (before?.retryAt !== undefined && sameCredential(before.start, conn.value) ? before.failures ?? 0 : 0) + 1;
+                const wait = Math.min(UNREACHABLE_BACKOFF_MS * 2 ** (failures - 1), UNREACHABLE_BACKOFF_MAX_MS);
+                this.refused.set(key, { start: conn.value, error, retryAt: now + wait, failures });
+              }
+            }
             // A row replaced or removed has nothing left to remember a refusal for.
             if (error.code === "CONNECTION_CHANGED") this.refused.delete(key);
           }

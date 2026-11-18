@@ -4,14 +4,62 @@
 hosted tenant runs: the engine bundle (`<out>/engine/<hash>/main.js` and its
 `main.js.sha256`), the pieces catalog (`<out>/pieces`) and the piece metadata
 cache (`<out>/piece-metadata.json`). To build the metadata it runs every
-catalog piece, about 656 third-party packages, at the builder's uid (#862).
+catalog piece, about 656 third-party packages (#862).
 
-This page says what the builder guarantees, what the host must do on top of
-it, and what to do about the transpiler cache.
+This page says how the build is split so that no piece can change what
+tenants run, what the builder guarantees in each mode, what the host does
+on top of it, and what to do about the transpiler cache.
 
-## What the builder guarantees (#862)
+## Two runs with a seal between them (#862)
 
-`publishSharedEngine` (`src/workflows/runner/engine-runtime/shared-engine-publish.ts`)
+Run in one pass, the builder imports every catalog piece at the uid that
+owns everything the build wrote. A piece can then rewrite the engine (caught,
+see below), any other piece in the tree, the tree the license gate judged,
+and the metadata. So the host runs it in two runs, as three accounts:
+
+1. `--install-only`, as the build account: the engine bundle and the catalog
+   install. No piece runs: the install uses `--ignore-scripts`, and nothing
+   imports a piece. Writes `<out>/engine` and `<out>/pieces` only. The engine
+   digest goes out on `--digest-fd` as in the one pass.
+2. The host, as root: copies the output into a root-owned, read-only tree,
+   checks `main.js` against the digest and writes `main.js.sha256` itself.
+3. `--extract-only --from <that tree>`, as an extraction account: the license
+   gate, then the metadata extraction, with the engine at
+   `<from>/engine/<hash>/` verified against root's manifest
+   (`verifiedSharedBundle`; it never builds one). It writes
+   `<out>/piece-metadata.json` and `<out>/THIRD_PARTY_NOTICES.md`, in a fresh
+   `--out` of its own, and the host copies those two into the published tree.
+   It never warms a transpiler cache.
+
+Before anything else, `--extract-only` refuses to run unless the tree it is
+given is sealed against it (`sealViolations` in
+`src/workflows/runner/engine-runtime/shared-build-phases.ts`): not running
+as root; every entry of `<from>/engine`, `<from>/pieces` and the brain's
+vendored pieces owned by root and not writable by this process; every
+ancestor root's, and not writable unless sticky. So the guarantee does not
+rest on the host having done step 2: a piece the extraction runs cannot
+change the engine, another piece, or the tree the license gate passed.
+
+What it still can change: the metadata file and the notices, which it writes
+in this run's own dir, and anything else its account can write. The metadata
+is what pieces report about themselves, so a piece could always make its own
+entry say anything; it can now also rewrite another piece's entry. That is
+data the daemon shows and validates, never code it runs.
+
+Measured end to end with the real builder and Bun 1.4.2, in an Ubuntu 24.04
+container with three accounts and `--pieces 3`: the install run wrote only
+`engine/` and `pieces/` and handed out a digest equal to the sha256 of the
+copied `main.js`; `--extract-only` against the build account's own tree
+refused with the owner of each unsealed path; against root's copy it
+extracted 40 entries with no failures; the warm-up below wrote one 3.9 MB
+cache file.
+
+The one pass (no phase flag) is unchanged, for development and for hosts
+that build older versions.
+
+## What the builder guarantees about the engine (#862)
+
+In the one pass and in `--install-only`, `publishSharedEngine` (`src/workflows/runner/engine-runtime/shared-engine-publish.ts`)
 wraps the piece-running part of the build:
 
 1. It copies into `<out>/engine/<hash>/` exactly the files `buildEngineBundle`
@@ -20,7 +68,8 @@ wraps the piece-running part of the build:
    in the build's directory, stale or planted, is not copied.
 2. It hands the `main.js` digest out on `--digest-fd` and closes that fd.
    No catalog piece has run yet.
-3. It runs the catalog install and the metadata extraction.
+3. It runs the catalog install and, in the one pass, the metadata
+   extraction.
 4. It hashes every file again. Any change, addition (including a planted
    `main.js.sha256`) or removal fails the build with exit 1.
 5. Only then does it create `main.js.sha256`, exclusively, from the in-memory
@@ -40,8 +89,9 @@ piece that, when imported, rewrites `main.js` and writes a matching
 
 ### What it cannot guarantee
 
-The builder cannot see anything written AFTER its final check by a piece
-process that outlived the extraction (a detached grandchild). Such a process
+In the one pass, the builder cannot see anything written AFTER its final
+check by a piece process that outlived the extraction (a detached
+grandchild). Such a process
 runs at the builder's uid. It can rewrite `main.js`, `main.js.sha256` and the
 summary file together.
 
@@ -80,68 +130,88 @@ pinned correctly. The same holds for the Bun install cache.
 
 ### The license gate and the notices (#971)
 
-The license gate (step 3b in the script) scans `<out>/pieces` after `bun
-install` and before any piece runs, so it judges the tree npm delivered. The
-pieces then run at the builder's uid and can write into that tree, so the
-gate does not vouch for the tree as it stands after extraction; a piece that
-wanted to could add or rewrite packages. The notices are rendered in memory
-before step 4 and written afterwards with an exclusive create (`wx`), after
-checking `<out>/pieces` is still a real directory: a file or link a piece
-planted at `THIRD_PARTY_NOTICES.md` fails the build instead of being followed
-(for example onto `main.js`). Like the summary, the notices file is not a
-source for anything the host pins.
+The license gate (step 3b in the script) scans the pieces tree after `bun
+install` and before any piece runs, so it judges the tree npm delivered.
 
-## What install-version must do (hosting repo, not this one)
+- In the one pass, the pieces then run at the builder's uid and can write
+  into that tree, so the gate does not vouch for the tree as it stands after
+  extraction; a piece that wanted to could add or rewrite packages.
+- Under `--extract-only` it judges the sealed tree, which no piece can
+  change, so what it passes is what tenants get.
 
-The host already runs the builder as `jarvis-build`, quiesces that account,
-and publishes as root. On top of that:
+The notices are rendered in memory before extraction and written afterwards
+with an exclusive create (`wx`): into `<out>/pieces` in the one pass, after
+checking it is still a real directory, and into the run's own `--out` under
+`--extract-only`. A file or link a piece planted at `THIRD_PARTY_NOTICES.md`
+fails the build instead of being followed (for example onto `main.js`). Like
+the summary, the notices file is not a source for anything the host pins.
 
-1. Give every build fresh inputs: an empty HOME, an empty
-   `BUN_INSTALL_CACHE_DIR` (or one the build uid cannot write), and a brain
-   tree the build uid cannot write. That includes what Bun reads when the
-   builder itself starts, before it computes the digest:
-   - `BUN_RUNTIME_TRANSPILER_CACHE_PATH` unset, or a fresh empty directory
-     made for this build only. A reused one can hold entries a previous
-     build's pieces planted for the builder's own modules.
-   - the builder run as `bun --config=<empty file> --no-env-file
-     scripts/build-shared-runtime.ts ...`, from a root-owned or fresh cwd, so
-     no `bunfig.toml` preload or `.env` acts on it (#863). Quiesce the build account BEFORE the
-   build as well as after, and clear anything that can restart its processes
-   (crontab, `at`, systemd user units with linger).
-2. Pass a pipe as `--digest-fd 3` and read it. Accept only exactly one line
-   of 64 lowercase hex characters followed by end of file. Anything else, a
-   missing line or a non-zero builder exit refuses the version. The digest is
-   handed out BEFORE the pieces run, so a build that is refused later has
-   already written a valid-looking line: act on it only after the builder has
-   exited 0.
-   Ignore `engineDigest` in stdout and in the summary file.
+## What install-version does (hosting, scripts VERSION 51)
 
-   The builder must be the ONLY process running as the build uid that holds
-   the pipe's write end. Root's process keeps only the read end and closes
-   its own copy of the write end once the builder child has it; the child
-   gets only the write end, as fd 3. Open the pipe in root's process, then
-   exec the builder
-   (setpriv-style, with no wrapper in between). A wrapper running as the build
-   uid that keeps fd 3 open, such as `timeout`, is a second way into the pipe.
-   This was measured with a hostile test piece that wrote through
-   `/proc/<pid>/fd/3` of every ancestor:
-   - run under `timeout`: it overwrote the digest through `timeout`'s fd 3;
-   - with the builder as the only holder: every attempt failed, and the
-     digest arrived intact;
-   - in both runs, it wrote a line into the caller's terminal through an
-     ancestor's fd 1.
-3. After quiescing the build account, copy `<out>/engine/<hash>/` into a fresh
-   root-owned directory. Then check the COPY: `sha256(main.js)` must equal the
-   digest from step 2, and every file must be a regular file with one link.
-   Write `main.js.sha256` as root from that digest, rather than publishing the
-   one found in the build tree, and publish the checked copy.
-4. Stop treating the ownership check on `$out` and `$work/transpiler`
-   (`install-version:478`) as an integrity check. It is a sanity check only.
-5. The transpiler cache: see below.
+The hosting repo's `install-version` reads which flags the version's builder
+has from the verified package. A builder with `--extract-only` is run in the
+two runs above; one with only `--digest-fd` in one pass, with the engine
+pinned; anything older in one pass, as before, so a rollback still installs.
 
-The pieces catalog and `piece-metadata.json` in `<out>` get no such
-protection. A piece can rewrite another piece's files, or the metadata, while
-extraction runs. That is a separate, open problem.
+The accounts, each used for nothing else and created by bootstrap:
+`jarvis-build` (the install run, or the one pass), `jarvis-extract` (the
+extraction run) and `jarvis-warm` (the transpiler warm-up below). Every
+stage:
+
+- runs exec'd straight into its account by `setpriv` with `--no-new-privs`,
+  under `setsid`, with `env -i` and only the variables it needs: no wrapper of
+  the account's own, so the builder is the only process of the build uid that
+  holds the pipe's write end. The deadline is enforced by root, which TERMs
+  and then KILLs the stage's process group, rather than by `timeout` on the
+  fd path. Measured with a hostile test piece that wrote through
+  `/proc/<pid>/fd/3` of every ancestor:
+  - run under `timeout`: it overwrote the digest through `timeout`'s fd 3;
+  - with the builder as the only holder: every attempt failed, and the
+    digest arrived intact;
+  - in both runs, it wrote a line into the caller's terminal through an
+    ancestor's fd 1.
+- runs bun as `bun --config=<empty file> --no-env-file`, from the account's
+  own fresh dir, so no `bunfig.toml` preload or `.env` acts on it (#863).
+  The `=` in `--config=<path>` is required: `--config <path>` and `-c`
+  silently fall back to the cwd `bunfig.toml`.
+- gets no `BUN_RUNTIME_TRANSPILER_CACHE_PATH`. Its HOME is in the scratch and
+  goes with it.
+- is followed by sealing the scratch dir and killing every process of the
+  account before root reads anything it wrote.
+
+Before a build starts, every build account's processes are killed and their
+crontab and `at` jobs removed, so nothing left by an earlier build, or
+scheduled by a piece, acts inside this one.
+
+The digest pipe is a root-only FIFO whose name is removed once both ends are
+open; root keeps only the read end (fd 8) and closes the read-write end it
+opened it with, so it sees end of file once the builder closes its fd 3.
+Root reads it only after the builder exited 0 and its account is quiesced,
+and accepts exactly one line of 64 lowercase hex characters followed by end
+of file. `engineDigest` in stdout and in the summary file are ignored.
+
+Root then copies the output, checks the copy's engine (one bundle directory
+of regular, single-link files, `sha256(main.js)` equal to the digest) and
+writes `main.js.sha256` from the digest, replacing the build's. Only then,
+with a phased builder, does `jarvis-extract` run against that copy.
+
+What is still the host's to know:
+
+- Yama `ptrace_scope` must be 1 or more on the build host (Ubuntu's default),
+  or a process of the build uid can attach to the builder and nothing it
+  computes can be trusted. Check `/proc/sys/kernel/yama/ptrace_scope`.
+- The digest is only as good as the build's INPUTS. The engine is compiled
+  from the brain tree (root's) and a staging install under the scratch HOME
+  (fresh per build), out of the host's persistent Bun install cache, which
+  `jarvis-build` owns and reuses across versions. In a phased build no
+  third-party code runs as `jarvis-build`, so nothing in that build can write
+  the cache. A one-pass build of an older version runs every piece as
+  `jarvis-build` and could leave a poisoned package in it, so the host
+  (scripts VERSION 52) empties the cache before a phased build unless a
+  root-owned marker says no one-pass build has run since the last wipe, and
+  removes that marker before every one-pass build. The cost is one full
+  catalog download, about 1GB, on a host's first phased build and on the
+  first one after any one-pass build.
 
 ## The transpiler cache
 
@@ -149,11 +219,13 @@ Bun runs a large file from a transpiled copy in
 `$BUN_RUNTIME_TRANSPILER_CACHE_PATH`. That copy is not `main.js`, and the
 digest pin never sees it (#835).
 
-Today `install-version` sets `BUN_RUNTIME_TRANSPILER_CACHE_PATH=$work/transpiler`
-for the builder, so the cache tenants trust is written by the process that
-imports every catalog piece. Each cache entry is named by a hash of the
-source file's CONTENT, not its path (measured). So a piece can plant an entry
-under the name `main.js` will look up.
+`install-version` used to set
+`BUN_RUNTIME_TRANSPILER_CACHE_PATH=$work/transpiler` for the builder and
+publish that directory, so the cache tenants trusted was written by the
+process that imports every catalog piece. Each cache entry is named by a hash
+of the source file's CONTENT, not its path (measured). So a piece could plant
+an entry under the name `main.js` will look up. Scripts VERSION 51 builds
+option C below instead.
 
 ### Measurements
 
@@ -228,22 +300,21 @@ What a tenant's cold start actually pays without piece entries:
   and #835 disables it for any tenant-writable directory under a pinned
   bundle.
 
-### Recommendation: C
+### Chosen: C
 
 C is within about 0.1 s of A on a typical cold engine spawn. It keeps the
 part of the cache that matters most, the engine, which is paid on every
 spawn. It is the only option besides B in which no piece writes a file that
 tenants trust.
 
-How the host builds it:
+How the host builds it (scripts VERSION 51):
 
-1. Stop setting `BUN_RUNTIME_TRANSPILER_CACHE_PATH` for the builder. Its
-   warm-up then lands under its scratch HOME and is discarded with it.
+1. The builder gets no `BUN_RUNTIME_TRANSPILER_CACHE_PATH`. Whatever it warms
+   lands under its scratch HOME and is discarded with it.
 2. After root has published `main.js` and checked it against the digest read
-   from `--digest-fd` (install-version steps 2 and 3; never the summary's
-   `engineDigest`, which a piece can forge),
-   boot the engine once to fill an empty cache directory. Run it as a
-   dedicated uid that runs nothing else (not `jarvis-build`):
+   from `--digest-fd` (never the summary's `engineDigest`, which a piece can
+   forge), `jarvis-warm`, which runs nothing else, boots the engine once to
+   fill an empty cache directory:
 
    ```
    BUN_RUNTIME_TRANSPILER_CACHE_PATH=<empty dir> bun --config=<empty file> --no-env-file --smol --no-install <published main.js>
@@ -254,10 +325,15 @@ How the host builds it:
    - `--no-env-file` keeps a `.env` in the cwd out of it. It is ignored
      before Bun 1.3.3 (measured), so warm with 1.3.3 or later.
    - Leave `SANDBOX_ID` unset, so the engine exits after boot.
-3. Optionally boot it twice into two empty directories and `cmp` the two
-   files. The entry is deterministic.
-4. chown the directory and its file to root, make them read-only, and point
-   tenants' `BUN_RUNTIME_TRANSPILER_CACHE_PATH` at it.
+3. Root accepts the result only if it is a flat directory of regular,
+   single-link files of `jarvis-warm`'s, and publishes a root-owned copy
+   (directory 0755, files 0644) as `/opt/jarvis-cache/<version>/transpiler`,
+   which `update-instance` points tenants' `BUN_RUNTIME_TRANSPILER_CACHE_PATH`
+   at. A warm-up that fails or times out publishes no cache and does not fail
+   the install: the cache is optional.
+
+Booting it twice into two empty directories and comparing the files would
+also work (the entry is deterministic); the host does not.
 
 If the per-piece cost ever matters, the next step is not a shared piece
 cache. It is keeping engines warm longer (`poolIdleTtlMs`). An engine that

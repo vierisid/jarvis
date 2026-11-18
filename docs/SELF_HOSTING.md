@@ -555,8 +555,9 @@ The Settings switch applies at once and works on hosted installs too; a
 It does not cover `run_command`. A shell command can capture the screen or send
 input on its own, and a list of such commands would never be complete, so the
 terminal keeps its own approvals and `--no-local-tools` instead. The desktop
-app itself keeps running its screen and clipboard observers while the switch is
-off; the brain drops what they send, until a desktop app update can pause them.
+app (0.13.0 and later) also pauses its own screen and clipboard observers while
+the switch is off, so it takes no screenshots and reads no clipboard. An older
+desktop app keeps running them, and the brain drops what it sends.
 
 Workflows follow the switch too: while it is off, a workflow step that uses
 `get_clipboard` or `set_clipboard` (or any desktop tool) is refused, and a
@@ -1173,4 +1174,4 @@ Jarvis never quietly replaces its database.
 `jarvis start` checks two things before it boots anything, and says plainly which one failed.
 
 - **The port is busy.** The check takes a moment, before the database or any service starts. The message names the port, says another program (possibly a Jarvis with a different data folder) is listening on it, gives the command that shows which one (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>` on Windows), and suggests a free port: `jarvis start --port <N>`, `JARVIS_PORT`, or `daemon.port`. Do not reach for `jarvis stop` here: with no Jarvis running for this data folder it clears the port by stopping whatever program listens on it. A port taken after that check gets the same message rather than a raw bind error.
-- **The data folder cannot be written.** A read-only folder, a full disk or the wrong owner stops the start with "Jarvis cannot write to its data folder" and the cause. "JARVIS is already running" means only that another daemon holds the lock for this data folder; stop it with `jarvis stop`. `jarvis start -d` and `jarvis logs` use the same wording.
+- **The data folder cannot be written.** A read-only folder, a full disk or the wrong owner stops the start with "Jarvis cannot write to its data folder" and the cause. "JARVIS is already running" means only that another daemon holds the lock for this data folder, and the message names the folder; stop it with `jarvis stop`. In a container the message says another Jarvis, most likely another container on the same volume, is using the folder: `jarvis stop` cannot reach that one, so stop that container (`docker stop <name>`) or give this one its own volume. `jarvis start -d` and `jarvis logs` use the same wording.

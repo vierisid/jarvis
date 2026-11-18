@@ -54,6 +54,12 @@ export type GoogleTokens = {
   refresh_token: string;
   expiry_date: number;
   token_type: string;
+  /**
+   * The scopes Google granted, space-separated, as its token response gives
+   * them (#957). Absent on a grant saved before it was recorded, which was the
+   * read-only one (google-scopes.ts).
+   */
+  scope?: string;
 };
 
 export class GoogleAuth {
@@ -251,6 +257,7 @@ export class GoogleAuth {
       refresh_token: data.refresh_token,
       expiry_date: Date.now() + (data.expires_in ?? 3600) * 1000,
       token_type: data.token_type ?? 'Bearer',
+      ...(typeof data.scope === 'string' && data.scope.trim() ? { scope: data.scope.trim() } : {}),
     };
 
     await this.saveTokens(tokens);
@@ -346,7 +353,7 @@ export class GoogleAuth {
     // so that costs up to an hour of failing polls.
     const bound = this.tokens.refresh_token;
 
-    let data: { access_token: string; expires_in?: number; refresh_token?: string };
+    let data: { access_token: string; expires_in?: number; refresh_token?: string; scope?: unknown };
 
     // ONE recorder for both paths: a gone grant is a gone grant whether the
     // control plane told us or Google did, and the settings tab has to say so
@@ -373,6 +380,9 @@ export class GoogleAuth {
       // Google does not normally rotate refresh tokens, but dropping one it DID
       // return would strand this instance at its next refresh.
       ...(data.refresh_token ? { refresh_token: data.refresh_token } : {}),
+      // The grant's scopes as Google reports them on refresh; kept when a
+      // refresh does not say (the control plane's answer may not).
+      ...(typeof data.scope === 'string' && data.scope.trim() ? { scope: data.scope.trim() } : {}),
       expiry_date: Date.now() + (data.expires_in ?? 3600) * 1000,
     };
 
@@ -385,7 +395,7 @@ export class GoogleAuth {
   /** The exchange itself: through the control plane when managed, else Google. */
   private async fetchRefreshed(
     refreshToken: string,
-  ): Promise<{ access_token: string; expires_in?: number; refresh_token?: string }> {
+  ): Promise<{ access_token: string; expires_in?: number; refresh_token?: string; scope?: unknown }> {
     if (this.refreshVia) {
       // Managed: the control plane holds the secret and applies it for us.
       return await this.refreshVia(refreshToken);
@@ -416,7 +426,7 @@ export class GoogleAuth {
         throw new Error(`Token refresh failed: ${clampReason(err)}`);
       }
 
-      return (await resp.json()) as { access_token: string; expires_in?: number };
+      return (await resp.json()) as { access_token: string; expires_in?: number; scope?: unknown };
     }
   }
 }

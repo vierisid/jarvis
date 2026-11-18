@@ -726,7 +726,7 @@ function grandfatherRunningCodeFlows(db: Database): void {
               COALESCE(f.published_version_id,
                        (SELECT v.id FROM flow_version v
                          WHERE v.flow_id = f.id AND v.state = 'DRAFT'
-                         ORDER BY v.updated DESC LIMIT 1)) AS version_id
+                         ORDER BY v.updated DESC, v.rowid DESC LIMIT 1)) AS version_id
          FROM flow f
         WHERE f.status = 'ENABLED' OR f.published_version_id IS NOT NULL`,
     )
