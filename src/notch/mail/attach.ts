@@ -107,6 +107,9 @@ const mailNamed = (person: MailPerson, asked: string): boolean => {
  * read as "not sent", and the same nudge went out again as a mail of its own
  * (the hardening audit, 17 November 2026).
  */
+/** Why a nudge is called not sent when Send was pressed and nothing confirmed it. Short: the notch shows 80 signs of it. */
+export const NUDGE_UNSURE = 'Gmail did not confirm it went. Look in the thread before trying again';
+
 export async function sendNudge(
   box: Pick<Mailbox, 'reply' | 'write'>,
   plan: { address: string; thread: string | null; subject: string; text: string },
@@ -128,7 +131,9 @@ export async function sendNudge(
       await session.discard();
       return sent;
     });
-    if (inThread.ok || pressed) return inThread;
+    if (inThread.ok) return inThread;
+    // Send was pressed and nothing says it went: it may have. That is said, and it is not sent again.
+    if (pressed) return { ok: false, why: NUDGE_UNSURE };
     // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
     log('[notch] a nudge could not be written in its thread, so it goes as a new mail');
   }

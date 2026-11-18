@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import { NotchInbox } from '../inbox.ts';
 import type { NotchLine, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
-import { attachMailLayer, sendNudge } from './attach.ts';
+import { NUDGE_UNSURE, attachMailLayer, sendNudge } from './attach.ts';
 import type { MailReplySession, MailStep } from './mailbox.ts';
 import type { MailBrowser } from './browser.ts';
 import { MailSignedOut } from './tab.ts';
@@ -134,7 +134,9 @@ describe('a nudge is sent once', () => {
 
   test('no answer to the send, and the thread does not show it: not sent again as a new mail', async () => {
     const b = box({ send: async () => ({ ok: false, why: 'Gmail did not answer' }), sent: async () => false });
-    expect(await send(b)).toEqual({ ok: false, why: 'Gmail did not answer' });
+    // It may have gone all the same: the reason says to look first.
+    expect(await send(b)).toEqual({ ok: false, why: NUDGE_UNSURE });
+    expect(NUDGE_UNSURE.length).toBeLessThanOrEqual(80);
     expect(b.did).toEqual(['write', 'send', 'read back', 'discard']);
     expect(b.did).not.toContain('new mail');
   });
