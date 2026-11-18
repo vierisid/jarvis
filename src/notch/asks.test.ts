@@ -383,6 +383,47 @@ describe('a name that may have been misheard is read back before anything runs',
   });
 });
 
+// The owner, 18 November 2026: on a call he had not had listened to, nothing else on the notch could be reached.
+describe('Home on a call', () => {
+  const ROW = { kind: 'row' as const, id: 'call', lead: 'Call', say: ['You are on a call. Listen and write it down'], go: true };
+
+  test('says that a call is on, first of all, and its row starts the listening', async () => {
+    const opened: number[] = [];
+    const h = harness({ deps: { call: { row: () => ROW, open: async (stage) => { opened.push(1); await stage.say(['Listening. I hold everything else until you are done.'], 3200); } } } });
+    await h.open();
+    const shown = h.line();
+    expect(shown?.kind === 'ask' ? shown.blocks?.[0] : null).toEqual(ROW);
+    await h.answer('go', { row: 'call' });
+    expect(opened).toHaveLength(1);
+    expect(h.said()).toBe('Listening. I hold everything else until you are done.');
+    // Its words end it: Home does not come back over them.
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+  });
+
+  test('with no call there is no such row, and a row that cannot be read is no row', async () => {
+    for (const row of [() => null, () => { throw new Error('the call is gone'); }]) {
+      const h = harness({ deps: { call: { row, open: async () => {} } } });
+      await h.open();
+      const shown = h.line();
+      expect(shown?.kind === 'ask' ? (shown.blocks ?? []).some((block) => block.kind === 'row' && block.id === 'call') : true).toBe(false);
+    }
+  });
+
+  test('what is typed or said there that the notch acts on itself is opened, though the call holds what comes by itself', async () => {
+    const h = harness({ deps: { side: (text) => (text === 'settings' ? { did: 'Open the settings.', run: () => { h.inbox.present('settings', async (stage) => { await stage.say(['Settings'], 2000); }); } } : null) } });
+    h.inbox.hold('call', { own: true });
+    await h.type('settings');
+    await h.advance(0);
+    expect(h.said()).toBe('Settings');
+    await h.answer('done');
+    // Said with the talk keys, the same.
+    await h.speak('t1', 'settings');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(h.said()).toBe('Settings');
+  });
+});
+
 describe('Undo on a row of today, in Home', () => {
   const rows = [{ kind: 'row' as const, id: 'chase:c1', lead: '10:00', say: ["Getting Sam's answer by Friday"], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] }];
 

@@ -932,3 +932,67 @@ describe('a line answered by voice comes back with its answer', () => {
   });
 });
 
+// The owner, 18 November 2026: on a call he had not had listened to, "I cannot use Jarvis in anything else ...
+// I can't access anything else." A call's hold keeps back what comes by itself, and nothing of the person's own.
+describe('a hold that lets the person\'s own things through does not keep them from their own notch', () => {
+  test('a tap on the resting notch opens Home, and with something waiting it starts the round', async () => {
+    let homes = 0;
+    const h = harness({ home: async (stage) => { homes++; await stage.say(['Home.'], 1000); } });
+    h.inbox.hold('call', { own: true });
+    await h.open();
+    expect(homes).toBe(1);
+    expect(h.said()).toBe('Home.');
+    await h.answer('done');
+    // Something came by itself during the call: it does not speak up, and a tap shows it.
+    h.inbox.add(item('news'));
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    await h.open();
+    expect(h.said()).toBe('news?');
+    await h.answer('yes');
+    expect(h.count()).toBe(0);
+  });
+
+  test('with everything stopped a tap opens nothing, as before, and also when a call is on as well', async () => {
+    let homes = 0;
+    const h = harness({ home: async (stage) => { homes++; await stage.say(['Home.'], 1000); } });
+    h.inbox.hold('stopped');
+    await h.open();
+    expect(homes).toBe(0);
+    h.inbox.hold('call', { own: true });
+    await h.open();
+    expect(homes).toBe(0);
+    h.inbox.add(item('news'));
+    await settle();
+    await h.open();
+    expect(h.line()).toBeNull();
+    // Woken, with the call still on: the notch is theirs again.
+    h.inbox.release('stopped');
+    await settle();
+    await h.open();
+    expect(h.said()).toBe('news?');
+  });
+
+  test('what the person set off themselves is put on the notch during a call; what comes by itself is not', async () => {
+    const h = harness();
+    h.inbox.hold('call', { own: true });
+    // Something that comes by itself: refused, as before.
+    expect(h.inbox.present('offline', async (stage) => { await stage.say(['No connection.'], 1000); })).toBe(false);
+    // Something they typed or said that the notch acts on itself: "settings", "what can you do".
+    expect(h.inbox.own(() => h.inbox.present('settings', async (stage) => { await stage.say(['Settings'], 1000); }))).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Settings');
+    await h.answer('done');
+    // Only for as long as their own doing lasts.
+    expect(h.inbox.present('later', async (stage) => { await stage.say(['Later.'], 1000); })).toBe(false);
+    // And not with everything stopped.
+    h.inbox.hold('stopped');
+    expect(h.inbox.own(() => h.inbox.present('settings', async (stage) => { await stage.say(['Settings'], 1000); }))).toBe(false);
+    // What `own` runs may throw: it is their own doing no longer either way.
+    h.inbox.release('stopped');
+    expect(() => h.inbox.own(() => { throw new Error('a route failed'); })).toThrow();
+    expect(h.inbox.present('after', async (stage) => { await stage.say(['After.'], 1000); })).toBe(false);
+  });
+});
+

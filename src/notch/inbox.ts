@@ -155,6 +155,8 @@ export class NotchInbox {
   /** The holds that keep back what comes by itself, and let through what the person started or is waiting on (a call). */
   private readonly soft = new Set<string>();
   private opener: (() => boolean) | null = null;
+  /** How deep in something the person set off themselves (`own`). */
+  private owning = 0;
   private readonly clock: NotchClock;
   private readonly log: (line: string) => void;
   private readonly now: () => number;
@@ -381,7 +383,9 @@ export class NotchInbox {
    */
   present(name: string, script: (stage: NotchStage) => Promise<void>, how: { held?: boolean } = {}): boolean {
     if (this.playing || this.options.busy?.() || this.surface.current().line) return false;
-    if (this.holds.size > 0 && how.held !== true) return false;
+    // Held: only the hold's own line, and, under a hold that lets the person's own things through, what they
+    // themselves set off (`own`).
+    if (this.holds.size > 0 && how.held !== true && !(this.owning > 0 && !this.hardHeld())) return false;
     this.run({ entry: null, stage: this.stage(name, false), round: null }, async (stage) => {
       await script(stage);
       return 'waits';
@@ -404,6 +408,23 @@ export class NotchInbox {
     for (const reason of this.holds) if (!this.soft.has(reason)) return false;
     this.start(entry, { unasked: false }, null, { reads, answers });
     return true;
+  }
+
+  /**
+   * Does something the person themselves set off: what they typed or said
+   * that the notch acts on itself ("settings", "what can you do"), a tap on
+   * the resting notch. What it puts on the notch (`present`) is theirs, and
+   * is not kept back by a hold that keeps back only what comes by itself.
+   */
+  own<T>(run: () => T): T {
+    this.owning++;
+    try { return run(); } finally { this.owning--; }
+  }
+
+  /** Whether a hold is on that holds everything, the person's own things too (everything stopped). */
+  private hardHeld(): boolean {
+    for (const reason of this.holds) if (!this.soft.has(reason)) return true;
+    return false;
   }
 
   private free(): boolean {
@@ -548,16 +569,20 @@ export class NotchInbox {
     if (this.playing) { this.playing.stage.wasOpened(); return; }
     if (this.surface.current().line) return;
     if (this.opener?.()) return;
-    if (this.holds.size > 0) return;
+    // A hold that keeps back only what comes by itself (a call) does not keep the person from their own
+    // notch: a tap is theirs. The owner, 18 November 2026, on a call he had not had listened to: "I cannot
+    // use Jarvis in anything else ... I can't access anything else." Everything stopped is another matter.
+    if (this.hardHeld()) return;
     // A round begins: the yes is seen, as a yes on a line is.
     if (this.entries.length > 0 && this.next({ seen: new Set() })) { this.surface.act({ gesture: 'nodg', kick: 240 }); return; }
     const home = this.options.home;
-    if (home) this.present('home', home);
+    if (home) this.own(() => { this.present('home', home); });
   }
 
   /** Shows what a round shows next. False when the round is over with nothing left to show. */
   private next(round: Round): boolean {
-    if (this.holds.size > 0) return false;
+    // A round is the person's own asking: only a hold that holds everything keeps it back.
+    if (this.hardHeld()) return false;
     const entry = this.ordered().find((candidate) => !round.seen.has(candidate.item.id));
     if (entry) {
       round.seen.add(entry.item.id);

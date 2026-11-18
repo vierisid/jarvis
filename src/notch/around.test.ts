@@ -25,12 +25,22 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; 
     clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
   };
   const surface = new NotchSurface(port, () => {});
-  const inbox = new NotchInbox(surface, { clock, log: () => {} });
+  let homes = 0;
+  /** Home, as the product has it: what a tap on the resting notch opens when nothing waits. Here it shows the call's row. */
+  const inbox: NotchInbox = new NotchInbox(surface, {
+    clock, log: () => {},
+    home: async (stage) => {
+      homes++;
+      const row = around.callRow();
+      const answer = await stage.sheet(['Home'], row ? [row] : []);
+      if (answer.act === 'go' && answer.row === 'call') await around.callOpen(stage);
+    },
+  });
   const fromPage = (message: unknown): void => pageEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   fromPage({ type: 'hello', v: 1 });
   let backOnline = 0;
   const logs: string[] = [];
-  const around = attachNotchAround(surface, inbox, {
+  const around: ReturnType<typeof attachNotchAround> = attachNotchAround(surface, inbox, {
     onEvent(listener) { aroundEvent = listener; },
     onSidecarDisconnected(listener) { gone = listener; },
   }, { ...options, backOnline: () => { backOnline++; return options.went?.(); }, clock, now: () => now, log: (line) => logs.push(line) });
@@ -42,12 +52,13 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; 
   return {
     around, inbox, surface, pushed, logs, line, item,
     backOnline: () => backOnline,
+    homes: (): number => homes,
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
     count: (): number => surface.current().count,
     parks: (): number[] => pushed.flatMap((message) => (message.type === 'act' && message.park !== undefined ? [message.park] : [])),
     async tell(payload: Record<string, unknown>, id = 'pc'): Promise<void> { aroundEvent(id, { event_type: NOTCH_AROUND_EVENT, payload }); await settle(); },
     async leave(id = 'pc'): Promise<void> { gone(id); await settle(); },
-    async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
+    async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await settle(); },
     /** A yes or a tap with nothing on the notch. */
     open(): void { fromPage({ type: 'open' }); },
     async pass(ms: number): Promise<void> {
@@ -417,9 +428,40 @@ describe('a call that can be listened to', () => {
     expect(h.said()).toBe('Call ended. I held 1 thing.');
   });
 
-  // The question at the start can go by unseen, and nothing can be said to the
-  // notch during a call: a yes on the resting notch asks it again.
-  test('a yes on the resting notch during the call asks once more, and not after the call', async () => {
+  // The owner, 18 November 2026, late: "if I start a meeting and I do not accept the meeting feature ... I
+  // cannot use Jarvis in anything else. If I try to open the Jarvis menu ... it just tells me you're in a
+  // meeting. Do you want me to start transcribing? ... so I can't access anything else." The question used
+  // to be asked again at every tap on the resting notch, for the whole call.
+  test('a no to the question is the answer for the call: a tap on the resting notch opens Home, and the question is not asked again', async () => {
+    let offers = 0;
+    const h = harness({ meetingNow: () => true, listen: {
+      offer: async (stage) => { offers++; const answer = await stage.offer(['On a call. Listen and write it down?'], 'listen'); return answer.act === 'yes'; },
+      ended: () => null,
+    } });
+    await h.tell({ call: true });
+    expect(h.said()).toBe('On a call. Listen and write it down?');
+    await h.answer('no');
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+    expect(offers).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      h.open();
+      await settle();
+      expect(h.said()).toBe('Home');
+      await h.answer('no');
+    }
+    expect(h.homes()).toBe(3);
+    expect(offers).toBe(1);
+    // The call is over: a tap is a tap as ever.
+    await h.tell({ call: false });
+    await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    h.open();
+    await settle();
+    expect(h.said()).toBe('Home');
+    expect(offers).toBe(1);
+  });
+
+  test('left unanswered, the question is not asked again either: it had its 45 seconds', async () => {
     let offers = 0;
     const h = harness({ meetingNow: () => true, listen: {
       offer: async (stage) => { offers++; const answer = await stage.offer(['On a call. Listen and write it down?'], 'listen'); return answer.act === 'yes'; },
@@ -428,19 +470,79 @@ describe('a call that can be listened to', () => {
     await h.tell({ call: true });
     await h.answer('fold');
     await h.answer('done');
-    expect(h.line()).toBeNull();
-    expect(offers).toBe(1);
     h.open();
     await settle();
-    expect(offers).toBe(2);
-    expect(h.said()).toBe('On a call. Listen and write it down?');
+    expect(h.said()).toBe('Home');
+    expect(offers).toBe(1);
+  });
+
+  test('Home says that a call is on, and its row is the way to have it listened to after all, by that one press', async () => {
+    const started: string[] = [];
+    let listening = false;
+    const h = harness({ meetingNow: () => true, listen: {
+      offer: async (stage) => (await stage.offer(['On a call. Listen and write it down?'], 'listen')).act === 'yes',
+      ended: () => null,
+      listening: () => listening,
+      can: () => !listening,
+      start: async (stage, sidecarId) => { started.push(sidecarId); listening = true; await stage.say(['Listening. I hold everything else until you are done.'], 3200); return true; },
+    } });
+    // No call: Home has no such row.
+    expect(h.around.callRow()).toBeNull();
+    await h.tell({ call: true });
+    // While the question itself is still up, there is no row yet: the question is the way.
+    expect(h.around.callRow()).toBeNull();
     await h.answer('no');
-    // The call is over: a yes at rest is a yes at rest again.
+    await h.answer('done');
+    expect(h.around.callRow()).toEqual({ kind: 'row', id: 'call', lead: 'Call', say: ['You are on a call. Listen and write it down'], go: true });
+    h.open();
+    await settle();
+    await h.answer('go', { row: 'call' });
+    // No second question: the press is the yes for this call.
+    expect(started).toEqual(['pc']);
+    expect(h.said()).toBe('Listening. I hold everything else until you are done.');
+    await h.answer('done');
+    // Listened to now: the row says so, and there is nothing to press.
+    expect(h.around.callRow()).toEqual({ kind: 'row', lead: 'Call', say: ['I am listening to this call, and writing it down.'] });
+    // And Home still opens.
+    h.open();
+    await settle();
+    expect(h.said()).toBe('Home');
+    await h.answer('no');
+    // After the call there is no row.
     await h.tell({ call: false });
     await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    expect(h.around.callRow()).toBeNull();
+  });
+
+  test('where it cannot be listened to, Home says only that a call is on', async () => {
+    const none = harness({ meetingNow: () => true });
+    await none.tell({ call: true });
+    await none.answer('done');
+    expect(none.around.callRow()).toEqual({ kind: 'row', lead: 'Call', say: ['You are on a call. What comes by itself waits until it is over.'] });
+    const cannot = harness({ meetingNow: () => true, listen: { offer: async () => false, ended: () => null, can: () => false, start: async () => false } });
+    await cannot.tell({ call: true });
+    await cannot.answer('done');
+    expect(cannot.around.callRow()).toMatchObject({ say: ['You are on a call. What comes by itself waits until it is over.'] });
+    // Pressing a row that is not there starts nothing.
+    await none.around.callOpen(null as never);
+  });
+
+  test('on a call, what waits can be gone through by a tap; what comes by itself still does not speak up', async () => {
+    const h = harness({ meetingNow: () => true, listen: { offer: async (stage) => (await stage.offer(['On a call. Listen and write it down?'], 'listen')).act === 'yes', ended: () => null } });
+    await h.tell({ call: true });
+    await h.answer('no');
+    await h.answer('done');
+    h.inbox.add(h.item('held'));
+    await settle();
+    // It does not speak up: the call holds it.
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    // The person taps: they asked, and it is shown.
     h.open();
     await settle();
-    expect(offers).toBe(2);
+    expect(h.said()).toBe('held?');
+    await h.answer('yes');
+    expect(h.count()).toBe(0);
   });
 
   // The owner, 18 November 2026: on a call that is not listened to, the talk

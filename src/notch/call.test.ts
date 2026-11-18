@@ -183,6 +183,64 @@ describe('asked for each call', () => {
     expect(h.listening()).toBe(true);
   });
 
+  // The owner, 18 November 2026: after a no to the question the notch is his again, and Home has the way to
+  // have the call listened to after all. That press is the yes for this call.
+  test('from Home it begins on the press alone: no second question, the same words, the same hearing', async () => {
+    const h = harness();
+    await h.begins();
+    await h.answer('no');
+    expect(h.calls.listening()).toBe(false);
+    expect(h.calls.can()).toBe(true);
+    const got: { said: boolean | null } = { said: null };
+    h.inbox.present('home', async (stage) => { got.said = await h.calls.start(stage, 'pc'); });
+    await settle();
+    // No question was put: it is listening.
+    expect(h.said()).toBe('Listening. I hold everything else until you are done.');
+    expect(h.state.asked).toHaveLength(1);
+    expect(h.state.asked[0]).toMatchObject({ on: true, far: false });
+    expect(h.calls.listening()).toBe(true);
+    expect(h.state.eye).toBe(true);
+    await h.answer('done');
+    expect(got.said).toBe(true);
+    // A piece of it is made into words like any other.
+    await h.piece('mic');
+    expect(h.state.made).toBe(1);
+    // It cannot be begun twice.
+    expect(h.calls.can()).toBe(false);
+    h.inbox.present('home', async (stage) => { await h.calls.start(stage, 'pc'); });
+    await settle();
+    expect(h.said()).toBe('I am listening to this call. I hold everything else until you are done.');
+    expect(h.state.asked.filter((ask) => ask.on)).toHaveLength(1);
+  });
+
+  test('from Home it also begins when the owner switched the question off: staying out is about asking, not about being asked', async () => {
+    const h = harness();
+    h.calls.setWord('calls', 'stay out');
+    expect(h.calls.can()).toBe(true);
+    h.inbox.present('home', async (stage) => { await h.calls.start(stage, 'pc'); });
+    await settle();
+    expect(h.calls.listening()).toBe(true);
+  });
+
+  test('from Home, where nothing makes out speech it says so, and with everything stopped nothing begins', async () => {
+    const deaf = harness({ stt: false });
+    expect(deaf.calls.can()).toBe(false);
+    const got: { said: boolean | null } = { said: null };
+    deaf.inbox.present('home', async (stage) => { got.said = await deaf.calls.start(stage, 'pc'); });
+    await settle();
+    expect(deaf.said()).toBe('Nothing here makes out speech yet, so I cannot write a call down.');
+    await deaf.answer('done');
+    expect(got.said).toBe(false);
+    expect(deaf.state.asked).toEqual([]);
+
+    const stopped = harness({ paused: () => true });
+    expect(stopped.calls.can()).toBe(false);
+    stopped.inbox.present('home', async (stage) => { await stopped.calls.start(stage, 'pc'); });
+    await settle();
+    expect(stopped.state.asked).toEqual([]);
+    expect(stopped.calls.listening()).toBe(false);
+  });
+
   test('a piece of a call nobody said yes to is not made into words', async () => {
     const h = harness();
     await h.piece('mic', 8000, 'call-x.1');

@@ -2317,9 +2317,19 @@ they were:
 181. **It ends by itself.** When the call is over, when the connection to
     the desktop app goes, when the notch is switched off, and after 3 hours
     and 10 minutes at the latest (`notchCallMost`).
-182. **A yes on the resting notch asks again.** The question at the start
-    stays 45 seconds. During the call a yes or a tap on the resting notch
-    asks it once more, or says that it is listening.
+182. **The question is asked once, and the notch stays the owner's.** It
+    stays 45 seconds at the start of the call. After a no, or left
+    unanswered, it is not asked again: a yes or a tap on the resting notch
+    opens Home as it always does, what waits can be gone through, and what
+    is typed or said is taken. The call's hold keeps back what comes by
+    itself and nothing else (`NotchInbox.hold` with `own`). Home has a row
+    for the call: on one that is not listened to it reads "You are on a
+    call. Listen and write it down", and pressing it starts the listening.
+    That press is the yes for this call, so nothing more is asked
+    (`NotchCalls.start`). On one that is listened to the row says so.
+    (Until 18 November 2026 the question came again at every tap, for the
+    whole call. The owner, on a call he had said no to: "I cannot use
+    Jarvis in anything else ... I can't access anything else.")
 
 What is not done, or not proven:
 

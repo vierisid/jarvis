@@ -169,6 +169,11 @@ export interface NotchAsksDeps {
    * null when the row is none of these or the thing is over already.
    */
   undoRow?: (row: string) => NotchPart[] | null;
+  /**
+   * Home's row about a call that is on (./around.ts), and what it opens:
+   * on a call that is not listened to, the way to have it listened to.
+   */
+  call?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /**
@@ -599,8 +604,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.silent = true;
       // It runs when the line that carried these words has left the notch: what it opens (the settings, a
       // sheet, day one) cannot take the notch from under that line, and was refused, so nothing opened.
+      // And it is the person's own doing: on a call that is not listened to, what it opens is not held back.
       inbox.after(() => {
-        try { side.run(); } catch (error) {
+        try { inbox.own(() => { side.run(); }); } catch (error) {
           log(`[notch] something the notch does itself failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       });
@@ -1146,9 +1152,13 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       const mailRow = deps.mail?.row() ?? null;
       const learnedRow = deps.learned?.row() ?? null;
       const standingRows = deps.standing?.rows() ?? [];
+      let callRow: NotchBlock | null = null;
+      try { callRow = deps.call?.row() ?? null; } catch { callRow = null; }
       stage.put({
         id, kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask, or tell me what to do', mood: 'listen', focus: true,
         blocks: [
+          // On a call: said first, with the way to have it listened to when it is not.
+          ...(callRow ? [callRow] : []),
           ...(recent ? [{ kind: 'row' as const, id: 'last', lead: 'Last answer', say: [shortened(recent.answer ?? '', 90)], go: true }] : []),
           ...(mailRow ? [mailRow] : []),
           ...(deps.see ? [deps.see.row()] : []),
@@ -1178,6 +1188,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (answer.act === 'go' && answer.row === 'see' && deps.see) {
         await deps.see.open(stage);
         continue;
+      }
+      // The call's row: listening begins by that press. Its own words have the notch from here.
+      if (answer.act === 'go' && answer.row === 'call' && deps.call) {
+        await deps.call.open(stage);
+        return;
       }
       if (answer.act === 'go' && answer.row === 'mail' && deps.mail) {
         await deps.mail.open(stage);
