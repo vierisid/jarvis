@@ -199,7 +199,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     waitMs: deps.waitMs,
     log,
   });
-  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, monthRead: () => sweptOnce, now, log });
+  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, monthRead: () => sweptOnce, calendar, zone: deps.zone, now, log });
 
   const timers: ReturnType<typeof setInterval>[] = [];
   let first: ReturnType<typeof setTimeout> | null = null;

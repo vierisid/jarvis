@@ -19,6 +19,7 @@
  * when the mail layer is attached, not with the rest of the vault.
  */
 import type { Database } from 'bun:sqlite';
+import { mailRowSlots, type MailRowSlot } from './slots.ts';
 import type { MailPerson } from './thread.ts';
 
 /**
@@ -54,6 +55,14 @@ export interface MailProposalRow {
   told: string;
   /** What the thread is, for the owner, in one short sentence. Empty when none was made. */
   about: string;
+  /**
+   * Free times the reply can offer, the one it names among them, each with
+   * its words in the reply (./slots.ts). Null or absent: the reply offers no
+   * time, or the calendar could not be read.
+   */
+  slots?: MailRowSlot[] | null;
+  /** What they asked for, as the end of "Anna asked ...". Empty or absent when not known. */
+  asked?: string;
   model: string;
   /** Tokens read and written for this message, every draft of it counted. */
   tokensIn: number;
@@ -76,7 +85,7 @@ export const mailProposalId = (thread: string, messageAt: number): string => `${
 interface StoredProposal {
   id: string; thread_id: string; message_at: number; state: string;
   who_name: string; who_address: string; subject: string; to_json: string; cc_json: string;
-  draft: string; time: string | null; missing: string; look_for: string; found_json: string | null; tone: string; told?: string | null; about?: string | null;
+  draft: string; time: string | null; missing: string; look_for: string; found_json: string | null; tone: string; told?: string | null; about?: string | null; slots_json?: string | null; asked?: string | null;
   model: string; tokens_in: number; tokens_out: number; created_at: number; updated_at: number; sent_at: number | null;
 }
 
@@ -92,6 +101,8 @@ function people(json: string): MailPerson[] {
 function rowOf(stored: StoredProposal): MailProposalRow {
   let found: MailProposalRow['found'] = null;
   try { found = stored.found_json ? JSON.parse(stored.found_json) as MailProposalRow['found'] : null; } catch { found = null; }
+  let slots: MailRowSlot[] | null = null;
+  try { slots = stored.slots_json ? mailRowSlots(JSON.parse(stored.slots_json)) : null; } catch { slots = null; }
   return {
     id: stored.id,
     thread: stored.thread_id,
@@ -109,6 +120,8 @@ function rowOf(stored: StoredProposal): MailProposalRow {
     tone: stored.tone,
     told: stored.told ?? '',
     about: stored.about ?? '',
+    slots,
+    asked: stored.asked ?? '',
     model: stored.model,
     tokensIn: stored.tokens_in,
     tokensOut: stored.tokens_out,
@@ -153,6 +166,8 @@ export class MailStore {
     const columns = (db.query('PRAGMA table_info(notch_mail_proposals)').all() as { name: string }[]).map((column) => column.name);
     if (!columns.includes('told')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN told TEXT NOT NULL DEFAULT ''`);
     if (!columns.includes('about')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN about TEXT NOT NULL DEFAULT ''`);
+    if (!columns.includes('slots_json')) db.run('ALTER TABLE notch_mail_proposals ADD COLUMN slots_json TEXT');
+    if (!columns.includes('asked')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN asked TEXT NOT NULL DEFAULT ''`);
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_thread ON notch_mail_proposals (thread_id)');
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_state ON notch_mail_proposals (state)');
   }
@@ -194,11 +209,11 @@ export class MailStore {
     this.db.run(
       `INSERT OR REPLACE INTO notch_mail_proposals
        (id, thread_id, message_at, state, who_name, who_address, subject, to_json, cc_json, draft, time, missing, look_for, found_json, tone, told, about,
-        model, tokens_in, tokens_out, created_at, updated_at, sent_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        slots_json, asked, model, tokens_in, tokens_out, created_at, updated_at, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [row.id, row.thread, row.messageAt, row.state, row.who.name, row.who.address, row.subject, JSON.stringify(row.to), JSON.stringify(row.cc),
         row.draft, row.time, row.missing, row.lookFor, row.found ? JSON.stringify(row.found) : null, row.tone, row.told, row.about,
-        row.model, row.tokensIn, row.tokensOut, row.createdAt, row.updatedAt, row.sentAt],
+        row.slots?.length ? JSON.stringify(row.slots) : null, row.asked ?? '', row.model, row.tokensIn, row.tokensOut, row.createdAt, row.updatedAt, row.sentAt],
     );
   }
 

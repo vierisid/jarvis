@@ -9,6 +9,7 @@ import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } fr
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import { MAIL_WHY_DRAFT_THERE, type MailReplyPlan, type MailReplySession, type MailStep, type Mailbox } from './mailbox.ts';
 import { MAIL_FUSE_MS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer } from './notch.ts';
+import type { MailCalendarEvent } from './proposer.ts';
 import { MailStore, mailProposalId, type MailProposalRow } from './store.ts';
 import { mailPerson } from './thread.ts';
 import type { MailLook } from './watch.ts';
@@ -46,6 +47,10 @@ function harness(rows: MailProposalRow[], options: {
   inGmail?: () => boolean;
   /** Whether the whole month has been gone through. */
   monthRead?: () => boolean;
+  /** The calendar as it is when a time is about to be offered. Not given: no calendar can be asked. */
+  calendar?: (from: number, to: number) => Promise<MailCalendarEvent[] | null>;
+  /** What writing a reply again for the calendar as it is now gives. */
+  redraftNow?: (before: MailProposalRow) => MailProposalRow | null;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -100,6 +105,11 @@ function harness(rows: MailProposalRow[], options: {
         redrafts.push([id, change]);
         const before = store.proposal(id)!;
         if (change.tone === 'more formally' || change.told === 'cannot be written') return null;
+        if (change.tone === undefined && change.told === undefined && options.redraftNow) {
+          const fresh = options.redraftNow(before);
+          if (fresh) store.put(fresh);
+          return fresh;
+        }
         const next = change.told
           ? { ...before, draft: `Hi Leo,\n${change.told}.\nSam`, time: null, missing: '', told: change.told }
           : { ...before, draft: 'Thursday 10 works. Sam', time: null, tone: change.tone ?? before.tone };
@@ -114,6 +124,8 @@ function harness(rows: MailProposalRow[], options: {
     mailbox: () => (options.noMailbox ? null : mailbox),
     inGmail: options.inGmail,
     monthRead: options.monthRead,
+    calendar: options.calendar,
+    zone: 'UTC',
     now: () => AT + 10_000 + now,
     log: () => {},
   });
@@ -440,6 +452,208 @@ describe('a prepared reply on the notch', () => {
     expect(h.said()).toBe('I cannot reach Gmail from here to send it. The reply is kept.');
     expect(h.did).toEqual([]);
     expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+});
+
+// The prototype: "Anna asked to move Thursday. Offer a slot?" with three free times, and a pick sends it.
+describe('a reply that offers a time, with free times from the calendar', () => {
+  const HOUR = 3_600_000;
+  // It is Saturday 14 November, a little after 9:00 UTC.
+  const slots = [
+    { at: Date.UTC(2026, 10, 16, 15, 0), minutes: 30, words: 'Monday at 15:00' },
+    { at: Date.UTC(2026, 10, 17, 10, 0), minutes: 30, words: 'Tuesday at 10:00' },
+    { at: Date.UTC(2026, 10, 18, 9, 30), minutes: 30, words: 'Wednesday at 9:30' },
+  ];
+  const offers = (extra: Partial<MailProposalRow> = {}): MailProposalRow =>
+    row({ draft: 'Hi Leo,\nMonday at 15:00 would suit me.\nSam', time: 'Monday at 15:00', missing: '', slots, asked: 'to move Thursday', ...extra });
+  const keys = (h: ReturnType<typeof harness>): string[] | undefined => { const shown = h.line(); return shown?.kind === 'offer' ? shown.options : undefined; };
+
+  test('the line says who asked for what, and has the free times as its keys', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    expect(h.line()).toMatchObject({ kind: 'offer', src: 'mail', unasked: true });
+    expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+    expect(keys(h)).toEqual(['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30']);
+    expect(h.did).toEqual([]);
+  });
+
+  test('a pick puts that time into the reply and sends it, with the fuse, and says what was offered', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    expect(h.plans).toEqual([{ thread: T1, to: ['leo@lumen.example'], cc: ['anna@lumen.example'], text: 'Hi Leo,\nTuesday at 10:00 would suit me.\nSam' }]);
+    expect(h.did).toEqual(['write']);
+    expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_FUSE_MS });
+    expect(h.said()).toBe('Offering Tuesday at 10:00 to Leo…');
+    await h.answer('done');
+    expect(h.did).toEqual(['write', 'send', 'sent?']);
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    expect(h.store.proposal(row().id)).toMatchObject({ state: 'sent', time: 'Tuesday at 10:00', draft: 'Hi Leo,\nTuesday at 10:00 would suit me.\nSam' });
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+  });
+
+  test('the first time is the one the reply names already: it goes as it was written', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Monday at 15:00' });
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nMonday at 15:00 would suit me.\nSam');
+    expect(h.said()).toBe('Offering Monday at 15:00 to Leo…');
+  });
+
+  test('the keys are the notch\'s words, the letter keeps its own language', async () => {
+    const italian = slots.map((slot, at) => ({ ...slot, words: ['lunedì alle 15:00', 'martedì alle 10:00', 'mercoledì alle 9:30'][at]! }));
+    const h = harness([offers({ draft: 'Ciao Leo,\nlunedì alle 15:00 andrebbe bene.\nSam', time: 'lunedì alle 15:00', slots: italian })]);
+    await h.arrive();
+    expect(keys(h)).toEqual(['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30']);
+    await h.answer('pick', { option: 'Wednesday at 9:30' });
+    expect(h.plans[0]!.text).toBe('Ciao Leo,\nmercoledì alle 9:30 andrebbe bene.\nSam');
+    expect(h.said()).toBe('Offering Wednesday at 9:30 to Leo…');
+  });
+
+  test('outside Gmail the line names its source, and without the words for what was asked it says "for a time"', async () => {
+    const h = harness([offers({ asked: '' })], { inGmail: () => false });
+    h.mail.speak();
+    await settle();
+    expect(h.said()).toBe('In Gmail: Leo asked for a time. Offer a slot?');
+  });
+
+  test('Esc on the line is a no; left alone it waits', async () => {
+    const no = harness([offers()]);
+    await no.arrive();
+    await no.answer('no');
+    expect(no.store.proposal(row().id)!.state).toBe('declined');
+    expect(no.did).toEqual([]);
+
+    const left = harness([offers()]);
+    await left.arrive();
+    await left.answer('fold');
+    expect(left.store.proposal(row().id)!.state).toBe('ready');
+    expect(text((left.mail.homeRow() as { say: NotchPart[] }).say)).toBe('Reply to Leo is drafted');
+  });
+
+  test('Esc while the fuse burns takes the offer back: nothing is sent and no draft is left', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    await h.answer('undo');
+    expect(h.did).toEqual(['write', 'discard']);
+    expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  test('a time that was taken since is not offered: the calendar is asked at the pick, and the others are still there', async () => {
+    const asked: [number, number][] = [];
+    const h = harness([offers()], { calendar: async (from, to) => { asked.push([from, to]); return [{ summary: 'Board call', start: '2026-11-17T10:00:00Z', end: '2026-11-17T11:00:00Z' }]; } });
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    // Asked for the hours round that time, not for the month.
+    expect(asked).toEqual([[Date.UTC(2026, 10, 17, 9, 0), Date.UTC(2026, 10, 17, 11, 30)]]);
+    expect(h.did).toEqual([]);
+    expect(h.said()).toBe('Tuesday at 10:00 has been taken since. Another?');
+    expect(keys(h)).toEqual(['Monday at 15:00', 'Wednesday at 9:30']);
+    await h.answer('pick', { option: 'Wednesday at 9:30' });
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nWednesday at 9:30 would suit me.\nSam');
+    expect(h.said()).toBe('Offering Wednesday at 9:30 to Leo…');
+  });
+
+  test('when none of them is free any more it says so, and the reply is kept', async () => {
+    const h = harness([offers()], { calendar: async () => [{ summary: 'Away', start: '2026-11-16T00:00:00Z', end: '2026-11-19T00:00:00Z' }] });
+    await h.arrive();
+    await h.answer('pick', { option: 'Monday at 15:00' });
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    expect(keys(h)).toEqual(['Wednesday at 9:30']);
+    await h.answer('pick', { option: 'Wednesday at 9:30' });
+    expect(h.said()).toBe('None of those times is free any more. The reply is kept.');
+    expect(h.did).toEqual([]);
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  test('a calendar that cannot be reached is not a reason to hold the offer back', async () => {
+    for (const calendar of [async () => null, async () => { throw new Error('signed out'); }]) {
+      const h = harness([offers()], { calendar });
+      await h.arrive();
+      await h.answer('pick', { option: 'Tuesday at 10:00' });
+      expect(h.said()).toBe('Offering Tuesday at 10:00 to Leo…');
+    }
+  });
+
+  test('a time that has come too close is not on the keys any more', async () => {
+    const h = harness([offers()]);
+    // Monday, 13:30: Monday at 15:00 is less than two hours away.
+    await h.advance(2 * 24 * HOUR + 4.5 * HOUR);
+    await h.arrive();
+    expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+    expect(keys(h)).toEqual(['Tuesday at 10:00', 'Wednesday at 9:30']);
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nTuesday at 10:00 would suit me.\nSam');
+  });
+
+  test('when its times have passed the reply is written again for the calendar as it is, before the line', async () => {
+    const later = [
+      { at: Date.UTC(2026, 10, 19, 15, 0), minutes: 30, words: 'Thursday at 15:00' },
+      { at: Date.UTC(2026, 10, 20, 10, 0), minutes: 30, words: 'Friday at 10:00' },
+    ];
+    const h = harness([offers()], { redraftNow: (before) => ({ ...before, draft: 'Hi Leo,\nThursday at 15:00 would suit me.\nSam', time: 'Thursday at 15:00', slots: later }) });
+    // Wednesday: Monday and Tuesday are gone, and Wednesday at 9:30 with them.
+    await h.advance(4 * 24 * HOUR);
+    await h.arrive();
+    expect(h.redrafts).toEqual([[row().id, {}]]);
+    expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+    expect(keys(h)).toEqual(['Thursday at 15:00', 'Friday at 10:00']);
+  });
+
+  test('when it cannot be written again, it is the plain line, and the draft behind it', async () => {
+    const h = harness([offers()], { redraftNow: () => null });
+    await h.advance(4 * 24 * HOUR);
+    await h.arrive();
+    expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
+    await h.answer('yes');
+    expect(h.said()).toBe('Reply to Leo');
+  });
+
+  test('a reply that does not name its time once has the plain line: another time could not take its place', async () => {
+    for (const draft of ['Hi Leo,\nMonday at 15:00, I repeat, Monday at 15:00.\nSam', 'Hi Leo,\nSome time on Monday.\nSam']) {
+      const h = harness([offers({ draft })]);
+      await h.arrive();
+      expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
+    }
+    // And one that offers a single time is a reply like any other.
+    const one = harness([offers({ slots: slots.slice(0, 1) })]);
+    await one.arrive();
+    expect(one.said()).toBe('You have not replied to Leo. I drafted a reply.');
+  });
+
+  test('on the draft, the time is a word with the free times as its choices, and a choice changes the letter', async () => {
+    const paper = mailDraftBlocks(offers())[0] as Extract<NotchBlock, { kind: 'paper' }>;
+    expect(paper.lines[1]![1]).toEqual({ word: { name: 'when', value: 'Monday at 15:00', options: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'], label: 'Time', read: 'dayTime' } });
+    // Opened from Home, the draft is what is shown: the reply can be read before anything goes.
+    const h = harness([offers()]);
+    h.inbox.present('home', (stage) => h.mail.open(stage));
+    await settle();
+    expect(h.said()).toBe('Reply to Leo');
+    await h.answer('word', { word: 'when', value: 'Wednesday at 9:30' });
+    expect(h.store.proposal(row().id)).toMatchObject({ time: 'Wednesday at 9:30', draft: 'Hi Leo,\nWednesday at 9:30 would suit me.\nSam' });
+    // The other times are still its choices.
+    const again = (h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines[1]![1];
+    expect(again).toMatchObject({ word: { value: 'Wednesday at 9:30', options: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'] } });
+    await h.answer('yes');
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nWednesday at 9:30 would suit me.\nSam');
+    // Sent from the draft, it is a reply that was sent: the line is the usual one.
+    expect(h.said()).toBe('Sending to Leo…');
+  });
+
+  test('a time of the owner\'s own, typed on the draft, takes the free times off the keys: the letter no longer names one of them', async () => {
+    const typed = harness([offers()]);
+    typed.inbox.present('home', (stage) => typed.mail.open(stage));
+    await settle();
+    await typed.answer('word', { word: 'when', value: 'Friday at 16:00' });
+    const kept = typed.store.proposal(row().id)!;
+    expect(kept).toMatchObject({ time: 'Friday at 16:00', draft: 'Hi Leo,\nFriday at 16:00 would suit me.\nSam' });
+    // A reply in that state, when it speaks up: the plain line, and the draft behind it.
+    const h = harness([kept]);
+    await h.arrive();
+    expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
   });
 });
 

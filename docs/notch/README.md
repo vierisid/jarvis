@@ -2439,6 +2439,71 @@ What is not done, or not proven:
   asked.
 - **On a Mac it is compiled and was never run**, as everything since pass 9.
 
+## A reply that offers a time
+
+The prototype: "Anna asked to move Thursday. Offer a slot?" with three
+times as keys, and a press sends the pick. The owner asked for it on
+18 November 2026 as the second of the things the prototype has and the
+product did not. Before, a reply could name one time, and the owner could
+type another over it.
+
+How it goes. When a reply is prepared and the calendar can be read, three
+free times are found in it by rule (`src/notch/mail/slots.ts`) and given to
+the model with the thread. A reply that proposes a time proposes the first
+of them, and the model words the other two as well, in the language of the
+letter. They are kept with the reply. On the notch such a reply has the
+prototype's line in the place of "You have not replied to Anna. I drafted
+a reply.", with the times as keys. A pick puts that time into the letter
+and sends it the way any reply is sent: into the thread as a draft, the
+fuse, and out. "Offering Friday at 10:00 to Anna…", then "Offered Friday
+at 10:00 to Anna."
+
+196. **Which times are free is read off the calendar by rule, never by a
+    model.** Monday to Friday, 9:00 to 18:00 in the owner's time zone, half
+    an hour beginning on the hour or the half hour with nothing else in it,
+    from tomorrow for seven days, at most one a day on up to three days
+    (`mailFreeSlots`). A whole-day entry is not in the way. The model words
+    the times it is given and chooses none.
+197. **The model's words are a list only when they are one for each time.**
+    As many as were given, no two the same, the first exactly the time the
+    letter names once, and none of the others in the letter as well
+    (`parseMailProposal`). Anything else and the reply stands as a reply
+    with one time, with the plain line.
+198. **The keys are the notch's words, the letter keeps its own.** The key
+    says "Tuesday at 10:00", made from the instant by code. What goes into
+    an Italian letter is the Italian the model wrote for that instant.
+199. **A pick is the yes.** The reply goes out with the picked time and is
+    not opened first, as in the prototype. The fuse is the same five
+    seconds, and Esc inside it takes the offer back and leaves no draft.
+    Whoever wants to read the letter first finds it in Home's row, where
+    the time is a word with the free times as its choices.
+200. **The calendar is asked again at the pick.** A reply can wait for
+    hours. Before the letter is written into the thread the hours round
+    the picked time are read again, for at most `MAIL_SLOT_ASK_MS`. A time
+    that was taken since is not offered: the line says so and has the
+    others. A calendar that does not answer in time is not a no.
+201. **A time that has come within two hours is off the keys.** With fewer
+    than two left the reply is written again for the calendar as it is
+    then, before its line is shown. When that cannot be done it has the
+    plain line.
+202. **Esc on the line is a no, left alone it waits**, as for any reply.
+
+What is not done, or not proven:
+
+- **No real mail has gone through it.** The rule, the model's part and the
+  line are tested with stand-ins. Whether the real model words three times
+  well, in every language, is not known.
+- **The working day is fixed**: 9:00 to 18:00, Monday to Friday, half an
+  hour. There is no setting for it, and a meeting's own length is not read
+  from the mail.
+- **A whole-day "out of office" does not block a day**, because a
+  whole-day entry is taken to be a note.
+- **It is offered in a letter, not held in the calendar.** Two people who
+  are offered the same half hour can both say yes. Nothing is put into the
+  calendar until the owner does.
+- **It cannot be picked by voice yet.** The prototype takes "Friday at ten
+  works" on this line.
+
 ## The keys
 
 | What | Keys | How it is told |

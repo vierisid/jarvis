@@ -28,6 +28,7 @@
  */
 import type { MailCalendarEvent, MailProposal, MailThink } from './proposer.ts';
 import { mailAboutMessages, mailTold, mailVoiceSamples, parseMailAbout, proposeMail } from './proposer.ts';
+import { mailFreeSlots, type MailRowSlot, type MailSlot } from './slots.ts';
 import { mailProposalId, type MailProposalRow, type MailStore } from './store.ts';
 import { isOwner, mailFirstName, type MailOwner, type MailPerson, type MailThread } from './thread.ts';
 import { MAIL_WAIT_MIN_MS, mailMachine, mailReplyTo, mailWaiting } from './waiting.ts';
@@ -85,6 +86,12 @@ export interface MailWatchDeps {
   /** How long a message waits before a reply is prepared. The rule's four hours unless a test brain says otherwise. */
   waitMs?: number;
   log?: (line: string) => void;
+}
+
+/** The free times with the words the reply has for each, or null when the reply offers none of them. */
+function rowSlots(slots: MailSlot[], times: string[] | undefined): MailRowSlot[] | null {
+  if (!times || times.length < 2 || times.length !== slots.length) return null;
+  return slots.map((slot, at) => ({ ...slot, words: times[at]! }));
 }
 
 /** How far back a full look goes: as far as the rule calls a message waiting. */
@@ -362,13 +369,15 @@ export class MailWatch {
     const at = this.now();
     const ownerName = this.ownerName || [...owner][0]!.split('@')[0]!;
     let made: { proposal: MailProposal | null; cost: { model: string; input: number; output: number; cached: number } };
+    // Which times are free is read off the calendar by rule. The model words them.
+    const slots = calendar ? mailFreeSlots(calendar, at, this.deps.zone) : [];
     try {
       made = await proposeMail({
         thread,
         owner,
         ownerName,
         samples: mailVoiceSamples([...this.voice.values()], owner, { thread: thread.id, to: last.from.address, before: at }),
-        ...(calendar ? { calendar } : {}),
+        ...(calendar ? { calendar, slots } : {}),
         now: at,
         zone: this.deps.zone,
       }, this.deps.think);
@@ -395,6 +404,8 @@ export class MailWatch {
       tone: '',
       told: '',
       about: proposal?.about ?? '',
+      slots: rowSlots(slots, proposal?.times),
+      asked: proposal?.asked ?? '',
       model: cost.model,
       tokensIn: cost.input + cost.cached,
       tokensOut: cost.output,
@@ -429,12 +440,13 @@ export class MailWatch {
     const tone = change.tone ?? row.tone;
     const told = mailTold(change.told ?? row.told);
     const calendar = (await this.deps.calendar?.(at, at + MAIL_CALENDAR_AHEAD_MS).catch(() => null)) ?? null;
+    const slots = calendar ? mailFreeSlots(calendar, at, this.deps.zone) : [];
     const made = await proposeMail({
       thread,
       owner,
       ownerName: this.ownerName || [...owner][0]!.split('@')[0]!,
       samples: mailVoiceSamples([...this.voice.values()], owner, { thread: thread.id, to: last.from.address, before: at }),
-      ...(calendar ? { calendar } : {}),
+      ...(calendar ? { calendar, slots } : {}),
       now: at,
       zone: this.deps.zone,
       manner: tone,
@@ -446,7 +458,11 @@ export class MailWatch {
       tokensIn: row.tokensIn + spent.input + spent.cached,
       tokensOut: row.tokensOut + spent.output,
       updatedAt: at,
-      ...(made?.proposal?.needsReply ? { draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone, told, about: made.proposal.about || row.about } : {}),
+      ...(made?.proposal?.needsReply ? {
+        draft: made.proposal.reply, time: made.proposal.time, missing: made.proposal.missing, tone, told, about: made.proposal.about || row.about,
+        // The times are of the calendar as it is now: the ones the reply had before are gone with it.
+        slots: rowSlots(slots, made.proposal.times), asked: made.proposal.asked || (rowSlots(slots, made.proposal.times) ? row.asked ?? '' : ''),
+      } : {}),
     };
     this.deps.store.put(next);
     return made?.proposal?.needsReply ? next : null;

@@ -10,7 +10,7 @@ const T = Date.UTC(2026, 10, 14, 9, 0);
 const row = (extra: Partial<MailProposalRow> = {}): MailProposalRow => ({
   id: mailProposalId('19a1b2c3d4e5f607', T), thread: '19a1b2c3d4e5f607', messageAt: T, state: 'ready', who: leo, subject: 'Deck for Thursday?',
   to: [leo], cc: [anna], draft: 'Hi Leo,\nThursday at 10:00 works.\nSam', time: 'Thursday at 10:00', missing: '', lookFor: 'Lumen deck',
-  found: [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }], tone: '', told: '', about: '', model: 'm',
+  found: [{ id: '1AbCdEfGhIjKlMnOpQrStUvWxYz012345', name: 'Lumen deck v3', kind: 'Google Slides' }], tone: '', told: '', about: '', slots: null, asked: '', model: 'm',
   tokensIn: 1200, tokensOut: 80, createdAt: T + 1, updatedAt: T + 1, sentAt: null, ...extra,
 });
 
@@ -35,6 +35,32 @@ describe('a prepared reply', () => {
     const again = new MailStore(db);
     expect(again.proposal(row().id)).toEqual(row());
     expect(again.ready().map((entry) => entry.id)).toEqual([row().id]);
+  });
+
+  test('the free times it can offer are kept with it, each with its words, and what was asked for', () => {
+    const db = new Database(':memory:');
+    const slots = [{ at: T + 86_400_000, minutes: 30, words: 'Thursday at 10:00' }, { at: T + 2 * 86_400_000, minutes: 30, words: 'Friday at 15:00' }];
+    new MailStore(db).put(row({ slots, asked: 'to move Thursday' }));
+    expect(new MailStore(db).proposal(row().id)).toMatchObject({ slots, asked: 'to move Thursday' });
+    // What is not a list of times that can be used is none.
+    db.run(`UPDATE notch_mail_proposals SET slots_json = '[{"at":"soon"}]'`);
+    expect(new MailStore(db).proposal(row().id)!.slots).toBeNull();
+    db.run(`UPDATE notch_mail_proposals SET slots_json = 'not json'`);
+    expect(new MailStore(db).proposal(row().id)!.slots).toBeNull();
+  });
+
+  test('a table made before replies carried times gets the columns, and its rows read as having none', () => {
+    const db = new Database(':memory:');
+    db.run(`CREATE TABLE notch_mail_proposals (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, message_at INTEGER NOT NULL, state TEXT NOT NULL,
+      who_name TEXT NOT NULL DEFAULT '', who_address TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', to_json TEXT NOT NULL DEFAULT '[]', cc_json TEXT NOT NULL DEFAULT '[]',
+      draft TEXT NOT NULL DEFAULT '', time TEXT, missing TEXT NOT NULL DEFAULT '', look_for TEXT NOT NULL DEFAULT '', found_json TEXT, tone TEXT NOT NULL DEFAULT '',
+      told TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, sent_at INTEGER)`);
+    db.run(`INSERT INTO notch_mail_proposals (id, thread_id, message_at, state, draft, created_at, updated_at) VALUES ('old', 't', 1, 'ready', 'Hello', 1, 1)`);
+    const store = new MailStore(db);
+    expect(store.proposal('old')).toMatchObject({ draft: 'Hello', slots: null, asked: '' });
+    store.put(row());
+    expect(store.proposal(row().id)).toEqual(row());
   });
 
   // A send and a thread that moved on both want to end a reply. Only one of them does.
