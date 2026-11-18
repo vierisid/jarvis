@@ -440,6 +440,55 @@ describe('"Remember that"', () => {
 });
 
 describe('an approval the turn asks for', () => {
+  // The hardening audit, 17 November 2026: an approval an instruction waits on
+  // could become unreachable. Something urgent took the notch for a moment,
+  // and the notch went back to the work line: "Waiting for your yes." with
+  // nothing to say yes to.
+  test('has the notch back after something urgent took it for a moment', async () => {
+    const h = harness();
+    await h.type('run the command');
+    const turn = h.door.running();
+    h.door.emit(turn, { kind: 'approval', approvalId: 'ap1', status: 'pending' });
+    await settle();
+    // What raising does: the approval's item takes the notch, urgent, and it is one that comes back.
+    h.inbox.add({
+      id: 'approval:ap1', subject: 'approval:ap1', class: 'clock', speaks: true, urgent: true, returns: true, title: () => ['ap1'],
+      play: async (stage) => { await stage.offer(['Run it?'], 'approve'); return 'settled'; },
+    });
+    await settle();
+    expect(h.said()).toBe('Run it?');
+    // Something urgent: a line that says itself and goes.
+    h.inbox.add({
+      id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, once: true, title: () => ['A meeting'],
+      play: async (stage) => { await stage.say(['Your call starts in two minutes.'], 1500); return 'settled'; },
+    });
+    await settle();
+    expect(h.said()).toBe('Your call starts in two minutes.');
+    await h.answer('done');
+    // The approval again, and not the work line that only says it waits.
+    expect(h.said()).toBe('Run it?');
+  });
+
+  test('is brought up again when the work line comes back alone and still waits for it', async () => {
+    const h = harness();
+    await h.type('run the command');
+    const turn = h.door.running();
+    h.door.emit(turn, { kind: 'approval', approvalId: 'ap1', status: 'pending' });
+    await settle();
+    expect(h.raised).toEqual(['ap1']);
+    expect(h.said()).toBe('Waiting for your yes.');
+    // Something urgent takes the notch from the work line, and hands it back.
+    h.inbox.add({
+      id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, once: true, title: () => ['A meeting'],
+      play: async (stage) => { await stage.say(['Your call starts in two minutes.'], 1500); return 'settled'; },
+    });
+    await settle();
+    await h.answer('done');
+    expect(h.said()).toBe('Waiting for your yes.');
+    // Right after the first raising it is not pushed again.
+    expect(h.raised).toEqual(['ap1']);
+  });
+
   test('is raised to the notch at once, and the work gets the notch back after it', async () => {
     const h = harness();
     await h.type('run the command');
@@ -692,6 +741,28 @@ describe('first batch of the edge-case audit', () => {
     await h.advance(5000);
     expect(h.door.texts()).toEqual([]);
     expect(row(h)).toMatchObject({ state: 'refused', note: 'Everything is stopped. Wake me first.', heard: '' });
+  });
+
+  // The hardening audit, 17 November 2026: said during a call it was taken in
+  // silence, with no line and no shake, and ran an hour later when the call
+  // was over.
+  test('spoken during a call: turned away at the first key, and it never runs when the call is over', async () => {
+    let onCall = true;
+    const h = harness({ deps: { onCall: () => onCall } });
+    h.asks.listen('t1');
+    h.asks.released('t1');
+    h.asks.words('t1', 'send Sam the deck');
+    await settle();
+    expect(h.shakes()).toBe(1);
+    expect(h.line()).toBeNull();
+    onCall = false;
+    await h.advance(5000);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'refused', note: 'You were on a call, and I hold everything until it is over.', heard: '' });
+    // After the call it is heard as ever.
+    await h.speak('t2', 'send Sam the deck');
+    await h.advance(1500);
+    expect(h.door.texts()).toEqual(['send Sam the deck']);
   });
 
   test('spoken while something runs: refused at the first key, not after it was all said', async () => {
@@ -1075,6 +1146,9 @@ describe('a question about where something is', () => {
     expect(row(h)).toMatchObject({ state: 'stopped' });
     expect(h.line()).toBeNull();
     expect(h.door.texts()).toEqual([]);
+    // The hardening audit, 17 November 2026: it was left unseen, and came back
+    // after every restart as "Stopped. What was already done stays done."
+    expect(h.ledger.unseen()).toEqual([]);
   });
 
   test('a new question while a step waits for its click ends the walk: it is not told "I am still on the last thing"', async () => {
@@ -1095,6 +1169,8 @@ describe('a question about where something is', () => {
     expect(walks).toBe(1);
     expect(h.door.texts()).toEqual(['send Leo the numbers']);
     expect(h.said()).toBe('On it: send Leo the numbers');
+    // The walk that was ended has nothing left to be seen: it does not come back after a restart as "Stopped".
+    expect(h.ledger.unseen().map((entry) => entry.heard)).not.toContain('How do I add an audio input capture?');
     // Spoken, the same: the keys are not refused.
     const again = harness({ deps: { point: (_question, how) => { signal = how?.signal; return new Promise(() => {}); } } });
     await again.type('How do I add an audio input capture?');

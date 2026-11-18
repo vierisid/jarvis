@@ -292,6 +292,11 @@ type notchAct struct {
 	Right, Down int
 	// count: how far the place moves on each time, and the most that are counted.
 	Dx, Dy, Most int
+	// paste at a place on the screen: the program that place was in when the
+	// person pointed at it. The yes can come minutes after the pointing, and
+	// whatever is at the place by then is not what was pointed at: with
+	// another program there, nothing is put. Empty: not asked.
+	In string
 }
 
 // The most a paste may hold: a few hundred rows.
@@ -352,6 +357,9 @@ func parseNotchAct(params map[string]any) (notchAct, error) {
 		return act, err
 	}
 	act.Screen, _ = params["screen"].(bool)
+	if in, ok := params["in"].(string); ok && len(in) <= 120 {
+		act.In = notchAppKey(strings.TrimSpace(in))
+	}
 	if act.Hand, _, err = whole("hand", 2); err != nil || act.Hand < 0 {
 		return act, fmt.Errorf("notch.act: hand is 0, 1 or 2")
 	}

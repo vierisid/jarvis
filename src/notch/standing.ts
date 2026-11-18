@@ -51,7 +51,9 @@ export const NOTCH_STANDING_TICK_MS = 30_000;
 /** How long a chase that is over stays in the list. */
 export const NOTCH_CHASE_KEPT_MS = 24 * 3_600_000;
 
-const NOT_A_NAME = /^(the|a|an|my|me|his|her|their|it|this|that|he|she|they|him|them|someone|anyone|somebody|anybody|answer|reply|signature|you|us|we)$/i;
+const NOT_A_NAME = /^(the|a|an|my|me|his|her|their|it|this|that|he|she|they|him|them|someone|anyone|somebody|anybody|answer|reply|signature|you|us|we|up|down|on|off|in|out|back|over|for|to|with|about|from|by|at|of|and|or|if|when|until|after|before|some|all|any|every|each|more|one|what|who|which|where|how|why|ready|started|rid|going|there|here)$/i;
+/** Somebody who is meant and not named: "he", "they", "this one". The notch asks who. */
+const SOMEBODY = /^(?:he|she|they|it|this|that|him|her|them|someone|somebody|anyone|anybody|this one|that one)$/i;
 const ADDRESS = /[^\s<>,;"']+@[^\s<>,;"']+\.[a-z]{2,}/i;
 const LEAD = '(?:(?:ok(?:ay)?|hey|jarvis|please|now|and|then|so)[,\\s]+)*';
 
@@ -74,7 +76,14 @@ export function eyeRequest(text: string): { who: string } | null {
   const said = text.trim().replace(/[’`]/g, "'");
   if (!said || said.split(/\s+/).length > 16) return null;
   const match = said.match(new RegExp(`^${LEAD}(?:tell|let|ping|warn|notify) me(?: know)? (?:when|once|as soon as|the moment|if) (.+?) (?:repl(?:y|ies)|answers?|writes?(?: (?:back|to me))*|gets? back(?: to me)?|responds?|e?mails?(?: me)?)(?: back)?(?: to me)?[.!]?$`, 'i'));
-  return match ? { who: whoOf(match[1]!) } : null;
+  if (!match) return null;
+  const who = whoOf(match[1]!);
+  // Nobody is named. "When he replies" means somebody, and the notch asks
+  // who. "If the supplier responds", "when the server answers" is about
+  // something else: an ordinary sentence, and it goes on as one. Taken here
+  // it was answered "Who? Say the name." (the hardening audit, 17 November 2026).
+  if (!who && !SOMEBODY.test(match[1]!.trim())) return null;
+  return { who };
 }
 
 /** The days a chase can be asked to be done by, as the notch says them. */
@@ -126,6 +135,14 @@ export function chaseRequest(text: string): ChaseAsked | null {
     said.match(/\bfrom\s+(\S+@\S+|[\p{L}]+)/iu),
     said.match(/\b(?:get|chase)\s+(\S+@\S+|[\p{L}]+)/iu),
   ].map((match) => (match ? whoOf(match[1]!) : '')).find(Boolean) ?? '';
+  // Nobody is named. It is still a chase when it is put as one: "get the
+  // answer by Friday", "get his reply", "chase him until he answers", and
+  // the notch asks whose. Anything else is an ordinary sentence that has
+  // "get" and "answer" in it: "get me the answer to question five", "chase
+  // up the signature page in my downloads". Those go on as instructions.
+  if (!named
+    && !new RegExp(`^${LEAD}(?:get|chase)\\s+(?:(?:the|an?|his|her|their|that|this)\\s+)?(?:answer|reply|signature)\\b`, 'i').test(said)
+    && !new RegExp(`^${LEAD}(?:get|chase)\\s+(?:him|her|them)\\b`, 'i').test(said)) return null;
   const thing = (low.match(/\b(answer|reply|signature)\b/)?.[1] ?? 'answer') as ChaseAsked['thing'];
   const about = said.match(/\b(?:on|about|for)\s+(.+?)(?:\s+by\s+.+|\s+until\s+.+|[.!?]?$)/i)?.[1]?.trim() ?? '';
   const day = chaseDay(low.match(/\bby\s+(.+?)[.!?]?$/)?.[1] ?? '');

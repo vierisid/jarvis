@@ -7,8 +7,8 @@ import { Database } from 'bun:sqlite';
 import { NotchInbox } from '../inbox.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
-import type { MailReplyPlan, MailReplySession, MailStep, Mailbox } from './mailbox.ts';
-import { MAIL_FUSE_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer } from './notch.ts';
+import { MAIL_WHY_DRAFT_THERE, type MailReplyPlan, type MailReplySession, type MailStep, type Mailbox } from './mailbox.ts';
+import { MAIL_FUSE_MS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer } from './notch.ts';
 import { MailStore, mailProposalId, type MailProposalRow } from './store.ts';
 import { mailPerson } from './thread.ts';
 import type { MailLook } from './watch.ts';
@@ -121,6 +121,8 @@ function harness(rows: MailProposalRow[], options: {
   return {
     mail, store, inbox, did, plans, redrafts, held, line, surface, asks,
     looks: () => looks,
+    /** The time, as the mail layer reads it. */
+    at: (): number => AT + 10_000 + now,
     said: (): string => text(line()?.say),
     count: (): number => surface.current().count,
     blocks: (): NotchBlock[] => { const shown = line(); return shown?.kind === 'sheet' ? shown.blocks : []; },
@@ -369,6 +371,19 @@ describe('a prepared reply on the notch', () => {
     expect(h.did).toEqual(['write', 'discard']);
     expect(h.said()).toBe('I could not put the reply in the thread, so nothing was sent. It is kept here.');
     expect(h.line()).toMatchObject({ kind: 'say', mark: 'fail' });
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  // The hardening audit, 17 November 2026: a reply written into a thread that
+  // already held a draft went out with the old words after it. Now it is not
+  // written, and the draft that is there is somebody's: it is not thrown away.
+  test('a thread that already holds a draft is left alone: nothing is written, nothing is thrown away', async () => {
+    const h = harness([row()], { steps: { write: { ok: false, why: MAIL_WHY_DRAFT_THERE } } });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    expect(h.did).toEqual(['write']);
+    expect(h.said()).toBe('There is a draft in that thread already. I left it alone, and nothing was sent.');
     expect(h.store.proposal(row().id)!.state).toBe('ready');
   });
 
@@ -804,14 +819,20 @@ describe('keeping the notch in line with the replies that wait', () => {
 describe('the owner steers what a reply says', () => {
   /** A reply Jarvis was sure of: nothing missing, nothing told. It says yes. */
   const sure = (): MailProposalRow => row({ missing: '', time: null, draft: 'Hi Leo,\nHappy to go ahead with the proposal.\nSam' });
-  /** Something else takes the notch, as the talk keys do: the draft goes back to waiting. */
-  const takenAway = async (h: ReturnType<typeof harness>): Promise<void> => {
+  /**
+   * Something else takes the notch, as the talk keys do: the draft goes back
+   * to waiting. Comes back with how the words then said came: spoken, with
+   * the keys that went down at that moment.
+   */
+  const takenAway = async (h: ReturnType<typeof harness>): Promise<{ source: 'spoken'; at: number }> => {
+    const keys = { source: 'spoken' as const, at: h.at() };
     h.inbox.add({
       id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, once: true, asked: true,
       title: () => ['Listening'],
       play: async (stage) => { await stage.say(['Listening'], 800); return 'settled'; },
     });
     await h.advance(4000);
+    return keys;
   };
 
   test('one click turns it round: "say no" writes the reply again as a no, and that is what is sent', async () => {
@@ -836,8 +857,8 @@ describe('the owner steers what a reply says', () => {
     await h.answer('yes');
     expect(h.said()).toBe('Reply to Leo');
     // The keys are held: the draft leaves the notch for the listening.
-    await takenAway(h);
-    const route = h.mail.route('Decline it, we are full until January.');
+    const keys = await takenAway(h);
+    const route = h.mail.route('Decline it, we are full until January.', keys);
     expect(route?.did).toBe('Write the reply again, as told.');
     // Routing changes nothing by itself: it is asked twice for one sentence.
     expect(h.redrafts).toEqual([]);
@@ -863,12 +884,30 @@ describe('the owner steers what a reply says', () => {
     await h.answer('yes');
     // Open: it is.
     expect(h.mail.route('Decline it')).not.toBeNull();
-    await takenAway(h);
+    const keys = await takenAway(h);
     await h.advance(MAIL_STEER_SAID_MS - 10_000);
-    expect(h.mail.route('Decline it')).not.toBeNull();
+    expect(h.mail.route('Decline it', keys)).not.toBeNull();
     await h.advance(20_000);
     // Long after: it is not.
-    expect(h.mail.route('Decline it')).toBeNull();
+    expect(h.mail.route('Decline it', keys)).toBeNull();
+  });
+
+  // The hardening audit, 17 November 2026: for 45 seconds after a draft left
+  // the notch, anything said or typed was taken as what that reply should
+  // say. "Open the Q3 deck" never opened the deck.
+  test('a draft that left the notch is meant only by what was said with the keys that took it off', async () => {
+    const h = harness([sure()]);
+    await h.arrive();
+    await h.answer('yes');
+    const keys = await takenAway(h);
+    // Typed a moment later: an instruction like any other.
+    expect(h.mail.route('Open the Q3 deck', { source: 'typed', at: h.at() })).toBeNull();
+    // Said with keys that went down well after the draft had gone: the same.
+    expect(h.mail.route('Open the Q3 deck', { source: 'spoken', at: h.at() + MAIL_STEER_KEYS_MS + 1 })).toBeNull();
+    // Nothing known about how the words came: not taken.
+    expect(h.mail.route('Open the Q3 deck')).toBeNull();
+    // Said with the keys that took it off: what the reply is to say.
+    expect(h.mail.route('Decline it', keys)).not.toBeNull();
   });
 
   test('a draft the owner closed, sent or turned down is in hand no more', async () => {

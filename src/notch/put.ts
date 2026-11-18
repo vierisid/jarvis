@@ -264,8 +264,11 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
   };
 
   /** The request that puts a thing somewhere, in its form. A cell takes cells; one value is just words. */
-  function request(thing: NotchHeld, form: NotchPutForm, place: Place, cell: boolean): Record<string, unknown> {
-    const where = place === 'caret' ? { front: true } : { screen: true, x: place.x, y: place.y };
+  function request(thing: NotchHeld, form: NotchPutForm, place: Place, cell: boolean, appSeen = ''): Record<string, unknown> {
+    // With the place goes the program it was in when it was pointed at: the
+    // yes can come minutes later, and the desktop app puts nothing where
+    // another program is by then.
+    const where = place === 'caret' ? { front: true } : { screen: true, x: place.x, y: place.y, ...(appSeen ? { in: appSeen } : {}) };
     if (!heldIsTable(thing)) return { do: 'paste', ...where, text: thing.text, hand: 0 };
     return { do: 'paste', ...where, rows: thing.rows, as: cell ? 'cells' : AS[form], hand: 0 };
   }
@@ -278,7 +281,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
     let result: Awaited<ReturnType<NotchJobHands['act']>> = null;
     let lost = false;
     try {
-      result = await deps.hands.act(request(thing, form, place, cell));
+      result = await deps.hands.act(request(thing, form, place, cell, appSeen));
     } catch { lost = true; }
     deps.jobs.home();
     if (lost) return { parts: ['I lost touch with your computer in the middle of it. Look whether it is there.'], ms: 5200, mood: 'sorry', mark: 'fail' };

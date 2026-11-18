@@ -35,3 +35,10 @@ func notchPressOnPlace(x, y, wantX, wantY int) bool {
 	dx, dy := x-wantX, y-wantY
 	return dx >= -2 && dx <= 2 && dy >= -2 && dy <= 2
 }
+
+// notchActStillIn says whether a place that was pointed at while one program
+// was there may still be acted on, with this program there now. Both are
+// names as the never list holds them. Nothing asked ("") is yes.
+func notchActStillIn(asked, now string) bool {
+	return asked == "" || asked == now
+}
