@@ -357,9 +357,11 @@ export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
  *   - unset (the default path, under HOME): "0", which disables the cache.
  *   - a root-owned directory of root-owned files that nothing here can write
  *     or rename (isHostOwnedReadOnly): kept. That is the read-only cache
- *     multi-tenant hosting warms per version (build-shared-runtime.ts), which
- *     Bun reads without writing. It is only as trustworthy as the code that ran
- *     while it was being warmed, which today includes every catalog piece.
+ *     multi-tenant hosting warms per version, which Bun reads without
+ *     writing. It is only as trustworthy as the code that ran while it was
+ *     being warmed: hosting now boots the published engine alone into it
+ *     (#862, docs/shared-runtime-integrity.md); a cache the one-pass
+ *     build-shared-runtime.ts warmed also holds the work of every catalog piece.
  *   - anything else, including a "daemon-owned" directory: "0". A directory
  *     the daemon owns is one every tenant workload at the daemon's uid owns
  *     too, so it would move the cache without making it any less forgeable.

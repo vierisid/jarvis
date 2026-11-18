@@ -179,23 +179,37 @@ describe("the shared engine manifest is written after extraction, from the build
     expect(readFileSync(join(outDir, ENGINE_MANIFEST_NAME), "utf8")).toBe(bundle.digest + "\n");
   });
 
-  test("build-shared-runtime runs every piece inside publishSharedEngine and writes no manifest itself", () => {
+  test("build-shared-runtime runs every piece inside publishSharedEngine or against a sealed engine, and writes no manifest itself", () => {
     const script = readFileSync(resolve(import.meta.dir, "../../../../scripts/build-shared-runtime.ts"), "utf8");
+    // Everything that can run piece code is defined once: the catalog
+    // install, the engine and the extraction.
+    for (const step of ["spawnSync(process.execPath, [\"install\"", "new EngineRuntime(", "buildPieceCatalog("]) {
+      expect({ step, count: script.split(step).length - 1 }).toEqual({ step, count: 1 });
+    }
+    // The one pass and --install-only call them only inside publishSharedEngine.
     const start = script.indexOf("await publishSharedEngine(bundle, engineOutDir, async () => {");
     const end = script.indexOf("\n}, handOutDigest);\n", start);
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
     const inside = script.slice(start, end);
-    // Everything that can run piece code: the catalog install, the engine and
-    // the extraction.
-    for (const step of ["spawnSync(process.execPath, [\"install\"", "new EngineRuntime(", "buildPieceCatalog("]) {
-      expect({ step, inside: inside.includes(step) }).toEqual({ step, inside: true });
-      expect({ step, count: script.split(step).length - 1 }).toEqual({ step, count: 1 });
-    }
+    const outside = script.slice(0, start) + script.slice(end);
+    expect(inside).toContain("installCatalog(piecesDir, catalog);");
+    expect(inside).toContain("await extractMetadata({");
+    expect(outside.split("installCatalog(").length - 1).toBe(1); // the definition
+    // --extract-only extracts only with the engine the host sealed, verified
+    // against root's manifest, after the seal check, and never warms the cache.
+    const branchStart = script.indexOf('if (phase === "extract") {\n  // The engine the host sealed');
+    const branch = script.slice(branchStart, script.indexOf("\n  process.exit(0);\n}\n", branchStart));
+    expect(branch.length).toBeGreaterThan(0);
+    expect(branch).toContain("const sealed = verifiedSharedBundle(engineRootFrom!);");
+    expect(branch).toContain("await extractMetadata({");
+    expect(branch).toContain("warmTranspilerCache: false,");
+    expect(branch).not.toContain("buildEngineBundle(");
+    expect(script.indexOf("sealViolations([")).toBeLessThan(script.indexOf("const sealed = verifiedSharedBundle("));
     expect(script).not.toContain("main.js.sha256\"");
     expect(script).not.toMatch(/createHash/u);
     // And the summary carries the digest the host should pin to.
-    expect(script).toMatch(/\n {4}engineDigest,\n/u);
+    expect(script).toMatch(/\n {2}engineDigest,\n/u);
   });
 
   // --digest-fd is only sound when the builder is the one build-uid holder of
