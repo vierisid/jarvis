@@ -81,7 +81,8 @@ export function notchMailLayerDeps(options: {
       const google = options.google();
       if (!google?.isAuthenticated()) return null;
       const events = await listUpcomingEvents(await google.getAccessToken(), 'primary', new Date(from).toISOString(), new Date(to).toISOString(), 250);
-      return events.map((event) => ({ summary: event.summary, start: event.start, end: event.end, ...(event.attendees.length > 1 ? { withOthers: true } : {}) }));
+      // Who is in it goes along: before a call, the notch says what it knows about the one other person (src/notch/before.ts).
+      return events.map((event) => ({ summary: event.summary, start: event.start, end: event.end, ...(event.attendees.length > 1 ? { withOthers: true, who: event.attendees.slice(0, 30) } : {}) }));
     },
     modelReady: options.modelReady,
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone,

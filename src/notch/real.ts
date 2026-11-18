@@ -58,6 +58,7 @@ import { attachNotchMoves, type NotchMoves } from './moves.ts';
 import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
+import { notchBeforeNotes } from './before.ts';
 import type { NotchPart } from './protocol.ts';
 import { attachNotchSaid } from './said.ts';
 import { whereQuestion } from './point.ts';
@@ -612,7 +613,19 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   if (deps.day && settings) {
     const layer = mail;
     const asleep = (): boolean => (deps.emergency ? deps.emergency.getState() !== 'normal' : false);
-    if (layer) soon = attachNotchSoon(inbox, { calendar: (from, to) => layer.calendar(from, to), now: dayNow, log });
+    if (layer) {
+      soon = attachNotchSoon(inbox, {
+        calendar: (from, to) => layer.calendar(from, to), now: dayNow, log,
+        // Before a call: what is held about the one other person it is with. From the calls that were
+        // written down, the mail that was waited on, and what is remembered. Nothing is fetched or asked.
+        notes: (meeting) => notchBeforeNotes(meeting, {
+          people: () => layer.store.people(),
+          calls: () => (calls?.store.recent(20) ?? []).flatMap((call) => (call.notes ? [{ at: call.startedAt, with: call.notes.with, summary: call.notes.summary, actions: call.notes.actions }] : [])),
+          mail: (address) => layer.store.withPerson(address).map((row) => ({ at: row.messageAt, about: row.about, subject: row.subject, state: row.state })),
+          facts: office?.memory ? (about) => office.memory!.list(about).map((fact) => ({ text: `${fact.about} ${fact.text}`.trim() })) : undefined,
+        }),
+      });
+    }
     if (deps.day.around && deps.calls) {
       const emergency = deps.emergency;
       const kept = attachNotchCalls(deps.calls.port, {
