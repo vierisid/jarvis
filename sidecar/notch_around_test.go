@@ -114,3 +114,34 @@ func TestNotchAroundSaysOnlyWhatItKnowsAndOnlyWhenItChanges(t *testing.T) {
 		t.Errorf("something was said after the connection was taken away: %v", again)
 	}
 }
+
+// 18 November 2026, the owner's first try at having a call listened to: a
+// call in Google Meet, and the notch never knew. The record Windows keeps of
+// who used the microphone had not been written on that machine for a month.
+// A call is now also told from who is recording at this moment.
+func TestNotchACallIsToldFromWhoIsRecordingNow(t *testing.T) {
+	self := `C:\Users\sam\JarvisNotchDev\bin\jarvis.exe`
+	cases := []struct {
+		name     string
+		programs []string
+		want     bool
+	}{
+		{"nobody is recording", nil, false},
+		{"a browser is", []string{"chrome.exe"}, true},
+		{"a calling program is, among others", []string{"audiodg.exe", "zoom.exe"}, true},
+		{"the new Teams, which records through a web view", []string{"msedgewebview2.exe"}, true},
+		// Talking to Jarvis, and Jarvis listening to a call, are not a call.
+		{"only this program is", []string{"jarvis.exe"}, false},
+		{"a dictation tool is", []string{"wispr flow.exe"}, false},
+		// Windows gives the names without their ending.
+		{"a browser, named without its ending", []string{"chrome"}, true},
+		{"this program, named without its ending", []string{"jarvis"}, false},
+		{"Windows' own search is", []string{"searchhost.exe"}, false},
+		{"an empty name", []string{""}, false},
+	}
+	for _, tc := range cases {
+		if got := notchCallAmong(tc.programs, self); got != tc.want {
+			t.Errorf("%s: on a call = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

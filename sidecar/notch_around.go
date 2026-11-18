@@ -174,6 +174,29 @@ func notchCallApp(name string) bool {
 	return false
 }
 
+// notchCallAmong says whether one of the programs that are recording from a
+// microphone now is a program people make calls with. `self` is this
+// program's own path: it records when the person talks to Jarvis, and when
+// it listens to a call, and neither is a call.
+func notchCallAmong(programs []string, self string) bool {
+	own := strings.ToLower(self)
+	if at := strings.LastIndexAny(own, "\\/"); at >= 0 {
+		own = own[at+1:]
+	}
+	own = strings.TrimSuffix(own, ".exe")
+	for _, program := range programs {
+		// A name comes with its ending or without, as the system gives it.
+		name := strings.TrimSuffix(strings.ToLower(program), ".exe")
+		if name == "" || (own != "" && name == own) {
+			continue
+		}
+		if notchCallApp(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // notchFiletime turns the system's count into a time.
 func notchFiletime(ticks uint64) time.Time {
 	const toUnix = 116444736000000000 // 100 ns from 1601 to 1970

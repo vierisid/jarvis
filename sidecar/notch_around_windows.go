@@ -3,11 +3,14 @@
 package main
 
 import (
+	"log"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 	"unsafe"
 
+	ole "github.com/go-ole/go-ole"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -76,8 +79,36 @@ func notchOnline() bool {
 func platformNotchAroundStart(a *NotchAround) {
 	self, _ := os.Executable()
 	go func() {
+		// The sound sessions are asked through COM, which belongs to a thread.
+		runtime.LockOSThread()
+		canAsk := true
+		if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
+			// Already started on this thread in another way is fine. Anything
+			// else: the record alone is read, as before.
+			if oleErr, ok := err.(*ole.OleError); !ok || (oleErr.Code() != 1 && oleErr.Code() != 0x80010106) {
+				canAsk = false
+				log.Printf("[notch] around: the sound sessions cannot be asked: %v", err)
+			}
+		}
+		was, said := false, false
 		for {
-			a.SetCall(notchOnCall(readNotchMicRecord(), self, time.Now()))
+			byRecord := notchOnCall(readNotchMicRecord(), self, time.Now())
+			bySession := false
+			if canAsk {
+				if programs, err := notchProgramsUsingMicrophone(); err == nil {
+					bySession = notchCallAmong(programs, self)
+				} else if !said {
+					said = true
+					log.Printf("[notch] around: who has the microphone could not be asked: %v", err)
+				}
+			}
+			on := byRecord || bySession
+			if on != was {
+				was = on
+				// Which of the two ways said so, never which program.
+				log.Printf("[notch] around: a calling program has the microphone: %v (by the record: %v, by its sound session: %v)", on, byRecord, bySession)
+			}
+			a.SetCall(on)
 			a.SetOnline(notchOnline())
 			time.Sleep(notchAroundEvery)
 		}
