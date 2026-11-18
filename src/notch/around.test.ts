@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { NOTCH_AROUND_EVENT, NOTCH_CALL_AFTER_MS, NOTCH_CALL_ENDS_AFTER_MS, NOTCH_CALL_MOST_MS, NOTCH_OFFLINE_AFTER_MS, attachNotchAround } from './around.ts';
+import { NOTCH_AROUND_EVENT, NOTCH_CALL_AFTER_MS, NOTCH_CALL_ENDS_AFTER_MS, NOTCH_CALL_MOST_MS, NOTCH_OFFLINE_AFTER_MS, attachNotchAround, NOTCH_ONLINE_WAIT_MS } from './around.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -8,7 +8,7 @@ import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from './surf
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
-function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; listen?: NonNullable<Parameters<typeof attachNotchAround>[3]>['listen'] } = {}) {
+function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; listen?: NonNullable<Parameters<typeof attachNotchAround>[3]>['listen']; went?: () => number | void | Promise<number | void> } = {}) {
   const pushed: NotchToPage[] = [];
   let pageEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   let aroundEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -33,7 +33,7 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; 
   const around = attachNotchAround(surface, inbox, {
     onEvent(listener) { aroundEvent = listener; },
     onSidecarDisconnected(listener) { gone = listener; },
-  }, { ...options, backOnline: () => { backOnline++; }, clock, now: () => now, log: (line) => logs.push(line) });
+  }, { ...options, backOnline: () => { backOnline++; return options.went?.(); }, clock, now: () => now, log: (line) => logs.push(line) });
   const line = (): NotchLine | null => surface.current().line;
   const item = (id: string): NotchItem => ({
     id, subject: id, class: 'person', speaks: true, title: () => [`${id} waits`],
@@ -235,6 +235,51 @@ describe('the connection', () => {
     expect(h.said()).toBe('Back online.');
     // What waited for the connection is told to go on.
     expect(h.backOnline()).toBe(1);
+  });
+
+  // The prototype: "Back online. 2 things I was holding went out."
+  test('when things that were held went out, the line says how many', async () => {
+    for (const [went, said] of [[2, 'Back online. 2 things I was holding went out.'], [1, 'Back online. 1 thing I was holding went out.'], [0, 'Back online.'], [-3, 'Back online.'], [2.9, 'Back online. 2 things I was holding went out.']] as const) {
+      const h = harness({ went: async () => went });
+      await h.tell({ online: false });
+      await h.pass(NOTCH_OFFLINE_AFTER_MS);
+      await h.answer('done');
+      await h.tell({ online: true });
+      await h.pass(0);
+      expect(h.said()).toBe(said);
+    }
+    // Known at once, it is said at once.
+    const now = harness({ went: () => 3 });
+    await now.tell({ online: false });
+    await now.pass(NOTCH_OFFLINE_AFTER_MS);
+    await now.answer('done');
+    await now.tell({ online: true });
+    expect(now.said()).toBe('Back online. 3 things I was holding went out.');
+  });
+
+  test('it does not wait long for what was held: the connection is back either way, and it is said once', async () => {
+    let done!: (went: number) => void;
+    const h = harness({ went: () => new Promise<number>((resolve) => { done = resolve; }) });
+    await h.tell({ online: false });
+    await h.pass(NOTCH_OFFLINE_AFTER_MS);
+    await h.answer('done');
+    await h.tell({ online: true });
+    expect(h.line()).toBeNull();
+    await h.pass(NOTCH_ONLINE_WAIT_MS);
+    expect(h.said()).toBe('Back online.');
+    await h.answer('done');
+    // What went out later is not announced a second time.
+    done(2);
+    await h.pass(0);
+    expect(h.line()).toBeNull();
+    // And when the sending fails, the return is still said.
+    const fails = harness({ went: () => Promise.reject(new Error('the mailbox cannot be reached')) });
+    await fails.tell({ online: false });
+    await fails.pass(NOTCH_OFFLINE_AFTER_MS);
+    await fails.answer('done');
+    await fails.tell({ online: true });
+    await fails.pass(0);
+    expect(fails.said()).toBe('Back online.');
   });
 
   test('a blink is not said', async () => {

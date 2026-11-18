@@ -10,7 +10,7 @@ import type { NotchSurfacePort } from './surface.ts';
 const settle = async (): Promise<void> => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
 /** A surface with a page that has said hello, and an inbox on it. */
-function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage: NotchStage) => Promise<void>; maySpeak?: () => boolean } = {}) {
+function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage: NotchStage) => Promise<void>; maySpeak?: () => boolean; elsewhere?: () => boolean } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -29,7 +29,7 @@ function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage:
     clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
   };
   const surface = new NotchSurface(port, (line) => logs.push(line));
-  const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), busy: options.busy, home: options.home, maySpeak: options.maySpeak });
+  const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), busy: options.busy, home: options.home, maySpeak: options.maySpeak, elsewhere: options.elsewhere });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   if (options.page !== false) fromPage({ type: 'hello', v: 1 });
   const line = (): NotchLine | null => surface.current().line;
@@ -215,8 +215,53 @@ describe('a round', () => {
       await h.answer('yes');
     }
     expect(order).toEqual(['person1?', 'clock1?', 'rest1?', 'rest2?']);
-    expect(h.line()).toBeNull();
+    // Nothing is left: the round ends on its last word, the prototype's.
+    expect(h.said()).toBe('That is everything.');
+    expect(h.line()).toMatchObject({ kind: 'say', mood: 'happy' });
     expect(h.count()).toBe(0);
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+  });
+
+  test('"That is everything." is said only when it is true, and a tap on it is a tap on the resting notch', async () => {
+    // Something still waits in the count: the round ends on the list, as before.
+    const some = harness();
+    some.inbox.add(item('a'));
+    some.inbox.add(item('b'));
+    await settle();
+    await some.answer('fold');
+    await some.open();
+    await some.answer('yes');
+    await some.answer('no');
+    expect(some.said()).toBe('1 thing still waits');
+    // The one thing that waited was found gone when its turn came: nothing was shown, so nothing is summed up.
+    const gone = harness();
+    gone.inbox.add({ id: 'gone', subject: 'gone', class: 'rest', title: () => ['gone'], check: () => false, play: async () => 'settled' });
+    await gone.open();
+    expect(gone.line()).toBeNull();
+    // Something waits outside the count (replies that were seen wait in Home): it has not been everything.
+    // And where that cannot be told, nothing is called everything on a guess.
+    for (const elsewhere of [() => true, () => { throw new Error('the mail store is closed'); }]) {
+      const more = harness({ elsewhere });
+      more.inbox.add(item('a'));
+      await settle();
+      await more.answer('fold');
+      await more.open();
+      await more.answer('yes');
+      expect(more.line()).toBeNull();
+    }
+    let homes = 0;
+    const tap = harness({ home: async (stage) => { homes++; await stage.say(['Home.'], 1000); } });
+    tap.inbox.add(item('a'));
+    await settle();
+    await tap.answer('fold');
+    await tap.open();
+    await tap.answer('yes');
+    expect(tap.said()).toBe('That is everything.');
+    // A tap while it is up opens Home at once: it does not have to be waited out.
+    await tap.open();
+    expect(homes).toBe(1);
+    expect(tap.said()).toBe('Home.');
   });
 
   test('not now means next, each item comes once, and the round ends on the list of what still waits', async () => {
@@ -665,6 +710,9 @@ describe('what the hardening audit found', () => {
     await h.open();
     expect(h.said()).toBe('Morning. 1 needs you.');
     await h.answer('yes');
+    // The old line is gone. What was shown was all there was, and the round says so.
+    expect(h.said()).toBe('That is everything.');
+    await h.answer('done');
     expect(h.line()).toBeNull();
     // And the notch can be taken again.
     h.inbox.add(item('next'));

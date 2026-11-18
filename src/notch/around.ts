@@ -30,6 +30,8 @@ export const NOTCH_CALL_ENDS_AFTER_MS = 15 * 1000;
 export const NOTCH_CALL_MOST_MS = 3 * 60 * 60 * 1000;
 /** How often "on a call" is tried again while the notch is taken by something the person is doing. */
 export const NOTCH_CALL_SAY_AGAIN_MS = 5 * 1000;
+/** How long "Back online" waits for what was held to go out, so that it can say how much went. */
+export const NOTCH_ONLINE_WAIT_MS = 8000;
 /** How long the connection has to be gone before it is said: a blink is not said. */
 export const NOTCH_OFFLINE_AFTER_MS = 8 * 1000;
 
@@ -43,8 +45,12 @@ export interface NotchAroundDeps {
   meetingNow?(): boolean;
   /** Everything is stopped: nothing is said. */
   asleep?(): boolean;
-  /** The connection is back: what waited for it can go on. */
-  backOnline?(): void;
+  /**
+   * The connection is back: what waited for it can go on. When it comes back
+   * with a number, that many things that were held have gone out, and the
+   * line says so.
+   */
+  backOnline?(): void | number | Promise<number | void>;
   /**
    * Listening to the call (./call.ts). `offer` asks whether to, in the place
    * of "On a call. I hold everything", and comes back true when it has said
@@ -232,9 +238,26 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     isOnline = true;
     log('[notch] the connection is back');
     // Said only if its going was said: a return nobody was told to wait for is no news.
-    if (saidOffline && !deps.asleep?.()) inbox.present('online', (stage) => stage.say(['Back online.'], 2200, { mood: 'happy', mark: 'check' }));
+    const tell = saidOffline && !deps.asleep?.();
     saidOffline = false;
-    try { deps.backOnline?.(); } catch (error) { log(`[notch] going on after the connection came back failed: ${error instanceof Error ? error.message : String(error)}`); }
+    // What was held goes out first, so that the line can say how much of it went: the prototype's
+    // "Back online. 2 things I was holding went out." Not waited for long: the connection is back either way.
+    const say = (went: number): void => {
+      if (!tell) return;
+      inbox.present('online', (stage) => stage.say(went > 0
+        ? ['Back online. ', { em: went === 1 ? '1 thing' : `${went} things` }, ' I was holding went out.']
+        : ['Back online.'], went > 0 ? 3400 : 2200, { mood: 'happy', mark: 'check' }));
+    };
+    let held: unknown;
+    try { held = deps.backOnline?.(); } catch (error) { log(`[notch] going on after the connection came back failed: ${error instanceof Error ? error.message : String(error)}`); }
+    if (held instanceof Promise) {
+      let said = false;
+      const once = (went: number): void => { if (!said) { said = true; say(went); } };
+      const late = clock.setTimeout(() => once(0), NOTCH_ONLINE_WAIT_MS);
+      held.then((went) => { clock.clearTimeout(late); once(typeof went === 'number' && went > 0 ? Math.floor(went) : 0); }, () => { clock.clearTimeout(late); once(0); });
+    } else {
+      say(typeof held === 'number' && held > 0 ? Math.floor(held) : 0);
+    }
   }
 
   /** The machine whose word is taken: the one that spoke last. */

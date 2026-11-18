@@ -143,14 +143,25 @@ describe('a file held over the notch', () => {
     h.fromPage({ type: 'drag', state: 'over' });
     await settle();
     expect(h.mouth()).toEqual(['open', 'over']);
-    // No line is put up for it: the mouth says it.
-    expect(h.line()).toBeNull();
+    // The prototype's words for it, inside the notch, over the open mouth.
+    expect(h.said()).toBe('Drop it on me');
+    expect(h.line()).toMatchObject({ kind: 'say', mood: 'look' });
     h.fromPage({ type: 'drag', state: 'left' });
     await settle();
     expect(h.mouth()).toEqual(['open', 'over', 'shut']);
+    // The words go with the mouth.
+    expect(h.line()).toBeNull();
+    // And they come again for the next file.
+    h.fromPage({ type: 'drag', state: 'over' });
+    await settle();
+    expect(h.said()).toBe('Drop it on me');
+    h.fromPage({ type: 'drag', state: 'left' });
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.mouth()).toEqual(['open', 'over', 'shut', 'open', 'over', 'shut']);
     // Taken away twice is shut once.
     h.fromPage({ type: 'drag', state: 'left' });
-    expect(h.mouth().length).toBe(3);
+    expect(h.mouth().length).toBe(6);
   });
 
   test('what is on the notch is not taken down for a file that may never be dropped', async () => {

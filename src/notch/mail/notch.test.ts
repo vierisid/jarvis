@@ -996,6 +996,9 @@ describe('several replies waiting', () => {
     await h.answer('button', { button: 'not-needed' });
     expect(h.store.proposal(row().id)!.state).toBe('declined');
     expect(h.store.proposal(older.id)!.state).toBe('sent');
+    // Both are dealt with, and the round they were opened in ends on its last word.
+    expect(h.said()).toBe('That is everything.');
+    await h.answer('done');
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(0);
   });
@@ -1068,6 +1071,8 @@ describe('several replies waiting', () => {
     expect(h.store.ready().length).toBe(2);
     // Seen: out of the count, so that the next tap on the resting notch is the text field.
     expect(h.count()).toBe(0);
+    // (This inbox is not told of Home. In the product, replies that wait there keep the round from saying it was everything.)
+    if (h.line()) await h.answer('done');
     expect(h.line()).toBeNull();
     // From Home's row: the list. Esc on it closes it.
     h.inbox.present('home', (stage) => h.mail.open(stage));

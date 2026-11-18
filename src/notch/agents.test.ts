@@ -528,6 +528,9 @@ describe('the next rung is offered from results', () => {
     await h.reply('yes');
     expect(h.agents.store.rung('flow-1')).toBe('acts alone');
     await h.pass(5000);
+    // It was the one thing that waited: the round ends on its last word, and that goes too.
+    expect(h.said()).toBe('That is everything.');
+    await h.pass(5000);
     for (let i = 0; i < 6; i++) h.ran('flow-1');
     h.agents.tick();
     await settle();

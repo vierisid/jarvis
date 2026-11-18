@@ -358,6 +358,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     home: (stage) => (asks ? asks.home(stage) : today(stage)),
     // Only in a still moment, not to an empty chair, and never in the quiet hours.
     ...(presence && quiet ? { maySpeak: () => presence.still() && !presence.isAway() && !quiet.now() } : {}),
+    // Replies that were seen wait in Home, not in the count: with any of them there, a round has not been everything.
+    elsewhere: () => (mail?.store.ready().length ?? 0) > 0,
   });
   calmed = () => inbox.calmed();
   const approvals = attachNotchApprovals(inbox, {
@@ -603,6 +605,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     if (deps.standing) {
       const kept = attachNotchStanding({
         inbox, db: deps.mail.db, mail: mail.standing, paused, log,
+        // Without a connection a follow-up that is due is held, and goes out when the connection is back.
+        offline: () => (around ? !around.online() : false),
         eye: (on) => { eyeKept = on; paintEye(); },
         fired: () => surface.act({ gesture: 'pop' }),
         ...(deps.standing.chaseWaitMs ? { waitMs: deps.standing.chaseWaitMs } : {}),
@@ -655,8 +659,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         meetingNow: () => soon?.meetingNow() ?? false,
         asleep,
         listen: calls ? { offer: (stage, sidecarId) => calls!.offer(stage, sidecarId), ended: () => calls!.ended() } : undefined,
-        // What could not be read while there was no connection is read now.
-        backOnline: () => { void layer?.look('glance'); },
+        // What could not be read while there was no connection is read now, and the follow-ups that were
+        // held go out: how many went is what "Back online" says.
+        backOnline: () => { void layer?.look('glance'); return standing?.released() ?? 0; },
         clock: deps.clock,
         now: dayNow,
         log,

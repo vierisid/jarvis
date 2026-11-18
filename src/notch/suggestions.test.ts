@@ -47,6 +47,9 @@ describe('a suggestion with the notch on', () => {
     expect(h.said()).toBe('Reply to Marco: He asked for the deck on Tuesday.');
     expect(h.line()).toMatchObject({ kind: 'say' });
     await h.done();
+    // It was all that waited.
+    expect(h.said()).toBe('That is everything.');
+    await h.done();
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(0);
   });

@@ -140,6 +140,43 @@ describe('the resting notch shows where you are, and whether it is looking', () 
     expect(h.logs.join('\n')).not.toContain('Chrome');
   });
 
+  // The prototype, after a bank: "I am back. I saw nothing in there."
+  test('the first time it looks again after a bank it says so, with a blink, and never again', async () => {
+    const h = harness();
+    h.tell(notepad, true);
+    h.tell({ ...notepad, app: 'chrome', name: 'Google Chrome', title: '', look: 'bank' });
+    await settle();
+    expect(h.said()).toBe('Your bank. I look away in here.');
+    await h.answer('done');
+    h.tell(notepad);
+    await settle();
+    expect(h.pushed.some((message) => message.type === 'act' && message.gesture === 'blink')).toBe(true);
+    await h.advance(600);
+    expect(h.said()).toBe('I am back. I saw nothing in there.');
+    await h.answer('done');
+    // The second time the eyes say it.
+    h.tell({ ...notepad, app: 'chrome', name: 'Google Chrome', title: '', look: 'bank' });
+    await settle();
+    h.tell(notepad);
+    await settle();
+    await h.advance(600);
+    expect(h.line()).toBeNull();
+  });
+
+  test('not after a password, which is typed many times a day, and not after an app it was told never to watch', async () => {
+    for (const look of ['password', 'never'] as const) {
+      const h = harness();
+      h.tell(notepad, true);
+      h.tell({ ...notepad, look, ...(look === 'never' ? { never: ['notepad'] } : {}) });
+      await settle();
+      if (h.line()) await h.answer('done');
+      h.tell(notepad);
+      await settle();
+      await h.advance(600);
+      expect(h.line()).toBeNull();
+    }
+  });
+
   test('an app on the never-watch list, or watching switched off: eyes closed, no app shown', () => {
     const h = harness();
     h.tell({ ...notepad, app: 'steam', name: 'Steam', look: 'never', never: ['steam'] });
