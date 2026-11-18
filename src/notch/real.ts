@@ -299,6 +299,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const presence = settings ? new NotchPresence({
     settings,
     calm: () => calmed(),
+    hands: () => asks?.handsOn(),
     left: (at) => day?.left(at),
     back: (away) => { void day?.back(away); },
     morning: (away) => day?.morning(away),
@@ -464,6 +465,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       raiseApproval: (approvalId) => approvals.raise(approvalId),
       // On a call everything is held, what is said to the notch too (./around.ts).
       onCall: () => around?.onCall() ?? false,
+      stillFor: () => presence?.stillFor() ?? 0,
       // The instruction is over: what it was still asking for is asked no more.
       withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },
       attention: () => surface.act({ gesture: 'shake' }),
@@ -574,6 +576,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // What needs the person: everything in the count that is not one of these lines or a meeting, and every reply that is drafted.
       waiting: () => inbox.waiting().filter((item) => !lines.has(item.id) && !item.id.startsWith('soon:')).length + (layer?.store.ready().length ?? 0),
       away: () => presence?.isAway() ?? false,
+      morningSaid: () => presence?.morningSaid(),
       mail: layer ? { newSince: (at) => layer.mail.newSince(at), told: () => layer.mail.told(), open: (stage) => layer.mail.open(stage) } : undefined,
       calendar: soon ? { ahead: () => soon!.ahead(), look: () => soon!.look() } : undefined,
       now: dayNow,

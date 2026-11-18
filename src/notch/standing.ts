@@ -279,6 +279,32 @@ function fromThem(message: MailThread['messages'][number], them: { address: stri
   return message.from.address.toLowerCase() === them.address.toLowerCase();
 }
 
+/** How soon after a nudge a mail that reads like an automatic reply is taken for one. */
+export const NOTCH_AUTO_REPLY_MS = 5 * 60_000;
+
+const AUTO_SUBJECT = /^\s*(?:automatic reply|auto(?:matic)?[- ]?(?:reply|response)|autoreply|out of (?:the )?office|risposta automatica|fuori ufficio|abwesenheit\w*|r[ée]ponse automatique|absence|respuesta autom[aá]tica|fuera de la oficina)\b/i;
+const AUTO_TEXT = /\b(?:out of (?:the )?office|automatic reply|auto-?reply|automated (?:reply|response|message)|on (?:annual |parental |sick )?leave|currently (?:away|out)|away from (?:the office|my desk|my e-?mail)|limited access to (?:my )?e-?mail|fuori ufficio|risposta automatica|abwesenheitsnotiz|nicht im b[üu]ro|absent du bureau|r[ée]ponse automatique|fuera de la oficina|respuesta autom[aá]tica)\b/i;
+
+/**
+ * Whether a mail reads like the reply a mailbox sends by itself: "I am out of
+ * the office until Monday". By how it is headed, or by how it begins.
+ */
+export function mailAutoReply(text: string, subject = ''): boolean {
+  return AUTO_SUBJECT.test(subject) || AUTO_TEXT.test(text.slice(0, 240));
+}
+
+/**
+ * Whether a mail of theirs is their mailbox answering a nudge by itself: it
+ * reads like one, and it came within minutes of the nudge. Such a mail is no
+ * answer, and the chase goes on. Both have to hold: a person who writes "I
+ * was out of office last week, yes we can sign" has answered, and is not
+ * written to again.
+ */
+export function chaseAutoReply(message: MailThread['messages'][number], subject: string, nudgedAt: number[]): boolean {
+  if (!mailAutoReply(message.text, subject)) return false;
+  return nudgedAt.some((at) => message.at >= at - NOTCH_STANDING_SLACK_MS && message.at - at <= NOTCH_AUTO_REPLY_MS);
+}
+
 /** The mail of theirs that came since a watch began, if a thread holds one. */
 function answerIn(thread: MailThread, them: { address: string }, since: number): MailThread['messages'][number] | null {
   return thread.messages.find((message) => fromThem(message, them) && message.at >= since - NOTCH_STANDING_SLACK_MS) ?? null;
@@ -589,7 +615,13 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         if (answer) eyeFired(eye, answer, thread);
       }
       for (const chase of store.chases()) {
-        if (live(chase) && answerIn(thread, chase, chase.createdAt)) chaseDone(chase);
+        if (!live(chase)) continue;
+        // Their mailbox answering the nudge by itself is not their answer: the
+        // chase goes on. It used to end on it: "Done. Sam answered."
+        const nudged = chase.steps.filter((entry) => entry.text.startsWith('Nudged')).map((entry) => entry.at);
+        const answer = thread.messages.find((message) => fromThem(message, chase) && message.at >= chase.createdAt - NOTCH_STANDING_SLACK_MS
+          && !chaseAutoReply(message, thread.subject, nudged));
+        if (answer) chaseDone(chase);
       }
     }
   });

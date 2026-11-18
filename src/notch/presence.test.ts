@@ -121,6 +121,8 @@ describe('whether the person is there', () => {
     const settings = new NotchSettings(new Database(':memory:'));
     const first = harness(NINE, settings);
     first.presence.hands(false);
+    // The line was on the notch: that is what is remembered.
+    first.presence.morningSaid();
     const restarted = harness(NINE + 2 * 60 * MIN, settings);
     restarted.presence.hands(false);
     expect(restarted.told).toEqual([]);
@@ -128,6 +130,43 @@ describe('whether the person is there', () => {
     restarted.pass(20 * 60 * MIN);
     restarted.presence.hands(false);
     expect(restarted.told).toEqual(['calm', 'left 0', 'morning 1200']);
+  });
+
+  // The hardening audit, 17 November 2026: the morning was written down when
+  // its line was queued. A brain that restarted while the line still waited
+  // for a still moment said no morning line that day.
+  test('a morning whose line was never said is told again after a restart, and only once without one', () => {
+    const settings = new NotchSettings(new Database(':memory:'));
+    const first = harness(NINE, settings);
+    first.presence.hands(false);
+    expect(first.told).toEqual(['morning 0']);
+    // Hands off and on again, the same morning, the line still waiting: not told twice.
+    first.presence.hands(true);
+    first.presence.hands(false);
+    expect(first.told.filter((entry) => entry.startsWith('morning'))).toHaveLength(1);
+    // The brain restarts before the line was said.
+    const restarted = harness(NINE + 10 * MIN, settings);
+    restarted.presence.hands(false);
+    expect(restarted.told).toEqual(['morning 0']);
+    // Said now: after the next restart there is none.
+    restarted.presence.morningSaid();
+    const again = harness(NINE + 30 * MIN, settings);
+    again.presence.hands(false);
+    expect(again.told).toEqual([]);
+  });
+
+  test('how long the hands have been still is known, and their coming back is told', () => {
+    const seen: string[] = [];
+    let now = NINE;
+    const presence = new NotchPresence({ settings: new NotchSettings(new Database(':memory:')), now: () => now, hands: () => seen.push('hands'), log: () => {},
+      clock: { setTimeout: () => ({}), clearTimeout: () => {} } });
+    expect(presence.stillFor()).toBe(0);
+    presence.hands(true);
+    now += 3 * MIN;
+    expect(presence.stillFor()).toBe(3 * MIN);
+    presence.hands(false);
+    expect(presence.stillFor()).toBe(0);
+    expect(seen).toEqual(['hands']);
   });
 
   test('someone still at work after midnight is not wished a good morning at one', () => {

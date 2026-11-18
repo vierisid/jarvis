@@ -187,4 +187,38 @@ describe('the evening line', () => {
     await settle();
     expect(h.line()).toBeNull();
   });
+  // The hardening audit, 17 November 2026: an evening line that could not be
+  // said was said the next morning as "Today: 5 things done", counted from
+  // yesterday.
+  test('one that never got its say is not said the next day', async () => {
+    const h = harness({ done: 5, waiting: 2 });
+    // Something else has the notch at six, and stays.
+    h.inbox.present('other', async (stage) => { await stage.offer(['Something else?'], 'ok', { fold: 0 }); });
+    await settle();
+    h.state.now = new Date(2026, 10, 16, 18, 5).getTime();
+    h.day.tick();
+    await settle();
+    expect(h.said()).toBe('Something else?');
+    // The next morning the notch is free again.
+    h.state.now = new Date(2026, 10, 17, 9, 0).getTime();
+    await h.answer('no');
+    await h.inbox.open();
+    await settle();
+    expect(h.said()).not.toContain('Today:');
+  });
+
+  test('is queued once an evening, however often the clock ticks', async () => {
+    const h = harness({ done: 4, waiting: 1 });
+    h.inbox.present('other', async (stage) => { await stage.offer(['Something else?'], 'ok', { fold: 0 }); });
+    await settle();
+    h.state.now = new Date(2026, 10, 16, 18, 5).getTime();
+    for (let i = 0; i < 5; i++) { h.day.tick(); h.state.now += MIN; }
+    await settle();
+    expect(h.inbox.waiting().filter((item) => item.id === 'evening')).toHaveLength(1);
+    // Said the same evening once the notch is free.
+    await h.answer('no');
+    await h.inbox.open();
+    await settle();
+    expect(h.said()).toBe('Today: 4 things done. 1 still waits.');
+  });
 });

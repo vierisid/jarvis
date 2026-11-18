@@ -4,7 +4,7 @@ import { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import {
-  NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest,
+  NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
   type StandingMail, type StandingPerson,
 } from './standing.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -394,6 +394,41 @@ describe('until it is done', () => {
     expect(h.sent.length).toBe(1);
     expect(h.line()).toBeNull();
     expect(h.standing.rows()).toEqual([{ kind: 'row', id: 'chases', go: true, say: ['Nothing left to chase. See what I did.'] }]);
+  });
+
+  // The hardening audit, 17 November 2026: Sam's mailbox answered the nudge by
+  // itself a minute later, and the chase was over: "Done. Sam answered."
+  test('their mailbox answering the nudge by itself is not their answer: the chase goes on', async () => {
+    const h = harness({ waitMs: 60_000 });
+    await started(h);
+    await h.pass(9000);
+    h.advance(40_000);
+    h.arrives(thread(SAM.address, h.now(), 'Thank you for your email. I am out of the office until Monday with limited access to email.'));
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.standing.counts().chases).toBe(1);
+    // The real answer, days later, ends it.
+    h.advance(3 * 24 * HOUR);
+    h.arrives(thread(SAM.address, h.now(), 'Back now. Yes, Thursday works for me.'));
+    await settle();
+    expect(h.said()).toBe('Done. Sam answered.');
+  });
+
+  test('what reads like an automatic reply, and what does not', () => {
+    for (const auto of [
+      'I am out of the office until Monday.', 'Thank you for your message. I am currently away and will reply on my return.',
+      'This is an automated response: I have limited access to email this week.', 'Sono fuori ufficio fino a lunedì.',
+      'Ich bin nicht im Büro und antworte nächste Woche.', 'Je suis absent du bureau jusqu\'au 24.',
+    ]) expect(mailAutoReply(auto)).toBe(true);
+    expect(mailAutoReply('See you Thursday.', 'Automatic reply: The contract')).toBe(true);
+    for (const real of ['Yes, Thursday works for me.', 'Signed and attached.', 'Can we move it to Friday?']) expect(mailAutoReply(real, 'The contract')).toBe(false);
+    // A person who mentions having been away has still answered: only a mail that came right after the nudge is taken for the mailbox's own.
+    const nudged = 1_000_000;
+    const message = (at: number, text: string) => ({ from: { name: 'Sam Rivers', address: SAM.address }, to: [], cc: [], at, text });
+    expect(chaseAutoReply(message(nudged + 60_000, 'I am out of the office until Monday.'), 'The contract', [nudged])).toBe(true);
+    expect(chaseAutoReply(message(nudged + NOTCH_AUTO_REPLY_MS + 1, 'I was out of office last week. Yes, we can sign.'), 'The contract', [nudged])).toBe(false);
+    expect(chaseAutoReply(message(nudged + 60_000, 'Yes, Thursday works for me.'), 'The contract', [nudged])).toBe(false);
+    expect(chaseAutoReply(message(nudged + 60_000, 'I am out of the office until Monday.'), 'The contract', [])).toBe(false);
   });
 
   test('an answer that came a moment before the follow-up was due is found first: nothing is sent to someone who has answered', async () => {
