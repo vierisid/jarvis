@@ -426,6 +426,22 @@ describe('stopping everything stops the listening', () => {
     expect(h.blocks().filter((block) => block.kind === 'note').map((block) => text((block as { say: NotchPart[] }).say))).toContain('I heard both sides. I did not hear 4 minutes of it. Not sent yet.');
   });
 
+  test('stopped and never woken before the call ended: the rest of the call counts as not heard', async () => {
+    const h = harness();
+    await h.begins();
+    await h.answer('yes');
+    await h.answer('done');
+    await h.piece('mic');
+    await h.piece('far');
+    await h.piece('mic');
+    h.pause(true);
+    await settle();
+    h.state.now += 12 * 60_000;
+    void h.calls.ended();
+    await settle();
+    expect(h.calls.store.recent()[0]).toMatchObject({ missedMs: 12 * 60_000 });
+  });
+
   test('a piece that arrives while everything is stopped is not made into words', async () => {
     let paused = false;
     const h = harness({ paused: () => paused });

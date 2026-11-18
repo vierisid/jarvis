@@ -585,6 +585,8 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
   }
 
   async function written(call: Live): Promise<{ say: NotchPart[]; show: boolean }> {
+    // Not being heard when it ended (stopped, and never woken): from then to its end was not heard.
+    if (!call.open && call.deafSince !== null) { call.missedMs += Math.max(0, now() - call.deafSince); call.deafSince = null; }
     await end(call, NOTCH_CALL_TAIL_MS);
     // The pieces that were still being made into words.
     let timer: ReturnType<typeof setTimeout> | undefined;
