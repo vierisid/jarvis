@@ -42,6 +42,12 @@ const (
 	notchAudioMultimedia    = 1 // eMultimedia: the one music and video go to
 	notchClsctxAll          = 0x17
 	notchAudioSessionActive = 1
+
+	notchVtEnumAudioEndpoints = 3 // IMMDeviceEnumerator
+	notchVtCollectionCount    = 3 // IMMDeviceCollection
+	notchVtCollectionItem     = 4 // IMMDeviceCollection
+	notchAudioCapture         = 1 // eCapture: a microphone
+	notchDeviceStateActive    = 1 // plugged in and switched on
 )
 
 func notchComCall(obj *ole.IUnknown, slot int, args ...uintptr) uintptr {
@@ -122,4 +128,79 @@ func notchSessionProgram(control *ole.IUnknown) string {
 		return ""
 	}
 	return strings.ToLower(processBaseName(pid))
+}
+
+// notchProgramsUsingMicrophone returns the programs that are recording from a
+// microphone right now, as lower-case file names: every program with a
+// running stream on any microphone that is plugged in and switched on.
+//
+// It is how a call is told (notch_around.go). Windows also keeps a record of
+// who used the microphone and when, for the person's own eyes, and that was
+// read at first. On the owner's machine that record stopped being written in
+// October 2026 (its entries carry "PersistedInDatabase" since): a call in the
+// browser left no trace in it, and the notch never knew a call was on. The
+// sessions are what Windows itself goes by.
+//
+// Nothing is listened to: only "does this program have a stream running" is
+// asked. The caller's goroutine must be locked to its thread and have COM
+// started.
+func notchProgramsUsingMicrophone() ([]string, error) {
+	enumerator, err := ole.CreateInstance(notchClsidDeviceEnumerator, notchIidDeviceEnumerator)
+	if err != nil || enumerator == nil {
+		return nil, fmt.Errorf("audio device list: %v", err)
+	}
+	defer enumerator.Release()
+
+	var devices *ole.IUnknown
+	if hr := notchComCall(enumerator, notchVtEnumAudioEndpoints,
+		notchAudioCapture, notchDeviceStateActive, uintptr(unsafe.Pointer(&devices))); hr != 0 || devices == nil {
+		return nil, fmt.Errorf("microphone list: %#x", hr)
+	}
+	defer devices.Release()
+	var many uint32
+	if hr := notchComCall(devices, notchVtCollectionCount, uintptr(unsafe.Pointer(&many))); hr != 0 {
+		return nil, fmt.Errorf("microphone count: %#x", hr)
+	}
+	var using []string
+	for d := uint32(0); d < many && d < 32; d++ {
+		var device *ole.IUnknown
+		if hr := notchComCall(devices, notchVtCollectionItem, uintptr(d), uintptr(unsafe.Pointer(&device))); hr != 0 || device == nil {
+			continue
+		}
+		using = append(using, notchDevicePrograms(device)...)
+		device.Release()
+	}
+	return using, nil
+}
+
+// notchDevicePrograms is the programs with a running stream on one device.
+func notchDevicePrograms(device *ole.IUnknown) []string {
+	var manager *ole.IUnknown
+	if hr := notchComCall(device, notchVtActivate,
+		uintptr(unsafe.Pointer(notchIidAudioSessionManager)), notchClsctxAll, 0,
+		uintptr(unsafe.Pointer(&manager))); hr != 0 || manager == nil {
+		return nil
+	}
+	defer manager.Release()
+	var sessions *ole.IUnknown
+	if hr := notchComCall(manager, notchVtGetSessionEnumerator, uintptr(unsafe.Pointer(&sessions))); hr != 0 || sessions == nil {
+		return nil
+	}
+	defer sessions.Release()
+	var count int32
+	if hr := notchComCall(sessions, notchVtGetCount, uintptr(unsafe.Pointer(&count))); hr != 0 {
+		return nil
+	}
+	var programs []string
+	for i := int32(0); i < count && i < 256; i++ {
+		var control *ole.IUnknown
+		if hr := notchComCall(sessions, notchVtGetSession, uintptr(i), uintptr(unsafe.Pointer(&control))); hr != 0 || control == nil {
+			continue
+		}
+		if name := notchSessionProgram(control); name != "" {
+			programs = append(programs, name)
+		}
+		control.Release()
+	}
+	return programs
 }
