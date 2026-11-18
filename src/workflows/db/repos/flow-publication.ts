@@ -31,7 +31,7 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // a workflow's name is its published version's label, so the older one
     // takes the current name and the workflow keeps it.
     const current = published && published !== target.id ? getFlowVersion(published) : null;
-    if (current && target.created < current.created && target.displayName !== current.displayName) {
+    if (current && target.displayName !== current.displayName && createdBefore(target.id, current.id)) {
       getWorkflowDb().run("UPDATE flow_version SET display_name = ? WHERE id = ?", [current.displayName, target.id]);
       target = { ...target, displayName: current.displayName };
     }
@@ -54,4 +54,19 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     updateFlowStatus(flowId, "ENABLED");
     return { flow: getFlow(flowId)!, version: target };
   }).immediate();
+}
+
+/**
+ * Whether version `a` was created before version `b`. Two versions made in
+ * the same millisecond share `created`, so the tie goes to `rowid`, which
+ * ascends with insertion (the `created DESC, rowid DESC` order runs use).
+ */
+function createdBefore(a: string, b: string): boolean {
+  const row = getWorkflowDb()
+    .query<{ older: number }, [string, string]>(
+      `SELECT (a.created < b.created OR (a.created = b.created AND a.rowid < b.rowid)) AS older
+         FROM flow_version a, flow_version b WHERE a.id = ? AND b.id = ?`,
+    )
+    .get(a, b);
+  return row?.older === 1;
 }
