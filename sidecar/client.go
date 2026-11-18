@@ -673,6 +673,13 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	wakeHold.Store(wakeUndecided)
 	defer wakeHold.Store(wakeAllowed)
 
+	// Everything the notch says to the brain on this connection goes out from
+	// one goroutine, in order, and the one who says it never waits
+	// (notch_out.go).
+	notchOutCtx, notchOutEnd := context.WithCancel(ctx)
+	defer notchOutEnd()
+	notchSays := newNotchOut(notchOutCtx, notchOutRoom)
+
 	// What the notch's talk keys record goes out on this connection. Until a
 	// microphone is given below, a hold of the keys is answered "refused".
 	talkSend := func(phase string, payload map[string]any, pcm []byte) {
@@ -688,9 +695,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		if pcm != nil {
 			evt.Binary = BinaryDataInline{Type: "inline", MimeType: "audio/pcm"}
 		}
-		if err := sendFn(ctx, evt, pcm); err != nil {
-			log.Printf("[notch] talk: %q did not reach the brain: %v", phase, err)
-		}
+		notchSays.do(func() {
+			if err := sendFn(ctx, evt, pcm); err != nil {
+				log.Printf("[notch] talk: %q did not reach the brain: %v", phase, err)
+			}
+		})
 	}
 	notchTalk.use(nil, talkSend)
 	defer notchTalk.forget()
@@ -716,9 +725,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				if body != nil {
 					evt.Binary = BinaryDataInline{Type: "inline", MimeType: "application/x-notch-look"}
 				}
-				if err := sendFn(ctx, evt, body); err != nil {
-					log.Printf("[notch] look: %v did not reach the brain: %v", payload["phase"], err)
-				}
+				notchSays.do(func() {
+					if err := sendFn(ctx, evt, body); err != nil {
+						log.Printf("[notch] look: %v did not reach the brain: %v", payload["phase"], err)
+					}
+				})
 			})
 		}
 		// Whether the person is on a call, and whether this machine has a
@@ -726,9 +737,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		notchAroundStart.Do(func() { platformNotchAroundStart(notchAround) })
 		notchAround.Use(func(payload map[string]any) {
 			evt := SidecarEvent{Type: "sidecar_event", EventType: notchAroundEvent, Timestamp: time.Now().UnixMilli(), Priority: "high", Payload: payload}
-			if err := sendFn(ctx, evt, nil); err != nil {
-				log.Printf("[notch] what is going on around the person did not reach the brain: %v", err)
-			}
+			notchSays.do(func() {
+				if err := sendFn(ctx, evt, nil); err != nil {
+					log.Printf("[notch] what is going on around the person did not reach the brain: %v", err)
+				}
+			})
 		})
 		notchWhereStart.Do(func() { platformNotchWhereStart(notchWhere) })
 		notchWhere.Use(func(payload map[string]any, icon []byte) {
@@ -743,9 +756,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			if icon != nil {
 				evt.Binary = BinaryDataInline{Type: "inline", MimeType: "image/png"}
 			}
-			if err := sendFn(ctx, evt, icon); err != nil {
-				log.Printf("[notch] where the person is did not reach the brain: %v", err)
-			}
+			notchSays.do(func() {
+				if err := sendFn(ctx, evt, icon); err != nil {
+					log.Printf("[notch] where the person is did not reach the brain: %v", err)
+				}
+			})
 		})
 	}
 	c.whereDecide.Store(&whereDecide)
@@ -768,9 +783,11 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			Priority: "high",
 			Payload:  map[string]any{"message": json.RawMessage(text)},
 		}
-		if err := sendFn(ctx, evt, nil); err != nil {
-			log.Printf("[notch] a message from the page did not reach the brain: %v", err)
-		}
+		notchSays.do(func() {
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[notch] a message from the page did not reach the brain: %v", err)
+			}
+		})
 	})
 	defer notch.OnMessage(nil)
 	// The dashboard, opened the way the tray opens it. On its own goroutine:

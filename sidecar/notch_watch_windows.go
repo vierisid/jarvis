@@ -13,6 +13,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -77,7 +78,7 @@ var notchWatchFlow watchFlow
 // watchLooksAt says whether this program looks at a window now. Where it does
 // not, the brain hears "gap" once and nothing else.
 func watchLooksAt(win watchWin, hwnd uintptr) bool {
-	if why := notchLookAway(notchAppKey(win.App), win32WindowTitle(hwnd)); why != "" {
+	if why := notchLookAway(notchAppKey(whereAppOf(hwnd)), win32WindowTitle(hwnd)); why != "" {
 		if notchWatchFlow.Away() {
 			recorderEmit(notchWatchEvent, map[string]any{"kind": "gap", "ts": time.Now().UnixMilli()})
 		}
@@ -131,7 +132,13 @@ func watchTellTyped(front uintptr) {
 // The clipboard, read here and not through a shell: a job asks it once a round
 // ---------------------------------------------------------------------------
 
+// clipboardOpen opens the clipboard and keeps this goroutine on the thread
+// that opened it, until clipboardClose. Windows ties an open clipboard to
+// the thread that opened it: closed from another thread it stays open, and
+// then no program on the machine can copy or paste until this one exits. A
+// goroutine is moved between threads at any time unless it is held.
 func clipboardOpen() bool {
+	runtime.LockOSThread()
 	for try := 0; try < 10; try++ {
 		if ok, _, _ := procOpenClipboard.Call(0); ok != 0 {
 			return true
@@ -139,14 +146,22 @@ func clipboardOpen() bool {
 		// Another program has it open for a moment.
 		time.Sleep(15 * time.Millisecond)
 	}
+	runtime.UnlockOSThread()
 	return false
+}
+
+// clipboardClose closes the clipboard on the thread that opened it, and lets
+// the goroutine go.
+func clipboardClose() {
+	procCloseClipboard.Call()
+	runtime.UnlockOSThread()
 }
 
 func clipboardClear() bool {
 	if !clipboardOpen() {
 		return false
 	}
-	defer procCloseClipboard.Call()
+	defer clipboardClose()
 	ok, _, _ := procEmptyClipboard.Call()
 	return ok != 0
 }
@@ -159,7 +174,7 @@ func clipboardText() (string, bool) {
 	if !clipboardOpen() {
 		return "", false
 	}
-	defer procCloseClipboard.Call()
+	defer clipboardClose()
 	handle, _, _ := procGetClipboardData.Call(cfUnicodeText)
 	if handle == 0 {
 		return "", false
@@ -224,7 +239,7 @@ func clipboardSet(plain, html string) bool {
 		}
 		return false
 	}
-	defer procCloseClipboard.Call()
+	defer clipboardClose()
 	procEmptyClipboard.Call()
 	if set, _, _ := procSetClipboardData.Call(cfUnicodeText, text); set == 0 {
 		procWatchGlobalFree.Call(text)
@@ -291,6 +306,10 @@ func notchActFront(hwnd uintptr) bool {
 	return false
 }
 
+// smSwapButtons asks Windows whether the person has swapped the two mouse
+// buttons.
+const smSwapButtons = 23
+
 // notchActPress sends Jarvis's pointer to a place, then presses there with
 // the system's pointer and puts that back where it was. hwnd is the window
 // the press is meant for, or 0 for whatever is at the place.
@@ -332,13 +351,47 @@ func notchActPress(act notchAct, at lookPoint, hwnd uintptr) *notchActError {
 			let = append([]kbdInput{{inputType: inputKeyboard, vk: vk, flags: keyeventfKeyUp}}, let...)
 		}
 	}
+	// The pointer is there now. What is under it is asked once more, as it
+	// was before the pointer flew: in that time a dialog can have come up at
+	// the place, or the person can have gone to another window, and the
+	// press would land in it.
+	if hwnd != 0 {
+		now := win32RootWindow(win32WindowFromPoint(at.X, at.Y))
+		if now != hwnd || windowKeyReach(now) == keysBlocked {
+			if had != 0 {
+				procSetCursorPos.Call(uintptr(was.X), uintptr(was.Y))
+			}
+			return &notchActError{"covered", "another window came up over that place"}
+		}
+	}
+	// And the pointer is asked where it is: the person's own hand on the
+	// mouse moves it too, and the press goes wherever the pointer is. Moved
+	// away, it is put back once; moved away again, nothing is pressed.
+	for tried := 0; ; tried++ {
+		var now w32Point
+		if ok, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&now))); ok == 0 || notchPressOnPlace(int(now.X), int(now.Y), int(at.X), int(at.Y)) {
+			break
+		}
+		if tried == 1 {
+			return &notchActError{"pointer", "the pointer was moved away from that place"}
+		}
+		procSetCursorPos.Call(uintptr(at.X), uintptr(at.Y))
+		procSleep.Call(15)
+	}
+	// The button that presses: the left one, or the right one where the
+	// person has swapped them. Windows swaps what the buttons mean, and
+	// "left down" sent by a program was then a right click.
+	down, up := uintptr(MOUSEEVENTF_LEFTDOWN), uintptr(MOUSEEVENTF_LEFTUP)
+	if swapped, _, _ := procGetSystemMetrics.Call(smSwapButtons); swapped != 0 {
+		down, up = MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP
+	}
 	_ = sendInputs(held)
-	procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-	procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	procMouseEvent.Call(down, 0, 0, 0, 0)
+	procMouseEvent.Call(up, 0, 0, 0, 0)
 	if act.Double {
 		procSleep.Call(60)
-		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+		procMouseEvent.Call(down, 0, 0, 0, 0)
+		procMouseEvent.Call(up, 0, 0, 0, 0)
 	}
 	_ = sendInputs(let)
 	procSleep.Call(20)

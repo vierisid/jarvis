@@ -226,3 +226,26 @@ func TestOleBoolReadsOnlyItsSixteenBits(t *testing.T) {
 		}
 	}
 }
+
+// The hardening audit, 17 November 2026: a second window of the browser was
+// judged by the site of the one in front. GitHub in front, the bank in the
+// second window, and the bank's window was looked at.
+func TestAnotherWindowOfTheBrowserIsNotJudgedByTheSiteOfTheOneInFront(t *testing.T) {
+	w := &NotchWhere{icons: map[string][]byte{}}
+	w.Use(func(map[string]any, []byte) {})
+	w.SetFront(notchFront{App: "chrome", Name: "Google Chrome", Title: "Pull requests - Google Chrome", Site: "github.com"}, nil)
+	if w.Refuses("chrome", "Pull requests - Google Chrome") {
+		t.Fatal("the window in front is GitHub: looked at")
+	}
+	if !w.Refuses("chrome", "PayPal: Summary - Google Chrome") {
+		t.Fatal("a second window of the browser showing the bank is not looked at")
+	}
+	if w.Refuses("chrome", "Recipes for bread - Google Chrome") {
+		t.Fatal("a second window showing something harmless is looked at")
+	}
+	// And the other way round: the bank in front refuses the browser's other windows too.
+	w.SetFront(notchFront{App: "chrome", Name: "Google Chrome", Title: "PayPal: Summary - Google Chrome", Site: "paypal.com"}, nil)
+	if !w.Refuses("chrome", "Recipes for bread - Google Chrome") {
+		t.Fatal("with the bank in front, nothing of that browser is looked at")
+	}
+}

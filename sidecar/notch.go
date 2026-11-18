@@ -59,6 +59,12 @@ type NotchService struct {
 	// the watch on the keyboard, which exists only while a page is up.
 	pairs notchKeyPairs
 	keys  *notchKeyboard
+	// Whether the page says Esc would do something on the notch, and whether
+	// the window is out of sight (behind a fullscreen video). Esc is taken
+	// from the app in front only when the first holds and the second does
+	// not (wantEsc, setHidden).
+	escWanted bool
+	hidden    bool
 }
 
 // notch is the process-wide service. It is safe before any connection exists:
@@ -116,6 +122,8 @@ func (n *NotchService) Configure(enabled bool) bool {
 		// for that moment Esc must not still be taken from the app in front.
 		n.stopKeys()
 		n.closeSurface()
+		// And what the hands do is no longer watched: nobody is left to tell.
+		notchWatchOff()
 	}
 	return changed
 }
@@ -123,6 +131,25 @@ func (n *NotchService) Configure(enabled bool) bool {
 // Enabled reports the switch as the brain last set it on this connection.
 func (n *NotchService) Enabled() bool {
 	return n.enabled.Load()
+}
+
+// errNotchOff answers a request that reads the screen or acts on it while the
+// switch is off.
+var errNotchOff = errors.New("the notch is switched off")
+
+// notchOnly lets a request through only while the switch is on.
+//
+// With the switch off this program is told nothing of where it must not
+// look, so every check it has would let everything through: a picture of a
+// window would be taken whatever the window was. Only a brain that breaks
+// its own rule asks then, and it is refused here, not trusted.
+func notchOnly(svc *NotchService, name string, handler RPCHandler) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		if !svc.Enabled() {
+			return nil, fmt.Errorf("%s: %w", name, errNotchOff)
+		}
+		return handler(params)
+	}
 }
 
 // Reset turns the switch off and says why, if it was on.
@@ -156,6 +183,12 @@ func (n *NotchService) watchKeys() {
 		pairs = notchDefaultPairs(runtime.GOOS)
 	}
 	kb := newNotchKeyboard(pairs, func(action notchKeyAction) {
+		// A notch nobody can see has nothing a yes could mean. Told to the
+		// page it opened Home there, unseen, and could take the keyboard
+		// from the film.
+		if action == notchKeyYes && n.isHidden() {
+			return
+		}
 		// The microphone first: it must not wait on the page.
 		notchTalk.key(action)
 		n.runInPage(notchKeyScript(action))
@@ -168,7 +201,9 @@ func (n *NotchService) watchKeys() {
 	}
 	n.mu.Lock()
 	n.keys = kb
+	want := n.escWanted && !n.hidden
 	n.mu.Unlock()
+	kb.wantEsc(want)
 }
 
 // detachPage returns only when no message is on its way into the page, so the
@@ -176,6 +211,8 @@ func (n *NotchService) watchKeys() {
 func (n *NotchService) detachPage() {
 	n.mu.Lock()
 	n.toPage = nil
+	// What the page wanted and where its window was go with it.
+	n.escWanted, n.hidden = false, false
 	n.mu.Unlock()
 	n.stopKeys()
 }
@@ -188,6 +225,12 @@ func (n *NotchService) stopKeys() {
 	n.mu.Unlock()
 	if kb != nil {
 		kb.close()
+		// If the person was talking, that ends here and nothing of it is
+		// sent. It is said to the microphone directly: what the keys say is
+		// carried by the watch, and the watch has just ended, so the "talk
+		// cancelled" it would have carried reached nobody. The microphone
+		// then stayed open to its cap and the recording went to the brain.
+		notchTalk.key(notchKeyTalkCancel)
 	}
 }
 
@@ -229,11 +272,32 @@ func (n *NotchService) KeyPairs() notchKeyPairs {
 // wantEsc is the page saying whether Esc would do anything on the notch now.
 func (n *NotchService) wantEsc(want bool) {
 	n.mu.Lock()
-	kb := n.keys
+	n.escWanted = want
+	kb, take := n.keys, want && !n.hidden
 	n.mu.Unlock()
 	if kb != nil {
-		kb.wantEsc(want)
+		kb.wantEsc(take)
 	}
+}
+
+// setHidden is the window saying whether it is out of sight: hidden behind a
+// fullscreen video. A notch nobody can see takes no Esc from the app in
+// front. Esc there is how a person leaves the fullscreen, and it was eaten by
+// an answer left on a notch they could not see.
+func (n *NotchService) setHidden(hidden bool) {
+	n.mu.Lock()
+	n.hidden = hidden
+	kb, take := n.keys, n.escWanted && !hidden
+	n.mu.Unlock()
+	if kb != nil {
+		kb.wantEsc(take)
+	}
+}
+
+func (n *NotchService) isHidden() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hidden
 }
 
 // notchPairsFromSettings reads the two pairs as the settings write them. An

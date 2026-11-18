@@ -162,7 +162,7 @@ import {
   type DashboardSpawnSettled,
 } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
-import { attachNotch, createNotchReopen } from "../notch/attach.ts";
+import { attachNotch, createNotchReopen, NOTCH_PANEL_ID } from "../notch/attach.ts";
 import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
@@ -1230,6 +1230,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // A page whose sign-in has ended is opened again, signed in anew.
       const notchReopen = createNotchReopen(sidecarManager, { pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
       notchSurface.onSignedOut((sidecarId) => { void notchReopen(sidecarId); });
+      // And a notch whose window went away by itself is put back.
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'panel.closed') return;
+        if ((event.payload as { panel_id?: unknown } | undefined)?.panel_id !== NOTCH_PANEL_ID) return;
+        void notchReopen.closed(sidecarId);
+      });
       if (notchDemoState === 'open') {
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.

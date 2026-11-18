@@ -34,7 +34,7 @@ func TestNotchFilesTellsNamesKindsAndCountsAndNothingOfWhatIsInAFile(t *testing.
 	// What is inside a folder is not looked at.
 	notchFilesWrite(t, filepath.Join(dir, "Clients"), "inside.pdf", time.Minute)
 
-	got := notchFilesIn("desktop", dir)
+	got := notchFilesIn("desktop", dir, nil)
 	if !got.Reached || got.Files != 3 || got.Folders != 1 || got.Shortcuts != 1 {
 		t.Fatalf("counts: reached %v, files %d, folders %d, shortcuts %d", got.Reached, got.Files, got.Folders, got.Shortcuts)
 	}
@@ -65,14 +65,14 @@ func TestNotchFilesNamesOnlyTheNewestFew(t *testing.T) {
 	for i := 0; i < notchFilesNamed+4; i++ {
 		notchFilesWrite(t, dir, string(rune('a'+i))+".pdf", time.Duration(i)*time.Minute)
 	}
-	got := notchFilesIn("documents", dir)
+	got := notchFilesIn("documents", dir, nil)
 	if got.Files != notchFilesNamed+4 || len(got.Recent) != notchFilesNamed || got.Recent[0].Name != "a.pdf" {
 		t.Fatalf("files %d, named %d, first %q", got.Files, len(got.Recent), got.Recent[0].Name)
 	}
 }
 
 func TestNotchFilesAFolderThatIsNotThereIsNotReachedAndNothingBreaks(t *testing.T) {
-	got := notchFilesIn("desktop", filepath.Join(t.TempDir(), "no such folder"))
+	got := notchFilesIn("desktop", filepath.Join(t.TempDir(), "no such folder"), nil)
 	if got.Reached || got.Files != 0 || got.Recent == nil || got.Kinds == nil {
 		t.Fatalf("got %+v", got)
 	}
@@ -153,7 +153,7 @@ func TestNotchFilesMarksWhatIsPrivateAndSaysHowLargeEachIs(t *testing.T) {
 	dir := t.TempDir()
 	notchFilesWrite(t, dir, "passwords.txt", time.Minute)
 	notchFilesWrite(t, dir, "notes.txt", 2*time.Minute)
-	got := notchFilesIn("desktop", dir)
+	got := notchFilesIn("desktop", dir, nil)
 	if len(got.Recent) != 2 || !got.Recent[0].Private || got.Recent[1].Private || got.Recent[1].Size == 0 {
 		t.Fatalf("recent: %+v", got.Recent)
 	}
@@ -271,5 +271,71 @@ func TestNotchFilesFindsTheDesktopThoughTheEnvironmentPointsElsewhere(t *testing
 	}
 	if got, _, err := notchFileOpen(roots, nil, "documents", "Contract.pdf"); err != nil || len(got) == 0 {
 		t.Fatalf("a file was not handed over from where the system says the documents are: %v", err)
+	}
+}
+
+// The hardening audit, 17 November 2026: names under which Windows opens a
+// file that is called something else walked round the private rule.
+func TestNotchFileOddNamesAreNeverOpened(t *testing.T) {
+	dir := t.TempDir()
+	desk := filepath.Join(dir, "Desktop")
+	if err := os.MkdirAll(desk, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(desk, "notes.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	roots := map[string][]string{"desktop": {desk}}
+	for _, name := range []string{"server.pem::$DATA", "notes.txt::$DATA", "notes.txt:stream", "vault.kdbx.", "wallet.key ", "notes.txt.", "PASSWO~1.XLS", "CREDEN~1.TXT", "notes*.txt", "a|b.txt"} {
+		if _, _, err := notchFileOpen(roots, nil, "desktop", name); err == nil {
+			t.Errorf("%q was handed over", name)
+		}
+	}
+	if got, _, err := notchFileOpen(roots, nil, "desktop", "notes.txt"); err != nil || string(got) != "hello" {
+		t.Errorf("a plain file is still handed over: %q, %v", got, err)
+	}
+}
+
+// A file the person blocked by itself: its folder was asked about, the file
+// was not, and it was named and handed over.
+func TestNotchFileBlockedByItself(t *testing.T) {
+	dir := t.TempDir()
+	desk := filepath.Join(dir, "Desktop")
+	if err := os.MkdirAll(desk, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"clients.xlsx", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(desk, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blocked := func(path string) bool { return filepath.Base(path) == "clients.xlsx" }
+	roots := map[string][]string{"desktop": {desk}}
+	if _, _, err := notchFileOpen(roots, blocked, "desktop", "clients.xlsx"); err == nil {
+		t.Error("a blocked file was handed over")
+	}
+	if _, _, err := notchFileOpen(roots, blocked, "desktop", "notes.txt"); err != nil {
+		t.Errorf("the file beside it is not blocked: %v", err)
+	}
+	got := notchFilesIn("desktop", desk, blocked)
+	if got.Files != 1 || len(got.Recent) != 1 || got.Recent[0].Name != "notes.txt" {
+		t.Errorf("a blocked file is not counted or named: %+v", got)
+	}
+}
+
+// The hardening audit, 17 November 2026: a file OneDrive keeps online only
+// was downloaded whole just to be read on day one.
+func TestAFileKeptOnlineIsKnownByWhatWindowsSaysOfIt(t *testing.T) {
+	for attrs, want := range map[uint32]bool{
+		0x00000020:              false, // an ordinary file
+		0x00000020 | 0x00000001: false, // read-only
+		0x00400000 | 0x00000020: true,  // recall on data access: OneDrive, online only
+		0x00040000:              true,  // recall on open
+		0x00001000:              true,  // offline
+		0x00080000 | 0x00000020: false, // pinned: always kept on this device
+	} {
+		if got := notchFileAttrsElsewhere(attrs); got != want {
+			t.Errorf("attributes %#x: elsewhere = %v, want %v", attrs, got, want)
+		}
 	}
 }

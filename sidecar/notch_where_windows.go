@@ -300,6 +300,24 @@ func processImagePath(pid uint32) string {
 	return syscall.UTF16ToString(buf[:size])
 }
 
+// whereAppOf is the program a top-level window belongs to, by its file's
+// name. Calculator, Settings and the Store all live inside one host program,
+// and the list of what is never looked at holds the app's own name: asked by
+// the host's name, a Store app on that list was looked at whenever it was not
+// the window in front.
+func whereAppOf(hwnd uintptr) string {
+	pid := win32GetWindowPid(hwnd)
+	name := processBaseName(pid)
+	if strings.EqualFold(strings.TrimSuffix(name, filepath.Ext(name)), "ApplicationFrameHost") {
+		if hosted := whereHostedPid(hwnd, pid); hosted != 0 {
+			if inner := processBaseName(hosted); inner != "" {
+				return inner
+			}
+		}
+	}
+	return name
+}
+
 // The child windows of a frame are walked through a callback that cannot
 // carry state, so the state is here, behind a lock.
 var (

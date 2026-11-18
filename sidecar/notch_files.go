@@ -35,6 +35,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -79,6 +80,22 @@ var notchFilePrivateEnding = map[string]bool{
 func notchFilePrivate(name string) bool {
 	return notchFilePrivateEnding[strings.ToLower(filepath.Ext(name))] || notchFilePrivateName.MatchString(name)
 }
+
+// notchFileNameOdd: whether a name is one of the forms under which Windows
+// opens a file that is called something else. "server.pem::$DATA" is the
+// file server.pem, and has no private ending to look at. "vault.kdbx." and
+// "wallet.key " lose their last dot or blank on the way to the disk.
+// "PASSWO~1.XLS" is the short name of "Passwords 2026.xlsx". Each of them
+// walked round the rule that a private file is never opened. No file a
+// person keeps on a desktop is asked for like this, so none is opened.
+func notchFileNameOdd(name string) bool {
+	if strings.ContainsAny(name, `:*?"<>|`) || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return true
+	}
+	return notchFileShortName.MatchString(name)
+}
+
+var notchFileShortName = regexp.MustCompile(`~[0-9]`)
 
 // notchFilePlace is one of the places looked in.
 type notchFilePlace struct {
@@ -150,7 +167,7 @@ func notchFileName(name string) string {
 
 // notchFilesIn looks at the top of one folder. The folder not being there is
 // not an error: the place is simply not reached.
-func notchFilesIn(place, dir string) notchFilePlace {
+func notchFilesIn(place, dir string, blocked func(path string) bool) notchFilePlace {
 	out := notchFilePlace{Place: place, Kinds: map[string]int{}, Recent: []notchFileSeen{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -162,6 +179,10 @@ func notchFilesIn(place, dir string) notchFilePlace {
 	for _, entry := range entries {
 		name := entry.Name()
 		if notchFileHidden(name) {
+			continue
+		}
+		// A file or folder that is blocked by itself is not named.
+		if blocked != nil && blocked(filepath.Join(dir, name)) {
 			continue
 		}
 		if looked >= notchFilesMost {
@@ -289,7 +310,7 @@ func notchFilesPlace(place string, dirs []string, blocked func(dir string) bool)
 		if blocked != nil && blocked(dir) {
 			continue
 		}
-		got := notchFilesIn(place, dir)
+		got := notchFilesIn(place, dir, blocked)
 		if !got.Reached {
 			continue
 		}
@@ -318,6 +339,13 @@ func notchFilesLook(roots map[string][]string, blocked func(dir string) bool) []
 // say what it is. The name is a name and nothing else: it is looked for in
 // the folder that the list was made from, and is never joined to anything
 // the brain sent. Every refusal says why in a word the brain can show.
+// notchFileAttrsElsewhere reads what Windows says of a file: whether its
+// content is not on this disk (notchFileElsewhere). The three bits are
+// "offline", "recall on open" and "recall on data access".
+func notchFileAttrsElsewhere(attrs uint32) bool {
+	return attrs&(0x00001000|0x00040000|0x00400000) != 0
+}
+
 func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, place, name string) ([]byte, string, error) {
 	dirs, known := roots[place]
 	if !known {
@@ -329,6 +357,9 @@ func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, pla
 	}
 	if notchFileHidden(name) {
 		return nil, "", fmt.Errorf("that is not a file I list")
+	}
+	if notchFileNameOdd(name) {
+		return nil, "", fmt.Errorf("that is not the name of a file I list")
 	}
 	if notchFilePrivate(name) {
 		return nil, "", fmt.Errorf("private: its name says so, and it is never opened")
@@ -342,6 +373,11 @@ func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, pla
 		return nil, "", fmt.Errorf("that place is not reached")
 	}
 	path := filepath.Join(dir, name)
+	// A file the person has blocked by itself is not handed over either: only
+	// its folder used to be asked about.
+	if blocked != nil && blocked(path) {
+		return nil, "", fmt.Errorf("that file is blocked")
+	}
 	// Not followed: a link on the desktop may point anywhere on the machine.
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -356,9 +392,23 @@ func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, pla
 	if info.Size() > notchFileMost {
 		return nil, "", fmt.Errorf("it is too large to read")
 	}
-	bytes, err := os.ReadFile(path)
+	// A file that is kept online only is not fetched to be read.
+	if notchFileElsewhere(info) {
+		return nil, "", fmt.Errorf("it is kept online and is not on this computer")
+	}
+	// Read to the limit and no further: a file that grows between the look at
+	// its size and the reading is not read to its new end.
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("it could not be read")
+	}
+	defer file.Close()
+	bytes, err := io.ReadAll(io.LimitReader(file, notchFileMost+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("it could not be read")
+	}
+	if len(bytes) > notchFileMost {
+		return nil, "", fmt.Errorf("it is too large to read")
 	}
 	return bytes, kind, nil
 }

@@ -217,7 +217,7 @@ func (w *lookWindows) Front(at lookPoint) (app, title string) {
 	if hwnd == 0 {
 		return "", ""
 	}
-	return notchAppKey(processBaseName(win32GetWindowPid(hwnd))), win32WindowTitle(hwnd)
+	return notchAppKey(whereAppOf(hwnd)), win32WindowTitle(hwnd)
 }
 
 func (w *lookWindows) WindowRect(at lookPoint) lookRect {
