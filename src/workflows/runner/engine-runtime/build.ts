@@ -1414,6 +1414,18 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
 }
 
 /**
+ * The bundle under `root` for this tree's build hash, verified against the
+ * `main.js.sha256` beside it, or `null` (missing, or refused with the reason
+ * logged). Never the per-user cache, never a build. For the shared build's
+ * `--extract-only` run (#862), which must extract with the engine the host
+ * sealed and nothing else.
+ */
+export function verifiedSharedBundle(root: string): EngineBundle | null {
+  const found = findSharedBundle(root);
+  return found.kind === "hit" ? found.bundle : null;
+}
+
+/**
  * Locate an already-built engine bundle for the current source state —
  * the shared root (if configured) first, then the per-user cache. Returns
  * null if no matching bundle is on disk -- callers can either
