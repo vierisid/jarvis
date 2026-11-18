@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import os from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import YAML from 'yaml';
-import { flockHeldBy, getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
+import { flockHeldBy, getPidPath, isLocked, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
 import { win32SystemExe } from '../util/system-exe.ts';
 import { absoluteDbPath, defaultConfigPath, loadConfig, resolveDataPaths } from '../config/loader.ts';
@@ -1145,4 +1145,36 @@ export async function firstRunHintFor(opts: { systemConfigPath?: string; dataDir
   const { dataDir, dbPath } = resolveDataPaths(cfg.daemon, { dataDir: opts.dataDir });
   if (inspectDatabaseFile(absoluteDbPath(dbPath, dataDir), dataDir).state !== 'fresh') return null;
   return firstRunHint(defaultConfigPath(), opts.openUrl);
+}
+
+/**
+ * `--data-dir <path>` (or `--data-dir=<path>`) taken out of a command's
+ * arguments, for the commands that open the database without the daemon:
+ * export, restore, doctor, enroll, sidecars and revoke. `--data-dir` moves the
+ * database (resolveDataPaths), so without it these would open a different
+ * database from a daemon started with `jarvis start --data-dir`. With no flag,
+ * the folder the running daemon was started with is used (its launch record);
+ * with neither, `dataDir` is undefined and the config decides.
+ */
+export function takeDataDirArg(args: string[], opts: { running?: () => string | undefined } = {}): { dataDir?: string; rest: string[]; error?: string } {
+  const rest: string[] = [];
+  let dataDir: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    let value: string | undefined;
+    if (arg === '--data-dir') value = args[++i];
+    else if (arg.startsWith('--data-dir=')) value = arg.slice('--data-dir='.length);
+    else { rest.push(arg); continue; }
+    if (!value || value.startsWith('-')) {
+      return { rest, error: '--data-dir needs a folder (for a folder whose name starts with -, use ./<name>)' };
+    }
+    dataDir = value;
+  }
+  return { dataDir: dataDir ?? (opts.running ?? runningDaemonDataDir)(), rest };
+}
+
+/** The --data-dir the running daemon was started with, if one is running and had one. */
+export function runningDaemonDataDir(): string | undefined {
+  const pid = isLocked();
+  return pid ? readLaunchRecord(pid)?.dataDir : undefined;
 }

@@ -85,7 +85,7 @@ import { initDatabase, closeDb } from "../vault/schema.ts";
 import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
-import { absoluteDbPath, loadConfig, resolveDataPaths } from "../config/loader.ts";
+import { absoluteDbPath, loadConfig, oldDbKeptNotice, resolveDataPaths } from "../config/loader.ts";
 import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
 import { resolveEngineCacheRetention, resolveEngineIdleTtlMs, resolvePlanningPolicy } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
@@ -788,7 +788,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
   // Data dir and database: CLI args > config file (and JARVIS_HOME) > default.
   // Shared with `jarvis start`'s first-run check (resolveDataPaths).
-  const { dataDir, dbPath } = resolveDataPaths(jarvisConfig.daemon, { dataDir: userConfig?.dataDir, dbPath: userConfig?.dbPath });
+  const dataPaths = resolveDataPaths(jarvisConfig.daemon, { dataDir: userConfig?.dataDir, dbPath: userConfig?.dbPath });
+  const { dataDir, dbPath } = dataPaths;
   // browser_upload_file never sends files from here, wherever it is (#521), and
   // sends them only from the allowed roots (#527).
   {
@@ -855,6 +856,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   config.dbPath = absoluteDbPath(config.dbPath, config.dataDir);
 
   printBanner(config);
+  // An install whose database never moved into its data dir keeps using it
+  // where it is (resolveDataPaths); say so every start until it is moved.
+  for (const line of oldDbKeptNotice(dataPaths) ?? []) console.warn(`[Daemon] ${line}`);
 
   try {
     // 1. Ensure data directory exists

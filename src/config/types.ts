@@ -758,6 +758,13 @@ export type JarvisConfig = {
     data_dir: string;
     db_path: string;
     /**
+     * Set by the config loader, never read from config.yaml: true when the
+     * user did not set `db_path` (or JARVIS_HOME chose it), so the database is
+     * `<data dir>/jarvis.db` and follows `--data-dir` too. Absent means
+     * `db_path` is taken as given. See resolveDataPaths in config/loader.ts.
+     */
+    db_path_follows_data_dir?: boolean;
+    /**
      * Canonical origin signed into sidecar enrollment JWTs as the `brain`
      * (WebSocket) and `jwks` (public-key fetch) claims, so this is what the
      * sidecar will keep using once enrolled.
