@@ -72,9 +72,9 @@ describe("workflows.sandbox", () => {
   test("a missing launcher or an unsupported platform is reported, not guessed", () => {
     resetSandboxSupportCache();
     expect(detectSandboxSupport({ platform: "win32" }).kind).toBe("none");
-    const missing = detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: "/nonexistent/jarvis-sandbox" } });
+    const missing = detectSandboxSupport({ platform: "linux", env: { JARVIS_SANDBOX_LAUNCHER: "/nonexistent/jarvis-sandbox" } });
     expect(missing).toEqual({ kind: "none", reason: expect.stringContaining("does not exist") });
-    expect(detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: "relative" } }).kind).toBe("none");
+    expect(detectSandboxSupport({ platform: "linux", env: { JARVIS_SANDBOX_LAUNCHER: "relative" } }).kind).toBe("none");
   });
 
   test("a kernel without Landlock reads as no sandbox", () => {

@@ -1075,7 +1075,11 @@ export async function buildEngineBundle(opts?: {
 
   // The build view (see BUILD_VIEW): a private directory, gone after the build,
   // whose two links are the only paths esbuild is given.
-  const view = mkdtempSync(resolve(tmpdir(), "jarvis-engine-view-"));
+  // Resolved: esbuild keys its inputs relative to the REAL working
+  // directory, so a tmpdir behind a link (macOS's /var -> /private/var) made
+  // every staging input read as `../../var/...`, outside the view, and
+  // assertInputsFromStaging refused the bundle.
+  const view = realpathSync(mkdtempSync(resolve(tmpdir(), "jarvis-engine-view-")));
   // esbuild is told the bundle lands IN the view, so the sourcemap's paths are
   // view-relative too (`../repo/src/...`) and the map is as reproducible as
   // the bundle; the bytes are published to bundleDir below. The cost, taken
