@@ -26,6 +26,8 @@
 # Build:   docker build --build-arg VERSION=0.3.1 -t jarvis .
 #          VERSION is REQUIRED and has no default; see the stamp step below for
 #          why. For a throwaway local image, any semver will do: 0.0.0-dev.
+#          docs/SELF_HOSTING.md ("Building the image from source") has the full
+#          command, and the fix when apt-get cannot resolve hosts.
 # Run:     docker run -p 127.0.0.1:3142:3142 -v jarvis-data:/data jarvis
 #          then: docker exec <container> jarvis enroll "my-desktop"; LLM keys are
 #          set in the dashboard (Settings > LLM), not via env vars.
@@ -221,7 +223,7 @@ RUN set -eu; \
 ARG VERSION
 RUN set -eu; \
     [ -n "${VERSION:-}" ] || { \
-      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>." >&2; \
+      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>, e.g. docker build --build-arg VERSION=0.0.0-dev -t jarvis . (see docs/SELF_HOSTING.md)" >&2; \
       exit 1; \
     }; \
     VERSION="$VERSION" bun -e 'const v = process.env.VERSION; if (!/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$/.test(v)) throw new Error("VERSION is not semver: " + v); const f = "package.json"; const p = await Bun.file(f).json(); p.version = v; await Bun.write(f, JSON.stringify(p, null, 2) + String.fromCharCode(10)); console.log("stamped package.json version " + v)'
