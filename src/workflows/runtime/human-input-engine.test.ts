@@ -49,7 +49,7 @@ beforeAll(async () => {
   const services = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), authorityEngine: authority, approvalManager: new ApprovalManager(), emergencyController: new EmergencyController(), auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(),
     llmManager: { chat: async () => { throw Error('No model calls'); } } as any, channelService: {} as any, wsService: {} as any });
   api = new SandboxApi({ services }); await api.start({ port: 0 });
-  runtime = new EngineRuntime({ api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
+  runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */, api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
   const handle = await runtime.acquire({ runId: 'human-metadata', projectId: DEFAULT_IDS.project });
   try { const entries = []; for (const meta of names) entries.push(metadataToCatalogEntry(await handle.extractPieceMetadata({ pieceName: meta.name, pieceVersion: meta.version }))); catalog = new PieceCatalog(entries); configureWorkflowReadiness({ pieces: catalog }); }
   finally { await handle.release(); }

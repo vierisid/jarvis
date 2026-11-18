@@ -124,7 +124,7 @@ beforeAll(async () => {
       return { content: reply, finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
     } } as any, channelService: {} as any, wsService: {} as any });
   api = new SandboxApi({ services }); await api.start({ port: 0 });
-  runtime = new EngineRuntime({ api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
+  runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */, api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
   const handle = await runtime.acquire({ runId: 'invoice-fixture-metadata', projectId: DEFAULT_IDS.project });
   try { const entries = []; for (const [pieceName,pieceVersion] of Object.entries(versions)) entries.push(metadataToCatalogEntry(await handle.extractPieceMetadata({ pieceName, pieceVersion })));
     catalog = new PieceCatalog(entries); configureWorkflowReadiness({ pieces: catalog });

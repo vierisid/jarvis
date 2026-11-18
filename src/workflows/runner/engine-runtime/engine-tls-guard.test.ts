@@ -357,7 +357,7 @@ describe.skipIf(skipEngine)("a real engine loading a piece that disables TLS ver
       })();
       exports.tlsWriter = {};
     `);
-    runtime = new EngineRuntime({
+    runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */,
       api,
       bundlePath: cached.bundlePath, expectedDigest: cached.digest,
       pool: false,
