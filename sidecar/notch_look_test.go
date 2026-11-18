@@ -637,6 +637,50 @@ func TestLookShotMakesALargePartSmaller(t *testing.T) {
 	}
 }
 
+// The hardening audit, 17 November 2026: a picture was made smaller by a whole
+// number only, so a window 1920 wide came out 960 wide where 1568 was asked
+// for, and its small writing was read at half its size.
+func TestLookShotIsMadeExactlyAsSmallAsAsked(t *testing.T) {
+	const w, h = 1920, 1080
+	shot := &lookShot{pixels: make([]byte, w*h*4), w: w, h: h}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			i := (y*w + x) * 4
+			if x < w/2 {
+				shot.pixels[i+2] = 255
+			} else {
+				shot.pixels[i] = 255
+			}
+		}
+	}
+	decode := func(data []byte) image.Image {
+		img, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img
+	}
+	small := decode(shot.CutSmall(lookRect{0, 0, w, h}, 1568))
+	if b := small.Bounds(); b.Dx() != 1568 || b.Dy() != 882 {
+		t.Fatalf("1920 by 1080 asked for at 1568: %v", b)
+	}
+	if r, _, bl, _ := small.At(100, 400).RGBA(); r>>8 < 250 || bl>>8 > 5 {
+		t.Fatal("the left is not red")
+	}
+	if r, _, bl, _ := small.At(1400, 400).RGBA(); r>>8 > 5 || bl>>8 < 250 {
+		t.Fatal("the right is not blue")
+	}
+	// A display of 3840: halved first, then the rest of the way.
+	big := &lookShot{pixels: make([]byte, 3840*2160*4), w: 3840, h: 2160}
+	if b := decode(big.CutSmall(lookRect{0, 0, 3840, 2160}, 1568)).Bounds(); b.Dx() != 1568 || b.Dy() != 882 {
+		t.Fatalf("3840 by 2160 asked for at 1568: %v", b)
+	}
+	// Already as small as asked: as it is.
+	if b := decode(shot.CutSmall(lookRect{0, 0, 1568, 800}, 1568)).Bounds(); b.Dx() != 1568 || b.Dy() != 800 {
+		t.Fatalf("%v", b)
+	}
+}
+
 // The owner's first "put it there", 16 November 2026: he circled five numbers
 // on a dashboard in a browser, and what was put was the name of the browser's
 // window. A browser says nothing about what is on its page, so all there was
