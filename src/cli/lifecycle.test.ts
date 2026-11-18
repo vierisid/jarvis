@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DEFAULT_DAEMON_PORT,
+  describeAlreadyRunning,
   describeDashboard,
   getConfiguredPort,
   readConfiguredPort,
@@ -443,5 +444,28 @@ describe('resolveDashboardTarget precedence', () => {
     } finally {
       releaseLock();
     }
+  });
+});
+
+describe('describeAlreadyRunning', () => {
+  test('outside a container: names the folder and the PID, and says jarvis stop', () => {
+    expect(describeAlreadyRunning({ folder: '/home/u/.jarvis', inDocker: false, pid: 4242 })).toEqual([
+      'JARVIS is already running (PID 4242) on the data folder /home/u/.jarvis',
+      'Stop it first with: jarvis stop',
+    ]);
+  });
+
+  test('outside a container with no PID known: no empty PID', () => {
+    const [headline] = describeAlreadyRunning({ folder: '/home/u/.jarvis', inDocker: false, pid: null });
+    expect(headline).toBe('JARVIS is already running on the data folder /home/u/.jarvis');
+  });
+
+  test('in a container: points at the other container, not jarvis stop, and drops its PID', () => {
+    const lines = describeAlreadyRunning({ folder: '/data', inDocker: true, pid: 7 }).join('\n');
+    expect(lines).toContain('/data');
+    expect(lines).toContain('docker stop <name>');
+    expect(lines).toContain('its own volume');
+    expect(lines).not.toContain('jarvis stop');
+    expect(lines).not.toContain('PID');
   });
 });
