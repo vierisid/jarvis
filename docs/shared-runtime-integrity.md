@@ -205,8 +205,13 @@ What is still the host's to know:
   (fresh per build), out of the host's persistent Bun install cache, which
   `jarvis-build` owns and reuses across versions. In a phased build no
   third-party code runs as `jarvis-build`, so nothing in that build can write
-  the cache; but a one-pass build of an older version runs every piece as
-  `jarvis-build`, and could leave a poisoned package in it for later builds.
+  the cache. A one-pass build of an older version runs every piece as
+  `jarvis-build` and could leave a poisoned package in it, so the host
+  (scripts VERSION 52) empties the cache before a phased build unless a
+  root-owned marker says no one-pass build has run since the last wipe, and
+  removes that marker before every one-pass build. The cost is one full
+  catalog download, about 1GB, on a host's first phased build and on the
+  first one after any one-pass build.
 
 ## The transpiler cache
 
