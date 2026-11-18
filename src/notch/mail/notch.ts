@@ -24,6 +24,12 @@
  *
  * What the owner can do with a reply, and what each thing does:
  *
+ *   a time on the line  when the reply offers a time and the calendar gave
+ *                       free ones, the line is the prototype's: "Anna asked
+ *                       to move Thursday. Offer a slot?" with the times as
+ *                       keys. A pick puts that time into the reply and sends
+ *                       it, with the same fuse. The reply itself is in Home's
+ *                       list for whoever wants to read it first
  *   yes on the line     shows the draft, on paper, with who it goes to
  *   a lit word          the tone: the reply is written again in that manner.
  *                       The time, when the reply names one: the owner's own
@@ -62,6 +68,8 @@ import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
 import type { NotchStage } from '../stage.ts';
 import { MAIL_WHY_DRAFT_THERE, type Mailbox, type MailReplyPlan } from './mailbox.ts';
+import type { MailCalendarEvent } from './proposer.ts';
+import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot } from './slots.ts';
 import type { MailProposalRow, MailStore } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
 import type { MailLook, MailWatch } from './watch.ts';
@@ -72,6 +80,9 @@ export const MAIL_FUSE_MS = 5000;
 export const MAIL_NOTHING_AGAIN_MS = 30 * 60 * 1000;
 /** A look this recent is taken as the state of the mailbox when the owner comes to Gmail. */
 export const MAIL_LOOK_FRESH_MS = 10 * 60 * 1000;
+
+/** How long the calendar is waited for, between a pick and its send, to say whether the time is still free. */
+export const MAIL_SLOT_ASK_MS = 6000;
 
 /** The link under a draft that turns the reply down for good. */
 export const MAIL_NOT_NEEDED = 'not-needed';
@@ -126,6 +137,10 @@ export interface NotchMailDeps {
    * waiting" is not known and is not said. Taken as yes when not given.
    */
   monthRead?(): boolean;
+  /** The owner's calendar between two moments, or null when it cannot be reached: asked before a time is offered. */
+  calendar?(from: number, to: number): Promise<MailCalendarEvent[] | null>;
+  /** The owner's time zone, for the words of a time. */
+  zone?: string;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -173,7 +188,9 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
     if (at < 0) return [line];
     lit = true;
     // The time is a word the owner can change: clicked, or typed over with their own.
-    return [line.slice(0, at), { word: { name: 'when', value: row.time!, options: [row.time!], label: 'Time', read: 'dayTime' } }, line.slice(at + row.time!.length)];
+    // With free times from the calendar, they are its choices, worded as the letter words them.
+    const free = (row.slots ?? []).map((slot) => slot.words);
+    return [line.slice(0, at), { word: { name: 'when', value: row.time!, options: free.includes(row.time!) ? free : [row.time!], label: 'Time', read: 'dayTime' } }, line.slice(at + row.time!.length)];
   });
   const to: NotchPart[] = ['To ', em(names(row.to))];
   if (row.cc.length) to.push('  ·  Copy to ', em(names(row.cc)));
@@ -217,6 +234,33 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   };
 
   /**
+   * The times a reply can still offer, with the words the notch has for each.
+   * Null when it offers none: it never did, they have passed, or the time the
+   * letter names is not in it once, so that another could not take its place.
+   */
+  function openSlots(row: MailProposalRow): (MailRowSlot & { say: string })[] | null {
+    if (!row.slots?.length || !row.time || row.draft.split(row.time).length !== 2) return null;
+    if (!row.slots.some((slot) => slot.words === row.time)) return null;
+    const open = row.slots.filter((slot) => slot.at - now() >= MAIL_SLOT_LEAST_AHEAD_MS);
+    return open.length >= 2 ? open.map((slot) => ({ ...slot, say: mailSlotWords(slot.at, deps.zone) })) : null;
+  }
+
+  /** Whether a time is still free, asked of the calendar now. Null when the calendar does not answer in time. */
+  async function stillFree(slot: MailRowSlot): Promise<boolean | null> {
+    if (!deps.calendar) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const events = await Promise.race([
+        deps.calendar(slot.at - 3_600_000, slot.at + slot.minutes * 60_000 + 3_600_000).catch(() => null),
+        new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), MAIL_SLOT_ASK_MS); (timer as { unref?: () => void }).unref?.(); }),
+      ]);
+      return events ? mailSlotFree(slot, events) : null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * One reply, from its line to its end. `line: false` opens the draft at
    * once: the owner picked it from the list. Comes back `settled` when the
    * reply no longer waits, `waits` when it does.
@@ -244,13 +288,55 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       await stage.say(['The thread has moved on since. This reply is no longer needed.'], 3400, { src: 'mail' });
       return 'settled';
     };
+    /** The time picked on the line, as the notch says it: the reply goes out with it, and is not opened first. */
+    let offering: string | null = null;
     if (options.line) {
-      const first = await unlessGone(stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' }));
-      if (first === GONE) return movedOn();
-      if (first.act === 'fold') return 'waits';
-      if (first.act === 'no') return decline(id);
+      // A reply whose times have passed while it waited is written again, for the calendar as it is now.
+      if (row.slots?.length && !openSlots(row)) {
+        const writing = stage.id();
+        stage.put({ id: writing, kind: 'work', say: ['The times in a reply have passed. Writing it again…'], steps: 0, done: 0, src: 'mail' });
+        const again = await watch.redraft(id, {}).catch(() => null);
+        if (stage.ended()) return 'waits';
+        if (again) row = again;
+      }
+      let slots = openSlots(row);
+      let taken = '';
+      while (slots) {
+        // The prototype's line: who asked for what, and the free times as keys.
+        const pick = await unlessGone(stage.choose(
+          [...source('', ''), ...(taken ? [em(taken), ' has been taken since. Another?'] : [em(who), ` asked ${row.asked || 'for a time'}. Offer a slot?`])],
+          slots.map((slot) => slot.say), { src: 'mail' }));
+        if (pick === GONE) return movedOn();
+        if (pick.act === 'fold') return 'waits';
+        if (pick.act === 'no') return decline(id);
+        const chosen = slots.find((slot) => slot.say === pick.option);
+        if (pick.act !== 'pick' || !chosen) continue;
+        // The calendar is asked now: the reply may have waited for hours. Not known is not no.
+        if ((await stillFree(chosen)) === false) {
+          taken = chosen.say;
+          slots = slots.filter((slot) => slot !== chosen);
+          if (slots.length === 0) {
+            await stage.say(['None of those times is free any more. The reply is kept.'], 3600, { src: 'mail' });
+            return 'waits';
+          }
+          continue;
+        }
+        if (chosen.words !== row.time) {
+          row = { ...row, draft: row.draft.replace(row.time!, chosen.words), time: chosen.words, updatedAt: now() };
+          store.put(row);
+        }
+        offering = chosen.say;
+        break;
+      }
+      if (!offering) {
+        const first = await unlessGone(stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' }));
+        if (first === GONE) return movedOn();
+        if (first.act === 'fold') return 'waits';
+        if (first.act === 'no') return decline(id);
+      }
     }
 
+    if (!offering) {
     // The draft, on paper. Only yes and Esc answer it: a click somewhere else is neither.
     const sheet = stage.id();
     stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row), yes: 'send', stay: true, ...(options.keep ? { no: options.keep } : {}), src: 'mail' });
@@ -304,6 +390,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       // Taken off the notch by something else (the talk keys, above all): still in hand for a moment.
       if (inHand === mine) inHand = closed ? null : { id, showing: false, leftAt: now() };
     }
+    }
 
     // Yes: into the thread as a draft, a fuse, and out.
     const mailbox = deps.mailbox();
@@ -356,7 +443,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         }
         let went: 'done' | 'undo' | 'lost';
         try {
-          went = await stage.fuse(['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
+          went = await stage.fuse(offering ? ['Offering ', em(offering), ` to ${who}…`] : ['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
         } catch (error) {
           // Something took the notch while the draft was in Gmail and not yet sent: it is not left there.
           await reply.discard().catch(() => {});
@@ -383,7 +470,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
           return 'waits';
         }
         store.move(id, 'ready', 'sent', now());
-        await stage.say(['Sent to ', em(who), '.'], 2400, { mood: 'happy', mark: 'check', src: 'mail' });
+        await stage.say(offering ? ['Offered ', em(offering), ` to ${who}.`] : ['Sent to ', em(who), '.'], offering ? 2800 : 2400, { mood: 'happy', mark: 'check', src: 'mail' });
         return 'settled';
       });
     } finally {

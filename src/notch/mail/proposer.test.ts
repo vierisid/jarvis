@@ -140,13 +140,13 @@ describe('what the model answers', () => {
   const answer = (fields: Record<string, unknown>) => JSON.stringify({ needs_reply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: '', ...fields });
 
   test('a reply is taken as written', () => {
-    expect(parseMailProposal(answer({}))).toEqual({ needsReply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: null, lookFor: '', about: '' });
+    expect(parseMailProposal(answer({}))).toEqual({ needsReply: true, why: 'Leo asked for a time.', reply: 'Hi Leo,\nThursday at 10:00 works.\nSam', missing: '', time: null, lookFor: '', about: '', times: [], asked: '' });
     // Wrapped in a code fence or a sentence, it is still found.
     expect(parseMailProposal('Here you go:\n```json\n' + answer({}) + '\n```')?.needsReply).toBe(true);
   });
 
   test('no reply needed is an answer too', () => {
-    expect(parseMailProposal('{"needs_reply": false, "why": "Thanks only.", "reply": "ignored"}')).toEqual({ needsReply: false, why: 'Thanks only.', reply: '', missing: '', time: null, lookFor: '', about: '' });
+    expect(parseMailProposal('{"needs_reply": false, "why": "Thanks only.", "reply": "ignored"}')).toEqual({ needsReply: false, why: 'Thanks only.', reply: '', missing: '', time: null, lookFor: '', about: '', times: [], asked: '' });
   });
 
   // The lit time word must be in the reply, once, or there is nothing to light.
@@ -213,3 +213,72 @@ describe('the owner\'s voice', () => {
     expect(mailVoiceSamples(threads, owner, { thread: 't1', to: leo.address, before: NOW - 80 * HOUR })).toEqual([]);
   });
 });
+
+describe('free times in a reply', () => {
+  const slots = [{ at: Date.UTC(2026, 10, 16, 15, 0), minutes: 30 }, { at: Date.UTC(2026, 10, 17, 10, 0), minutes: 30 }, { at: Date.UTC(2026, 10, 18, 9, 30), minutes: 30 }];
+  const answer = (fields: Record<string, unknown>) => JSON.stringify({
+    needs_reply: true, why: 'Anna asked to move the review.', reply: 'Hi Anna,\nMonday at 15:00 would suit me.\nSam', missing: '', time: 'Monday at 15:00',
+    times: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'], asked: 'to move Thursday', ...fields,
+  });
+
+  test('the model is given the times the calendar has free, by date, outside the marks of the mail, with the rule to propose the first', () => {
+    const [system, user] = mailProposalMessages(input({ calendar: [], slots }));
+    expect(user!.content).toContain("These times are free in Sam's calendar, half an hour each:\n1. Monday 16 November 2026, 15:00 to 15:30\n2. Tuesday 17 November 2026, 10:00 to 10:30\n3. Wednesday 18 November 2026, 09:30 to 10:00");
+    // Between no two marks: it is found by rule, not material from the mailbox.
+    const before = user!.content.slice(0, user!.content.indexOf('These times are free'));
+    expect(before.split('<<<UNTRUSTED_CONTENT').length).toBe(before.split('UNTRUSTED_CONTENT>>>').length);
+    expect(system!.content).toContain('propose the first time of the list and no other');
+    expect(system!.content).toContain('"times"');
+    // With no calendar, or one free time only, there is no list.
+    expect(mailProposalMessages(input({ slots }))[1]!.content).not.toContain('These times are free');
+    expect(mailProposalMessages(input({ calendar: [], slots: slots.slice(0, 1) }))[1]!.content).not.toContain('These times are free');
+  });
+
+  test('the words for each time are taken when they are one for each, the first the time the reply names', () => {
+    expect(parseMailProposal(answer({}), 3)).toMatchObject({ time: 'Monday at 15:00', times: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'], asked: 'to move Thursday' });
+    // In another language they are the letter's words.
+    const italian = answer({ reply: 'Ciao Anna,\nlunedì alle 15:00 andrebbe bene.\nSam', time: 'lunedì alle 15:00', times: ['lunedì alle 15:00', 'martedì alle 10:00', 'mercoledì alle 9:30'] });
+    expect(parseMailProposal(italian, 3)!.times).toEqual(['lunedì alle 15:00', 'martedì alle 10:00', 'mercoledì alle 9:30']);
+  });
+
+  test('anything else is no list, and the reply stands with its one time', () => {
+    const none = (fields: Record<string, unknown>, given = 3) => parseMailProposal(answer(fields), given)!;
+    // No times were given to it: whatever it lists is not from the calendar.
+    expect(none({}, 0)).toMatchObject({ time: 'Monday at 15:00', times: [], asked: '' });
+    // Fewer or more than were given.
+    expect(none({ times: ['Monday at 15:00', 'Tuesday at 10:00'] }).times).toEqual([]);
+    // The first is not the time the reply names.
+    expect(none({ times: ['Tuesday at 10:00', 'Monday at 15:00', 'Wednesday at 9:30'] }).times).toEqual([]);
+    expect(none({ times: ['Friday at 9:00', 'Tuesday at 10:00', 'Wednesday at 9:30'] }).times).toEqual([]);
+    // Two the same, an empty one, one that is not words, one far too long.
+    expect(none({ times: ['Monday at 15:00', 'Tuesday at 10:00', 'Tuesday at 10:00'] }).times).toEqual([]);
+    expect(none({ times: ['Monday at 15:00', '', 'Wednesday at 9:30'] }).times).toEqual([]);
+    expect(none({ times: ['Monday at 15:00', 7, 'Wednesday at 9:30'] }).times).toEqual([]);
+    expect(none({ times: ['Monday at 15:00', 'x'.repeat(61), 'Wednesday at 9:30'] }).times).toEqual([]);
+    expect(none({ times: 'Monday at 15:00' }).times).toEqual([]);
+    // The reply names more than the first: putting another in its place would say one twice.
+    expect(none({ reply: 'Hi Anna,\nMonday at 15:00 or Tuesday at 10:00 would suit me.\nSam' }).times).toEqual([]);
+    // The reply names no time once.
+    expect(none({ time: '' })).toMatchObject({ time: null, times: [] });
+    // And without a list nothing was asked for that the notch would say.
+    expect(none({ times: [] }).asked).toBe('');
+  });
+
+  test('what was asked for is a few plain words', () => {
+    const asked = (value: unknown) => parseMailProposal(answer({ asked: value }), 3)!.asked;
+    expect(asked('to move Thursday')).toBe('to move Thursday');
+    expect(asked('  for a   demo. ')).toBe('for a demo');
+    expect(asked('for <b>a</b> call')).toBe('for b a b call');
+    expect(asked('to do a very long list of things that is not a few words')).toBe('');
+    expect(asked('x'.repeat(41))).toBe('');
+    expect(asked(7)).toBe('');
+  });
+
+  test('asking the model carries how many times it was given', async () => {
+    const think = async () => ({ content: answer({}), model: 'm', input: 1, output: 1, cached: 0 });
+    expect((await proposeMail(input({ calendar: [], slots }), think)).proposal!.times).toHaveLength(3);
+    expect((await proposeMail(input({ calendar: [] }), think)).proposal!.times).toEqual([]);
+    expect((await proposeMail(input({ slots }), think)).proposal!.times).toEqual([]);
+  });
+});
+

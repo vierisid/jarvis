@@ -378,6 +378,67 @@ describe('a reply written again in another manner', () => {
   });
 });
 
+describe('free times for a reply that offers one', () => {
+  const offers = { reply: 'Hi Leo,\nMonday at 15:00 would suit me.\nSam', time: 'Monday at 15:00', times: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'], asked: 'to move Thursday' };
+
+  test('are read off the calendar by rule, given to the model, and kept with the reply, each with its words', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24, 'Can we move Thursday?')])], { answer: () => reply(offers) });
+    await watch.look('sweep');
+    // It is Saturday: the next working days, at the times the rule likes, by their whole dates.
+    expect(asked.thinks[0]).toContain('1. Monday 16 November 2026, 15:00 to 15:30\n2. Tuesday 17 November 2026, 10:00 to 10:30\n3. Wednesday 18 November 2026, 09:30 to 10:00');
+    expect(store.ready()[0]).toMatchObject({
+      time: 'Monday at 15:00', asked: 'to move Thursday',
+      slots: [
+        { at: Date.UTC(2026, 10, 16, 15, 0), minutes: 30, words: 'Monday at 15:00' },
+        { at: Date.UTC(2026, 10, 17, 10, 0), minutes: 30, words: 'Tuesday at 10:00' },
+        { at: Date.UTC(2026, 10, 18, 9, 30), minutes: 30, words: 'Wednesday at 9:30' },
+      ],
+    });
+  });
+
+  test('a reply that accepts their time, or names none, has none', async () => {
+    const { watch, store } = world([thread(T1, [message(leo, 24)])]);
+    await watch.look('sweep');
+    expect(store.ready()[0]).toMatchObject({ time: 'Thursday at 10:00', slots: null, asked: '' });
+  });
+
+  test('with no calendar the model is given none, and whatever it lists is not kept', async () => {
+    const { watch, store, asked, reply } = world([thread(T1, [message(leo, 24)])], { calendar: false, answer: () => reply(offers) });
+    await watch.look('sweep');
+    expect(asked.thinks[0]).not.toContain('These times are free');
+    expect(store.ready()[0]).toMatchObject({ slots: null, asked: '' });
+  });
+
+  test('written again later, the times are the calendar\'s as it is then', async () => {
+    const { watch, store, asked, reply, later } = world([thread(T1, [message(leo, 24, 'Can we move Thursday?')])], {
+      answer: (text) => (text.includes('1. Wednesday 18 November 2026, 15:00')
+        ? reply({ reply: 'Hi Leo,\nWednesday at 15:00 would suit me.\nSam', time: 'Wednesday at 15:00', times: ['Wednesday at 15:00', 'Thursday at 11:00', 'Friday at 9:30'], asked: 'to move Thursday' })
+        : reply(offers)),
+    });
+    await watch.look('sweep');
+    const [row] = store.ready();
+    // Three days on, Monday and Tuesday are gone. Thursday at 10:00 holds the board call.
+    later(3 * 24 * HOUR);
+    const next = await watch.redraft(row!.id, {});
+    expect(asked.thinks[1]).toContain('1. Wednesday 18 November 2026, 15:00 to 15:30\n2. Thursday 19 November 2026, 11:00 to 11:30\n3. Friday 20 November 2026, 09:30 to 10:00');
+    expect(next).toMatchObject({ time: 'Wednesday at 15:00', asked: 'to move Thursday' });
+    expect(next!.slots!.map((slot) => [new Date(slot.at).toISOString(), slot.words])).toEqual([
+      ['2026-11-18T15:00:00.000Z', 'Wednesday at 15:00'], ['2026-11-19T11:00:00.000Z', 'Thursday at 11:00'], ['2026-11-20T09:30:00.000Z', 'Friday at 9:30'],
+    ]);
+  });
+
+  test('written again as something that offers no time, the times it had are gone with it', async () => {
+    const { watch, store, reply } = world([thread(T1, [message(leo, 24, 'Can we move Thursday?')])], {
+      answer: (text) => (text.includes('told you, for this reply') ? reply({ reply: 'Hi Leo,\nLet us keep Thursday.\nSam', time: '', times: [], asked: '' }) : reply(offers)),
+    });
+    await watch.look('sweep');
+    const [row] = store.ready();
+    expect(row!.slots).toHaveLength(3);
+    const next = await watch.redraft(row!.id, { told: 'keep Thursday' });
+    expect(next).toMatchObject({ time: null, slots: null, asked: '' });
+  });
+});
+
 describe('is a reply still an answer to the last word', () => {
   // Three questions to the mailbox, each waiting its turn behind a look, made a draft slow to open.
   test('is one question to the mailbox: whose mailbox it is was learned by the look', async () => {
