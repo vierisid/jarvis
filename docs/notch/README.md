@@ -817,8 +817,9 @@ else joins the count.
     tomorrow. It waits for a still moment like everything else, and says how
     long is left then; two minutes before the start it does not wait any
     more. A meeting moved or cancelled in the meantime is not announced at
-    its old hour. The prototype's line went on "Notes are ready": nothing
-    prepares notes yet, so nothing is said about notes. A title is text from
+    its old hour. The prototype's line goes on "Notes are ready": since
+    18 November it does here too, when there is something known about the
+    person the meeting is with (see "Before a call"). A title is text from
     the calendar: it is shown to the person and no model reads it.
 71. **On a call, everything is held** (`around.ts`). The desktop app says
     when a program people make calls with has the microphone
@@ -2788,6 +2789,55 @@ What is not done, or not proven:
   misheard is not read back.
 - **A name the speech-to-text wrote without a capital is missed.**
 - **No real voice has gone through it.**
+
+## Before a call
+
+The prototype: "Call with Anna in 10 min. Notes are ready.", and yes opens
+a short sheet, "Before you call Anna": the last call, what was asked, what
+is open. The product said only "Board call in 10 min.", because nothing
+prepared notes. The owner asked for the prototype's way on 18 November
+2026, as the eighth of the things it has and the product did not. By then
+there was something to prepare them from: the calls that are written down.
+
+How it goes. Ten minutes before a meeting, when its line is about to be
+said, what Jarvis holds about the one other person the meeting is with is
+put together (`src/notch/before.ts`): the last call with them and what each
+side owed after it, the mail of theirs that waits for a reply and the last
+that was answered, and what is remembered about them. When there is
+anything, the line goes on "Notes are ready." and has a yes, which opens
+"Before you talk to Anna". When there is nothing, the line is as it was.
+
+233. **Nothing is asked of a model and nothing is fetched.** The sheet is
+    read from what is already kept: the notes of calls (`notch_calls`),
+    the mail layer's own rows, the memory. It is put together at the
+    moment the line is said, so it is as fresh as those are.
+234. **Who the meeting is with is one person Jarvis knows, or nobody.**
+    From the calendar's guests when the calendar gives them: exactly one of
+    them is somebody the owner writes with. Otherwise from the title:
+    exactly one known person is named in it, by their whole name or by a
+    first name only they have, as a word of its own. A meeting with
+    several known people, or with nobody known, has no notes: whose would
+    they be?
+235. **"Notes are ready" is never said over an empty sheet.** With nothing
+    known, or when putting the notes together fails, the line says the
+    meeting and its minutes and nothing else.
+236. **What is on the sheet came from a call or a mail, and goes nowhere
+    else.** It is shown to the owner. No model reads it here, and none of
+    it is written to a log.
+
+What is not done, or not proven:
+
+- **The guests are known only through a connection to the calendar.** Read
+  in the browser, the calendar gives a title and whether others are in it,
+  and then it is the title that has to name the person.
+- **One person.** A meeting with three people the owner knows gets no
+  notes, though notes about each would be of use.
+- **Only what was written down.** A call that was not listened to left no
+  notes. Mail older than what the mail layer keeps is not looked at.
+- **Nothing is summed up.** The sheet shows rows as they are kept. Nothing
+  says "the open question is the start date" the way a person preparing
+  would.
+- **Not seen on a real meeting.**
 
 ## The keys
 

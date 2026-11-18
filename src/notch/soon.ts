@@ -12,9 +12,11 @@
  * not clocks. The calendar is read the way ./ways.ts says: a connection when
  * there is one, the signed-in browser when not.
  *
- * It says only what is true of the calendar. The prototype's line went on
- * "Notes are ready": nothing prepares notes for a meeting yet, so nothing is
- * said about notes.
+ * It says only what is true. The prototype's line goes on "Notes are
+ * ready", and so does this one when there are notes: what Jarvis already
+ * holds about the one other person the meeting is with (./before.ts). Yes
+ * opens them. With nothing known the line is as it was, and says nothing
+ * about notes.
  *
  * A title is text from the calendar. It is shown to the person and goes
  * nowhere else from here: no model reads it.
@@ -24,7 +26,7 @@
  */
 import type { NotchInbox, NotchItem } from './inbox.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
-import type { NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchPart } from './protocol.ts';
 
 /** How long before a meeting it is said. */
 export const NOTCH_SOON_LEAD_MS = 10 * 60 * 1000;
@@ -38,12 +40,22 @@ const TITLE_CHARS = 60;
 export interface NotchSoonDeps {
   /** The calendar between two moments, or null when it cannot be reached. */
   calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>;
+  /**
+   * What is known before a meeting: who it is with, and the rows of a short
+   * sheet (./before.ts). Null when it is with nobody Jarvis knows or nothing
+   * is known. Asked when the line is said, not before.
+   */
+  notes?(meeting: NotchMeeting): { who: string; blocks: NotchBlock[] } | null;
   now?: () => number;
   log?: (line: string) => void;
 }
 
 /** A meeting as this file keeps it. */
-export interface NotchMeeting { title: string; start: number; end: number }
+export interface NotchMeeting {
+  title: string; start: number; end: number;
+  /** The addresses of those who are in it, when the calendar gives them. */
+  who?: string[];
+}
 
 export interface NotchSoon {
   /** Reads the calendar. False when it could not be reached: what was known stays. */
@@ -79,7 +91,8 @@ export function notchMeetings(events: MailCalendarEvent[]): NotchMeeting[] {
     const end = Date.parse(event.end);
     const title = oneLine(event.summary);
     if (!event.withOthers || event.allDay || !title || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
-    meetings.push({ title, start, end });
+    const who = Array.isArray(event.who) ? event.who.filter((address): address is string => typeof address === 'string' && address.includes('@')).map((address) => address.trim().toLowerCase()) : [];
+    meetings.push({ title, start, end, ...(who.length ? { who } : {}) });
   }
   return meetings.sort((a, b) => a.start - b.start);
 }
@@ -134,7 +147,17 @@ export function attachNotchSoon(inbox: NotchInbox, deps: NotchSoonDeps): NotchSo
         const state = put.get(key);
         if (state) state.said = true;
         const minutes = Math.round((meeting.start - now()) / 60_000);
-        await stage.say(minutes >= 1 ? [em(meeting.title), ' in ', em(`${minutes} min`), '.'] : [em(meeting.title), ' is starting now.'], 6000, { src: 'cal', mood: 'look' });
+        const line: NotchPart[] = minutes >= 1 ? [em(meeting.title), ' in ', em(`${minutes} min`), '.'] : [em(meeting.title), ' is starting now.'];
+        // What is known about the person it is with, put together now. A fault in that is no reason to say nothing of the meeting.
+        let notes: { who: string; blocks: NotchBlock[] } | null = null;
+        try { notes = deps.notes?.(meeting) ?? null; } catch { notes = null; }
+        if (!notes || notes.blocks.length === 0) {
+          await stage.say(line, 6000, { src: 'cal', mood: 'look' });
+          return 'settled';
+        }
+        // The prototype's line: "Call with Anna in 10 min. Notes are ready."
+        const answer = await stage.offer([...line, ' Notes are ready.'], 'show', { src: 'cal', mood: 'look' });
+        if (answer.act === 'yes') await stage.sheet(['Before you talk to ', em(notes.who)], notes.blocks, { src: 'cal' });
         return 'settled';
       },
     };

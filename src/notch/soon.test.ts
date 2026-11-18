@@ -13,7 +13,7 @@ const text = (parts: NotchPart[] | undefined): string => (parts ?? []).map((part
 const event = (summary: string, startInMin: number, minutes = 30, extra: Partial<MailCalendarEvent> = {}): MailCalendarEvent =>
   ({ summary, start: new Date(NOW + startInMin * MIN).toISOString(), end: new Date(NOW + (startInMin + minutes) * MIN).toISOString(), withOthers: true, ...extra });
 
-function harness(events: () => MailCalendarEvent[] | null, options: { maySpeak?: () => boolean } = {}) {
+function harness(events: () => MailCalendarEvent[] | null, options: { maySpeak?: () => boolean; notes?: NonNullable<Parameters<typeof attachNotchSoon>[1]['notes']> } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -27,7 +27,7 @@ function harness(events: () => MailCalendarEvent[] | null, options: { maySpeak?:
   const inbox = new NotchInbox(surface, { log: () => {}, maySpeak: options.maySpeak });
   let now = NOW;
   const asked: [number, number][] = [];
-  const soon = attachNotchSoon(inbox, { calendar: async (from, to) => { asked.push([from, to]); return events(); }, now: () => now, log: () => {} });
+  const soon = attachNotchSoon(inbox, { calendar: async (from, to) => { asked.push([from, to]); return events(); }, notes: options.notes, now: () => now, log: () => {} });
   const line = (): NotchLine | null => surface.current().line;
   return {
     soon, inbox, asked, line,
@@ -171,3 +171,56 @@ describe('what changed in the calendar', () => {
     expect(notchCalendarChanges(before, after, NOW).map(text)).toEqual(['Standup moved to tomorrow at 16:00']);
   });
 });
+
+// The prototype: "Call with Anna in 10 min. Notes are ready."
+describe('notes before a meeting', () => {
+  const NOTES = { who: 'Anna', blocks: [{ kind: 'row' as const, lead: '28 Oct', say: ['Last call. She liked the workflow demo.'] }, { kind: 'row' as const, lead: 'Waits', say: ['Anna wants the contract to start on 1 December.'] }] };
+
+  test('with something known the line says so, and yes opens it', async () => {
+    const seen: { title: string; who?: string[] }[] = [];
+    const h = harness(() => [event('Call with Anna', 9, 30, { who: ['Me@northwind.example', 'anna@lumen.example'] })], { notes: (meeting) => { seen.push({ title: meeting.title, who: meeting.who }); return NOTES; } });
+    await h.soon.look();
+    h.soon.tick();
+    await settle();
+    expect(h.said()).toBe('Call with Anna in 9 min. Notes are ready.');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'show', src: 'cal' });
+    // Asked for when the line is said, with the guests the calendar gave, in small letters.
+    expect(seen).toEqual([{ title: 'Call with Anna', who: ['me@northwind.example', 'anna@lumen.example'] }]);
+    await h.answer('yes');
+    expect(h.said()).toBe('Before you talk to Anna');
+    expect(h.line()).toMatchObject({ kind: 'sheet', src: 'cal', blocks: NOTES.blocks });
+    await h.answer('no');
+    expect(h.line()).toBeNull();
+  });
+
+  test('with nothing known the line is as it was, and says nothing about notes', async () => {
+    for (const notes of [() => null, () => ({ who: 'Anna', blocks: [] }), () => { throw new Error('the mail store is closed'); }]) {
+      const h = harness(() => [event('Board call', 9)], { notes });
+      await h.soon.look();
+      h.soon.tick();
+      await settle();
+      expect(h.said()).toBe('Board call in 9 min.');
+      expect(h.line()).toMatchObject({ kind: 'say' });
+    }
+  });
+
+  test('Esc on the line is not now: it is said once, and the meeting is not announced again', async () => {
+    const h = harness(() => [event('Call with Anna', 9)], { notes: () => NOTES });
+    await h.soon.look();
+    h.soon.tick();
+    await settle();
+    await h.answer('no');
+    expect(h.line()).toBeNull();
+    h.soon.tick();
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+  });
+
+  test('guests are carried only when the calendar gave addresses', () => {
+    expect(notchMeetings([event('Sync', 10, 30, { who: ['a@x.example', 'not an address', 7 as never] })])[0]!.who).toEqual(['a@x.example']);
+    expect(notchMeetings([event('Sync', 10)])[0]!.who).toBeUndefined();
+    expect(notchMeetings([event('Sync', 10, 30, { who: [] })])[0]!.who).toBeUndefined();
+  });
+});
+

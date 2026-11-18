@@ -187,3 +187,15 @@ describe('who the owner writes with', () => {
   });
 });
 
+describe('the mail of one person that was waited on', () => {
+  test('theirs alone, the newest first, whatever the case of the address, and no more than asked for', () => {
+    const store = new MailStore(new Database(':memory:'));
+    store.put(row({ id: 'a', thread: 'a', messageAt: T, who: leo, about: 'The older one.' }));
+    store.put(row({ id: 'b', thread: 'b', messageAt: T + 2000, who: anna, about: 'Not his.' }));
+    store.put(row({ id: 'c', thread: 'c', messageAt: T + 1000, who: leo, state: 'sent', about: 'The newer one.' }));
+    expect(store.withPerson('LEO@lumen.example').map((one) => [one.about, one.state])).toEqual([['The newer one.', 'sent'], ['The older one.', 'ready']]);
+    expect(store.withPerson(leo.address, 1)).toHaveLength(1);
+    expect(store.withPerson('nobody@lumen.example')).toEqual([]);
+  });
+});
+

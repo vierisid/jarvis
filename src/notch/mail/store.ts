@@ -282,6 +282,11 @@ export class MailStore {
     ).all(most) as { name: string; address: string }[]);
   }
 
+  /** The mail of one address that was waited on, the newest first: for what is known before a call with them (../before.ts). */
+  withPerson(address: string, most = 6): MailProposalRow[] {
+    return (this.db.query('SELECT * FROM notch_mail_proposals WHERE who_address = ? COLLATE NOCASE ORDER BY message_at DESC LIMIT ?').all(address, most) as StoredProposal[]).map(rowOf);
+  }
+
   /** The manner this person is always written to in, or '' when none was ever said. */
   tone(address: string): string {
     const row = this.db.query('SELECT tone FROM notch_mail_tones WHERE address = ?').get(address.toLowerCase()) as { tone: string } | null;

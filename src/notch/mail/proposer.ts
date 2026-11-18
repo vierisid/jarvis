@@ -22,6 +22,8 @@ export interface MailCalendarEvent {
   allDay?: boolean;
   /** Other people are in it: a meeting or a call, not a note of the owner's own. Absent when that is not known. */
   withOthers?: boolean;
+  /** The addresses of those who are in it, the owner's own among them, when the calendar gives them. Absent when it does not. */
+  who?: string[];
 }
 
 export interface MailProposalInput {
