@@ -132,6 +132,8 @@ export interface EffectInvocation {
    * every slice. Only the final confirmed result completes the effect. */
   deferCompletion?: (result: unknown) => boolean;
   providerBinding?: WorkflowEffect['providerBinding'];
+  /** Display only (#957): an email send's account and the message it answers, for its card. Never matched on. */
+  sender?: WorkflowEffect['sender'];
   /**
    * The tool's own gate asked for `confirm` and this is its floor: a pure
    * level shortfall above a floor the principal clears becomes an approval
@@ -425,7 +427,8 @@ export class WorkflowEffectBoundary {
           triggeredBy: resolved.run.triggeredBy, environment: resolved.run.environment,
           piece: input.piece, action: input.action },
         decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now(),
-        ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}) };
+        ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
+        ...(input.sender && Object.keys(input.sender).length ? { sender: input.sender } : {}) };
       saveWorkflowEffect(effect!);
     }
     let record = effect!;

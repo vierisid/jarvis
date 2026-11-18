@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { BriefCapabilities } from '../../../../src/brief/capabilities';
 import { dashboardAttentionSnapshot } from '../navigation/notifications';
-import { documentDecisionCount, isInProgress, listedNoticeCount, needsYouCount, pendingByWorkflow, plainDecisionTitle, relativeTime, siblingNote } from './needs-you';
+import { documentDecisionCount, isInProgress, listedNoticeCount, needsYouCount, pendingByWorkflow, settledNeedsYouCount, plainDecisionTitle, relativeTime, siblingNote } from './needs-you';
 
 const row = (over: Record<string, unknown> = {}) => ({ decisionId: 'x', title: 'Send report', state: 'pending', kind: 'permission', supportedActions: ['approve_permission', 'inspect'], ...over }) as any;
 
@@ -65,4 +65,11 @@ test('notices count exactly what the room lists: unread rows, and pending approv
   expect(listedNoticeCount(dashboardAttentionSnapshot(true, items, decisions(false)))).toBe(3);
   // Disconnected, the list shows nothing, so nothing is counted.
   expect(listedNoticeCount(dashboardAttentionSnapshot(false, items, decisions(true)))).toBe(0);
+});
+
+test('the settled count is the same number, and unknown while any source is unread or failing', () => {
+  const known = { documents: true, others: true, humanInputs: true, notices: true };
+  expect(settledNeedsYouCount(3, known)).toBe(3);
+  expect(settledNeedsYouCount(0, known)).toBe(0);
+  for (const part of Object.keys(known) as (keyof typeof known)[]) expect(settledNeedsYouCount(0, { ...known, [part]: false })).toBeNull();
 });

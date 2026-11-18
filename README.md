@@ -95,6 +95,8 @@ docker exec jarvis jarvis enroll "my-desktop"
 
 This exposes the brain only on the Docker host's loopback interface and persists its data in `jarvis-data`. Connect the desktop app and complete setup as above. For remote devices, configure the public URL and proxy described in the [self-hosting guide](docs/SELF_HOSTING.md).
 
+To build the image yourself, see [Building the image from source](docs/SELF_HOSTING.md#building-the-image-from-source).
+
 Docker does not grant access to the host desktop. Install the desktop app on each computer where Jarvis should use local apps and files.
 
 ### Day-to-day commands

@@ -36,6 +36,14 @@ export interface WorkflowEffect {
    */
   providerBinding?: { connectionId: string; credentialDigest: string; credentialGeneration?: number };
   /**
+   * #957: display only, for an email send's card. The account the step sends
+   * from (an address or the connection's name) and, for a reply or forward,
+   * the message it answers. Taken once when the effect is recorded; outside
+   * the request digest and the target, so it never changes what an approval
+   * was granted for, and never matched on.
+   */
+  sender?: { account?: string; replyTo?: string; forwards?: string };
+  /**
    * #1039: the step is waiting for a place in its flow's card budget, since
    * `since`. Kept when it waits again, so it keeps its place in the queue.
    */

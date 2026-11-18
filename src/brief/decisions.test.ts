@@ -557,6 +557,17 @@ test('a governed email card shows who it goes to, the subject, a body excerpt an
   expect(JSON.stringify(queue.get(`approval:${a.id}`).review)).not.toContain('never serialize me');
 });
 
+test('an email card leads with the account it sends from and the message it answers (#957)', () => {
+  const a = manager.createRequest({ agentId: 'workflow:fixture', agentName: 'Fixture', toolName: 'piece:gmail/reply_to_email', toolArguments: { message_id: '18c0ffee', body: 'Thanks' },
+    actionCategory: 'send_email', urgency: 'normal', reason: 'send_email is governed', context: '', executionMode: 'workflow' });
+  const e = effect('pending', a.id);
+  saveWorkflowEffect({ ...e.record, toolName: 'piece:gmail/reply_to_email', actionCategory: 'send_email', route: 'piece', arguments: { message_id: '18c0ffee', body: 'Thanks' },
+    sender: { account: 'owner@example.test', replyTo: '"Q3 \u202einvoice" (message 18c0ffee)' } });
+  const action = queue.get(`approval:${a.id}`).review?.action;
+  expect(action?.fields.slice(0, 2)).toEqual([{ label: 'Sending account', value: 'owner@example.test' },
+    { label: 'Replying to', value: '"Q3 invoice" (message 18c0ffee)' }]);
+});
+
 test('a governed HTTP card shows the method, URL and body excerpt with credentials redacted by the shared HTTP rules (G-1)', () => {
   // Frozen as an older record might hold it: the card applies redactHttpInput again, so a rule added since covers it too.
   const a = governedApproval('piece:http/send_request', 'send_message', { method: 'POST', url: 'http://user:pw@203.0.113.10/hook?token=abc123',

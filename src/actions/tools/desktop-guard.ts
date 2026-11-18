@@ -8,10 +8,11 @@
  * sidecar. On the observer side Jarvis ignores what arrives: awareness and the
  * generic sidecar event pipeline drop the screen and clipboard events a
  * sidecar sends (sidecar-event-routing.ts), the pebble takes no screenshot or
- * window list of its own, and a skill recording stops. It does NOT stop a
- * sidecar's own screen and clipboard observers: the sidecar still captures,
- * OCRs and reads, and sends those events, which the daemon then drops unread
- * (stopping them at the source needs a sidecar change). The browser tools are
+ * window list of its own, and a skill recording stops. The daemon also tells
+ * each sidecar to pause its own screen and clipboard observers
+ * (observers.set_paused, pebble-blind.ts and sidecar/observers_pause.go), so a
+ * current sidecar captures, OCRs and reads nothing; an older one ignores the
+ * pause and its events are dropped unread as above. The browser tools are
  * unaffected. A screenshot the user attaches themselves from the dashboard is
  * the user's own act and is not covered. The default is `true`, so an install
  * that never set it behaves as before.

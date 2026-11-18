@@ -553,8 +553,9 @@ The Settings switch applies at once and works on hosted installs too; a
 It does not cover `run_command`. A shell command can capture the screen or send
 input on its own, and a list of such commands would never be complete, so the
 terminal keeps its own approvals and `--no-local-tools` instead. The desktop
-app itself keeps running its screen and clipboard observers while the switch is
-off; the brain drops what they send, until a desktop app update can pause them.
+app (0.13.0 and later) also pauses its own screen and clipboard observers while
+the switch is off, so it takes no screenshots and reads no clipboard. An older
+desktop app keeps running them, and the brain drops what it sends.
 
 Workflows follow the switch too: while it is off, a workflow step that uses
 `get_clipboard` or `set_clipboard` (or any desktop tool) is refused, and a
@@ -1031,6 +1032,43 @@ After `bind`, set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` to refuse plaintext
 rows. The daemon refuses to start with it set while any readable plaintext row
 remains; unsetting it undoes that and changes no data.
 
+## Building the image from source
+
+Most people want the published image (`ghcr.io/vierisid/jarvis`, see the
+README). To build one from a checkout instead:
+
+```sh
+docker build --build-arg VERSION=0.0.0-dev -t jarvis:local .
+```
+
+`VERSION` is required and has no default. It is stamped into the image's
+`package.json`, which is the version the running brain reports. Release builds
+pass the tag's version; for a local image any semver will do, such as
+`0.0.0-dev`. Without it the build stops with
+`VERSION build-arg is required and was empty`. There is deliberately no
+default: a release build that lost the flag would otherwise publish an image
+whose version does not match its tag.
+
+**`apt-get update` fails with `Temporary failure resolving 'deb.debian.org'`.**
+The build container cannot reach a DNS server (apt retries for a few minutes
+before it gives up). This is a host setup issue, and
+it is common on desktop Linux (Ubuntu, Fedora, Arch) where `/etc/resolv.conf`
+points at the systemd-resolved stub (`nameserver 127.0.0.53`), which is not
+reachable from Docker's default bridge network. Either build on the host's
+network:
+
+```sh
+docker build --network=host --build-arg VERSION=0.0.0-dev -t jarvis:local .
+```
+
+or give Docker a resolver it can reach in `/etc/docker/daemon.json` (your
+router or any DNS server you trust), then restart Docker. This applies to every
+container, not only builds:
+
+```json
+{ "dns": ["192.168.1.1"] }
+```
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |
@@ -1078,4 +1116,4 @@ Jarvis never quietly replaces its database.
 `jarvis start` checks two things before it boots anything, and says plainly which one failed.
 
 - **The port is busy.** The check takes a moment, before the database or any service starts. The message names the port, says another program (possibly a Jarvis with a different data folder) is listening on it, gives the command that shows which one (`lsof -nP -iTCP:<port> -sTCP:LISTEN`, or `netstat -ano | findstr :<port>` on Windows), and suggests a free port: `jarvis start --port <N>`, `JARVIS_PORT`, or `daemon.port`. Do not reach for `jarvis stop` here: with no Jarvis running for this data folder it clears the port by stopping whatever program listens on it. A port taken after that check gets the same message rather than a raw bind error.
-- **The data folder cannot be written.** A read-only folder, a full disk or the wrong owner stops the start with "Jarvis cannot write to its data folder" and the cause. "JARVIS is already running" means only that another daemon holds the lock for this data folder; stop it with `jarvis stop`. `jarvis start -d` and `jarvis logs` use the same wording.
+- **The data folder cannot be written.** A read-only folder, a full disk or the wrong owner stops the start with "Jarvis cannot write to its data folder" and the cause. "JARVIS is already running" means only that another daemon holds the lock for this data folder, and the message names the folder; stop it with `jarvis stop`. In a container the message says another Jarvis, most likely another container on the same volume, is using the folder: `jarvis stop` cannot reach that one, so stop that container (`docker stop <name>`) or give this one its own volume. `jarvis start -d` and `jarvis logs` use the same wording.

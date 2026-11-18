@@ -16,7 +16,7 @@ import type { DecisionAction, DecisionQuery, DecisionResolution, QueuedDecision 
 import { ensureDecisionSchema } from './decision-schema';
 import { HELD_RUN_EFFECT } from '../workflows/runtime/deferred-cards';
 import { WORKFLOW_REVIEWED_UI_TOOLS } from '../authority/ui-intent';
-import { governedActionReview } from '../authority/governed-review';
+import { governedActionReview, withEmailSender } from '../authority/governed-review';
 import { digest } from '../workflows/runtime/effect-context';
 import { approvalHeldByAwareness, AWARENESS_HELD_APPROVAL_MESSAGE } from '../authority/approval-provenance';
 
@@ -285,7 +285,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           .map(row => getWorkflowEffect(row.id))
           .find(effect => effect?.toolName === item.review!.toolName && effect.approvalId === item.approval?.approvalId
             && digest(effect.arguments) === digest(boundArguments)) : undefined;
-        if (piece && pieceEffect) item.review.action = governedActionReview(piece[1]!, pieceEffect.arguments) ?? undefined;
+        if (piece && pieceEffect) item.review.action = withEmailSender(governedActionReview(piece[1]!, pieceEffect.arguments), pieceEffect.sender) ?? undefined;
         // Project only reviewed notification fields from its immutable effect, never generic tool arguments.
         // `title` is the effect's toolName, so only notification rows load their full record.
         const frozen = linked.rows.filter(row => row.title === 'workflow_notify').map(row => getWorkflowEffect(row.id)).find(effect => effect?.route === 'notify' && effect.toolName === 'workflow_notify');

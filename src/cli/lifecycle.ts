@@ -438,6 +438,29 @@ export function describeLeftAlone(port: number, listeners: PortListener[], platf
 }
 
 /**
+ * What to tell the user when start is refused because another JARVIS holds
+ * the data folder's lock: a headline, then the advice. `jarvis stop` only
+ * reaches a daemon in this pid namespace, so inside a container (where the
+ * holder is most likely another container on the same volume, and this one is
+ * about to exit) the advice is to stop that container or give this one its own
+ * volume. The holder's PID is left out there too: it belongs to another
+ * container and means nothing here.
+ */
+export function describeAlreadyRunning(opts: { folder: string; inDocker: boolean; pid?: number | null }): string[] {
+  if (opts.inDocker) {
+    return [
+      `Another JARVIS is already using the data folder ${opts.folder}, most likely another container on the same volume.`,
+      'Stop that container (docker stop <name>), or give this one its own volume.',
+    ];
+  }
+  const pid = opts.pid ? ` (PID ${opts.pid})` : '';
+  return [
+    `JARVIS is already running${pid} on the data folder ${opts.folder}`,
+    'Stop it first with: jarvis stop',
+  ];
+}
+
+/**
  * Clear `port` of a lingering Jarvis daemon for this data folder: SIGTERM, then
  * SIGKILL if it has not gone within two seconds.
  *

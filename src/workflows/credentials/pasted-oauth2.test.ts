@@ -17,6 +17,8 @@ import {
   REFRESH_AHEAD_MS,
   stampOAuth2Claim,
   type TokenTransport,
+  UNREACHABLE_BACKOFF_MAX_MS,
+  UNREACHABLE_BACKOFF_MS,
 } from "./pasted-oauth2";
 
 const NOW = Date.UTC(2026, 9, 21, 12, 0, 0);
@@ -171,9 +173,12 @@ describe("#954 pasted OAuth2 refresh", () => {
     clock = NOW + 9 * 60_000;
     expect(await refresher.fresh(conn)).toEqual(conn.value);
     expect(calls).toHaveLength(1);
-    // Expired now: nothing to hand out, so every fetch tries again.
+    // Expired now: nothing to hand out, so the first fetch tries again at once; the next waits out the backoff.
     clock = NOW + 11 * 60_000;
     await refresher.fresh(conn).catch(() => undefined);
+    await refresher.fresh(conn).catch(() => undefined);
+    expect(calls).toHaveLength(2);
+    clock += UNREACHABLE_BACKOFF_MS;
     await refresher.fresh(conn).catch(() => undefined);
     expect(calls).toHaveLength(3);
   });
@@ -191,13 +196,47 @@ describe("#954 pasted OAuth2 refresh", () => {
     expect(calls).toHaveLength(2);
   });
 
-  test("an unreachable endpoint is not remembered for an expired token: the next fetch tries again", async () => {
+  test("an unreachable endpoint for an expired token is tried again behind a doubling backoff, failing at once meanwhile", async () => {
     const conn = pasted(-5);
+    let clock = NOW;
     const { calls, transport } = recordingTransport(() => ({ status: 503, body: null }));
-    const refresher = new PastedOAuth2Refresher(transport, { now: () => NOW });
-    await refresher.fresh(conn).catch(() => undefined);
-    await refresher.fresh(conn).catch(() => undefined);
+    const refresher = new PastedOAuth2Refresher(transport, { now: () => clock });
+    const codeOf = async () => ((await refresher.fresh(conn).catch((e: unknown) => e)) as ConnectionCredentialError).code;
+    expect(await codeOf()).toBe("CONNECTION_REFRESH_UNREACHABLE");
+    // Within the backoff: the remembered reason, with no request.
+    expect(await codeOf()).toBe("CONNECTION_REFRESH_UNREACHABLE");
+    expect(calls).toHaveLength(1);
+    clock += UNREACHABLE_BACKOFF_MS;
+    await codeOf();
     expect(calls).toHaveLength(2);
+    // The second failure in a row doubles the wait.
+    clock += UNREACHABLE_BACKOFF_MS;
+    await codeOf();
+    expect(calls).toHaveLength(2);
+    clock += UNREACHABLE_BACKOFF_MS;
+    await codeOf();
+    expect(calls).toHaveLength(3);
+    // Never longer than the cap.
+    for (let i = 0; i < 8; i++) { clock += UNREACHABLE_BACKOFF_MAX_MS; await codeOf(); }
+    expect(calls).toHaveLength(11);
+  });
+
+  test("a backoff ends when the endpoint answers, and does not hold a value a person saved since", async () => {
+    const conn = pasted(-5);
+    let clock = NOW;
+    let up = false;
+    const { calls, transport } = recordingTransport(() => up ? { status: 200, body: { access_token: "ya29.back", expires_in: 3599 } } : { status: 503, body: null });
+    const refresher = new PastedOAuth2Refresher(transport, { now: () => clock });
+    await refresher.fresh(conn).catch(() => undefined);
+    expect(calls).toHaveLength(1);
+    // A new paste is another value: tried at once.
+    const pastedAgain = updateConnectionById(DEFAULT_IDS.project, conn.id, { value: { ...conn.value, refresh_token: "1//new" } })!;
+    await refresher.fresh({ ...conn, value: pastedAgain.value, generation: pastedAgain.credentialGeneration }).catch(() => undefined);
+    expect(calls).toHaveLength(2);
+    up = true;
+    clock += UNREACHABLE_BACKOFF_MS;
+    expect(await refresher.fresh({ ...conn, value: pastedAgain.value, generation: pastedAgain.credentialGeneration })).toMatchObject({ access_token: "ya29.back" });
+    expect(calls).toHaveLength(3);
   });
 
   test("a lifetime of zero or less is treated as absent, so the next fetch does not refresh again", async () => {
