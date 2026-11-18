@@ -346,6 +346,12 @@ export interface NotchStandingDeps {
   /** How long a chase waits between two steps. Given by a test brain; otherwise it is worked out from the day it is to be done by. */
   waitMs?: number;
   paused?: () => boolean;
+  /**
+   * Whether the machine has no connection now. A follow-up that is due then
+   * is held, not tried and called failed: it goes out when the connection is
+   * back (`released`).
+   */
+  offline?: () => boolean;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -362,6 +368,12 @@ export interface NotchStanding {
   tick(): Promise<void>;
   /** How many eyes are kept, and how many chases are under way. */
   counts(): { eyes: number; chases: number };
+  /**
+   * The connection is back: the follow-ups that were held while it was gone
+   * go out now. Comes back with how many went: the prototype's "2 things I
+   * was holding went out".
+   */
+  released(): Promise<number>;
   /**
    * What was started since a moment, for the list of what was done (./today.ts):
    * each eye that is still kept, each chase. An eye, and a chase that is
@@ -642,6 +654,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
   });
 
   let ticking = false;
+  /** Chases whose follow-up came due while there was no connection. */
+  const heldOffline = new Set<string>();
   async function tick(): Promise<void> {
     if (stopped || ticking || deps.paused?.()) return;
     ticking = true;
@@ -649,6 +663,12 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       store.forgetOld(now() - NOTCH_CHASE_KEPT_MS);
       const due = store.chases().filter((chase) => chase.state === 'on' && now() >= chase.nextAt);
       if (due.length === 0) return;
+      // No connection: what is due is held. Tried now, it would only be written down as failed, and the
+      // chase would ask what to do about a mail that could not have gone.
+      if (deps.offline?.()) {
+        for (const chase of due) heldOffline.add(chase.id);
+        return;
+      }
       // The outcome is checked before every step: nothing is sent to someone who has just answered.
       try { await deps.mail.look(); } catch { /* without a look the step waits for the next one */ return; }
       for (const was of due) {
@@ -745,6 +765,16 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     open: (stage, which) => (which === 'eyes' ? openEyes(stage) : openChases(stage)),
     tick,
     counts: () => ({ eyes: store.eyes().length, chases: store.chases().filter(live).length }),
+    async released() {
+      const waited = [...heldOffline];
+      heldOffline.clear();
+      if (waited.length === 0) return 0;
+      const before = new Map(waited.map((id) => [id, store.chase(id)?.nudges ?? 0]));
+      await tick();
+      const went = waited.filter((id) => (store.chase(id)?.nudges ?? 0) > (before.get(id) ?? 0)).length;
+      log(`[notch] ${went} of ${waited.length} follow-up(s) held without a connection went out`);
+      return went;
+    },
     done(since) {
       const stands: Record<NotchChaseState, string> = { on: 'on it', stuck: 'stuck', done: 'done', dropped: 'stopped' };
       return [

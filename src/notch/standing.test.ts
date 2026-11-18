@@ -25,6 +25,8 @@ const thread = (from: string, at: number, said = 'Yes, Thursday works for me.'):
 });
 
 function harness(options: {
+  /** Whether the machine has no connection now. */
+  offline?: () => boolean;
   people?: Record<string, StandingPerson | null>;
   find?: 'unreachable';
   send?: ({ ok: true } | { ok: false; why: string })[];
@@ -71,7 +73,7 @@ function harness(options: {
   const logs: string[] = [];
   let fired = 0;
   const standing = attachNotchStanding({
-    inbox, db: options.db ?? new Database(':memory:'), mail, paused: options.paused, now: () => now, waitMs: options.waitMs,
+    inbox, db: options.db ?? new Database(':memory:'), mail, paused: options.paused, offline: options.offline, now: () => now, waitMs: options.waitMs,
     eye: (on) => { if (eyes.at(-1) !== on) eyes.push(on); },
     fired: () => { fired++; },
     log: (line) => logs.push(line),
@@ -657,6 +659,68 @@ describe('what was started, in the list of what was done, with Undo', () => {
     expect(h.standing.done(start)).toMatchObject([{ small: 'done', undo: false }]);
     expect(h.standing.undo(row!.id)).toBeNull();
     for (const id of ['job:1', 'agent:f1', 'eye:nothing', 'chase:nothing', '']) expect(h.standing.undo(id)).toBeNull();
+  });
+});
+
+// The prototype: "I keep working here and hold what has to go out." / "Back online. 2 things I was holding went out."
+describe('a follow-up that comes due with no connection', () => {
+  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.pass(9000); };
+
+  test('is held, not tried and called failed, and goes out when the connection is back', async () => {
+    let offline = false;
+    const h = harness({ waitMs: 60_000, offline: () => offline });
+    await chase(h);
+    expect(h.sent).toHaveLength(1);
+    offline = true;
+    h.advance(61_000);
+    await h.standing.tick();
+    await settle();
+    // Nothing was sent, the mailbox was not even asked, and the chase does not ask what to do about it.
+    expect(h.sent).toHaveLength(1);
+    expect(h.looks()).toBe(0);
+    expect(h.line()).toBeNull();
+    expect(h.standing.counts().chases).toBe(1);
+    // Still no connection at the next tick: still held, once.
+    await h.standing.tick();
+    expect(h.sent).toHaveLength(1);
+    offline = false;
+    expect(await h.standing.released()).toBe(1);
+    expect(h.sent).toHaveLength(2);
+    // What was held has gone: asked again, nothing is counted twice.
+    expect(await h.standing.released()).toBe(0);
+    expect(h.sent).toHaveLength(2);
+  });
+
+  test('with nothing held, nothing is counted, and nothing is sent early', async () => {
+    const h = harness({ waitMs: 60_000, offline: () => false });
+    await chase(h);
+    expect(await h.standing.released()).toBe(0);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  test('one that was answered while there was no connection is not followed up when it is back', async () => {
+    let offline = false;
+    const h = harness({ waitMs: 60_000, offline: () => offline });
+    await chase(h);
+    offline = true;
+    h.advance(61_000);
+    await h.standing.tick();
+    // Sam's answer is in the mailbox when it can be read again.
+    h.arriving(thread(SAM.address, h.now()));
+    offline = false;
+    expect(await h.standing.released()).toBe(0);
+    expect(h.sent).toHaveLength(1);
+  });
+
+  test('one that cannot be sent when the connection is back is not counted as gone out', async () => {
+    let offline = false;
+    const h = harness({ waitMs: 60_000, offline: () => offline, send: [{ ok: true }, { ok: false, why: 'Gmail did not take it' }] });
+    await chase(h);
+    offline = true;
+    h.advance(61_000);
+    await h.standing.tick();
+    offline = false;
+    expect(await h.standing.released()).toBe(0);
   });
 });
 

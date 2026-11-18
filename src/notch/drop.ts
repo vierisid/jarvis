@@ -122,6 +122,8 @@ export const NOTCH_DROP_HOLD_MS = 5 * 60_000;
 export const NOTCH_DROP_MOST = 3;
 /** How long "Got it" is up before the question about it. */
 export const NOTCH_DROP_GOT_MS = 900;
+/** The most the words "Drop it on me" stay, when a file is held over the notch and neither dropped nor taken away. */
+export const NOTCH_DROP_TAG_MS = 30_000;
 
 /** A file that was dropped and waits for its question. */
 export interface DropHeld {
@@ -270,7 +272,30 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
   let mouth = false;
   let stopped = false;
 
+  /** Takes the words away again, while they are up. */
+  let endTag: (() => void) | null = null;
+  /**
+   * The prototype's words for a file that is being brought: "Drop it on me".
+   * There they are a tag under the notch, for as long as a file is dragged
+   * anywhere. Here the notch hears of a file only once it is over it, and its
+   * window is cut to its own shape, so the words are inside it, over the open
+   * mouth, and only when nothing else has the notch.
+   */
+  const sayDrop = (): void => {
+    if (endTag) return;
+    let gone!: () => void;
+    const left = new Promise<void>((resolve) => { gone = resolve; });
+    const up = inbox.present('drop-tag', async (stage) => {
+      const id = stage.id();
+      try {
+        stage.put({ id, kind: 'say', say: ['Drop it on me'], ms: NOTCH_DROP_TAG_MS, mood: 'look' });
+        await Promise.race([stage.answer(id, ['done', 'yes']), stage.wait(NOTCH_DROP_TAG_MS), left]);
+      } catch { /* the file was dropped: its own card has the notch now */ } finally { endTag = null; }
+    });
+    if (up) endTag = gone;
+  };
   const shut = (how: 'shut' | 'gulp'): void => {
+    endTag?.();
     if (!mouth && how === 'shut') return;
     mouth = false;
     surface.act({ mouth: how });
@@ -349,6 +374,7 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       mouth = true;
       surface.act({ mouth: 'open' });
       surface.act({ mouth: 'over' });
+      sayDrop();
       return;
     }
     shut('shut');

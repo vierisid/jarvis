@@ -18,7 +18,8 @@
  *     the count. Not now is never no.
  *   - Yes at rest starts a round: what waits is gone through one by one, a
  *     person first, then what runs on a clock, then the rest, each once. A
- *     round ends on the list of what still waits.
+ *     round ends on the list of what still waits, or, when nothing does, on
+ *     "That is everything." 
  *   - Before an item is shown it is asked whether it is still true. One that
  *     is not leaves the count without a word.
  *   - Something the person started and is waiting on (an instruction that is
@@ -97,6 +98,12 @@ export interface NotchInboxOptions {
    * changed. Without this, anything may speak whenever the notch is free.
    */
   maySpeak?: () => boolean;
+  /**
+   * Whether something still waits for the person outside the count: replies
+   * that were seen and now wait in Home. Then a round does not end on "That
+   * is everything.": it would not be true.
+   */
+  elsewhere?: () => boolean;
   now?: () => number;
 }
 
@@ -111,6 +118,8 @@ interface Entry {
 interface Round {
   /** Ids already shown in this round: each item once. */
   seen: Set<string>;
+  /** How many of them were really on the notch: one that was found gone when its turn came was not. */
+  shown?: number;
 }
 
 interface Playing {
@@ -120,6 +129,8 @@ interface Playing {
   round: Round | null;
   /** What the script asked to have played when it has ended. */
   then?: Entry;
+  /** The last word of a round ("That is everything."): a tap on it is a tap on the resting notch. */
+  last?: boolean;
   /**
    * The others that had waited to speak when this one was chosen to. They
    * give up their turn only when this one has really spoken: if it turns out
@@ -127,6 +138,9 @@ interface Playing {
    */
   others?: Entry[];
 }
+
+/** How long "That is everything." stays, at the end of a round that left nothing waiting. */
+export const NOTCH_ROUND_OVER_MS = 2400;
 
 /** How long something that waits for the notch to be free is still wanted. */
 export const NOTCH_AFTER_MS = 15_000;
@@ -471,7 +485,21 @@ export class NotchInbox {
     }
     // What comes next takes the line's place directly. Going back to the eyes
     // in between would make the notch shrink and grow again for nothing.
-    if (playing.round && this.next(playing.round)) return;
+    if (playing.round) {
+      // What was really on the notch in this round: one that was found gone when its turn came was not.
+      if (entry && end !== 'gone' && end !== 'cut') playing.round.shown = (playing.round.shown ?? 0) + 1;
+      if (this.next(playing.round)) return;
+      // The round went through what waited and nothing is left: the prototype's last word, "That is
+      // everything." Not after a round that showed nothing or was cut short, and not when something else
+      // is owed the notch.
+      if (end !== 'cut' && entry && (playing.round.shown ?? 0) > 0 && this.entries.length === 0 && this.holds.size === 0 && !(then && this.entries.includes(then)) && !this.waitsElsewhere()) {
+        this.run({ entry: null, stage: this.stage('round-over', false), round: null, last: true }, async (stage) => {
+          await stage.say(['That is everything.'], NOTCH_ROUND_OVER_MS, { mood: 'happy' });
+          return 'waits';
+        });
+        return;
+      }
+    }
     if (then && this.entries.includes(then) && !this.heldBack(then.item)) {
       this.start(then, { unasked: false }, null);
       return;
@@ -484,6 +512,11 @@ export class NotchInbox {
     // fuse) speaks now.
     if (this.entries.some((waiting) => waiting.missed)) { this.cameUp(); return; }
     this.pushCount();
+  }
+
+  /** Whether something still waits outside the count. Not known is taken as yes: nothing is called everything on a guess. */
+  private waitsElsewhere(): boolean {
+    try { return this.options.elsewhere?.() ?? false; } catch { return true; }
   }
 
   /** Takes what is playing off the notch, now. Returns what it was. */
@@ -510,6 +543,8 @@ export class NotchInbox {
 
   private opened(): void {
     if (this.options.busy?.()) return;
+    // A tap while the round's last word is still up is a tap on the resting notch: it does not have to be waited out.
+    if (this.playing?.last) this.halt();
     if (this.playing) { this.playing.stage.wasOpened(); return; }
     if (this.surface.current().line) return;
     if (this.opener?.()) return;

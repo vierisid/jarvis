@@ -227,6 +227,24 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
     surface.setWhere(app);
   }
 
+  /** "I am back" has been said: once is enough, after that the eyes say it. */
+  let saidBack = false;
+  /**
+   * The prototype, after a bank: "I am back. I saw nothing in there." Said
+   * the first time it looks again after a bank, with a blink. Not after a
+   * password: one is typed many times a day, and the prototype does not say
+   * it there either. It is true by construction: while it looks away the
+   * desktop app hands over no title, no site and no picture.
+   */
+  function back(before: NotchLook): void {
+    if (before !== 'bank' || saidBack || deps.asleep() || !watchingOn()) return;
+    if (inbox.present('look-back', async (stage) => {
+      stage.surface.act({ gesture: 'blink' });
+      await stage.wait(550);
+      await stage.say(['I am back. I saw nothing in there.'], 2600);
+    })) saidBack = true;
+  }
+
   /** The first time it looks away for a reason, it says why. After that the eyes say it. */
   function explain(look: NotchLook): void {
     if (look !== 'password' && look !== 'bank') return;
@@ -265,6 +283,8 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
       // What changed, never what is on the screen.
       log(`[notch] that machine is ${told.look ? `looking away (${told.look})` : 'watching again'}`);
       explain(told.look);
+      // Looking again, after having looked away by itself.
+      if (!told.look) back(before as NotchLook);
     }
   });
   port.onSidecarDisconnected?.((sidecarId) => {

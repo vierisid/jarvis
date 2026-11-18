@@ -2964,6 +2964,50 @@ What is not done, or not proven:
   dashboard. If the reason still holds tomorrow, it fails again.
 - **Not seen on a real evening.**
 
+## Four small things from the prototype
+
+The last of what the prototype has and the product did not, asked for by
+the owner on 18 November 2026. Each is one line.
+
+251. **"Drop it on me."** While a file is held over the notch and nothing
+    else has it, the notch says so, over the open mouth
+    (`src/notch/drop.ts`). The words go when the file is dropped or taken
+    away. In the prototype they are a tag under the notch for as long as a
+    file is dragged anywhere. Here the notch hears of a file only once it
+    is over it, and its window is cut to its own shape, so the words are
+    inside it and come then.
+252. **"I am back. I saw nothing in there."** The first time it looks
+    again after a bank, with a blink (`src/notch/where.ts`). Once since
+    the brain started: after that the eyes say it. Not after a password,
+    which is typed many times a day. It is true by construction: while it
+    looks away the desktop app hands over no title, no site and no
+    picture.
+253. **"Back online. 2 things I was holding went out."** A follow-up of a
+    chase that comes due with no connection is held (`standing.ts`,
+    `offline`): it is not tried, written down as failed, and asked about.
+    When the connection is back the held ones go out, and the line says
+    how many really went. One whose answer has come in the meantime is
+    not sent, and one that could not be sent is not counted. The return
+    is said within `NOTCH_ONLINE_WAIT_MS` whether or not they have gone,
+    and once.
+254. **"That is everything."** A round that went through what waited and
+    left nothing ends on it (`src/notch/inbox.ts`). Not after a round in
+    which nothing was really shown (what waited was gone when its turn
+    came), not when something still waits in the count (then the round
+    ends on the list, as before), and not while replies that were seen
+    still wait in Home: it would not be true. A tap while it is up is a
+    tap on the resting notch.
+
+What is not done, or not proven:
+
+- **No tag while a file is dragged elsewhere on the screen.** The product
+  does not know of a file until it is over the notch.
+- **Only follow-ups are held.** A reply sent from a draft with no
+  connection still says it could not be put in the thread, and is kept. A
+  promise that comes due with no connection is run and fails.
+- **None of the four was seen on a real machine.** The first was looked at
+  in a browser.
+
 ## The keys
 
 | What | Keys | How it is told |

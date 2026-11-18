@@ -442,9 +442,9 @@ describe('the count and the round', () => {
     await h.answer('no');
     await h.answer('no');
     await h.answer('no');
-    // One key each, with no line in between and no list at the end: nothing is left to list.
-    expect(h.pushed().slice(before).filter((m) => m.type === 'show').map((m) => (m.type === 'show' ? m.line.kind : ''))).toEqual(['offer', 'offer']);
-    expect(h.line()).toBeNull();
+    // One key each, with no line in between and no list at the end: nothing is left to list, and the round says so.
+    expect(h.pushed().slice(before).filter((m) => m.type === 'show').map((m) => (m.type === 'show' ? m.line.kind : ''))).toEqual(['offer', 'offer', 'say']);
+    expect(h.said()).toBe('That is everything.');
     expect(h.count()).toBe(0);
     for (const req of [first, second, payment]) expect(h.approvals.getRequest(req.id)!.status).toBe('denied');
     expect(h.runs).toEqual([]);
