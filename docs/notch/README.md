@@ -2106,6 +2106,132 @@ What is not done, or not proven, in pass 12:
 - **The Mac side of the key change is the same shared code**, and has not
   run there.
 
+## Hardening
+
+Pass 13 was an audit of everything above, by six readers and two rigs, and
+the fixes that came of it. The walk's part is under invariant 95. The rest
+is here, as what now holds. Each has a test that fails without it, unless
+it says otherwise.
+
+148. **What the notch opens by saying so, opens.** "Memory", "settings",
+    "what can you do", "my agents": the words arrive inside the line that
+    carries them, and that line has the notch. What they set off runs when
+    that line has left (`NotchInbox.after`, kept `NOTCH_AFTER_MS`), not
+    under it, where it was refused and the ledger said done.
+149. **An approval an instruction waits on can always be reached.** Raised,
+    it takes the notch and has it back after anything urgent took it for a
+    moment (`returns` in `src/notch/approvals.ts`). When the work line
+    comes back alone and still says it waits for a yes, the approval is
+    brought up again: not more than every fifteen seconds, three times at
+    most (`raiseAgain` in `src/notch/asks.ts`).
+150. **An instruction that ended without a word leaves nothing to be
+    seen.** A walk ended by the next question, a thing the notch did
+    itself: marked seen where it ends. A memory whose question was cut off
+    by something urgent says so when the notch is free.
+151. **On a call nothing is taken, what is said to the notch included.** It
+    is turned away at the first key with a shake, and the ledger says why.
+    It never runs when the call is over.
+152. **An answer is not said to an empty chair.** A line that came and went
+    while the hands had been off the machine for two minutes
+    (`NOTCH_ANSWER_UNSEEN_STILL_MS`) stays in the count and is said once
+    more when the hands are on again (`NotchAsks.handsOn`).
+153. **The morning and the evening line are written down when they are
+    said.** Not when they are queued: a restart in between lost them for
+    the day. Each is for its own day (`src/notch/day.ts`,
+    `NotchPresence.morningSaid`).
+154. **A draft that left the notch is meant only by the keys that took it
+    off.** Words are that reply's steer when they were spoken and the talk
+    keys went down while the draft was up, or within `MAIL_STEER_KEYS_MS`
+    of its going. Typed words, and words said later, are instructions.
+155. **A nudge is sent once.** After Send was pressed in the thread a chase
+    never sends the same words again as a new mail, whatever the thread
+    shows yet (`sendNudge` in `src/notch/mail/attach.ts`).
+156. **A draft that is already in a thread is somebody's.** A reply is not
+    written into it and it is not thrown away
+    (`MAIL_WHY_DRAFT_THERE`). The page's part of this
+    (`src/notch/mail/page/reply.js`) has no test against real Gmail.
+157. **A mailbox's own reply does not end a chase.** A mail that reads like
+    an out-of-office note and came within `NOTCH_AUTO_REPLY_MS` of the
+    nudge is not the person's answer. Both have to hold.
+158. **Where nobody is named and nobody is meant, words are an
+    instruction.** "Get me the answer to question five", "chase up the
+    signature page", "let me know if the supplier responds", "every day I
+    get so many emails": none is a chase, an eye or an agent.
+159. **A job that pays is never taken over, and one that deletes asks.**
+    Also when it was shown as rounds (`src/notch/teach.ts`). A job caught
+    by watching has no names to judge by: see the limits.
+160. **What is put where the person pointed goes to the program that was
+    there.** The request carries it (`in`), and the Windows desktop app
+    puts nothing where another program is by then.
+161. **A press goes where it was meant, or is not made.** What is under the
+    pointer is asked again once the pointer is there, the pointer is asked
+    where it is, and with the mouse buttons swapped the other button
+    presses. A shortcut is pressed by its key, not through the keyboard
+    layout (`sidecar/keys_plain.go`).
+162. **Cells pasted into a sheet are words and numbers.** One that a sheet
+    would work out (it begins with `=`, `+`, `-` or `@`, also behind a
+    blank) is given the apostrophe that makes it words
+    (`sidecar/notch_paste_safe.go`).
+163. **A look asks about every window its line crosses.** Not only the one
+    under the press. The picture is left out where its room would reach
+    into a window that is looked away from. A second window of a browser
+    is judged by its own title, and a Store app by its own name.
+164. **With the switch off, nothing reads the screen or acts on it.** The
+    requests are refused (`notchOnly` in `sidecar/notch.go`), and the
+    switch going off ends the watching of what the hands do.
+165. **Nobody waits on the connection.** What the notch says to the brain
+    goes out from one goroutine, in order (`sidecar/notch_out.go`). The
+    keyboard hook and the notch's window thread only put it in a queue.
+166. **A notch out of sight takes nothing.** Hidden behind a fullscreen
+    video it takes no Esc, no yes and no keyboard
+    (`NotchService.setHidden`).
+167. **A notch that went away comes back.** A window closed without the
+    brain asking is asked for again, three times in ten minutes at most
+    (`NotchReopen.closed`). A page whose sign-in has ended is opened again
+    signed in: it says it is alive every twenty minutes.
+168. **A file is read in one pass, with limits.** A page with a comment
+    that never closes, a slide deck that unpacks to many times its size:
+    neither stops the brain (`src/notch/drop-read.ts`). A file's name is
+    data, and goes to the model inside the outside-text wrapper.
+169. **Files: odd names are never opened, and nothing is downloaded to be
+    read.** A name that walks round the private-name rule on NTFS (a
+    stream, a trailing dot, a short name) is refused, a single blocked
+    file too, and a file OneDrive keeps online only is left where it is.
+170. **The page never promises a key that does not reach it.** The number
+    on a choice is drawn only while the notch has the keyboard. The mouth
+    closes by itself `NOTCH_DRAG_QUIET_MS` after the last sign of a drag.
+    The outline is not told again for a breath: with the eyes closed it is
+    told twice a second, where it was 58 times.
+171. **Day one says "Now I can think" only of an AI that answers.** One
+    small question is put to it first, and the setup is marked done once,
+    when it has answered.
+
+What is not done, or not proven, in pass 13:
+
+- **None of it has run on a real desktop.** The Windows code is built and
+  its tests run on GitHub's Windows machine. The Mac code is compiled
+  there and has never run. The mail page script was not tried against
+  Gmail.
+- **A job caught by watching is not checked for paying.** It is known by
+  where the clicks went, not by what the buttons are called.
+- **A deep window is read nine levels down.** Office ribbons and web pages
+  go deeper. Where the list falls short the walk goes by the picture. A
+  deeper read was not made blind: it has to be measured on a real machine.
+- **A site on the never list is not recognised in a browser window that
+  is not in front.** Only the window in front tells its site.
+- **A browser tab that keeps the microphone reads as a call** for as long
+  as it does, and on a call nothing is taken.
+- **The notch does not follow a change of display.** Its size and place
+  are those of the moment it was made: a new scale, a dock, Remote
+  Desktop leave it where it was until the desktop app starts again.
+- **The fonts come from Google at each start.** They no longer hold the
+  page back, and the system's font is used until they are there.
+- **The picture for "where is" is of a part of the screen**, not of the
+  window: what lies over the window is in it.
+- **The Mac is pass 14.** What the audit found there (the camera housing,
+  permissions that are never asked for, the menu bar) is listed in the
+  audit and not touched.
+
 ## The keys
 
 | What | Keys | How it is told |
