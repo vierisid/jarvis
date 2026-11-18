@@ -203,8 +203,17 @@ export function applyEnvOverrides(config: JarvisConfig): void {
   }
 }
 
+/**
+ * The config.yaml the daemon reads when no --system-config is given. It
+ * follows the home folder only: --data-dir and JARVIS_HOME move the data,
+ * not this file (in Docker, HOME=/data makes it /data/.jarvis/config.yaml).
+ */
+export function defaultConfigPath(): string {
+  return expandTilde('~/.jarvis/config.yaml');
+}
+
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  const path = configPath || defaultConfigPath();
 
   const file = Bun.file(path);
   const exists = await file.exists();
@@ -311,7 +320,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
 export async function readRawConfigFile(
   configPath?: string,
 ): Promise<Record<string, unknown> | null> {
-  const path = configPath || expandTilde('~/.jarvis/config.yaml');
+  const path = configPath || defaultConfigPath();
   const file = Bun.file(path);
   if (!(await file.exists())) return null;
   const doc = YAML.parseDocument(await file.text(), { merge: true });

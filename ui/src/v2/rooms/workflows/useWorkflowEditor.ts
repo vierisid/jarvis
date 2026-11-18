@@ -1386,7 +1386,7 @@ export function useWorkflowEditor(flowId: string | null) {
     async (stepName: string, output: unknown | null): Promise<ActionResult> => {
       if (!flowId || !version) return { ok: false, message: "no version loaded" };
       if (version.state === "LOCKED") {
-        return { ok: false, message: "version is published; create a new draft to edit sample data" };
+        return { ok: false, message: "This version is read-only. Choose Edit workflow to change its sample data." };
       }
       try {
         const res = await fetch(
@@ -1421,7 +1421,7 @@ export function useWorkflowEditor(flowId: string | null) {
     async (stepName: string, input: Record<string, unknown> | null): Promise<ActionResult> => {
       if (!flowId || !version) return { ok: false, message: "no version loaded" };
       if (version.state === "LOCKED") {
-        return { ok: false, message: "version is published; create a new draft to edit sample input" };
+        return { ok: false, message: "This version is read-only. Choose Edit workflow to change its sample input." };
       }
       try {
         const res = await fetch(

@@ -214,7 +214,7 @@ function CanvasHeader({
     : needsSetup ? 'Finish setup first: the steps listed below still need details.'
     : editor.dirty ? 'Save your changes to run this workflow.'
     : !versionMatches ? 'This page now shows a different version. Reopen the workflow from Workflows.'
-    : !binding.run ? (binding.publish ? (blockers.length ? 'This draft cannot be published yet. See what to fix below.' : 'Publish this draft to run it.') : 'This version cannot be run from here.')
+    : !binding.run ? (binding.publish ? (blockers.length ? 'This draft cannot be turned on yet. See what to fix below.' : 'Save and turn on this draft to run it.') : 'This version cannot be run from here.')
     : '';
   async function run() {
     if (busy.current || !binding.run || codeBlocked || editor.dirty || !versionMatches) return;
@@ -302,7 +302,7 @@ function CanvasHeader({
     >
       <WorkflowSummary trigger={editor.draftTrigger} catalog={editor.catalog} />
       <div className="brief-canvas-tools" aria-label="Draft tools">
-        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!, 'Publishing')}>{WORKFLOW_SAVE_ACTION}</BriefButton>}
+        {binding.publish && <BriefButton size="sm" disabled={codeBlocked || needsSetup || changing || saving || editor.dirty || !versionMatches} onClick={() => void change(binding.publish!, 'Turning on')}>{WORKFLOW_SAVE_ACTION}</BriefButton>}
         {binding.edit && <BriefButton size="sm" disabled={changing} onClick={() => void change(binding.edit!, 'Starting a new draft')}>Edit workflow</BriefButton>}
         <BriefButton
           size="sm"
@@ -362,7 +362,7 @@ function CanvasHeader({
       </details>}
       {runBlockedBy && !editor.loading && !editor.error && <p className="brief-canvas-run-reason" id="brief-run-reason">{runBlockedBy}</p>}
       {!editor.dirty && blockers.length > 0 && <details className="brief-canvas-setup" open>
-        <summary>{binding.readOnly ? 'Not ready to run' : 'Not ready to publish'}</summary>
+        <summary>{binding.readOnly ? 'Not ready to run' : 'Not ready to turn on'}</summary>
         <ul>{blockers.map((issue, index) => <li key={index}>
           {typeof issue.node === 'string' && stepTitles.has(issue.node) && <BriefButton size="sm" onClick={() => selectSetupStep(issue.node as string)}>{cardName(stepTitles.get(issue.node))}</BriefButton>}
           <span>{issueLine(issue, nameOf)}</span>

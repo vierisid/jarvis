@@ -23,10 +23,10 @@ import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tryAcquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, getPidPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { clearLaunchRecord, daemonOwnsPort, describeAlreadyRunning, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeAlreadyRunning, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, firstRunHint, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { detectInstallMethod } from '../src/cli/install-method.ts';
-import { loadConfig } from '../src/config/loader.ts';
+import { defaultConfigPath, loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
@@ -104,6 +104,32 @@ ${c.bold('Examples:')}
 `);
 }
 
+/**
+ * Friendly first-run hint - when no config exists yet, the daemon boots in
+ * "setup mode" and the dashboard's onboarding gate handles LLM/TTS/profile/
+ * tutorial. Print a few lines so the user knows where to go (the browser
+ * auto-opens too unless --no-open is set). Called only once this start is
+ * going ahead: a start refused because another instance holds the lock or the
+ * port is taken has nothing to onboard.
+ *
+ * The file checked is the one the daemon reads (defaultConfigPath), which
+ * follows HOME, not --data-dir or JARVIS_HOME.
+ *
+ * Skipped in hosted mode (--system-config set): the authoritative config lives
+ * at a root-owned path the tenant cannot edit, the home config.yaml never
+ * exists on these installs, and every hosted brain's journal would otherwise
+ * carry an onboarding hint pointing at the wrong file.
+ */
+function printFirstRunHint(systemConfigPath: string | undefined, openUrl: string | null): void {
+  if (systemConfigPath) return;
+  const cfgPath = defaultConfigPath();
+  if (existsSync(cfgPath)) return;
+  const [heading, ...rest] = firstRunHint(cfgPath, openUrl);
+  console.log(c.cyan(heading!));
+  for (const line of rest) console.log(c.dim(line));
+  console.log('');
+}
+
 function assertSupportedPlatform(): void {
   if (process.platform !== 'win32') return;
   console.error(c.red('Native Windows installs are not supported for the JARVIS daemon.'));
@@ -173,30 +199,6 @@ async function cmdStart(args: string[]): Promise<void> {
   const dashboardTarget = resolveDashboardTarget({ cliPort: port });
   const dashboard = describeDashboard(dashboardTarget);
 
-  // Friendly first-run hint - when no config exists yet, the daemon
-  // boots in "setup mode" and the dashboard's onboarding gate handles
-  // LLM/TTS/profile/tutorial. Print a one-liner so the user knows where
-  // to go (the browser auto-opens too unless --no-open is set).
-  //
-  // Skipped in hosted mode (--system-config set): the authoritative config
-  // lives at a root-owned path the tenant cannot edit, ~/.jarvis/config.yaml
-  // never exists on these installs, and every hosted brain's journal would
-  // otherwise carry an onboarding hint pointing at the wrong file.
-  const { existsSync: _exists } = await import('node:fs');
-  const { homedir } = await import('node:os');
-  const cfgPath = join(homedir(), '.jarvis', 'config.yaml');
-  if (!systemConfigPath && !_exists(cfgPath)) {
-    console.log(c.cyan('First-run detected. Jarvis is JWT-only by default:'));
-    console.log(c.dim('  1. jarvis enroll "<device-name>"   mint your device token'));
-    console.log(c.dim('  2. paste the token into the sidecar (desktop app) to connect'));
-    console.log(c.dim('  Setting up without a sidecar? Put "auth:\n  insecure_open_access: true"'));
-    console.log(c.dim(dashboard.openUrl
-      ? `  in ~/.jarvis/config.yaml, open ${dashboard.openUrl}, and`
-      : '  in ~/.jarvis/config.yaml, reach the socket in daemon.listen through your proxy, and'));
-    console.log(c.dim('  REMOVE the flag once your device is enrolled.'));
-    console.log('');
-  }
-
   if (!detach) {
     // Run in foreground — acquire lock atomically (checks + locks in one step)
     const lock = tryAcquireLock(process.pid);
@@ -222,6 +224,8 @@ async function cmdStart(args: string[]): Promise<void> {
       writeLaunchRecord({ pid: process.pid, detached: false, noOpen, noLocalTools, port, dataDir, systemConfigPath });
     }
 
+    printFirstRunHint(systemConfigPath, dashboard.openUrl);
+
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath, allowNewDatabase });
 
@@ -245,6 +249,8 @@ async function cmdStart(args: string[]): Promise<void> {
       console.error(c.dim('  Free that port, or start JARVIS on another one: jarvis start -d --port <N>'));
       process.exit(1);
     }
+
+    printFirstRunHint(systemConfigPath, dashboard.openUrl);
 
     // Run in background — spawn a detached child process with log file
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));

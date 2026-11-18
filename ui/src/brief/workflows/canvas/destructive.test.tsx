@@ -51,7 +51,7 @@ test("a refused publish says which step is wrong in plain words", async () => {
   await room({ publish: async () => { throw refusal; }, edit: undefined });
   await React.act(async () => button("Save and turn on").click());
   await settle();
-  expect(feedback()).toContain("Publishing stopped.");
+  expect(feedback()).toContain("Turning on stopped.");
   expect(feedback()).toContain('"Draft the follow-up" uses the result of a step that was deleted or does not run before it (step_1)');
   expect(feedback()).not.toContain("could not be confirmed");
   // An answer with no readable body keeps the old advice to reopen.
@@ -74,11 +74,11 @@ test("a draft that cannot run says why next to the button, and the server's read
     : fixture.request(input, init);
   await room({ request, publish: async () => {} });
   expect(button("Run workflow").disabled).toBe(true);
-  expect(host.querySelector(".brief-canvas-run-reason")?.textContent).toBe("This draft cannot be published yet. See what to fix below.");
+  expect(host.querySelector(".brief-canvas-run-reason")?.textContent).toBe("This draft cannot be turned on yet. See what to fix below.");
   expect(button("Run workflow").getAttribute("aria-describedby")).toBe("brief-run-reason");
-  const list = [...host.querySelectorAll(".brief-canvas-setup")].find(e => e.textContent?.includes("Not ready to publish"))!;
+  const list = [...host.querySelectorAll(".brief-canvas-setup")].find(e => e.textContent?.includes("Not ready to turn on"))!;
   expect(list.textContent).toContain('"Draft the follow-up" uses the result of a step that was deleted');
   // With no known problem the reason is the plain next step.
   await room({ publish: async () => {} });
-  expect(host.querySelector(".brief-canvas-run-reason")?.textContent).toBe("Publish this draft to run it.");
+  expect(host.querySelector(".brief-canvas-run-reason")?.textContent).toBe("Save and turn on this draft to run it.");
 });

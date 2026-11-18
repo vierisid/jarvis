@@ -56,6 +56,7 @@ for (const detach of [false, true]) {
     expect(text).toContain(`Another JARVIS is already using the data folder ${join(root, 'data')}`);
     expect(text).toContain('docker stop <name>');
     expect(text).not.toContain('jarvis stop');
+    expect(text).not.toContain('First-run');
   }, 30_000);
 
   // /.dockerenv makes every run count as Docker, so this one only means something outside a container.
@@ -67,5 +68,6 @@ for (const detach of [false, true]) {
     expect(text).toContain(`on the data folder ${join(root, 'data')}`);
     expect(text).toContain('Stop it first with: jarvis stop');
     expect(text).not.toContain('docker stop');
+    expect(text).not.toContain('First-run');
   }, 30_000);
 }

@@ -1129,3 +1129,22 @@ export function resolveStopPort(options?: {
 
   return { port: DEFAULT_DAEMON_PORT, source: 'default' };
 }
+
+/**
+ * The first-run hint `jarvis start` prints when the daemon's config.yaml does
+ * not exist yet: the heading line, then the detail lines. `configPath` is the
+ * file the daemon reads (defaultConfigPath), named in full so a Docker or
+ * --data-dir install is not sent to a `~` it has to work out.
+ */
+export function firstRunHint(configPath: string, openUrl: string | null): string[] {
+  return [
+    'First-run detected. Jarvis is JWT-only by default:',
+    '  1. jarvis enroll "<device-name>"   mint your device token',
+    '  2. paste the token into the sidecar (desktop app) to connect',
+    '  Setting up without a sidecar? Put "auth:\n  insecure_open_access: true"',
+    openUrl
+      ? `  in ${configPath}, open ${openUrl}, and`
+      : `  in ${configPath}, reach the socket in daemon.listen through your proxy, and`,
+    '  REMOVE the flag once your device is enrolled.',
+  ];
+}
