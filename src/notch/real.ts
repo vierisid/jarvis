@@ -58,6 +58,7 @@ import { attachNotchMoves, type NotchMoves } from './moves.ts';
 import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
+import { attachNotchSaid } from './said.ts';
 import { whereQuestion } from './point.ts';
 
 export interface NotchRealDeps {
@@ -425,6 +426,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
   // Everything it does, on one sheet: day one ends on it, the settings lead to it, "what can you do" opens it.
   const canDo: NotchCanDo = attachNotchCanDo({ inbox });
+  // What is said with a line up is tried as an answer to that line (./said.ts). An instruction's own lines are read by ./asks.ts.
+  const saidLine = attachNotchSaid({ inbox, line: () => surface.current().line, skip: (item) => item.startsWith('ask:'), log });
   const openPage = office?.openPage;
   const prefs: NotchPrefs | null = settings ? attachNotchPrefs({
     inbox, settings, log,
@@ -464,7 +467,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
       side: (text, how) => dayOne?.route(text) ?? mail?.mail.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
-        ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
+        ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text)
+        // After everything that has words of its own: what was said over a line that is up answers that line.
+        ?? saidLine.route(text, how) ?? null,
+      keys: () => saidLine.keys(),
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.

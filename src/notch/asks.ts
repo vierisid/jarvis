@@ -134,6 +134,12 @@ export interface NotchAsksDeps {
    * ledger says was done; `run` does it, and shows what it shows by itself.
    */
   side?: (text: string, how?: NotchAskHow) => { did: string; run(): void } | null;
+  /**
+   * The talk keys went down, and what is on the notch is about to make way
+   * for the listening: told before it does, so that what is said can be
+   * about the line that was up (./said.ts).
+   */
+  keys?: () => void;
   /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
   learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /**
@@ -1232,6 +1238,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         deps.attention?.();
         return refused;
       }
+      // Before the listening takes the notch: the line it takes it from may be what is talked about.
+      try { deps.keys?.(); } catch { /* what is said is then an instruction like any other */ }
       replaceEarlier('A new recording took its place.');
       const id = crypto.randomUUID();
       ledger.open(id, 'spoken');

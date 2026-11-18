@@ -17,6 +17,7 @@ import type { RawInteraction } from '../skills/recorder.ts';
 import { NOTCH_WATCH_EVENT } from './catch.ts';
 import { NOTCH_PLAIN_LINE_COLUMNS, notchApprovalSentence, notchApprovalWay } from './approvals.ts';
 import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
+import { NotchLedger } from './ledger.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { attachNotchReal, type NotchReal } from './real.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -577,8 +578,8 @@ describe('a call that is listened to, put together', () => {
   });
 });
 
-describe('noticing, put together', () => {
-  function assembled(think: () => string) {
+/** The notch assembled with its noticing, an instruction door that keeps what was submitted, and a clock of its own. */
+function assembledNotch(think: () => string) {
     const pushed: NotchToPage[] = [];
     let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const port: NotchSurfacePort = {
@@ -591,6 +592,12 @@ describe('noticing, put together', () => {
     fromPage({ type: 'hello', v: 1 });
     let whereSays: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const state = { now: new Date(2026, 10, 18, 10, 0).getTime(), looks: 0, paused: false };
+    const timers: { fn: () => void; at: number }[] = [];
+    let ticks = 0;
+    const clock = {
+      setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: ticks + ms }; timers.push(timer); return timer; },
+      clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+    };
     const submitted: { text: string; requestId: string }[] = [];
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
@@ -611,15 +618,35 @@ describe('noticing, put together', () => {
         see: async () => { state.looks++; return { picture: new Uint8Array([1]), x: 0, y: 0, w: 800, h: 600, app: 'slack' }; },
         think: async () => think(),
       },
+      clock,
       lookMs: 3_600_000,
       log: () => {},
     });
     live = real;
     const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    /** The notch's own clock goes on: a line's moment passes. */
+    const pass = async (ms: number): Promise<void> => {
+      const until = ticks + ms;
+      for (;;) {
+        const next = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!next) break;
+        ticks = next.at; timers.splice(timers.indexOf(next), 1); next.fn();
+        await wait();
+      }
+      ticks = until;
+      await wait();
+    };
+    /** Holds the talk keys, says `words`, lets go, and waits out the moment the words are shown. */
+    const say = async (talkId: string, words: string): Promise<void> => {
+      real.asks!.listen(talkId); await wait();
+      real.asks!.released(talkId); await wait();
+      real.asks!.words(talkId, words); await wait();
+      await pass(2000);
+    };
     const line = (): NotchLine | null => surface.current().line;
     const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map((part) => (typeof part === 'string' ? part : part && typeof part === 'object' && 'em' in part ? String((part as { em: unknown }).em) : part && typeof part === 'object' && 'word' in part ? `[${(part as { word: { value: string } }).word.value}]` : '')).join('');
     return {
-      real, state, submitted, line, wait, fromPage,
+      real, state, submitted, line, wait, fromPage, pass, say,
       said: (): string => text(line()?.say),
       rows: (): string[] => { const shown = line(); return (shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks : []).filter((block) => block.kind === 'row').map((block) => text((block as { say: unknown }).say)); },
       inFront(payload: Record<string, unknown>): void { whereSays('pc', { event_type: 'notch.where', payload: { look: '', still: true, never: [], ...payload } }); },
@@ -632,7 +659,10 @@ describe('noticing, put together', () => {
       },
       async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await wait(); },
     };
-  }
+}
+
+describe('noticing, put together', () => {
+  const assembled = assembledNotch;
   const SLACK = (): string => JSON.stringify({ offer: true, seen: 'Leo asked for the October revenue.', act: 'Reply to him here with the number', yes: 'reply', about: 'leo october revenue' });
 
   test('from resting in a window to the instruction running, and the switch in Settings', async () => {
@@ -697,6 +727,41 @@ describe('noticing, put together', () => {
     expect(await h.real.notice!.tick()).toBe('waits');
     expect(await h.rests()).toBe('looked');
     expect(h.state.looks).toBe(1);
+  });
+});
+
+describe('talking about the line that is up, put together', () => {
+  const SLACK = (): string => JSON.stringify({ offer: true, seen: 'Leo asked for the October revenue.', act: 'Reply to him here with the number', yes: 'reply', about: 'leo october revenue' });
+
+  test('"yes, go ahead" said over an offer is its yes: the offer comes back, is taken, and what it runs is what was read', async () => {
+    const h = assembledNotch(SLACK);
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    await h.rests();
+    expect(h.said()).toBe('Leo asked for the October revenue. Reply to him here with the number?');
+    await h.say('t1', 'Yes, go ahead.');
+    expect(h.submitted.map((one) => one.text)).toEqual(['Leo asked for the October revenue. Reply to him here with the number.']);
+    expect(h.submitted[0]!.requestId).toStartWith('notch-offered-');
+    // What was said is in the list of what was asked, as what the notch did with it.
+    const spoken = new NotchLedger(getDb()).recent(5).find((row) => row.source === 'spoken');
+    expect(spoken).toMatchObject({ state: 'done', kind: 'notch', heard: 'Yes, go ahead.', answer: 'Said yes to the line that was up.' });
+  });
+
+  test('a noise the speech-to-text made a word of is no yes: nothing the offer stands for is run', async () => {
+    const h = assembledNotch(SLACK);
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    await h.rests();
+    await h.say('t1', 'Okay.');
+    expect(h.submitted.map((one) => one.text)).toEqual(['Okay.']);
+    expect(h.submitted.some((one) => one.text.includes('Reply to him'))).toBe(false);
+  });
+
+  test('what is said over an offer and is not about it is an instruction like any other, and the offer waits', async () => {
+    const h = assembledNotch(SLACK);
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    await h.rests();
+    await h.say('t1', 'Open the Q3 deck.');
+    expect(h.submitted.map((one) => one.text)).toEqual(['Open the Q3 deck.']);
+    expect(h.real.inbox.has('notice:1')).toBe(true);
   });
 });
 

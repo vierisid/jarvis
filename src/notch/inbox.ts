@@ -30,6 +30,7 @@
  * learns what any item is about.
  */
 import type { NotchBlock, NotchPart } from './protocol.ts';
+import type { NotchSaid } from './said.ts';
 import { NotchStage, NotchStageEnded, realNotchClock } from './stage.ts';
 import type { NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
@@ -374,6 +375,23 @@ export class NotchInbox {
     return true;
   }
 
+  /**
+   * The person answered an item's line by voice (./said.ts). The talk keys
+   * took the notch for the listening, so the line had left it: the item is
+   * brought back now, and when its script shows that line again it has its
+   * answer at once. If the script shows another line, that line waits for
+   * the person as ever. False when the item is gone or the notch is not
+   * free: then nothing was done, and the item waits where it was.
+   */
+  replay(id: string, reads: string, answers: readonly NotchSaid[]): boolean {
+    const entry = this.entries.find((one) => one.item.id === id);
+    if (!entry || this.playing || this.options.busy?.() || this.surface.listening() === 0) return false;
+    // Under a hold that lets the person's own things through (a call that is not listened to), this is one of them.
+    for (const reason of this.holds) if (!this.soft.has(reason)) return false;
+    this.start(entry, { unasked: false }, null, { reads, answers });
+    return true;
+  }
+
   private free(): boolean {
     return !this.playing && this.canShow() && this.surface.current().line === null;
   }
@@ -389,9 +407,11 @@ export class NotchInbox {
     return new NotchStage(this.surface, this.clock, `${safe}-${++this.plays}`, { prefix: 'item', unasked });
   }
 
-  private start(entry: Entry, how: { unasked: boolean }, round: Round | null): void {
+  private start(entry: Entry, how: { unasked: boolean }, round: Round | null, said?: { reads: string; answers: readonly NotchSaid[] }): void {
     entry.missed = false;
-    this.run({ entry, stage: this.stage(entry.item.id, how.unasked && entry.item.asked !== true), round }, async (stage) => {
+    const stage = this.stage(entry.item.id, how.unasked && entry.item.asked !== true);
+    if (said) stage.expectSaid(said.reads, said.answers);
+    this.run({ entry, stage, round }, async (stage) => {
       if (entry.item.check && !(await entry.item.check())) return 'gone';
       if (stage.ended()) throw new NotchStageEnded();
       return entry.item.play(stage, how);

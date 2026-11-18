@@ -28,13 +28,18 @@ export interface NotchCan {
   lead: string;
   say: NotchPart[];
   /** The sentences the row quotes, each with the part of the product that takes it. */
-  tries?: { words: string; by: 'where' | 'put' | 'watch' | 'done' | 'run' | 'eye' | 'chase' | 'agent' | 'remember' | 'memory' | 'call' }[];
+  tries?: { words: string; by: 'where' | 'put' | 'watch' | 'done' | 'run' | 'eye' | 'chase' | 'agent' | 'remember' | 'memory' | 'call' | 'pick' | 'yes' }[];
 }
 
 /** Everything, in the order a person meets it. */
 export const NOTCH_CAN: readonly NotchCan[] = [
   { id: 'talk', lead: 'Talk', say: ['Hold ', talk, ' and say what you need. Let go when you are done.'] },
   { id: 'yes', lead: 'Yes, and not now', say: ['Tap ', { key: 'yes' }, ' for yes, ', { key: 'esc' }, ' for not now. Esc twice stops everything until you wake me.'] },
+  {
+    id: 'line', lead: 'Answer by voice',
+    say: ['With a line up, hold ', talk, ' and answer it: "', em('Friday at ten works'), '" picks a time, "', em('go ahead'), '" is a yes.'],
+    tries: [{ words: 'Friday at ten works', by: 'pick' }, { words: 'go ahead', by: 'yes' }],
+  },
   { id: 'look', lead: 'Look at this', say: ['Keep ', talk, ' held down, then click and drag a circle round a thing. Say what you want with it, or say nothing.'] },
   {
     id: 'where', lead: 'Where is, how do I',

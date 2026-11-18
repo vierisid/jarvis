@@ -765,3 +765,122 @@ describe('a hold that lets the person\'s own things through', () => {
     expect(h.count()).toBe(1);
   });
 });
+
+// What was said with a line up is that line's answer (./said.ts): the talk keys had taken the notch, so the item is brought back with it.
+describe('a line answered by voice comes back with its answer', () => {
+  /** A choice of three. Each showing is a new line; what was picked is kept. */
+  function choice(id = 'slot') {
+    const state = { shown: 0, picked: [] as (string | undefined)[], ends: [] as string[] };
+    const it: NotchItem = {
+      id, subject: id, class: 'person', speaks: true, title: () => ['A choice'],
+      play: async (stage) => {
+        state.shown++;
+        const pick = await stage.choose(['Anna asked to move Thursday. Offer a slot?'], ['Thursday at 15:00', 'Friday at 10:00', 'Monday at 9:30']);
+        state.ends.push(pick.act);
+        if (pick.act !== 'pick') return 'waits';
+        state.picked.push(pick.option);
+        await stage.say(['Offered ', pick.option ?? '', '.'], 2000);
+        return 'settled';
+      },
+    };
+    return { it, state };
+  }
+  const READS = 'offer|Anna asked to move Thursday. Offer a slot?|Thursday at 15:00|Friday at 10:00|Monday at 9:30';
+
+  test('the item is on the notch again, its line is answered at once, and its script goes on from there', async () => {
+    const h = harness();
+    const { it, state } = choice();
+    h.inbox.add(it);
+    await settle();
+    expect(h.said()).toBe('Anna asked to move Thursday. Offer a slot?');
+    // The talk keys: something urgent takes the notch, and leaves again.
+    h.inbox.add(item('talk', 'person', { urgent: true, asked: true, once: true }));
+    await settle();
+    await h.answer('no');
+    expect(h.inbox.showing()).toBeNull();
+    expect(h.inbox.replay('slot', READS, [{ act: 'pick', option: 'Friday at 10:00', index: 1 }])).toBe(true);
+    await settle();
+    expect(state.shown).toBe(2);
+    expect(state.picked).toEqual(['Friday at 10:00']);
+    expect(h.said()).toBe('Offered Friday at 10:00.');
+    await h.answer('done');
+    expect(h.inbox.has('slot')).toBe(false);
+  });
+
+  test('when the item shows another line than the one that was answered, that line waits for the person', async () => {
+    const h = harness();
+    const { it, state } = choice();
+    h.inbox.add(it);
+    await settle();
+    await h.answer('fold');
+    expect(h.inbox.replay('slot', 'offer|Some other line?|A|B', [{ act: 'pick', option: 'A', index: 0 }])).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Anna asked to move Thursday. Offer a slot?');
+    expect(state.picked).toEqual([]);
+    // And it is answered by hand as ever.
+    await h.answer('pick', { option: 'Monday at 9:30', index: 2 });
+    expect(state.picked).toEqual(['Monday at 9:30']);
+  });
+
+  test('an answer the line does not take is dropped, not kept for a later line', async () => {
+    const h = harness();
+    const { it, state } = choice();
+    h.inbox.add(it);
+    await settle();
+    await h.answer('fold');
+    expect(h.inbox.replay('slot', READS, [{ act: 'yes' }])).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Anna asked to move Thursday. Offer a slot?');
+    expect(state.ends).toEqual(['fold']);
+  });
+
+  test('two lit words changed in one breath are given one after the other, and the line then waits for its yes', async () => {
+    const h = harness();
+    const words = { when: 'Thursday at 10:00', tone: 'yours' };
+    let sent = 0;
+    const say = () => ['Send it ', { word: { name: 'when', value: words.when, options: [words.when] } }, ', ', { word: { name: 'tone', value: words.tone, options: ['yours', 'short'] } }, '?'];
+    h.inbox.add({
+      id: 'draft', subject: 'draft', class: 'person', speaks: true, title: () => ['A draft'],
+      play: async (stage) => {
+        const id = stage.id();
+        stage.put({ id, kind: 'offer', say: say(), yes: 'send' });
+        for (;;) {
+          const answer = await stage.answer(id, ['yes', 'no', 'fold', 'word']);
+          if (answer.act === 'word') { if (answer.word === 'when' || answer.word === 'tone') words[answer.word] = answer.value ?? ''; stage.surface.update(id, { say: say() }); continue; }
+          if (answer.act === 'yes') { sent++; return 'settled'; }
+          return 'waits';
+        }
+      },
+    });
+    await settle();
+    await h.answer('fold');
+    expect(h.inbox.replay('draft', 'offer|Send it Thursday at 10:00, yours?|', [{ act: 'word', word: 'when', value: 'Friday at 10:00' }, { act: 'word', word: 'tone', value: 'short' }])).toBe(true);
+    await settle();
+    expect(words).toEqual({ when: 'Friday at 10:00', tone: 'short' });
+    expect(sent).toBe(0);
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'send' });
+    await h.answer('yes');
+    expect(sent).toBe(1);
+  });
+
+  test('an item that is gone, a notch that is taken, and a stop are each a no', async () => {
+    const h = harness();
+    expect(h.inbox.replay('nothing', READS, [{ act: 'yes' }])).toBe(false);
+    const { it } = choice();
+    h.inbox.add(it);
+    await settle();
+    // It is on the notch itself: nothing is brought back over what is playing.
+    expect(h.inbox.replay('slot', READS, [{ act: 'pick', option: 'Friday at 10:00', index: 1 }])).toBe(false);
+    await h.answer('fold');
+    h.inbox.hold('stopped');
+    expect(h.inbox.replay('slot', READS, [{ act: 'pick', option: 'Friday at 10:00', index: 1 }])).toBe(false);
+    h.inbox.release('stopped');
+    await settle();
+    // A hold that lets the person's own things through lets this through: they said it.
+    h.inbox.hold('call', { own: true });
+    expect(h.inbox.replay('slot', READS, [{ act: 'pick', option: 'Friday at 10:00', index: 1 }])).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Offered Friday at 10:00.');
+  });
+});
+

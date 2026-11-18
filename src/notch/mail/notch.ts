@@ -66,7 +66,8 @@
 import { NOTCH_NAME } from '../name.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
-import type { NotchStage } from '../stage.ts';
+import { saidOption } from '../said.ts';
+import { NotchStageEnded, type NotchStage } from '../stage.ts';
 import { MAIL_WHY_DRAFT_THERE, type Mailbox, type MailReplyPlan } from './mailbox.ts';
 import type { MailCalendarEvent } from './proposer.ts';
 import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot } from './slots.ts';
@@ -227,6 +228,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   const unseen = (): MailProposalRow[] => store.ready().filter((row) => !seen.has(row.id));
   /** The draft that is open on the notch, or was until a moment ago: what is said then is about it. */
   let inHand: { id: string; showing: boolean; leftAt: number } | null = null;
+  /** The line of free times that is on the notch, or was until the talk keys took it off: a time said then picks one. */
+  let slotsUp: { id: string; says: string[]; showing: boolean; leftAt: number } | null = null;
 
   const decline = (id: string): NotchItemEnd => {
     store.move(id, 'ready', 'declined', now());
@@ -265,7 +268,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * once: the owner picked it from the list. Comes back `settled` when the
    * reply no longer waits, `waits` when it does.
    */
-  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean; steer?: string }): Promise<NotchItemEnd> {
+  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean; steer?: string; pick?: string }): Promise<NotchItemEnd> {
     let row = store.proposal(id);
     if (!row || row.state !== 'ready') return 'settled';
     const who = mailFirstName(row.who);
@@ -301,20 +304,37 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       }
       let slots = openSlots(row);
       let taken = '';
+      // Said with the talk keys while the line was up: that time is the pick, if it is still one of them.
+      let said = options.pick;
       while (slots) {
-        // The prototype's line: who asked for what, and the free times as keys.
-        const pick = await unlessGone(stage.choose(
-          [...source('', ''), ...(taken ? [em(taken), ' has been taken since. Another?'] : [em(who), ` asked ${row.asked || 'for a time'}. Offer a slot?`])],
-          slots.map((slot) => slot.say), { src: 'mail' }));
-        if (pick === GONE) return movedOn();
-        if (pick.act === 'fold') return 'waits';
-        if (pick.act === 'no') return decline(id);
-        const chosen = slots.find((slot) => slot.say === pick.option);
-        if (pick.act !== 'pick' || !chosen) continue;
+        const open = slots;
+        let chosen = said ? open.find((slot) => slot.say === said) : undefined;
+        said = undefined;
+        if (!chosen) {
+          // The prototype's line: who asked for what, and the free times as keys.
+          const mine = { id, says: open.map((slot) => slot.say), showing: true, leftAt: 0 };
+          slotsUp = mine;
+          let pick: Awaited<ReturnType<NotchStage['choose']>> | typeof GONE;
+          try {
+            pick = await unlessGone(stage.choose(
+              [...source('', ''), ...(taken ? [em(taken), ' has been taken since. Another?'] : [em(who), ` asked ${row.asked || 'for a time'}. Offer a slot?`])],
+              mine.says, { src: 'mail' }));
+          } catch (error) {
+            // Taken off the notch by something else (the talk keys, above all): what is said in the next moment may pick one.
+            if (slotsUp === mine) slotsUp = error instanceof NotchStageEnded ? { ...mine, showing: false, leftAt: now() } : null;
+            throw error;
+          }
+          if (slotsUp === mine) slotsUp = null;
+          if (pick === GONE) return movedOn();
+          if (pick.act === 'fold') return 'waits';
+          if (pick.act === 'no') return decline(id);
+          chosen = open.find((slot) => slot.say === pick.option);
+          if (pick.act !== 'pick' || !chosen) continue;
+        }
         // The calendar is asked now: the reply may have waited for hours. Not known is not no.
         if ((await stillFree(chosen)) === false) {
           taken = chosen.say;
-          slots = slots.filter((slot) => slot !== chosen);
+          slots = open.filter((slot) => slot !== chosen);
           if (slots.length === 0) {
             await stage.say(['None of those times is free any more. The reply is kept.'], 3600, { src: 'mail' });
             return 'waits';
@@ -643,6 +663,25 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * back up. Has no effect until `run`.
    */
   function route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null {
+    // A time said over the line of free times picks it: "Friday at ten works". Meant only by what was
+    // said with the keys that took that line off, as for a draft.
+    const line = slotsUp;
+    if (line && !line.showing && how?.source === 'spoken' && now() - line.leftAt < MAIL_STEER_SAID_MS && how.at <= line.leftAt + MAIL_STEER_KEYS_MS) {
+      const at = saidOption(line.says, text);
+      const row = at >= 0 ? store.proposal(line.id) : null;
+      if (row?.state === 'ready') {
+        const pick = line.says[at]!;
+        return {
+          did: `Offer ${pick}.`,
+          run: () => {
+            if (slotsUp === line) slotsUp = null;
+            log('[notch] a free time was picked by voice');
+            seen.add(line.id);
+            inbox.present('mail-slot', async (stage) => { await play(stage, line.id, { line: true, pick }); sync(); });
+          },
+        };
+      }
+    }
     const hand = inHand;
     if (!hand || !mailSteer(text)) return null;
     // A draft that has left the notch is still meant only by what was said

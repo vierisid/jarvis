@@ -624,6 +624,64 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     expect(one.said()).toBe('You have not replied to Leo. I drafted a reply.');
   });
 
+  // The prototype: "Friday at ten works", said over the line.
+  test('a time said with the talk keys over the line picks it, and it is sent as a press would send it', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+    // Nothing is routed while the line is still up: the keys have not taken it off.
+    expect(h.mail.route('Tuesday at ten works', { source: 'spoken', at: h.at() })).toBeNull();
+    // The talk keys take the notch.
+    const keys = h.at();
+    h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Listening'], play: async (stage) => { await stage.offer(['Listening'], 'ok'); return 'settled'; } });
+    await settle();
+    const route = h.mail.route('Tuesday at ten works', { source: 'spoken', at: keys });
+    expect(route?.did).toBe('Offer Tuesday at 10:00.');
+    expect(h.did).toEqual([]);
+    await h.answer('yes');
+    route!.run();
+    await settle();
+    expect(h.plans[0]!.text).toBe('Hi Leo,\nTuesday at 10:00 would suit me.\nSam');
+    expect(h.said()).toBe('Offering Tuesday at 10:00 to Leo…');
+    await h.answer('done');
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    expect(h.store.proposal(row().id)!.state).toBe('sent');
+    // Once: said again, it picks nothing.
+    expect(h.mail.route('Monday at three', { source: 'spoken', at: keys })).toBeNull();
+  });
+
+  test('what is said over the line that names none of its times is not a pick, and neither is anything typed or said later', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    const keys = h.at();
+    h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Listening'], play: async (stage) => { await stage.offer(['Listening'], 'ok'); return 'settled'; } });
+    await settle();
+    expect(h.mail.route('Friday at eleven', { source: 'spoken', at: keys })).toBeNull();
+    expect(h.mail.route('open the Tuesday report', { source: 'spoken', at: keys })).toBeNull();
+    expect(h.mail.route('Tuesday at ten', { source: 'typed', at: keys })).toBeNull();
+    expect(h.mail.route('Tuesday at ten')).toBeNull();
+    // Keys that went down well after the line had left.
+    expect(h.mail.route('Tuesday at ten', { source: 'spoken', at: keys + MAIL_STEER_KEYS_MS + 1 })).toBeNull();
+    expect(h.mail.route('Tuesday at ten', { source: 'spoken', at: keys })).not.toBeNull();
+    // And not for ever.
+    await h.advance(MAIL_STEER_SAID_MS);
+    expect(h.mail.route('Tuesday at ten', { source: 'spoken', at: keys })).toBeNull();
+  });
+
+  test('a time picked by voice is asked of the calendar like any other, and one taken since brings the line back with the rest', async () => {
+    const h = harness([offers()], { calendar: async () => [{ summary: 'Board call', start: '2026-11-17T10:00:00Z', end: '2026-11-17T11:00:00Z' }] });
+    await h.arrive();
+    const keys = h.at();
+    h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Listening'], play: async (stage) => { await stage.offer(['Listening'], 'ok'); return 'settled'; } });
+    await settle();
+    const route = h.mail.route('Tuesday at ten', { source: 'spoken', at: keys });
+    await h.answer('yes');
+    route!.run();
+    await settle();
+    expect(h.did).toEqual([]);
+    expect(h.said()).toBe('Tuesday at 10:00 has been taken since. Another?');
+  });
+
   test('on the draft, the time is a word with the free times as its choices, and a choice changes the letter', async () => {
     const paper = mailDraftBlocks(offers())[0] as Extract<NotchBlock, { kind: 'paper' }>;
     expect(paper.lines[1]![1]).toEqual({ word: { name: 'when', value: 'Monday at 15:00', options: ['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30'], label: 'Time', read: 'dayTime' } });

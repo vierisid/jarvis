@@ -9,6 +9,7 @@
  */
 import type { NotchAnswer, NotchSurface } from './surface.ts';
 import type { NotchAnswerAct, NotchArrival, NotchBlock, NotchLine, NotchPart } from './protocol.ts';
+import { notchLineReads, type NotchSaid } from './said.ts';
 
 /** Thrown inside a script when its stage has ended: something else took the notch. */
 export class NotchStageEnded extends Error {}
@@ -72,6 +73,14 @@ export class NotchStage {
    */
   private readonly unheard: NotchAnswer[] = [];
   private readonly openWaiters = new Set<{ done(): void; fail(): void }>();
+  /**
+   * Answers the person gave by voice before this script began (./said.ts):
+   * their line had left the notch for the listening. The first line that
+   * takes an answer gets them, one after the other, if it reads as the line
+   * they were said to. If it is another line they are dropped, and it waits
+   * for the person like any line.
+   */
+  private said: { reads: string; answers: NotchSaid[]; line: string | null } | null = null;
 
   /**
    * `prefix` and `name` make the ids of this stage's lines. `unasked` says the
@@ -159,10 +168,32 @@ export class NotchStage {
     });
   }
 
+  /** What was said to a line that reads as `reads`, before this script began: given to that line when it is up again. */
+  expectSaid(reads: string, answers: readonly NotchSaid[]): void {
+    this.said = answers.length > 0 ? { reads, answers: [...answers], line: null } : null;
+  }
+
+  /** The next of what was said, if the line `id` is the one it was said to and takes such an answer. */
+  private nextSaid(id: string, acts?: NotchAnswerAct[]): NotchAnswer | null {
+    const said = this.said;
+    const line = this.surface.current().line;
+    // A line that only says something, or shows work, is not what was answered: what was said waits for the next.
+    if (!said || !line || line.id !== id || (line.kind !== 'offer' && line.kind !== 'sheet')) return null;
+    const mine = said.line === null ? notchLineReads(line) === said.reads : said.line === id;
+    const next = said.answers[0];
+    if (!mine || !next || (acts && !acts.includes(next.act))) { this.said = null; return null; }
+    said.line = id;
+    said.answers.shift();
+    if (said.answers.length === 0) this.said = null;
+    return { type: 'answer', id, ...next };
+  }
+
   /** The next answer about the line `id`, of one of `acts` when given. */
   answer(id: string, acts?: NotchAnswerAct[]): Promise<NotchAnswer> {
     return new Promise((resolve, reject) => {
       if (this.stopped) { reject(new NotchStageEnded()); return; }
+      const said = this.nextSaid(id, acts);
+      if (said) { resolve(said); return; }
       const wanted = (answer: NotchAnswer): boolean => answer.id === id && (!acts || acts.includes(answer.act));
       const kept = this.unheard.findIndex(wanted);
       if (kept >= 0) { resolve(this.unheard.splice(kept, 1)[0]!); return; }

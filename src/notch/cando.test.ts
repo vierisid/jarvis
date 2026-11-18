@@ -11,6 +11,8 @@ import { memoryRequest } from './memory.ts';
 import { whereQuestion } from './point.ts';
 import { putRequest } from './put.ts';
 import { chaseRequest, eyeRequest } from './standing.ts';
+import type { NotchLine } from './protocol.ts';
+import { saidAbout } from './said.ts';
 import { runItRequest, teachDoneWord, watchMeRequest } from './teach.ts';
 
 const TAKES: Record<string, (words: string) => boolean> = {
@@ -25,6 +27,9 @@ const TAKES: Record<string, (words: string) => boolean> = {
   remember: (words) => rememberSentence(words) !== null,
   memory: (words) => memoryRequest(words) !== null,
   call: (words) => callRequest(words),
+  // Said over a line of three times, and over an offer.
+  pick: (words) => saidAbout({ id: 'l', kind: 'offer', say: ['Offer a slot?'], options: ['Thursday at 15:00', 'Friday at 10:00', 'Monday at 9:30'] } as NotchLine, words)?.[0]?.option === 'Friday at 10:00',
+  yes: (words) => saidAbout({ id: 'l', kind: 'offer', say: ['Reply to him?'], yes: 'reply' } as NotchLine, words)?.[0]?.act === 'yes',
 };
 
 describe('what I can do', () => {
@@ -52,7 +57,7 @@ describe('what I can do', () => {
 
   test('it names the things the owner said were missing, and the ones he did not think of', () => {
     const ids = NOTCH_CAN.map((can) => can.id);
-    for (const id of ['file', 'where', 'look', 'put', 'watch', 'twice', 'notice', 'eye', 'chase', 'agent', 'memory', 'mail', 'call', 'quiet', 'home', 'talk', 'yes']) expect(ids).toContain(id);
+    for (const id of ['line', 'file', 'where', 'look', 'put', 'watch', 'twice', 'notice', 'eye', 'chase', 'agent', 'memory', 'mail', 'call', 'quiet', 'home', 'talk', 'yes']) expect(ids).toContain(id);
     expect(new Set(ids).size).toBe(ids.length);
     const blocks = canDoBlocks();
     expect(blocks.filter((block) => block.kind === 'row').length).toBe(NOTCH_CAN.length);
