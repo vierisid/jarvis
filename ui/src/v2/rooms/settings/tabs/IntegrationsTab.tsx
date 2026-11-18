@@ -24,6 +24,10 @@ import { NotionConnection } from "../../../integrations/NotionConnection";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 
+/** #957: what turning Gmail sending on grants, said before the owner chooses it. */
+export const GMAIL_SEND_GRANT =
+  "Lets Jarvis send mail as you from this Google account (Google's gmail.send permission). Every send still waits for your approval on a card before it goes out. Leave it off to keep the connection read-only.";
+
 export function IntegrationsTab({
   data,
   onToast,
@@ -36,6 +40,8 @@ export function IntegrationsTab({
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [phase, setPhase] = useState<"idle" | "saving" | "authenticating">("idle");
+  const sendInput = useId();
+  const [allowSend, setAllowSend] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [googleRedirectUri, setGoogleRedirectUri] = useState(
     () => `${window.location.origin}/api/auth/google/callback`,
@@ -101,8 +107,8 @@ export function IntegrationsTab({
     setPhase("idle");
   };
 
-  const handleConnect = async () => {
-    const r = await data.initGoogleAuth();
+  const handleConnect = async (send: boolean) => {
+    const r = await data.initGoogleAuth({ send });
     if (!r.ok) {
       onToast(r.message, "warn");
       return;
@@ -139,6 +145,16 @@ export function IntegrationsTab({
     }, 3000);
   };
 
+  // Connected already: a change of what the grant allows is a new consent.
+  const handleAllowSend = async () => {
+    if (!await confirmDialog(`Allow Jarvis to send mail from this Google account? ${GMAIL_SEND_GRANT} Google will ask you to connect again.`)) return;
+    await handleConnect(true);
+  };
+  const handleReadOnly = async () => {
+    if (!await confirmDialog("Connect again read-only? Workflow steps that send mail from this account will stop until sending is allowed again.")) return;
+    await handleConnect(false);
+  };
+
   const handleDisconnect = async () => {
     if (!await confirmDialog("Disconnect Google? You'll need to re-authorize to reconnect.")) return;
     const r = await data.disconnectGoogle();
@@ -154,8 +170,12 @@ export function IntegrationsTab({
             <h3 className="v2-set__section-title">Google</h3>
             <div className="v2-set__section-sub">
               {g?.managed
-                ? "Connect Gmail and Google Calendar (read-only), managed by usejarvis."
-                : "Connect Gmail and Google Calendar (read-only). Restart-required after connect/disconnect."}
+                ? g.can_send
+                  ? "Gmail (read and send) and Google Calendar (read-only), managed by usejarvis."
+                  : "Connect Gmail and Google Calendar (read-only), managed by usejarvis."
+                : g?.can_send
+                  ? "Gmail (read and send) and Google Calendar (read-only). Restart-required after connect/disconnect."
+                  : "Connect Gmail and Google Calendar (read-only by default). Restart-required after connect/disconnect."}
             </div>
           </div>
           {g && (
@@ -188,9 +208,17 @@ export function IntegrationsTab({
             {g.is_authenticated ? (
               <>
                 <p className="v2-set__hint">
-                  Gmail and Google Calendar are connected, read-only. Jarvis never sends mail or
-                  edits events.
+                  {g.can_send
+                    ? "Gmail and Google Calendar are connected. Jarvis can send mail from this account, and every send waits for your approval on a card first. Calendar is read-only: Jarvis does not edit events."
+                    : "Gmail and Google Calendar are connected, read-only. Jarvis does not send mail or edit events from this account."}
                 </p>
+                {!g.can_send && (
+                  <p className="v2-set__hint">
+                    {g.send_available
+                      ? "Sending mail from this account is a separate choice on your account page."
+                      : "Sending mail from this account is not turned on for this instance."}
+                  </p>
+                )}
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <a
                     className="v2-set__btn"
@@ -208,7 +236,9 @@ export function IntegrationsTab({
                   {g.status === "reconnect_required"
                     ? (g.reconnect_reason ??
                       "Google access is no longer valid — connect your account again.")
-                    : "Connect your Google account to let Jarvis read your Gmail and Calendar. Nothing is sent or changed — access is read-only, and you can disconnect at any time."}
+                    : g.send_available
+                      ? "Connect your Google account to let Jarvis read your Gmail and Calendar. Sending mail is a separate choice on your account page, and every send waits for your approval first. You can disconnect at any time."
+                      : "Connect your Google account to let Jarvis read your Gmail and Calendar. Nothing is sent or changed — access is read-only, and you can disconnect at any time."}
                 </p>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <a
@@ -290,11 +320,23 @@ export function IntegrationsTab({
             {originWarnings.map((warning) => (
               <p className="v2-set__hint v2-set__hint--warn" key={warning}>{warning}</p>
             ))}
+            <div className="v2-set__field">
+              <label htmlFor={sendInput} style={{ display: "flex", gap: "var(--s-2)", alignItems: "flex-start" }}>
+                <input
+                  id={sendInput}
+                  type="checkbox"
+                  checked={allowSend}
+                  onChange={(e) => setAllowSend(e.target.checked)}
+                />
+                <span>Also allow sending mail</span>
+              </label>
+              <p className="v2-set__hint">{GMAIL_SEND_GRANT}</p>
+            </div>
             <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
               <button
                 type="button"
                 className="v2-set__btn v2-set__btn--primary"
-                onClick={handleConnect}
+                onClick={() => void handleConnect(allowSend)}
               >
                 Connect Google account
               </button>
@@ -309,7 +351,7 @@ export function IntegrationsTab({
             <div className="v2-set__row">
               <span className="v2-set__row-label">Gmail</span>
               <span className="v2-set__row-value">
-                <span className="v2-set__dot v2-set__dot--ok" /> read-only
+                <span className="v2-set__dot v2-set__dot--ok" /> {g.can_send ? "read and send (each send asks you first)" : "read-only"}
               </span>
             </div>
             <div className="v2-set__row">
@@ -338,7 +380,21 @@ export function IntegrationsTab({
                 </div>
               </div>
             )}
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <p className="v2-set__hint">
+              {g.can_send
+                ? "Jarvis can send mail from this account. Every send waits for your approval on a card before it goes out."
+                : "Read-only: Jarvis does not send mail or edit events from this account."}
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--s-2)", flexWrap: "wrap" }}>
+              {g.can_send ? (
+                <button type="button" className="v2-set__btn" onClick={() => void handleReadOnly()}>
+                  Make read-only
+                </button>
+              ) : (
+                <button type="button" className="v2-set__btn" onClick={() => void handleAllowSend()}>
+                  Allow sending mail
+                </button>
+              )}
               <button
                 type="button"
                 className="v2-set__btn v2-set__btn--danger"

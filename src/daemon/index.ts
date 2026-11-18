@@ -1034,6 +1034,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 4b. Create GoogleAuth if configured
     let googleAuth: GoogleAuth | null = null;
+    // The config the Google section was last applied from: whether the
+    // connection may send (#957) reads the hosted leave from it.
+    let googleConfigApplied: typeof jarvisConfig = jarvisConfig;
     // Managed instances have NO client credentials — the control plane holds
     // them — so this cannot key on their presence or hosted Google would never
     // start.
@@ -4598,6 +4601,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // observers and restart them so EmailSync/CalendarSync re-capture it.
     let lastGoogleCreds = googleIdentity(jarvisConfig);
     settingsReload.registerApplier('google', async (cfg) => {
+      googleConfigApplied = cfg;
       const creds = googleIdentity(cfg);
       if (!creds) {
         googleAuth = null;
@@ -5224,7 +5228,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const { JarvisGoogleConnectionSource } = await import(
         "../workflows/credentials/google-source.ts"
       );
-      credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth));
+      const { googleSendState } = await import("../integrations/google-scopes.ts");
+      credentialResolver.register(new JarvisGoogleConnectionSource(() => googleAuth, () =>
+        googleSendState(googleConfigApplied, classifyGoogle(googleConfigApplied).mode === 'managed', googleAuth?.getTokens())));
       const { JarvisClickUpConnectionSource } = await import("../workflows/credentials/clickup-source");
       credentialResolver.register(new JarvisClickUpConnectionSource(jarvisConfig.daemon.data_dir));
       const { JarvisMailchimpConnectionSource } = await import("../workflows/credentials/mailchimp-source");

@@ -307,12 +307,16 @@ const ownHostCalls: Array<[label: string, url: string]> = [
 
 let api: SandboxApi;
 let credentials: CredentialResolver;
+let googleCanSend = true;
 
 beforeEach(async () => {
   initWorkflowDb(":memory:");
   setEncryptionKey(Buffer.alloc(32, 41));
   credentials = new CredentialResolver();
-  credentials.register(new JarvisGoogleConnectionSource(googleAuth));
+  // The Gmail step these tests use is a send, so the connection is one the
+  // owner allowed to send (#957); the read-only default is covered below.
+  credentials.register(new JarvisGoogleConnectionSource(googleAuth, () => googleCanSend ? { canSend: true } : { canSend: false, reason: "not_granted" }));
+  googleCanSend = true;
   configureWorkflowReadiness({ pieces, credentials });
   api = new SandboxApi({ services: { credentialResolver: credentials } });
   await api.start({ port: 0 });
@@ -386,6 +390,12 @@ describe("readiness: a managed connection is valid only as the auth of its own p
 });
 
 describe("runtime: the engine's credential route checks the run's own graph", () => {
+  test("#957: a Gmail send with a read-only connection is not ready, and its run is refused the token", async () => {
+    googleCanSend = false;
+    expect(bindingIssues(empty(gmail())).map(i => i.message).join(" ")).toContain("connected read-only");
+    await expectRefused(await fetchFor(runOf(empty(gmail()))));
+  });
+
   test("a run whose Gmail step names it as auth gets the token", async () => {
     const response = await fetchFor(runOf(empty(gmail())));
     expect(response.status).toBe(200);

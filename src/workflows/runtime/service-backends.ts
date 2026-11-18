@@ -82,6 +82,7 @@ import { httpApprovalIntent, httpApprovalReason, httpCardRefusal, localAddressRe
 import type { EgressPolicy } from './http-egress';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
+import { describesEmailSender, emailSenderReview } from './email-sender';
 import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
@@ -1536,8 +1537,14 @@ export function buildSandboxServiceBackends(
     const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
       stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest, runId: ctx.runId }) : undefined;
     if (contact && !providerBinding) throw new Error('HubSpot contact upsert requires a saved, active HubSpot 0.12.1 OAuth connection; choose it in setup');
+    // #957: an email's card names the account it goes out from and the
+    // message it answers. Read once, for a step not yet recorded.
+    const sender = !previous && describesEmailSender(req.piece, req.action)
+      ? await emailSenderReview({ projectId: ctx.projectId, versionId: run.flowVersionId, stepName: ctx.stepName!,
+        piece: req.piece, action: req.action, args: input, sources: opts.credentialResolver.list() })
+      : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      externalDispatch: tracked && !contact, providerBinding,
+      externalDispatch: tracked && !contact, providerBinding, sender,
       // #953: a governed send or payment over the workflow's level asks
       // instead of failing the step, as a gated tool does; deletes and
       // settings changes stay denied by level.

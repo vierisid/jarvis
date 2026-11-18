@@ -2975,6 +2975,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             configured: false,
             is_authenticated: false,
             scopes: [],
+            can_send: false,
+            send_available: !managed || ctx.config.google?.gmail_send === true,
             token_expiry: null,
             // A config we REFUSED says why; "no Google here" says nothing.
             ...(shape.reason ? { reason: shape.reason } : {}),
@@ -2992,6 +2994,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // "connected" chip over a dead integration.
           const reconnect = auth?.reconnectRequired() ?? null;
           const authenticated = !reconnect && (auth?.isAuthenticated() ?? false);
+          // What the grant actually holds (#957), not what was once asked for.
+          const { grantedGoogleScopes, googleSendState, shortGoogleScope } = await import('../integrations/google-scopes.ts');
+          const send = googleSendState(ctx.config, managed, tokens);
 
           return json({
             // Managed and not yet authenticated is "waiting for the control
@@ -3007,7 +3012,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             configured: true,
             is_authenticated: authenticated,
             ...(reconnect ? { reconnect_reason: reconnect } : {}),
-            scopes: ['gmail.readonly', 'calendar.readonly'],
+            scopes: tokens ? grantedGoogleScopes(tokens).map(shortGoogleScope) : [],
+            // Sending needs a grant with gmail.send and, hosted, the system
+            // config's leave; every send still asks on an approval card.
+            can_send: authenticated && send.canSend,
+            send_available: !managed || ctx.config.google?.gmail_send === true,
             token_expiry: tokens?.expiry_date ?? null,
             ...managedFields,
           });
@@ -3020,6 +3029,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             configured: true,
             is_authenticated: false,
             scopes: [],
+            can_send: false,
+            send_available: !managed || ctx.config.google?.gmail_send === true,
             token_expiry: null,
             ...managedFields,
           });
@@ -3066,7 +3077,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     '/api/auth/google/init': {
-      POST: async () => {
+      POST: async (req: Request) => {
         const googleConfig = ctx.config.google;
         // MANAGED instances must not run this flow (GOOGLE.md). Its redirect URI
         // is this instance's own hostname, which is not registered with Google —
@@ -3084,16 +3095,32 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return error('Google credentials not configured. Save client_id and client_secret first.', 400);
         }
 
+        // #957: read-only unless the owner turned sending on for this
+        // connection. Only a literal `true` asks for gmail.send; an empty
+        // body (older dashboards) stays read-only.
+        let send = false;
+        try {
+          const text = await req.text();
+          if (text.trim()) {
+            const body = JSON.parse(text) as { send?: unknown } | null;
+            if (body === null || typeof body !== 'object' || Array.isArray(body)
+              || (body.send !== undefined && typeof body.send !== 'boolean')) {
+              return error('send must be true or false', 400);
+            }
+            send = body.send === true;
+          }
+        } catch {
+          return error('Invalid JSON body', 400);
+        }
+
         try {
           const { GoogleAuth } = await import('../integrations/google-auth.ts');
+          const { requestedGoogleScopes } = await import('../integrations/google-scopes.ts');
           const externalOrigin = resolveExternalOrigin(ctx.config);
           const redirectUri = externalUrl(externalOrigin, '/api/auth/google/callback');
           const flow = googleOAuthFlows.start(redirectUri);
           const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret, { redirectUri });
-          const scopes = [
-            'https://www.googleapis.com/auth/gmail.readonly',
-            'https://www.googleapis.com/auth/calendar.readonly',
-          ];
+          const scopes = requestedGoogleScopes(send);
           const authUrl = auth.getAuthUrl(scopes, {
             state: flow.state,
             codeChallenge: flow.codeChallenge,

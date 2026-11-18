@@ -90,6 +90,38 @@ describe('GoogleAuth token storage', () => {
   });
 });
 
+describe('GoogleAuth records the scopes Google granted (#957)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  test('the exchange keeps the granted scope, and a refresh that does not say keeps it too', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-auth-scope-'));
+    const tokensPath = join(dir, 'google-tokens.json');
+    const granted = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
+    let refreshScope: string | undefined;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = new URLSearchParams(String(init?.body));
+      return Response.json(body.get('grant_type') === 'authorization_code'
+        ? { access_token: 'access', refresh_token: 'refresh', expires_in: 3600, token_type: 'Bearer', scope: granted }
+        : { access_token: 'access-2', expires_in: 3600, ...(refreshScope ? { scope: refreshScope } : {}) });
+    }) as unknown as typeof fetch;
+    try {
+      const auth = new GoogleAuth('client-id', 'client-secret', { tokensPath });
+      await auth.exchangeCode('code');
+      expect(JSON.parse(await Bun.file(tokensPath).text()).scope).toBe(granted);
+      await auth.saveTokens({ ...auth.getTokens()!, expiry_date: Date.now() - 60_000 });
+      await auth.getAccessToken();
+      expect(auth.getTokens()!.scope).toBe(granted);
+      refreshScope = 'https://www.googleapis.com/auth/gmail.readonly';
+      await auth.saveTokens({ ...auth.getTokens()!, expiry_date: Date.now() - 60_000 });
+      await auth.getAccessToken();
+      expect(JSON.parse(await Bun.file(tokensPath).text()).scope).toBe(refreshScope);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('GoogleAuth managed refresh', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
