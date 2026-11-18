@@ -928,15 +928,10 @@ describe("Engine end-to-end (G+H pieces)", () => {
   test.skipIf(skipE2eTests)(
     "a CODE step is refused at publish without the per-flow opt-in, and runs once it has it",
     async () => {
-      // The CODE step writes to an absolute path outside the flow's world.
-      // That is the privilege the gate exists for -- a child process, not an
-      // isolate -- and it doubles as the only out-of-band proof available
-      // here that the step really executed: `executeFlow` leaves
-      // `flow_run.steps` null (the worker handler is what accumulates step
-      // outputs), so a SUCCEEDED status alone could not tell a step that ran
-      // from a step that was skipped.
-      const probeDir = mkdtempSync(join(tmpdir(), "jarvis-code-gate-"));
-      const probe = join(probeDir, "doubled.txt");
+      // The CODE step runs in a child process, not an isolate: the privilege
+      // the gate exists for. Its output is read back from the streamed step
+      // progress, the proof that it really executed: a SUCCEEDED status alone
+      // could not tell a step that ran from a step that was skipped.
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const trigger: FlowTriggerNode = {
         name: "trigger",
@@ -965,7 +960,6 @@ describe("Engine end-to-end (G+H pieces)", () => {
                 packageJson: "{}",
                 code:
                   "exports.code = async (inputs) => {" +
-                  `  require('node:fs').writeFileSync(${JSON.stringify(probe)}, String(Number(inputs.n) * 2));` +
                   "  return { doubled: Number(inputs.n) * 2 };" +
                   "};",
               },
@@ -989,21 +983,24 @@ describe("Engine end-to-end (G+H pieces)", () => {
         flowVersionId: published.version.id,
         environment: "TESTING",
       });
-      const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+      const handle = await runtime!.acquire({
+        runId: run.id, projectId: DEFAULT_IDS.project, flowId: flow.id, flowVersionId: published.version.id,
+      });
       let stderrBuf = "";
       handle.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
       try {
-        const finalRun = await handle.executeFlow({ flowVersion: getFlowVersion(published.version.id)! });
+        const finalRun = await handle.executeFlow({
+          flowVersion: getFlowVersion(published.version.id)!, streamStepProgress: "WEBSOCKET", runEnvironment: "TESTING",
+        });
         if (finalRun.status !== "SUCCEEDED") {
           console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
         }
         expect(finalRun.status).toBe("SUCCEEDED");
         // SUCCEEDED on its own would also pass if the engine had skipped the
-        // CODE step inside the loop body, so read the probe the step wrote.
-        expect(readFileSync(probe, "utf8")).toBe("42");
+        // CODE step inside the loop body, so read what the step returned.
+        expect(findOutputKey(getFlowRun(run.id)?.steps, "doubled")).toBe(42);
       } finally {
         await handle.release();
-        rmSync(probeDir, { recursive: true, force: true });
       }
       expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
     },
@@ -1022,18 +1019,12 @@ describe("Engine end-to-end (G+H pieces)", () => {
     "a CODE step does not inherit the engine's environment",
     async () => {
       const { isAllowedEnvName } = await import("../../../util/subprocess-env");
-      const probeDir = mkdtempSync(join(tmpdir(), "jarvis-code-env-"));
-      try {
-        await runCodeEnvProbe(probeDir, isAllowedEnvName);
-      } finally {
-        rmSync(probeDir, { recursive: true, force: true });
-      }
+      await runCodeEnvProbe(isAllowedEnvName);
     },
     60_000,
   );
 
-  async function runCodeEnvProbe(probeDir: string, isAllowedEnvName: (n: string) => boolean): Promise<void> {
-    const probe = join(probeDir, "env.json");
+  async function runCodeEnvProbe(isAllowedEnvName: (n: string) => boolean): Promise<void> {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const trigger: FlowTriggerNode = {
       name: "trigger",
@@ -1055,8 +1046,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
             packageJson: "{}",
             code:
               "exports.code = async () => {" +
-              `  require('node:fs').writeFileSync(${JSON.stringify(probe)}, JSON.stringify(Object.keys(process.env)));` +
-              "  return {};" +
+              "  return { envNames: Object.keys(process.env) };" +
               "};",
           },
         },
@@ -1071,16 +1061,20 @@ describe("Engine end-to-end (G+H pieces)", () => {
       flowVersionId: published.version.id,
       environment: "TESTING",
     });
-    const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+    const handle = await runtime!.acquire({
+      runId: run.id, projectId: DEFAULT_IDS.project, flowId: flow.id, flowVersionId: published.version.id,
+    });
     let stderrBuf = "";
     handle.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
     try {
-      const finalRun = await handle.executeFlow({ flowVersion: getFlowVersion(published.version.id)! });
+      const finalRun = await handle.executeFlow({
+        flowVersion: getFlowVersion(published.version.id)!, streamStepProgress: "WEBSOCKET", runEnvironment: "TESTING",
+      });
       if (finalRun.status !== "SUCCEEDED") {
         console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
       }
       expect(finalRun.status).toBe("SUCCEEDED");
-      const names = JSON.parse(readFileSync(probe, "utf8")) as string[];
+      const names = findOutputKey(getFlowRun(run.id)?.steps, "envNames") as string[];
       // Names only: nothing the engine holds is worth printing.
       expect(names.filter((n) => !isAllowedEnvName(n))).toEqual([]);
       expect(names).toContain("PATH");
@@ -1089,3 +1083,14 @@ describe("Engine end-to-end (G+H pieces)", () => {
     }
   }
 });
+
+/** The first value stored under `key` anywhere in a run's streamed steps. */
+function findOutputKey(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") return undefined;
+  if (!Array.isArray(value) && key in value) return (value as Record<string, unknown>)[key];
+  for (const child of Object.values(value)) {
+    const found = findOutputKey(child, key);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}

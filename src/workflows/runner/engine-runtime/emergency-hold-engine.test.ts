@@ -97,7 +97,9 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
     };
     api = new SandboxApi({ services: { ...backends, pieceAuthorize } });
     await api.start({ port: 0 });
-    runtime = new EngineRuntime({ api, bundlePath, expectedDigest: bundle.digest, devPieces: ["jarvis-test", "delay", "approval"] });
+    // Unsandboxed (#1154): the held CODE step below counts its runs in a
+    // file outside anything a sandboxed engine may write.
+    runtime = new EngineRuntime({ api, bundlePath, expectedDigest: bundle.digest, devPieces: ["jarvis-test", "delay", "approval"], sandbox: "off" });
   }, 120_000);
 
   afterAll(async () => {

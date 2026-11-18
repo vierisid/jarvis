@@ -70,6 +70,24 @@ describe('user-settings', () => {
     expect(config.workflows?.piece_metadata_cache).toBe('/srv/piece-metadata.json');
   });
 
+  test('workflows: a saved user section never supplies a system key, so it cannot turn the engine sandbox off', () => {
+    saveUserSection('workflows', {
+      enabled: true, maxConcurrentExecutions: 2, defaultRetries: 0, defaultTimeoutMs: 1000,
+      selfHealEnabled: false, autoSuggestEnabled: false, sandbox: 'off', engine_dir: '/tmp/planted-engine',
+    });
+
+    const unset = freshConfig();
+    mergeUserSettingsIntoConfig(unset);
+    expect(unset.workflows?.enabled).toBe(true);
+    expect(unset.workflows?.sandbox).toBeUndefined();
+    expect(unset.workflows?.engine_dir).toBeUndefined();
+
+    const fromFile = freshConfig();
+    (fromFile as Record<string, unknown>)['workflows'] = { sandbox: 'require' };
+    mergeUserSettingsIntoConfig(fromFile);
+    expect(fromFile.workflows?.sandbox).toBe('require');
+  });
+
   test('save -> merge round-trips a section into the config', () => {
     saveUserSection('stt', { provider: 'groq', groq: { api_key: 'gk-1' } });
     saveUserSection('active_role', 'researcher');

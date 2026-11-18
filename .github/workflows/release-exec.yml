@@ -919,6 +919,25 @@ jobs:
       - name: Build UI
         run: bun run prepublishOnly
 
+      # The workflow engine's sandbox launcher (#1154), shipped in the tarball
+      # as static Linux binaries for x64 and arm64 so an npm install sandboxes
+      # its engines without Go. Without one the daemon warns and runs them
+      # unsandboxed, or refuses under workflows.sandbox: require.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The Actions cache is writable by any run on main (#681).
+          cache: false
+          # The one Go version the repo builds with; sandbox-launcher/go.mod
+          # names the same go line.
+          go-version-file: sidecar/go.mod
+      - name: Build the sandbox launcher
+        run: |
+          set -euo pipefail
+          bun run build:sandbox --all
+          for arch in x64 arm64; do
+            [ -x "sandbox-launcher/dist/jarvis-sandbox-linux-$arch" ] || { echo "::error::the sandbox launcher for $arch was not built"; exit 1; }
+          done
+
       # Assert the tarball ABOUT TO BE PUBLISHED still contains every file an
       # out-of-repo consumer resolves by path. The PR gate runs this too, but
       # only this job holds the real artifact: a `files` edit merged after CI,

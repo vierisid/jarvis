@@ -72,7 +72,7 @@ describe("the engine's egress proxy", () => {
     updateDraftVersion(v.id, { trigger, valid: true });
     setFlowCodeStepsEnabled(flow.id, true);
     const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
-    const handle = await runtime.acquire({ runId: run.id, projectId: DEFAULT_IDS.project, flowId: flow.id });
+    const handle = await runtime.acquire({ runId: run.id, projectId: DEFAULT_IDS.project, flowId: flow.id, flowVersionId: v.id });
     try {
       const done = await handle.executeFlow({ flowVersion: getFlowVersion(v.id)!, streamStepProgress: "WEBSOCKET", runEnvironment: "TESTING" });
       expect(done.status).toBe("SUCCEEDED");

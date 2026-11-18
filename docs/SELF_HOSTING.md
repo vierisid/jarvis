@@ -479,7 +479,9 @@ clearest sign of a prompt injection you will get.
 
 This is containment for the file tools, not a sandbox. `run_command` and
 workflow code steps run as your user, so they do not go through the file
-tools at all.
+tools at all. On Linux, workflow code steps and pieces run inside the
+engine's file sandbox instead (see
+[The workflow engine's file sandbox](#the-workflow-engines-file-sandbox)).
 
 On Linux the daemon closes that route underneath them: at startup it calls
 `prctl(PR_SET_DUMPABLE, 0)`, which makes its own `/proc` entry unreadable to
@@ -966,6 +968,61 @@ with `allow_process_inspection` set. Keeping a secret out of the daemon's
 environment (the dashboard and keychain hold LLM keys) keeps it out of that file
 either way, and nothing short of a sandbox keeps the daemon's files from what it
 runs.
+
+### The workflow engine's file sandbox
+
+Workflow pieces and CODE steps run in the workflow engine, a Bun process the
+daemon starts as its own user. On Linux the engine starts inside a Landlock
+sandbox (#1154): it can read the engine and piece code, the CODE tree of the
+flow version it runs and the system files a process needs, and write only a
+private temporary directory. The rest of the data folder (the database, the
+keychain, `.secrets.*`, `google-tokens.json`, `workflow-encryption.key`,
+other flows' files) is out of its reach, and so is the daemon's
+`/proc/<pid>/environ`. The CODE-step processes it starts inherit the same
+rules. The full allow-list is in the "Trust model" section of
+[WORKFLOW_AUTOMATION.md](WORKFLOW_AUTOMATION.md).
+
+At boot the daemon logs what engines run under:
+
+```
+workflow engine sandbox: Landlock ABI 6 (prefer), launcher /app/sandbox-launcher/dist/jarvis-sandbox-linux-x64
+```
+
+or, when it cannot sandbox, `workflow engine sandbox: UNAVAILABLE ...` with
+the reason, followed by a warning the first time an engine starts unsandboxed.
+
+What it needs:
+
+- Linux 5.13 or later with `landlock` in the kernel's `lsm=` list (most
+  distributions since 2022; check `cat /sys/kernel/security/lsm`). Linux 6.2
+  or later also stops truncating files by path, and 6.12 or later also stops
+  signals and abstract unix sockets that leave the sandbox.
+- The launcher, a small static binary. The Docker image and the npm package
+  ship it; a source install builds it with `bun run build:sandbox`, which
+  needs Go. `JARVIS_SANDBOX_LAUNCHER` points at one kept elsewhere.
+- Nothing else: no root, no extra container capability, no `--privileged`.
+  Docker's default seccomp profile allows Landlock; a custom profile that
+  blocks it reads as "no Landlock".
+
+The setting, in `config.yaml` (a dashboard or settings save never changes it):
+
+```yaml
+workflows:
+  sandbox: prefer   # prefer (default) | require | off
+```
+
+`prefer` sandboxes where it can and runs engines unsandboxed with a warning
+where it cannot. `require` refuses to start an engine it cannot sandbox, so
+runs fail with that reason instead; use it on a host where workflows run code
+you did not write. `off` never sandboxes. `JARVIS_WORKFLOW_SANDBOX` sets the
+same values when the file does not.
+
+The sandbox is about files. A sandboxed engine still reaches the network as
+the workflow egress rules allow, and a CODE step that opens raw sockets is not
+filtered by them. On a hosted or shared machine, also block link-local
+addresses (169.254.0.0/16 and fe80::/10, where cloud metadata services live)
+for the daemon's user at the network layer, for example with a firewall rule
+or the container network, rather than relying on the per-step checks alone.
 
 ### Where Jarvis keeps its files, and a read-only home
 

@@ -362,6 +362,9 @@ describe.skipIf(skipEngine)("a real engine loading a piece that disables TLS ver
       bundlePath: cached.bundlePath, expectedDigest: cached.digest,
       pool: false,
       customPiecesPaths: [resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"), root],
+      // The probe piece reports through a file outside anything a sandboxed
+      // engine may write (#1154).
+      sandbox: "off",
     });
   });
 

@@ -159,6 +159,13 @@ jobs:
       # runs on a real release, so it is tested here against a fake gh.
       - run: .github/scripts/watch-release-run.test.sh
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
+      # The workflow engine's sandbox launcher (#1154), built before the run
+      # below so every engine suite runs inside it. Static, no cgo and no
+      # dependencies: the Go toolchain alone, no UI libraries.
+      - uses: ./.github/actions/go-setup
+      - run: go vet ./... && go test ./...
+        working-directory: sandbox-launcher
+      - run: bun run build:sandbox
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
       # on a loaded runner -- a headless Chromium slow to answer CDP
@@ -183,9 +190,16 @@ jobs:
       # With the gate set, each suite builds what it needs (cached after the
       # first build) and none of them depends on file order or on a list.
       # engine-ci-coverage.test.ts holds this step to that.
+      #
+      # JARVIS_WORKFLOW_SANDBOX=require (#1154): every engine runs inside the
+      # file sandbox built above, so a flow, a verified piece or the engine
+      # itself that needs a path outside its allow-list fails here, and a
+      # runner without Landlock fails instead of passing unsandboxed. A suite
+      # that sets `sandbox: "off"` says why next to it.
       - run: bun test --retry=2
         env:
           JARVIS_TEST_ENGINE_BUILD: "1"
+          JARVIS_WORKFLOW_SANDBOX: require
       # Not retried: deterministic.
       - run: bunx tsc --noEmit
 

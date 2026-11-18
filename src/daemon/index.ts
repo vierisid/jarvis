@@ -5304,6 +5304,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     for (const w of sharedRuntime.warnings) {
       logWithTimestamp(`[shared-runtime] WARNING: ${w}`);
     }
+    // The engine's file sandbox (#1154): config.yaml's workflows.sandbox, else
+    // JARVIS_WORKFLOW_SANDBOX, else prefer. Set once for every EngineRuntime.
+    {
+      const { configureEngineSandbox, describeSandbox, resolveSandboxMode } = await import(
+        "../workflows/runner/engine-runtime/sandbox.ts"
+      );
+      const sandboxMode = resolveSandboxMode(jarvisConfig.workflows?.sandbox, process.env, (m) => logWithTimestamp(m));
+      configureEngineSandbox(sandboxMode);
+      logWithTimestamp(describeSandbox(sandboxMode));
+    }
     try {
       engineBoot = await bootstrapWorkflowEngine({
         // #961: a self-hosted install's HTTP steps may reach its own private

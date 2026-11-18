@@ -468,8 +468,12 @@ export function mergeUserSettingsIntoConfig(config: JarvisConfig): void {
     } else {
       target[section] = stored;
     }
-    if (filePaths) {
-      target[section] = { ...(target[section] as object), ...filePaths };
+    if (section === 'workflows' && target[section] && typeof target[section] === 'object') {
+      // A stored row never supplies a system key, even one the file leaves
+      // unset: `sandbox` (#1154) must not be switched off by a settings save.
+      const merged = { ...(target[section] as Record<string, unknown>) };
+      for (const key of WORKFLOW_SYSTEM_KEYS) delete merged[key];
+      target[section] = { ...merged, ...(filePaths ?? {}) };
     }
   }
   // Inject stored credentials only into sections that actually have a settings

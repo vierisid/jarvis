@@ -77,12 +77,19 @@ daemon:
 # running engine is executing, and anything used in the last 24h are never
 # deleted. Tune with the JARVIS_ENGINE_CACHE_MAX_BUNDLES /
 # JARVIS_ENGINE_CACHE_MAX_AGE_DAYS env vars (0 disables that cap) -- only the
-# three path keys below are read from THIS file; the rest of `workflows` is
-# user-owned and comes from the dashboard.
+# three path keys and `sandbox` below are read from THIS file; the rest of
+# `workflows` is user-owned and comes from the dashboard.
 # workflows:
 #   engine_dir: /opt/jarvis-engine/${version}
 #   pieces_dir: /opt/jarvis-pieces/${version}
 #   piece_metadata_cache: /opt/jarvis-cache/${version}/piece-metadata.json
+#
+# The workflow engine's file sandbox (Linux, Landlock): prefer (default)
+# sandboxes where the machine can and warns where it cannot; require refuses
+# to run a workflow engine it cannot sandbox; off never sandboxes. Read from
+# this file only (JARVIS_WORKFLOW_SANDBOX when unset here). See
+# docs/SELF_HOSTING.md, "The workflow engine's file sandbox".
+#   sandbox: prefer
 
 # Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
 # require a token from an enrolled device. Correct setup order:

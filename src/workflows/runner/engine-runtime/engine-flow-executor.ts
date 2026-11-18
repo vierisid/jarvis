@@ -142,6 +142,7 @@ export class EngineFlowExecutor implements FlowExecutor {
       runId: ctx.run.id,
       projectId: ctx.run.projectId ?? DEFAULT_IDS.project,
       flowId: ctx.run.flowId,
+      flowVersionId: ctx.run.flowVersionId,
     };
     let lastError: unknown;
     for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {

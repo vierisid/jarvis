@@ -479,6 +479,16 @@ export type WorkflowConfig = {
   /** A prebuilt piece-metadata cache FILE (the per-entry JSON the catalog
    * builder writes) — boots skip extraction for every piece it covers. */
   piece_metadata_cache?: string;
+  /**
+   * The workflow engine's file sandbox (#1154): `prefer` (the default)
+   * sandboxes engines where the machine can and runs them unsandboxed with a
+   * warning where it cannot; `require` refuses to start an engine it cannot
+   * sandbox; `off` never sandboxes. SYSTEM-owned like the paths above: read
+   * from config.yaml only, never from the dashboard, so nothing that can
+   * change settings can turn it off. JARVIS_WORKFLOW_SANDBOX is the fallback.
+   * See docs/WORKFLOW_AUTOMATION.md, "Trust model".
+   */
+  sandbox?: 'require' | 'prefer' | 'off';
 };
 
 export type GoalConfig = {
@@ -1100,4 +1110,4 @@ export type UserOwnedSection = (typeof USER_OWNED_SECTIONS)[number];
  * the user-section discard and the DB merge re-applies them on top, so a
  * dashboard save of the user-tunable workflow fields can never strip them.
  */
-export const WORKFLOW_SYSTEM_KEYS = ["engine_dir", "pieces_dir", "piece_metadata_cache"] as const;
+export const WORKFLOW_SYSTEM_KEYS = ["engine_dir", "pieces_dir", "piece_metadata_cache", "sandbox"] as const;

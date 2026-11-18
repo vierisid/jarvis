@@ -72,6 +72,9 @@ beforeEach(async () => {
     killGraceMs: 200,
     cwd: tmp,
     baseCodeDir: resolve(tmp, "codes"),
+    // The stand-in bundle requires socket.io-client from the repo's
+    // node_modules, which a sandboxed engine cannot read (#1154).
+    sandbox: "off",
   });
 });
 
