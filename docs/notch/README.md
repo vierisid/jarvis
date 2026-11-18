@@ -1791,7 +1791,7 @@ What is not done, or not proven, in pass 11:
   minutes.
 - **The agent's name and Esc as undo are not on the line that announces
   it.** The prototype made the name a word and let Esc take the agent back.
-  Here the name is given, and "Let go" in the list removes it.
+  Here the name is given, can be changed on the agent's card, and "Let go" there removes it.
 - **A workflow made in the dashboard is not an agent** until the owner
   makes it one. One made in the last two days stands in "Your agents": to
   be switched on when it is off, to be made an agent with one click when it
@@ -2838,6 +2838,47 @@ What is not done, or not proven:
   says "the open question is the start date" the way a person preparing
   would.
 - **Not seen on a real meeting.**
+
+## An agent's card
+
+The prototype's list of agents has, for each, a way in to its card: its
+name as a word that can be changed, what it does, how free it is, its last
+runs as a row of dots, when it runs next, and what can be done with it. The
+product had one row for each agent with three buttons on it. The owner
+asked for the prototype's way on 18 November 2026, as the ninth of the
+things it has and the product did not.
+
+How it goes. "Your agents" lists each agent with its name, what it does,
+how free it is, and "Open" (`src/notch/agents.ts`). The card behind it has
+the name as a lit word, the job, "How free" with the rung as a word, "Last
+runs" as dots, "Next run", and Pause and Let go. Yes on the card runs the
+agent now. Esc goes back to the list.
+
+237. **The dots are how its last runs ended, the oldest first.** Six at
+    most. White went well, citron stopped to ask (a run that is still
+    open), red failed. Read from the product's own record of runs each
+    time the card is drawn. A reader that cannot see them is told in
+    words (`aria-label`).
+238. **"Next run" is the schedule it was made with**, as it was read back
+    then: "Every Monday at 9:00". An agent that waits for something to
+    happen says "When it happens". A paused one says "Paused, until you
+    resume". It is not a clock: the hour of the next run is not worked out.
+239. **The name is the owner's to change.** A click on one of the names no
+    other agent has, or one they type. It is kept only when it is a name:
+    letters and what stands between them in a name, at most 24, and not
+    the name of another agent (`agentName`). A name is said beside every
+    step an agent asks about, so it is never markup or a sentence.
+240. **Let go is still a question**, and deletes the workflow too. Pause,
+    Resume and Run now are not.
+
+What is not done, or not proven:
+
+- **No way to the workflow from the card.** The prototype has "Open
+  workflow". The owner's rule for agents is that nobody is sent to the
+  dashboard, so it was left out.
+- **What a run did is not on the card.** A dot says how it ended, not what
+  it sent or changed.
+- **The hour of the next run is not shown**, only the schedule's words.
 
 ## The keys
 

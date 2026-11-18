@@ -3,7 +3,8 @@
  * note, buttons, a file. The brain describes a sheet; this draws it with the
  * prototype's markup and reports which button or row was pressed.
  */
-import type { NotchBlock, NotchButton, NotchPart } from '../../../../src/notch/protocol.ts';
+import { NOTCH_BEADS_MAX } from '../../../../src/notch/protocol.ts';
+import type { NotchBead, NotchBlock, NotchButton, NotchPart } from '../../../../src/notch/protocol.ts';
 import { SVGNS, btn, el } from './dom.ts';
 import { NOTCH_NAME } from '../../../../src/notch/name.ts';
 import { FICON, G } from './icons.ts';
@@ -39,6 +40,19 @@ function button(b: NotchButton, deps: BlockDeps, row?: string): HTMLButtonElemen
   return n;
 }
 
+const BEAD_CLASS: Record<NotchBead, string> = { ok: 'on', ask: 'ask', bad: 'bad' };
+const BEAD_SAID: Record<NotchBead, string> = { ok: 'went well', ask: 'stopped to ask', bad: 'failed' };
+
+/** How the last runs of something ended, as a few dots, the oldest first. What they mean is said for a reader that cannot see them. */
+export function beads(runs: readonly NotchBead[]): HTMLElement {
+  const shown = runs.filter((run): run is NotchBead => run === 'ok' || run === 'ask' || run === 'bad').slice(-NOTCH_BEADS_MAX);
+  const n = el('span', 'beads');
+  for (const run of shown) n.append(el('i', BEAD_CLASS[run]));
+  n.setAttribute('role', 'img');
+  n.setAttribute('aria-label', shown.length ? `Last ${shown.length === 1 ? 'run' : `${shown.length} runs`}: ${shown.map((run) => BEAD_SAID[run]).join(', ')}` : 'No runs');
+  return n;
+}
+
 function row(block: Extract<NotchBlock, { kind: 'row' }>, deps: BlockDeps): HTMLElement {
   const main = el('span', 'mn');
   if (block.lead) main.append(el('b', '', block.lead), ' ');
@@ -59,6 +73,7 @@ function row(block: Extract<NotchBlock, { kind: 'row' }>, deps: BlockDeps): HTML
   const deciding = buttons.some((b) => !b.quiet);
   const n = el('div', `${deciding ? 'row stack' : 'row'}${block.gone ? ' gone' : ''}`);
   n.append(main);
+  if (Array.isArray(block.beads) && block.beads.length > 0) n.append(beads(block.beads));
   const aside = block.small ?? block.tail;
   if (aside) n.append(el('span', 'at', aside));
   if (deciding) {

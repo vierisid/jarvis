@@ -1085,3 +1085,22 @@ describe('typing into a word of a line (the hardening audit)', () => {
     expect(focus).toEqual([false]);
   });
 });
+
+// The prototype's beads on an agent's card: how each of its last runs ended.
+test('a row can carry a few dots for how the last runs ended, the oldest first, with words for a reader that cannot see them', () => {
+  show({ id: 's', kind: 'sheet', say: ['Tony'], blocks: [
+    { kind: 'row', say: ['Last runs'], beads: ['ok', 'ask', 'bad', 'ok'] },
+    { kind: 'row', say: ['No runs yet'] },
+    { kind: 'row', say: ['Next run'], small: 'Every Monday at 9:00' },
+  ] });
+  const dots = all('.sheet .row .beads i');
+  expect(dots.map((dot) => dot.className)).toEqual(['on', 'ask', 'bad', 'on']);
+  expect($('.sheet .row .beads')?.getAttribute('aria-label')).toBe('Last 4 runs: went well, stopped to ask, failed, went well');
+  // Only the row that was given dots has them.
+  expect(all('.sheet .row').map((row) => row.querySelectorAll('.beads').length)).toEqual([1, 0, 0]);
+  // What is no way a run ends is no dot, and there are never more than a few.
+  show({ id: 's2', kind: 'sheet', say: ['Tony'], blocks: [{ kind: 'row', say: ['Last runs'], beads: ['ok', 'burning' as never, ...Array<'bad'>(20).fill('bad')] }] });
+  expect(all('.sheet .row .beads i').length).toBe(8);
+  expect(all('.sheet .row .beads i').every((dot) => dot.className === 'bad')).toBe(true);
+});
+

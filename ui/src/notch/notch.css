@@ -234,6 +234,8 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .beads i { width: 6px; height: 6px; border-radius: 50%; background: var(--notch-rule); transition: background-color .2s, transform .2s var(--ease); }
 .beads i.on { background: var(--n-ink); }
 .beads i.now { background: var(--citron); transform: scale(1.35); }
+.beads i.ask { background: var(--citron); }
+.beads i.bad { background: var(--fail); }
 .count { font: 500 12px/1 var(--mono); color: var(--n-dim); font-variant-numeric: tabular-nums; margin-left: 4px; }
 /* Answered, and waiting for what comes next: the line stays, its hints step back. */
 .nin.spent .hint, .nin.spent .opts { opacity: .4; pointer-events: none; transition: opacity .2s var(--ease); }
