@@ -1,10 +1,13 @@
 import YAML from 'yaml';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
 import { requirePort } from './port.ts';
 import { resolveAllowProcessInspection } from './process-inspection.ts';
+
+const DB_FILE = 'jarvis.db';
 
 function expandTilde(filepath: string): string {
   // YAML happily produces a boolean, a number or null for a key that LOOKS
@@ -145,7 +148,8 @@ export function applyEnvOverrides(config: JarvisConfig): void {
   if (env.JARVIS_HOME) {
     const home = env.JARVIS_HOME;
     config.daemon.data_dir = home;
-    config.daemon.db_path = join(home, 'jarvis.db');
+    config.daemon.db_path = join(home, DB_FILE);
+    config.daemon.db_path_follows_data_dir = true;
   }
 
   // NOTE: LLM provider configuration is intentionally NOT read from env vars.
@@ -213,20 +217,85 @@ export function defaultConfigPath(): string {
 }
 
 /**
+ * Where the database was before it followed the data dir: `daemon.db_path`'s
+ * default, or `$JARVIS_HOME/jarvis.db`. An install started with `--data-dir`
+ * (or a `daemon.data_dir` with no `db_path`) kept its database there.
+ */
+function previousDbPath(): string {
+  const home = process.env.JARVIS_HOME;
+  return home ? join(home, DB_FILE) : expandTilde(DEFAULT_CONFIG.daemon.db_path);
+}
+
+function nonEmptyFile(path: string): boolean {
+  try { const s = statSync(path); return s.isFile() && s.size > 0; } catch { return false; }
+}
+
+/** The folder exists and has something in it. */
+function hasEntries(dir: string): boolean {
+  try { return readdirSync(dir).length > 0; } catch { return false; }
+}
+
+export interface DataPaths {
+  dataDir: string;
+  dbPath: string;
+  /**
+   * Set when this data dir's database is still at its previous place
+   * (`dbPath`) and has not been moved to `newPath` inside the data dir. The
+   * daemon keeps using it and says how to move it.
+   */
+  oldDbKept?: { newPath: string };
+}
+
+/**
  * Where the daemon keeps its data and its database: `--data-dir` first, then
  * `daemon.data_dir` from the config (which JARVIS_HOME overrides, see
- * applyEnvOverrides), then ~/.jarvis; the database is `daemon.db_path`, made
- * absolute inside the data dir when relative. startDaemon and `jarvis start`'s
- * first-run check both use this, so they cannot disagree about which install
- * they are looking at.
+ * applyEnvOverrides), then ~/.jarvis.
+ *
+ * The database is `daemon.db_path` when the user set it (made absolute inside
+ * the data dir when relative), and otherwise `<data dir>/jarvis.db`. One
+ * exception keeps an existing install's data: before this, the database
+ * stayed at ~/.jarvis/jarvis.db (or $JARVIS_HOME/jarvis.db) whatever data dir
+ * was chosen. When the data dir has no database yet but already has files in
+ * it, and that old file exists, the old file is still used (`oldDbKept`).
+ * "Has files" rather than the db-guard's saved-state list: before
+ * `workspace-id`, an install that ran with `--data-dir` left nothing on that
+ * list in the folder, and starting it empty would make its data look gone. A
+ * data dir that does not exist yet or is empty is a new install. Nothing is
+ * moved or copied.
+ *
+ * The daemon, `jarvis start`'s first-run check, doctor, export, restore and
+ * the device commands all use this, so they cannot disagree about which
+ * database they are looking at.
  */
 export function resolveDataPaths(
-  daemon: Pick<JarvisConfig['daemon'], 'data_dir' | 'db_path'>,
+  daemon: Pick<JarvisConfig['daemon'], 'data_dir' | 'db_path' | 'db_path_follows_data_dir'>,
   overrides: { dataDir?: string; dbPath?: string } = {},
-): { dataDir: string; dbPath: string } {
+): DataPaths {
   const dataDir = overrides.dataDir ?? daemon.data_dir ?? join(homedir(), '.jarvis');
-  const dbPath = overrides.dbPath ?? daemon.db_path ?? join(dataDir, 'jarvis.db');
-  return { dataDir, dbPath };
+  if (overrides.dbPath) return { dataDir, dbPath: absoluteDbPath(overrides.dbPath, dataDir) };
+  if (daemon.db_path_follows_data_dir !== true && daemon.db_path) {
+    return { dataDir, dbPath: absoluteDbPath(daemon.db_path, dataDir) };
+  }
+  const newPath = join(dataDir, DB_FILE);
+  const oldPath = previousDbPath();
+  if (resolve(newPath) === resolve(oldPath) || nonEmptyFile(newPath) || !nonEmptyFile(oldPath) || !hasEntries(dataDir)) {
+    return { dataDir, dbPath: newPath };
+  }
+  return { dataDir, dbPath: oldPath, oldDbKept: { newPath } };
+}
+
+/**
+ * The notice for a database kept at its old place (resolveDataPaths'
+ * `oldDbKept`): where it is, and how to move it into the data dir.
+ */
+export function oldDbKeptNotice(paths: DataPaths): string[] | null {
+  if (!paths.oldDbKept) return null;
+  const { newPath } = paths.oldDbKept;
+  return [
+    `Your database is still at ${paths.dbPath}, outside the data folder ${paths.dataDir}. Jarvis keeps using it there.`,
+    `To move it into the data folder: stop Jarvis, move ${paths.dbPath} to ${newPath} (with ${DB_FILE}-wal and ${DB_FILE}-shm next to it, if they exist), then start Jarvis again.`,
+    `To keep it where it is and stop this notice, set daemon.db_path: ${paths.dbPath} in ${defaultConfigPath()}.`,
+  ];
 }
 
 /** A relative db path names a file inside the data dir. */
@@ -245,6 +314,7 @@ export async function loadConfig(configPath?: string, opts: { quiet?: boolean } 
     const config = structuredClone(DEFAULT_CONFIG);
     config.daemon.data_dir = expandTilde(config.daemon.data_dir);
     config.daemon.db_path = expandTilde(config.daemon.db_path);
+    config.daemon.db_path_follows_data_dir = true;
     // log_file_path has no default, so there is nothing to expand here - but
     // the two branches must stay symmetrical or the next key added to one of
     // them gets expanded in only half the cases.
@@ -252,6 +322,7 @@ export async function loadConfig(configPath?: string, opts: { quiet?: boolean } 
     normalizeDaemonPort(config, path);
     normalizeAllowProcessInspection(config, path);
     applyEnvOverrides(config);
+    config.daemon.db_path = resolveDataPaths(config.daemon).dbPath;
     return config;
   }
 
@@ -277,6 +348,9 @@ export async function loadConfig(configPath?: string, opts: { quiet?: boolean } 
   // Expand tilde in paths
   config.daemon.data_dir = expandTilde(config.daemon.data_dir);
   config.daemon.db_path = expandTilde(config.daemon.db_path);
+  // A db_path the file does not set follows the data dir (resolveDataPaths).
+  const fileDaemon = (parsed as { daemon?: { db_path?: unknown } }).daemon;
+  config.daemon.db_path_follows_data_dir = fileDaemon?.db_path === undefined || fileDaemon.db_path === null;
   normalizeLogFilePath(config);
   normalizeDaemonPort(config, path);
   normalizeAllowProcessInspection(config, path);
@@ -328,6 +402,7 @@ export async function loadConfig(configPath?: string, opts: { quiet?: boolean } 
     }
   }
   applyEnvOverrides(config); // env wins over the discard (e.g. JARVIS_WAKE_ENGINE)
+  if (config.daemon.db_path_follows_data_dir) config.daemon.db_path = resolveDataPaths(config.daemon).dbPath;
 
   return config;
 }

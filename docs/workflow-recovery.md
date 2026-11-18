@@ -32,6 +32,21 @@ transport configuration/headers are removed before persistence and engine output
 because they can contain credentials. Slack returns its API result. Receipts are
 bounded to 256 KiB; an oversized/missing receipt leaves dispatch uncertain.
 
+Across runs (#957), every email send a workflow records (each Gmail send and
+the SMTP send) is noted for 24 hours by a key over its account (the step's
+connection), recipients (to, cc, bcc; or the message, thread or draft it
+answers), subject and body (`runtime/email-send-dedup.ts`, table
+`workflow_email_send`, which keeps a note after its run is deleted). A send
+with the same key from another run within that window asks "send again?",
+naming the earlier run and whether it was sent, may have been sent or is still
+waiting for approval, even where it would otherwise go without asking. It is
+never refused. The lookup is made as the effect is first recorded and kept on
+it (`sendKey`, `duplicateOf`), so each resume of that step still asks. A send
+denied or blocked before it went out does not count. The key is taken over the
+bounded projection the card shows. A send that names no recipient, answered
+message, subject or body has no key and is not checked, since it could not be
+told apart from any other send from that account.
+
 An existing legacy `piece` authorization for any of these send actions fails
 closed after upgrade. One that never dispatched (still waiting on its card, or
 approved but not yet sent) ends as `blocked` with `WORKFLOW_UPGRADED`, and its

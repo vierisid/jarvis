@@ -65,7 +65,10 @@ ${c.bold('Start options:')}
   --port <N>        Override daemon port (default: 3142). --port=<N> works too
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
-  --data-dir <path> Override data directory (default: ~/.jarvis)
+  --data-dir <path> Override data directory (default: ~/.jarvis). The database
+                    goes in it as jarvis.db unless daemon.db_path is set. Pass
+                    the same --data-dir to export, restore, doctor, enroll,
+                    sidecars and revoke (they use the running daemon's otherwise)
   --new-database    Create an empty database even though saved state exists
                     (a missing or empty jarvis.db otherwise stops the start)
   --no-local-tools  Run the general tools only on a sidecar (your machine), never
@@ -582,9 +585,9 @@ async function cmdStatus(): Promise<void> {
   } catch { /* the status above is what matters */ }
 }
 
-async function cmdDoctor(): Promise<void> {
+async function cmdDoctor(args: string[]): Promise<void> {
   const { runDoctor } = await import('../src/cli/doctor.ts');
-  await runDoctor();
+  await runDoctor(args);
 }
 
 async function cmdUninstall(): Promise<void> {
@@ -816,7 +819,7 @@ switch (command) {
     break;
   }
   case 'doctor':
-    await cmdDoctor();
+    await cmdDoctor(commandArgs);
     break;
   case 'enroll': {
     const { cmdEnroll } = await import('../src/cli/devices.ts');

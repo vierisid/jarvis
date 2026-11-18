@@ -84,7 +84,30 @@ export async function databaseFileCheck(dbPath: string, dataDir: string): Promis
   }
 }
 
-export async function runDoctor(): Promise<void> {
+/**
+ * The database the daemon opens (resolveDataPaths, so `--data-dir` and a
+ * database kept at its old place are seen the same way), its file check, and
+ * a warning when it was kept outside the data folder.
+ */
+export async function doctorDatabase(
+  daemon: Parameters<typeof import('../config/loader.ts').resolveDataPaths>[0],
+  dataDirArg?: string,
+): Promise<{ dbPath: string; checks: CheckResult[] }> {
+  const { resolveDataPaths, oldDbKeptNotice } = await import('../config/loader.ts');
+  const paths = resolveDataPaths(daemon, { dataDir: dataDirArg });
+  const checks = [await databaseFileCheck(paths.dbPath, paths.dataDir)];
+  const notice = oldDbKeptNotice(paths);
+  if (notice) checks.push({ name: 'Database Location', status: 'warn', message: notice.join(' ') });
+  return { dbPath: paths.dbPath, checks };
+}
+
+export async function runDoctor(args: string[] = []): Promise<void> {
+  const { takeDataDirArg } = await import('./lifecycle.ts');
+  const { dataDir: dataDirArg, error: dataDirError } = takeDataDirArg(args);
+  if (dataDirError) {
+    console.error(c.red(`Error: ${dataDirError}`));
+    process.exit(2);
+  }
   printBanner();
   console.log(c.bold('Running system diagnostics...\n'));
 
@@ -156,8 +179,9 @@ export async function runDoctor(): Promise<void> {
     const loaded = await loadConfig();
     // Look at the file before opening it: opening would create an empty
     // database in place of a missing one, and hide the damage.
-    const database = await databaseFileCheck(loaded.daemon.db_path, loaded.daemon.data_dir);
-    results.push(database);
+    const { dbPath, checks } = await doctorDatabase(loaded.daemon, dataDirArg);
+    const database = checks[0]!;
+    results.push(...checks);
     if (database.status === 'fail') {
       results.push({ name: 'LLM Provider', status: 'skip', message: 'Not checked: the database file needs attention first' });
     } else if (database.status === 'warn') {
@@ -166,7 +190,7 @@ export async function runDoctor(): Promise<void> {
       llmConfig = loaded;
     } else {
       llmConfig = loaded;
-      initDatabase(llmConfig.daemon.db_path);
+      initDatabase(dbPath);
       mergeLLMSettingsIntoConfig(llmConfig, { persistMigrations: false });
     }
     if (llmConfig) llmProviderNames = Object.keys(llmConfig.llm.providers ?? {});

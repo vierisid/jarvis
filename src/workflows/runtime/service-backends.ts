@@ -82,7 +82,8 @@ import { httpApprovalIntent, httpApprovalReason, httpCardRefusal, localAddressRe
 import type { EgressPolicy } from './http-egress';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
 import { captureProviderBinding, providerBindingHolds } from './provider-reconciliation';
-import { describesEmailSender, emailSenderReview } from './email-sender';
+import { describesEmailSender, emailSenderReview, stepConnectionId } from './email-sender';
+import { emailSendKey, findEarlierSend, noteEmailSend, sendAgainReason } from './email-send-dedup';
 import { recordPieceCompletion, recordPieceNotSent } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
@@ -1543,8 +1544,27 @@ export function buildSandboxServiceBackends(
       ? await emailSenderReview({ projectId: ctx.projectId, versionId: run.flowVersionId, stepName: ctx.stepName!,
         piece: req.piece, action: req.action, args: input, sources: opts.credentialResolver.list() })
       : undefined;
+    // #957: the same email (account, recipients, subject, body) from another
+    // run in the last 24 hours asks "send again?", whatever the policy would
+    // have done. Looked up as the step is first recorded and kept on the
+    // record, so every resume of it still asks.
+    const sendKey = describesEmailSender(req.piece, req.action)
+      ? emailSendKey(ctx.projectId, stepConnectionId(run.flowVersionId, ctx.stepName!) ?? '', input) : null;
+    const emailSend = sendKey ? () => {
+      const earlier = findEarlierSend(ctx.projectId, sendKey, ctx.runId);
+      return { key: sendKey, ...(earlier ? { duplicateOf: earlier } : {}) };
+    } : undefined;
+    const noteSend = (record: WorkflowEffect) => {
+      if (!record.sendKey) return;
+      try {
+        noteEmailSend({ effectId: record.id, sendKey: record.sendKey, projectId: record.projectId, runId: record.runId,
+          workflowName: boundedApprovalLabel(getFlowVersion(record.versionId)?.displayName ?? 'workflow', 120), at: record.createdAt });
+      } catch (error) { console.error('[Workflow Authority] could not note an email send:', error); }
+    };
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       externalDispatch: tracked && !contact, providerBinding, sender,
+      ...(emailSend ? { emailSend, onRecorded: noteSend,
+        approvalNote: (record: WorkflowEffect) => record.duplicateOf ? sendAgainReason(record.duplicateOf) : undefined } : {}),
       // #953: a governed send or payment over the workflow's level asks
       // instead of failing the step, as a gated tool does; deletes and
       // settings changes stay denied by level.
