@@ -39,6 +39,10 @@
  *   yes on the draft    the reply is put into the thread as a draft in Gmail,
  *                       a fuse burns, and it is sent. Saying yes is the
  *                       approval: nothing more is asked
+ *   after it went       when the owner had turned the tone on the draft, it
+ *                       asks once: "Always use a short tone with Marco?" A
+ *                       yes is kept, and the next replies to that person are
+ *                       written so. A no is not asked again
  *   Esc while it burns  takes the yes back, and nothing else: the draft is
  *                       removed from Gmail, and the reply goes back to waiting
  *   Esc before that     on the line that offered the reply, and on its draft,
@@ -71,7 +75,7 @@ import { NotchStageEnded, type NotchStage } from '../stage.ts';
 import { MAIL_WHY_DRAFT_THERE, type Mailbox, type MailReplyPlan } from './mailbox.ts';
 import type { MailCalendarEvent } from './proposer.ts';
 import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot } from './slots.ts';
-import type { MailProposalRow, MailStore } from './store.ts';
+import type { MailProposalRow, MailStore, MailTone } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
 import type { MailLook, MailWatch } from './watch.ts';
 
@@ -125,6 +129,21 @@ export function mailSteer(text: string): boolean {
 
 /** The manners a reply can be written again in. The first is the owner's own. */
 export const MAIL_TONES: Record<string, string> = { yours: '', shorter: 'shorter', warmer: 'more warmly', 'more formal': 'more formally' };
+
+/** A manner as the notch names it when it asks whether it is to stand: "Always use a short tone with Marco?" */
+export const MAIL_TONE_NAMES: Record<string, string> = { shorter: 'short', 'more warmly': 'warm', 'more formally': 'formal' };
+
+/**
+ * How people are always written to, as things that are remembered: each
+ * stands in Memory beside what else is known, and is forgotten there. With
+ * `about`, only those about that one.
+ */
+export function mailToneFacts(tones: readonly MailTone[], about?: string): { id: string; about: string; text: string; source: string }[] {
+  const wanted = (about ?? '').trim().toLowerCase();
+  return tones
+    .filter((one) => MAIL_TONE_NAMES[one.tone] && (!wanted || `${one.name} ${one.address}`.toLowerCase().includes(wanted)))
+    .map((one) => ({ id: `tone:${one.address}`, about: one.name || one.address, text: `gets ${MAIL_TONE_NAMES[one.tone]} replies`, source: 'you said so on the notch' }));
+}
 
 export interface NotchMailDeps {
   store: MailStore;
@@ -425,7 +444,9 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       await stage.say(['The thread has moved on since. I did not send it.'], 3600, { src: 'mail' });
       return 'settled';
     }
-    const plan: MailReplyPlan = { thread: row.thread, to: row.to.map((person) => person.address), cc: row.cc.map((person) => person.address), text: row.draft };
+    // The reply as it goes: what is asked after it went is asked about this one.
+    const going = row;
+    const plan: MailReplyPlan = { thread: going.thread, to: going.to.map((person) => person.address), cc: going.cc.map((person) => person.address), text: going.draft };
     watch.hold(id);
     // Said at once: the tab may be in the middle of a look, and the yes must not seem to have gone nowhere.
     const putting = stage.id();
@@ -491,6 +512,19 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         }
         store.move(id, 'ready', 'sent', now());
         await stage.say(offering ? ['Offered ', em(offering), ` to ${who}.`] : ['Sent to ', em(who), '.'], offering ? 2800 : 2400, { mood: 'happy', mark: 'check', src: 'mail' });
+        // The prototype: "Always use a short tone with Marco?" A reply that went in a manner the owner chose
+        // on its draft, and that does not stand for this person yet. Asked once: a no is not asked again.
+        const name = MAIL_TONE_NAMES[going.tone];
+        if (!offering && name && store.tone(going.who.address) !== going.tone && store.toneAsked(going.who.address) !== going.tone) {
+          const always = await stage.offer(['Always use a ', em(name), ' tone with ', em(who), '?'], 'yes', { mood: 'curious', src: 'mail' });
+          if (always.act === 'yes') {
+            store.setTone(going.who, going.tone, now());
+            log('[notch] a manner was remembered for one person');
+            await stage.say(['Remembered.'], 2400, { mood: 'happy', mark: 'check', src: 'mail' });
+          } else if (always.act === 'no') {
+            store.declineTone(going.who, going.tone, now());
+          }
+        }
         return 'settled';
       });
     } finally {

@@ -37,7 +37,7 @@ import { attachNotchNotice, type NotchNotice, type NotchNoticeDeps } from './not
 import { attachNotchDrop, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
-import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
+import { NOTCH_MAIL_ITEM, mailToneFacts } from './mail/notch.ts';
 import { NotchPresence } from './presence.ts';
 import { NotchQuiet, notchQuietHome } from './quiet.ts';
 import { NotchSettings } from './settings.ts';
@@ -427,7 +427,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const office = deps.office;
   // Made further down, when what it leans on is there. Reached through this until then.
   let dayOne: NotchDayOne | null = null;
-  const memory: NotchMemory | null = office?.memory ? attachNotchMemory({ inbox, list: office.memory.list, forget: office.memory.forget, log }) : null;
+  // How a person is always written to ("Always use a short tone with Marco?") is something that was learned:
+  // it stands in Memory with everything else that is remembered, and is forgotten there.
+  const toneFacts = (about?: string): ReturnType<NotchMemoryDeps['list']> => mailToneFacts(mail?.store.tones() ?? [], about);
+  const memory: NotchMemory | null = office?.memory ? attachNotchMemory({
+    inbox, log,
+    list: (about) => [...toneFacts(about), ...office.memory!.list(about)],
+    forget: (id) => (id.startsWith('tone:') ? (mail?.store.forgetTone(id.slice('tone:'.length)) ?? false) : office.memory!.forget(id)),
+  }) : null;
   const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
   // Everything it does, on one sheet: day one ends on it, the settings lead to it, "what can you do" opens it.
   const canDo: NotchCanDo = attachNotchCanDo({ inbox });

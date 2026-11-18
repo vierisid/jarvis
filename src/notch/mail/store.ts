@@ -82,6 +82,16 @@ export interface MailThreadSeen {
 
 export const mailProposalId = (thread: string, messageAt: number): string => `${thread}:${messageAt}`;
 
+/**
+ * The manners a person can always be written to in: what a reply can be
+ * written again in on its draft (./notch.ts, MAIL_TONES), less the owner's
+ * own. Anything else that is found stored is taken as none.
+ */
+export const MAIL_STANDING_TONES: readonly string[] = ['shorter', 'more warmly', 'more formally'];
+
+/** The manner one person is always written to in: "Always use a short tone with Marco?", answered yes. */
+export interface MailTone { address: string; name: string; tone: string; at: number }
+
 interface StoredProposal {
   id: string; thread_id: string; message_at: number; state: string;
   who_name: string; who_address: string; subject: string; to_json: string; cc_json: string;
@@ -168,6 +178,15 @@ export class MailStore {
     if (!columns.includes('about')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN about TEXT NOT NULL DEFAULT ''`);
     if (!columns.includes('slots_json')) db.run('ALTER TABLE notch_mail_proposals ADD COLUMN slots_json TEXT');
     if (!columns.includes('asked')) db.run(`ALTER TABLE notch_mail_proposals ADD COLUMN asked TEXT NOT NULL DEFAULT ''`);
+    // What the owner said about how one person is written to: the manner that stands, and the one they were
+    // last asked about and turned down, so that the same question is not put twice.
+    db.run(`CREATE TABLE IF NOT EXISTS notch_mail_tones (
+      address TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      tone TEXT NOT NULL DEFAULT '',
+      asked TEXT NOT NULL DEFAULT '',
+      at INTEGER NOT NULL
+    )`);
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_thread ON notch_mail_proposals (thread_id)');
     db.run('CREATE INDEX IF NOT EXISTS notch_mail_proposals_state ON notch_mail_proposals (state)');
   }
@@ -248,6 +267,50 @@ export class MailStore {
   /** Replies sent since a moment, the newest first: for the list of what was done today. */
   sentSince(since: number): MailProposalRow[] {
     return (this.db.query(`SELECT * FROM notch_mail_proposals WHERE state = 'sent' AND sent_at >= ? ORDER BY sent_at DESC`).all(since) as StoredProposal[]).map(rowOf);
+  }
+
+  /** The manner this person is always written to in, or '' when none was ever said. */
+  tone(address: string): string {
+    const row = this.db.query('SELECT tone FROM notch_mail_tones WHERE address = ?').get(address.toLowerCase()) as { tone: string } | null;
+    return row && MAIL_STANDING_TONES.includes(row.tone) ? row.tone : '';
+  }
+
+  /** The manner the owner was last asked about for this person and turned down, or ''. */
+  toneAsked(address: string): string {
+    const row = this.db.query('SELECT asked FROM notch_mail_tones WHERE address = ?').get(address.toLowerCase()) as { asked: string } | null;
+    return row?.asked ?? '';
+  }
+
+  /** The owner said yes: this person is written to in that manner from now on. Anything that is no such manner is not kept. */
+  setTone(who: MailPerson, tone: string, at: number): boolean {
+    if (!who.address || !MAIL_STANDING_TONES.includes(tone)) return false;
+    this.db.run(
+      `INSERT INTO notch_mail_tones (address, name, tone, asked, at) VALUES (?, ?, ?, '', ?)
+       ON CONFLICT(address) DO UPDATE SET name = excluded.name, tone = excluded.tone, asked = '', at = excluded.at`,
+      [who.address.toLowerCase(), who.name, tone, at],
+    );
+    return true;
+  }
+
+  /** The owner said no to that manner for this person: it is not asked again. What stood before stands. */
+  declineTone(who: MailPerson, tone: string, at: number): void {
+    if (!who.address) return;
+    this.db.run(
+      `INSERT INTO notch_mail_tones (address, name, tone, asked, at) VALUES (?, ?, '', ?, ?)
+       ON CONFLICT(address) DO UPDATE SET asked = excluded.asked`,
+      [who.address.toLowerCase(), who.name, tone, at],
+    );
+  }
+
+  /** Everybody who is always written to in some manner, the newest first. */
+  tones(): MailTone[] {
+    return (this.db.query(`SELECT address, name, tone, at FROM notch_mail_tones WHERE tone != '' ORDER BY at DESC`).all() as MailTone[])
+      .filter((row) => MAIL_STANDING_TONES.includes(row.tone));
+  }
+
+  /** Forgets how this person is written to. True when there was something to forget. */
+  forgetTone(address: string): boolean {
+    return this.db.run(`UPDATE notch_mail_tones SET tone = '' WHERE address = ? AND tone != ''`, [address.toLowerCase()]).changes === 1;
   }
 
   /** What every message asked about since a moment has cost, in tokens, whatever came of it. */

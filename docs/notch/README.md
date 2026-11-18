@@ -2697,6 +2697,48 @@ What is not done, or not proven:
   way of taking back have their tests; the whole of it together, on a
   brain with mail and agents, has not run.
 
+## A manner that is learned
+
+The prototype: a reply goes out in a tone the owner picked on its draft,
+and the notch asks "Always use a short tone with Marco?". A yes is
+remembered. In the product the tone was the draft's and gone with it. The
+owner asked for the prototype's way on 18 November 2026, as the sixth of
+the things it has and the product did not.
+
+How it goes. A reply whose tone the owner turned on its draft (shorter,
+warmer, more formal) has gone out. Then the notch asks whether that tone
+is to stand for that person. A yes is kept by their address
+(`notch_mail_tones`). From then on a reply to them is prepared in that
+manner, and its draft says so in its tone word. It stands in Memory with
+everything else that is remembered ("Leo Bianchi gets short replies"), and
+is forgotten there.
+
+223. **It is asked after the reply went, never before.** The reply is sent
+    on the yes it was given. The question about the tone comes after
+    "Sent to ...", and nothing about the reply depends on its answer.
+224. **It is asked once.** A no for that person and that manner is kept,
+    and the question is not put again. Left alone, it may be asked the
+    next time. A reply that went as the owner writes, or in the manner
+    that already stands, asks nothing. Neither does a time offered from
+    the line, whose draft was never opened.
+225. **Only a manner a reply can be written in is kept.** One of the three
+    on the draft's own word. What is found stored and is none of them is
+    taken as nothing (`MAIL_STANDING_TONES`): a manner goes to the model
+    as the owner's wish, so it is never a text anyone else could have
+    put there.
+226. **It is the owner's to change and to forget.** Another manner chosen
+    on a draft and answered yes takes the first one's place. In Memory it
+    is one thing with forget, like any other.
+
+What is not done, or not proven:
+
+- **Only the tone, and only for mail.** The prototype learns nothing else
+  either. Other preferences (a language for one person, a day somebody is
+  never free) are not learned from what the owner does.
+- **By address, not by person.** Somebody who writes from two addresses is
+  two people here.
+- **No real reply has gone through it.**
+
 ## The keys
 
 | What | Keys | How it is told |

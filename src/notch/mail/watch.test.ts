@@ -439,6 +439,31 @@ describe('free times for a reply that offers one', () => {
   });
 });
 
+describe('a person who is always written to in one manner', () => {
+  test('gets a reply that is prepared in it, and the draft says so', async () => {
+    const { watch, store, asked } = world([thread(T1, [message(leo, 24)])]);
+    store.setTone(leo, 'shorter', NOW - HOUR);
+    await watch.look('sweep');
+    expect(asked.thinks[0]).toContain('asked for this reply to be written shorter');
+    expect(store.ready()[0]).toMatchObject({ tone: 'shorter', state: 'ready' });
+  });
+
+  test('somebody else is written to as the owner writes', async () => {
+    const { watch, store, asked } = world([thread(T1, [message(anna, 24)])]);
+    store.setTone(leo, 'shorter', NOW - HOUR);
+    await watch.look('sweep');
+    expect(asked.thinks[0]).not.toContain('asked for this reply to be written');
+    expect(store.ready()[0]).toMatchObject({ tone: '' });
+  });
+
+  test('a message that needs no reply has no manner', async () => {
+    const { watch, store } = world([thread(T1, [message(leo, 24)])], { answer: () => '{"needs_reply": false, "why": "Thanks only."}' });
+    store.setTone(leo, 'shorter', NOW - HOUR);
+    await watch.look('sweep');
+    expect(store.proposal(mailProposalId(T1, NOW - 24 * HOUR))).toMatchObject({ state: 'silent', tone: '' });
+  });
+});
+
 describe('is a reply still an answer to the last word', () => {
   // Three questions to the mailbox, each waiting its turn behind a look, made a draft slow to open.
   test('is one question to the mailbox: whose mailbox it is was learned by the look', async () => {
