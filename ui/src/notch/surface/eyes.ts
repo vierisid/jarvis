@@ -18,6 +18,8 @@ export interface EyesDeps {
   reduce: boolean;
   /** True while something is on the notch: waking up then looks at it. */
   busy(): boolean;
+  /** The face the notch has at rest, as the brain keeps it. What a wake ends on. */
+  rest?(): NotchMood;
 }
 
 export interface Eyes {
@@ -60,7 +62,10 @@ export function createEyes(deps: EyesDeps): Eyes {
     if (g === 'wake') {
       setMood('sleepy');
       timers.after(800, () => {
-        setMood(deps.busy() ? (mood() === 'sleepy' ? 'look' : mood()) : 'idle');
+        // It wakes into the face it rests with: closed while it sees nothing, turned away where it looks away.
+        // (It woke into open eyes always, and went on resting with them, following the pointer, while the
+        // brain believed it showed "closed" or "away".)
+        setMood(deps.busy() ? (mood() === 'sleepy' ? 'look' : mood()) : deps.rest?.() ?? 'idle');
         gesture('blink', 120);
         timers.after(260, () => gesture('blink', 120));
         timers.after(700, () => gesture('peek-l', 420));

@@ -436,3 +436,15 @@ html.notch-window #notch-root { position: absolute; inset: 0; overflow: hidden; 
 .pillow-card span { display: block; font-size: 15.5px; line-height: 1.35; color: #B4BAC3; margin-top: 3px; white-space: nowrap; }
 @keyframes pillowcard { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .pillow-card { animation: none; } }
+
+/*
+ * A word with no place to break (a link, a long file name) wraps where it
+ * must, inside a sheet. It ran out of the sheet's side: under the buttons of
+ * its row, over the tile beside it, and gave the sheet a sideways scroll bar.
+ */
+.sheet { overflow-x: hidden; }
+.row .mn, .row .mn small, .note, .paper p, .paper li, .paper li > div, .paper .to, .file, .file b, .file small { overflow-wrap: anywhere; }
+.file b, .file small { min-width: 0; }
+/* The small word on a row's right is a time or a state, and keeps its own width. When it is a sentence it is
+   held to under half the row and wraps there. */
+.row .at { flex: 0 0 auto; max-width: 45%; overflow-wrap: anywhere; text-align: right; }

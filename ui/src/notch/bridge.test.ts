@@ -29,3 +29,31 @@ describe('the outline the desktop app is given', () => {
     expect(devicePolygons([], 2)).toEqual([]);
   });
 });
+
+// The hardening audit, 17 November 2026.
+describe('how often, and how large, an outline is sent', () => {
+  test('one that differs by less than can be seen is not sent again; a change in its make-up always is', async () => {
+    const { outlineMoved } = await import('./bridge.ts');
+    const a = [[[0, 0], [10, 0], [10, 10]]];
+    expect(outlineMoved(a, null, 0.25)).toBe(true);
+    expect(outlineMoved(a, [[[0, 0], [10, 0], [10, 10]]], 0.25)).toBe(false);
+    expect(outlineMoved(a, [[[0, 0], [10.2, 0], [10, 10.1]]], 0.25)).toBe(false);
+    expect(outlineMoved(a, [[[0, 0], [10.3, 0], [10, 10]]], 0.25)).toBe(true);
+    expect(outlineMoved(a, [[[0, 0], [10, 0], [10, 10], [0, 10]]], 0.25)).toBe(true);
+    expect(outlineMoved(a, [...a, ...a], 0.25)).toBe(true);
+  });
+
+  test('an outline is held to the number of points the desktop app takes', async () => {
+    const { withinPoints, NOTCH_OUTLINE_POINTS_MAX } = await import('./bridge.ts');
+    const circle = (n: number): number[][] => Array.from({ length: n }, (_, i) => [Math.cos(i / n * 6.283) * 300, Math.sin(i / n * 6.283) * 300]);
+    const small = [circle(200), circle(100)];
+    expect(withinPoints(small, NOTCH_OUTLINE_POINTS_MAX)).toBe(small);
+    // 782 points were measured at a display scale of 300 %, and 720 is the most that is taken.
+    const large = withinPoints([circle(600), circle(182)], NOTCH_OUTLINE_POINTS_MAX);
+    expect(large.reduce((sum, polygon) => sum + polygon.length, 0)).toBeLessThanOrEqual(NOTCH_OUTLINE_POINTS_MAX);
+    expect(large.length).toBe(2);
+    expect(large.every((polygon) => polygon.length >= 3)).toBe(true);
+    // It is the same shape, more coarsely.
+    expect(large[0]![0]).toEqual([300, 0]);
+  });
+});

@@ -74,22 +74,84 @@ export function devicePolygons(polygons: readonly (readonly [number, number])[][
   return polygons.map((polygon) => polygon.map(([x, y]) => [Math.round(x * scale * 100) / 100, Math.round(y * scale * 100) / 100]));
 }
 
+/** The most points one outline may have: the desktop app refuses, whole, one with more than 720. */
+export const NOTCH_OUTLINE_POINTS_MAX = 700;
+/** How far any point has to have moved, in the window's own pixels, for an outline to be worth sending again. */
+export const NOTCH_OUTLINE_MOVED = 0.25;
+/**
+ * A small movement (the lip rippling while it works or thinks, for minutes)
+ * is sent this often at the most. A large one, an arrival or a sheet
+ * opening, is sent as it happens.
+ */
+export const NOTCH_OUTLINE_LARGE = 1.5;
+export const NOTCH_OUTLINE_SMALL_EVERY_MS = 66;
+/** How often the hello is said again while no state has come back, and how many times at most. */
+export const NOTCH_HELLO_AGAIN_MS = 3000;
+export const NOTCH_HELLO_TRIES = 20;
+
+/**
+ * Polygons held to a number of points in all, by leaving out every so many
+ * of each. A curve is drawn with a point about every pixel and a half, so on
+ * a display scaled to 300 % a wide shape had more points than the desktop
+ * app takes (782 measured, 720 allowed) and the whole outline was refused.
+ */
+export function withinPoints(polygons: Polygons, most: number): Polygons {
+  const total = polygons.reduce((sum, polygon) => sum + polygon.length, 0);
+  if (total <= most) return polygons;
+  const every = Math.ceil(total / most);
+  return polygons.map((polygon) => {
+    const kept = polygon.filter((_, at) => at % every === 0);
+    return kept.length >= 3 ? kept : polygon.slice(0, 3);
+  });
+}
+
+/** Whether two outlines differ by more than a part of a pixel anywhere, or in how they are made up. */
+export function outlineMoved(a: Polygons, b: Polygons | null, by: number): boolean {
+  if (!b || a.length !== b.length) return true;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i]!, q = b[i]!;
+    if (p.length !== q.length) return true;
+    for (let j = 0; j < p.length; j++) {
+      if (Math.abs(p[j]![0]! - q[j]![0]!) >= by || Math.abs(p[j]![1]! - q[j]![1]!) >= by) return true;
+    }
+  }
+  return false;
+}
+
 /** Wires a surface to the desktop app, then says hello to the brain. */
 export function connectNotch(surface: NotchSurface, host: NotchWindow = window as unknown as NotchWindow): void {
-  let sent = '';
+  let sent: Polygons | null = null;
+  let sentAt = 0;
+  let trailing: ReturnType<typeof setTimeout> | null = null;
   const report = (): void => {
     const scale = window.devicePixelRatio || 1;
     const width = window.innerWidth, height = window.innerHeight;
-    const shapes = devicePolygons(withinWindow(surface.outlines(0), width, height), scale);
-    const cuts = devicePolygons(withinWindow(surface.outlines(NOTCH_CUT_INSET), width, height), scale);
-    const key = JSON.stringify(shapes);
-    // The same outline again is not worth a call across two processes.
-    if (key === sent) return;
-    sent = key;
+    const shapes = withinPoints(devicePolygons(withinWindow(surface.outlines(0), width, height), scale), NOTCH_OUTLINE_POINTS_MAX);
+    // The same outline again is not worth a call across two processes, and neither is one that differs by
+    // less than can be seen. A face with its eyes closed breathes by under a pixel, for as long as it is
+    // closed (which can be all day): every frame was a new outline, 58 a second, each a new cut of the
+    // window and a repaint of its edge.
+    if (!outlineMoved(shapes, sent, NOTCH_OUTLINE_MOVED)) return;
+    // A small movement so soon after the last one waits its turn. It is sent when that is over, so the last
+    // shape of a movement is always the one the window is cut to.
+    const since = performance.now() - sentAt;
+    if (since < NOTCH_OUTLINE_SMALL_EVERY_MS && !outlineMoved(shapes, sent, NOTCH_OUTLINE_LARGE)) {
+      if (trailing === null) trailing = setTimeout(() => { trailing = null; report(); }, NOTCH_OUTLINE_SMALL_EVERY_MS - since + 1);
+      return;
+    }
+    if (trailing !== null) { clearTimeout(trailing); trailing = null; }
+    sentAt = performance.now();
+    const cuts = withinPoints(devicePolygons(withinWindow(surface.outlines(NOTCH_CUT_INSET), width, height), scale), NOTCH_OUTLINE_POINTS_MAX);
+    sent = shapes;
     quietly(() => host.__notch_set_outline?.(shapes, cuts));
   };
   surface.onOutline(report);
-  host.__notch_receive = (message) => surface.receive(message);
+  /** The brain has answered the hello with what the notch shows. */
+  let stated = false;
+  host.__notch_receive = (message) => {
+    if ((message as { type?: unknown } | null)?.type === 'state') stated = true;
+    surface.receive(message);
+  };
   host.__notch_cursor = (x, y, down) => surface.pointer(x, y, !!down);
   // The keys: what they said, which they are on this machine, and whether Esc
   // would do anything here right now (only then is it taken from the app).
@@ -106,7 +168,18 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
     if (asked instanceof Promise) asked.then((pairs) => surface.setPairs(pairs), () => {});
   } catch { /* no desktop app here: the hints keep this system's usual keys */ }
   // A new display scale changes every number of the outline.
-  window.addEventListener('resize', () => { sent = ''; report(); });
+  window.addEventListener('resize', () => { sent = null; report(); });
   quietly(() => host.__notch_log?.(`page ready: scale ${window.devicePixelRatio || 1}, window ${window.innerWidth}x${window.innerHeight} css px`));
-  notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
+  // A page that was loaded again while it had the keyboard never gave it back: it is given back once, now.
+  quietly(() => host.__notch_focus?.(false));
+  const hello = (): void => notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
+  hello();
+  // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
+  // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
+  // a state has come.
+  let tries = 0;
+  const again = setInterval(() => {
+    if (stated || ++tries > NOTCH_HELLO_TRIES) { clearInterval(again); return; }
+    hello();
+  }, NOTCH_HELLO_AGAIN_MS);
 }

@@ -156,3 +156,62 @@ describe('sending a dropped file', () => {
     expect(await notchUpload(pdf(), 1, request)).toBe(false);
   });
 });
+
+// The hardening audit, 17 November 2026: the name was cut after it was encoded. A long name in another script
+// lost its ending, or was cut inside one letter and could not be read back at all: a Word file was refused
+// as a kind that cannot be read, or arrived with no name.
+describe('a long name', () => {
+  test('is cut in whole letters and keeps its ending', async () => {
+    const { notchDropName } = await import('./drop.ts');
+    for (const name of [`${'報告書'.repeat(40)}.docx`, `${'отчёт'.repeat(40)}.xlsx`, `${'a'.repeat(2000)}.pdf`, `${'😀'.repeat(200)}.png`]) {
+      const sent = notchDropName(name);
+      expect(sent.length).toBeLessThanOrEqual(900);
+      const back = decodeURIComponent(sent);
+      expect(back.endsWith(name.slice(name.lastIndexOf('.')))).toBe(true);
+      expect(name.startsWith(back.slice(0, 5))).toBe(true);
+    }
+    // A short name goes as it is.
+    expect(decodeURIComponent(notchDropName('Budget Q4 (final).xlsx'))).toBe('Budget Q4 (final).xlsx');
+    expect(decodeURIComponent(notchDropName('no ending at all'))).toBe('no ending at all');
+  });
+});
+
+describe('a page that is no longer signed in', () => {
+  test('says so when a dropped file is refused for it, and not for any other refusal', async () => {
+    const { notchUpload } = await import('./drop.ts');
+    const file = new File(['x'], 'a.txt', { type: 'text/plain' });
+    let told = 0;
+    expect(await notchUpload(file, 1, (async () => new Response('', { status: 401 })) as never, () => { told++; })).toBe(false);
+    expect(told).toBe(1);
+    expect(await notchUpload(file, 1, (async () => new Response('', { status: 413 })) as never, () => { told++; })).toBe(false);
+    expect(await notchUpload(file, 1, (async () => new Response('{}', { status: 200 })) as never, () => { told++; })).toBe(true);
+    expect(told).toBe(1);
+  });
+
+  test('asks the brain now and then, which keeps its sign-in from going idle, and says once when it has ended', async () => {
+    const { watchNotchSignIn } = await import('./drop.ts');
+    const asked: string[] = [];
+    let status = 200;
+    let told = 0;
+    const stop = watchNotchSignIn(() => { told++; }, {
+      every: 15, path: '/notch.html',
+      request: (async (path: string, init: { method: string }) => { asked.push(`${init.method} ${path}`); if (status === 0) throw new Error('offline'); return new Response(null, { status }); }) as never,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(asked.length).toBeGreaterThanOrEqual(2);
+    expect(asked[0]).toBe('HEAD /notch.html');
+    expect(told).toBe(0);
+    // The brain is away for a moment: nothing is said of that.
+    status = 0;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(told).toBe(0);
+    status = 401;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(told).toBe(1);
+    const before = asked.length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Said once, and then it asks no more: the brain opens the page again.
+    expect(asked.length).toBe(before);
+    stop();
+  });
+});

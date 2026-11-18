@@ -618,10 +618,33 @@ describe('a sheet that asks for a decision', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
   });
 
-  test('an ordinary sheet still closes on a click away', () => {
-    show(ask(false));
+  test('a sheet that is only to be read still closes on a click away, once its first moment is over', async () => {
+    show({ id: 'a', kind: 'sheet', say: ['What I can do'], blocks: [{ kind: 'note', say: ['Ask me anything.'] }] });
+    // The press was on its way before the sheet was there: it answers nothing.
+    surface.pointer(5, 600, true);
+    surface.pointer(5, 600, false);
+    expect(sent).toEqual([]);
+    await wait(400);
     surface.pointer(5, 600, true);
     expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
+  });
+
+  // The hardening audit, 17 November 2026: the chase sheet ("I will get it from Sam by Friday. Go?") came up
+  // seconds after it was asked for, and the person's next click in their own app turned it down unseen.
+  test('a sheet with a yes is a question: a click in another app does not answer it, stay or not', async () => {
+    show(ask(false));
+    await wait(400);
+    surface.pointer(5, 600, true);
+    expect(sent).toEqual([]);
+    surface.key('esc');
+    expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'no' }]);
+  });
+
+  test('a question about a dropped file is not answered by the press that picks up a second file', async () => {
+    show({ id: 'f', kind: 'ask', say: [], yes: 'ask', placeholder: 'Ask about it', blocks: [{ kind: 'file', icon: 'doc', name: 'Deck.pdf', meta: 'PDF' }] });
+    await wait(400);
+    surface.pointer(5, 600, true);
+    expect(sent).toEqual([]);
   });
 });
 
@@ -893,5 +916,159 @@ describe('pass 12 on the page: day one, the map and a row that is gone', () => {
     // A kind it does not know is a thing. (Motion is reduced in these tests: nothing comes in, so it "was" there.)
     expect(root.querySelector('.map g g')?.getAttribute('class')).toBe('thing was');
     expect(body()).toBe('sheet');
+  });
+});
+
+// The hardening audit, 17 November 2026 (pass 13).
+describe('what the hardening audit found on the page', () => {
+  test('an offer that was clicked on still folds: only a field being typed in keeps it', async () => {
+    show({ id: 'o', kind: 'offer', say: ['Reply to ', { em: 'Sam' }, '?'], yes: 'send', fold: 250 });
+    // A click on the eyes leaves that button the focused element, in a window that is never the active one.
+    $<HTMLButtonElement>('.eyes')!.focus();
+    expect(document.activeElement).toBe($('.eyes'));
+    await wait(450);
+    expect(sent).toEqual([{ type: 'answer', id: 'o', act: 'fold' }]);
+    expect(body()).toBe('rest');
+  });
+
+  test('a line that cannot be drawn leaves the one before it on the notch, answerable as itself', async () => {
+    show({ id: 'a', kind: 'offer', say: ['Send the note to ', { em: 'Marco' }, '?'], yes: 'send' });
+    const errors = console.error;
+    console.error = () => {};
+    try {
+      // A sheet with a block that is not one.
+      surface.receive({ type: 'show', line: { id: 'b', kind: 'sheet', say: ['Approve?'], yes: 'approve', blocks: [{ kind: 'paper' } as never] } });
+    } finally { console.error = errors; }
+    expect(said()).toContain('Send the note to Marco?');
+    await wait(400);
+    surface.key('yes');
+    // The yes is for the line that is on the screen, not for the one that never was.
+    expect(sent).toEqual([{ type: 'answer', id: 'a', act: 'yes' }]);
+  });
+
+  test('a line that came by itself does not take Esc from the app in front while it would not act on it', async () => {
+    const wants: boolean[] = [];
+    surface.onWantEsc((want) => wants.push(want));
+    show({ id: 'u', kind: 'offer', say: ['A reply for ', { em: 'Sam' }, ' is ready.'], yes: 'show', unasked: true });
+    expect(wants.at(-1) ?? false).toBe(false);
+    await wait(800);
+    expect(wants.at(-1)).toBe(true);
+    // One that was asked for takes it at once, as before.
+    const asked: boolean[] = [];
+    surface.receive({ type: 'rest' });
+    surface.onWantEsc((want) => asked.push(want));
+    show({ id: 'v', kind: 'offer', say: ['Send it?'], yes: 'send' });
+    expect(asked.at(-1)).toBe(true);
+  });
+
+  test('a double click on a sheet button is one press', () => {
+    show({ id: 's', kind: 'sheet', say: ['Settings'], blocks: [{ kind: 'buttons', buttons: [{ id: 'moves', label: 'How I move' }, { id: 'cando', label: 'What I can do' }] }] });
+    const [moves, cando] = all('.sheet button');
+    moves!.click();
+    moves!.click();
+    expect(sent).toEqual([{ type: 'answer', id: 's', act: 'button', button: 'moves' }]);
+    // Another button is another press.
+    cando!.click();
+    expect(sent.length).toBe(2);
+  });
+
+  test('an update for a line that is still coming in along the edge is not lost: it lands as it now is', async () => {
+    const moving = createNotchSurface(root, (message) => sent.push(message), {});
+    moving.receive({ type: 'state', line: null, count: 0 });
+    moving.receive({ type: 'show', line: { id: 'w', kind: 'work', say: ['Working'], steps: 4, done: 0, arrive: 'left', unasked: true } });
+    moving.receive({ type: 'update', id: 'w', done: 3, say: ['Almost there'] });
+    await wait(1500);
+    expect(root.textContent).toContain('Almost there');
+    expect(root.textContent).toContain('3/4');
+    moving.destroy();
+  });
+
+  test('a look that is asked for at rest is worn for a while, and the face the brain keeps comes back by itself', async () => {
+    surface.receive({ type: 'face', mood: 'away' });
+    expect($('.nin')?.dataset.mood).toBe('away');
+    surface.receive({ type: 'act', mood: 'happy' });
+    expect($('.nin')?.dataset.mood).toBe('happy');
+    await wait(4200);
+    expect($('.nin')?.dataset.mood).toBe('away');
+  }, 8000);
+});
+
+describe('typing into a word of a line (the hardening audit)', () => {
+  const draft = (): NotchLine => ({
+    id: 'd', kind: 'sheet', say: ['Reply to ', { em: 'Sam' }], yes: 'send', stay: true,
+    blocks: [{ kind: 'row', lead: 'Tell me', say: [{ word: { name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], label: 'Tell Pillow', free: true, long: true } }] }],
+  });
+
+  test('a yes with something typed and not yet taken takes it, as Enter would: it does not send the reply as it stood', async () => {
+    show(draft());
+    await wait(400);
+    $<HTMLElement>('.sheet .live')!.click();
+    const field = $<HTMLInputElement>('.pick input')!;
+    field.value = 'decline, we are full until January';
+    surface.key('yes');
+    // What was typed is what is told, and no yes was given for the old reply.
+    expect(sent).toEqual([{ type: 'answer', id: 'd', act: 'word', word: 'told', value: 'decline, we are full until January' }]);
+    // With nothing typed a yes is a yes.
+    surface.key('yes');
+    expect(sent.at(-1)).toEqual({ type: 'answer', id: 'd', act: 'yes' });
+  });
+
+  test('the ready-made sentences of such a word are one click away', async () => {
+    show(draft());
+    await wait(400);
+    $<HTMLElement>('.sheet .live')!.click();
+    const chips = all('.pick button').map((button) => button.textContent);
+    expect(chips).toEqual(['say no', 'say yes', 'ask for more time']);
+    all('.pick button')[2]!.click();
+    expect(sent).toEqual([{ type: 'answer', id: 'd', act: 'word', word: 'told', value: 'ask for more time' }]);
+  });
+
+  test('the same key pairs pushed again draw nothing anew: an open field keeps what is typed in it', async () => {
+    surface.setPairs({ talk: ['ctrl', 'meta'], yes: ['meta', 'alt'] });
+    show(draft());
+    await wait(400);
+    $<HTMLElement>('.sheet .live')!.click();
+    const field = $<HTMLInputElement>('.pick input')!;
+    field.value = 'half a sent';
+    surface.setPairs({ talk: ['ctrl', 'meta'], yes: ['meta', 'alt'] });
+    expect($<HTMLInputElement>('.pick input')).toBe(field);
+    expect(field.value).toBe('half a sent');
+    // Other pairs do change the hints.
+    surface.setPairs({ talk: ['ctrl', 'alt'], yes: ['meta', 'alt'] });
+    expect($<HTMLInputElement>('.pick input')).not.toBe(field);
+  });
+
+  test('blocks that arrive while a field is being typed in wait until the typing is over', async () => {
+    show(draft());
+    await wait(400);
+    $<HTMLElement>('.sheet .live')!.click();
+    const field = $<HTMLInputElement>('.pick input')!;
+    field.focus();
+    field.value = 'make it shor';
+    surface.receive({ type: 'update', id: 'd', blocks: [{ kind: 'note', say: ['A new draft.'] }] });
+    // The field is still there, with what was typed.
+    expect($<HTMLInputElement>('.pick input')).toBe(field);
+    expect(root.textContent).not.toContain('A new draft.');
+    // The typing ends (Esc closes the field): the sheet is drawn again with what came.
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(900);
+    expect(root.textContent).toContain('A new draft.');
+  });
+
+  test('moving from one field of the notch straight into another does not give the keyboard back in between', async () => {
+    show({ id: 'h', kind: 'ask', say: ['Ask'], placeholder: 'Type here', yes: 'ask', focus: true,
+      blocks: [{ kind: 'row', lead: 'Quiet', say: [{ word: { name: 'q', value: '22:00', options: ['22:00', '23:00'], free: true } }] }] });
+    await wait(50);
+    const askField = $<HTMLInputElement>('.say input, input.ask, .nin input')!;
+    $<HTMLElement>('.sheet .live')!.click();
+    const wordField = $<HTMLInputElement>('.pick input')!;
+    wordField.focus();
+    focus.length = 0;
+    // From the word's field into the ask field.
+    wordField.dispatchEvent(new FocusEvent('blur', { relatedTarget: askField }));
+    expect(focus).toEqual([]);
+    // Out of the notch altogether: given back.
+    wordField.dispatchEvent(new FocusEvent('blur', { relatedTarget: null }));
+    expect(focus).toEqual([false]);
   });
 });

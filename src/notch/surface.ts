@@ -45,6 +45,7 @@ export class NotchSurface {
   private readonly openListeners = new Set<(sidecarId: string) => void>();
   private readonly stopListeners = new Set<(sidecarId: string) => void>();
   private readonly dragListeners = new Set<(state: 'over' | 'left' | 'lost', sidecarId: string) => void>();
+  private readonly signedOutListeners = new Set<(sidecarId: string) => void>();
   private readonly helloListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
 
@@ -178,6 +179,12 @@ export class NotchSurface {
     return () => { this.stopListeners.delete(listener); };
   }
 
+  /** A page says its sign-in with the brain has ended: it has to be opened again, signed in anew. */
+  onSignedOut(listener: (sidecarId: string) => void): () => void {
+    this.signedOutListeners.add(listener);
+    return () => { this.signedOutListeners.delete(listener); };
+  }
+
   /** A file is over the notch, was taken away again, or was dropped and lost on the way. */
   onDrag(listener: (state: 'over' | 'left' | 'lost', sidecarId: string) => void): () => void {
     this.dragListeners.add(listener);
@@ -223,6 +230,10 @@ export class NotchSurface {
     }
     if (message.type === 'drag') {
       for (const listener of this.dragListeners) listener(message.state, sidecarId);
+      return;
+    }
+    if (message.type === 'signed-out') {
+      for (const listener of this.signedOutListeners) listener(sidecarId);
       return;
     }
     const line = this.line;
