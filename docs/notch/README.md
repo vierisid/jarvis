@@ -2501,8 +2501,78 @@ What is not done, or not proven:
 - **It is offered in a letter, not held in the calendar.** Two people who
   are offered the same half hour can both say yes. Nothing is put into the
   calendar until the owner does.
-- **It cannot be picked by voice yet.** The prototype takes "Friday at ten
-  works" on this line.
+## Talking about the line that is up
+
+In the prototype every line can be answered by voice: a choice of three
+takes "Friday at ten works", a line with a lit word takes "be firm with
+them" or "make it Friday at ten", an offer takes "yes, go ahead". In the
+product only a mail draft, a dropped file and an instruction's own question
+took spoken words. The owner asked for the prototype's way on 18 November
+2026, as the third of the things it has and the product did not.
+
+How it goes. The talk keys take the notch for the listening, so the line
+they were pressed over leaves it. When the keys go down the line that is up
+is remembered (`src/notch/said.ts`, `keys`). When the words arrive they are
+tried as an answer to that line, after everything that has words of its own
+("settings", "watch me", "remember that"). If they are one, the thing whose
+line it was is brought back to the notch (`NotchInbox.replay`), and when
+its script shows that line again the line has its answer at once: the pick
+is made, the word is changed, the yes is given. If they are not, they are
+an instruction like any other, and the line waits in the count as before.
+
+203. **Everything that was said has to be accounted for by the line.**
+    After the small words are taken away ("make it", "works", "please"),
+    every word left must belong to the choice, the value or the yes that
+    is read. "Friday at ten works" is all of a choice. "Open the Friday
+    report" is not, and runs as the instruction it is. At most twelve
+    words: more is an instruction.
+204. **A choice is read only when the words mean exactly one of them.** By
+    what it says ("undo it"), by a word only it has ("wait" for "Wait
+    until Monday"), by its place ("the second one"), and for times by the
+    day, the hour, the part of the day, or any of them together. A day or
+    an hour that is not among the choices picks nothing.
+205. **A lit word takes its value as it is said.** One of its choices
+    ("firm" for firmly), another way of saying one where the word gives
+    such ways, or a day and a time read as when they are typed. Two words
+    can be changed in one breath. After a change the line is up again with
+    the new value and waits for its yes: a change is not a yes.
+206. **A yes is the whole of what was said, and never one word a silence
+    can sound like.** "Yes, go ahead", "go ahead", "do it", or the word on
+    the line's own key ("send", "send it"). The same for a no: "not now",
+    "skip it". A bare "yes", "okay", "no" or "thank you" answers nothing:
+    those are the words a speech-to-text hears in a silence or a cough,
+    and a line that approves something is not answered by a noise. A line
+    of choices takes no yes.
+207. **Only the keys that took the line off speak about it.** What is
+    typed, what an offer runs, and what is said with a later hold of the
+    keys are never read as an answer to it (`NOTCH_SAID_KEYS_MS`).
+208. **The answer goes to that line, or to none.** When the thing shows
+    another line than the one that was answered, or one that does not take
+    such an answer, what was said is dropped and the line waits for the
+    person (`NotchStage.expectSaid`). It is never kept for a later line.
+209. **It is a reading, not a guess.** No model is asked. What is done with
+    what was said is written in "What you asked", as "Picked ... on the
+    line that was up", and what was said reaches no log.
+210. **Mail reads what is said over its own lines.** A draft that is open
+    takes what the reply is to say, as before. The line of free times
+    takes the time: "Friday at ten works" picks it and it is sent as a
+    press would send it, with the same question to the calendar first.
+
+What is not done, or not proven:
+
+- **No real voice has gone through it.** The reading is tested on
+  sentences as a speech-to-text writes them, and the whole way from the
+  keys to the answer with stand-ins. What the real speech-to-text makes of
+  "Friday at ten works" on a given day is not known.
+- **The line leaves and comes back.** In the prototype the line stays and
+  the words appear under it. Here the listening has the notch while the
+  keys are held, and the line returns with its answer.
+- **English only.** The small words, the days and the numbers are English.
+- **A lit word that takes anything typed is not filled by voice**, unless
+  it holds a day or a time: a name, a sentence.
+- **Work that is running is not steered by voice.** The prototype's "skip
+  the fees" said over a running paste is not built: while something runs,
+  the talk keys are refused.
 
 ## The keys
 
