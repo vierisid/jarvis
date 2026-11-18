@@ -506,15 +506,27 @@ export function notchNoticeDeps(options: Pick<NotchAskOptions, 'llm'>): NonNulla
     return { manager, id: findSidecar(target, manager.listSidecars())?.id ?? target };
   };
   return {
-    async see() {
+    async see(part) {
       const at = machine();
       if (!at || !isScreenCaptureEnabled()) return null;
-      return pointSeen(await at.manager.dispatchRPC(at.id, 'notch.shot', {}, { initial: 8000, max: 8000 }));
+      return pointSeen(await at.manager.dispatchRPC(at.id, 'notch.shot', part ? { x: part.x, y: part.y, w: part.w, h: part.h } : {}, { initial: 8000, max: 8000 }));
     },
     async read() {
       const at = machine();
       if (!at || !isScreenCaptureEnabled()) return null;
       return at.manager.dispatchRPC(at.id, 'notch.window', {}, { initial: 6000, max: 6000 });
+    },
+    // The mark over the thing an offer is about. The desktop app decides whether it is drawn: not when the
+    // window has moved since it was looked at, not where it looks away, and not where it cannot draw one.
+    async mark(rect, window, ms) {
+      const at = machine();
+      if (!at || !isScreenCaptureEnabled()) return false;
+      const told = await at.manager.dispatchRPC(at.id, 'notch.mark', { x: rect.x, y: rect.y, w: rect.w, h: rect.h, ms, in: { x: window.x, y: window.y, w: window.w, h: window.h } }, { initial: 4000, max: 4000 });
+      return typeof told === 'object' && told !== null && (told as { marked?: unknown }).marked === true;
+    },
+    unmark() {
+      const at = machine();
+      if (at) void at.manager.dispatchRPC(at.id, 'notch.mark', { clear: true }, { initial: 4000, max: 4000 }).catch(() => {});
     },
     // The owner did not ask for this look: it is the assistant's own, and waits behind what they did ask for.
     think: (messages, signal) => runWithOrigin('background', async () =>

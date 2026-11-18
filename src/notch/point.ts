@@ -329,7 +329,9 @@ export type PointPart = { type: 'text'; text: string } | { type: 'image'; source
 /** A message to a model that sees pictures. */
 export interface PointMessage { role: 'system' | 'user'; content: string | PointPart[] }
 
-const RULER = 'The picture has a ruler: numbers from 0 to 100 run along its top, from left to right, and down its left side, from top to bottom, with a faint dotted line across the picture at every ten.';
+/** What a model is told about the ruler on a picture of a window. For whoever else shows such a picture (./notice.ts). */
+export const NOTCH_POINT_RULER = 'The picture has a ruler: numbers from 0 to 100 run along its top, from left to right, and down its left side, from top to bottom, with a faint dotted line across the picture at every ten.';
+const RULER = NOTCH_POINT_RULER;
 
 export const NOTCH_POINT_SEEN_SYSTEM = [
   'The owner of this computer asks where something is, or how to do something, in the program or web page in front of them. You show them the way one click at a time. You are given their question, the clicks they have already made on the way, which program it is, a picture of the window as it is now, and sometimes a numbered list of things the program itself names on the screen.',
