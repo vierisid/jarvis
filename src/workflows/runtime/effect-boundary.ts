@@ -135,6 +135,17 @@ export interface EffectInvocation {
   /** Display only (#957): an email send's account and the message it answers, for its card. Never matched on. */
   sender?: WorkflowEffect['sender'];
   /**
+   * #957: an email send's key and the earlier send it repeats, worked out as
+   * the record is created (no await between the lookup and the save) and
+   * kept on it. A record that repeats an earlier send always asks, on every
+   * resume, with `approvalNote` first on its card.
+   */
+  emailSend?: () => { key: string; duplicateOf?: WorkflowEffect['duplicateOf'] };
+  /** Said first on the card, before the decision's reason: why this one asks (#957 "send again?"). */
+  approvalNote?: (record: WorkflowEffect) => string | undefined;
+  /** Called once, right after the record is first saved (#957 notes an email send). Must not throw. */
+  onRecorded?: (record: WorkflowEffect) => void;
+  /**
    * The tool's own gate asked for `confirm` and this is its floor: a pure
    * level shortfall above a floor the principal clears becomes an approval
    * card instead of a denial, the substitution the chat gate makes (a write
@@ -361,7 +372,7 @@ export class WorkflowEffectBoundary {
           // retry, as the checkpoint would have stopped the first one.
           const current = judgeEffect(authority, input, effect.runId);
           if (!current.allowed) throw new PolicyRefusal('AUTHORITY_DENIED', `Authority denied ${input.toolName}: ${current.reason}`);
-          if ((current.requiresApproval || input.confirmation || input.approvalRequired) && !effect.approvalId) {
+          if ((current.requiresApproval || input.confirmation || input.approvalRequired || effect.duplicateOf) && !effect.approvalId) {
             throw new PolicyRefusal('APPROVAL_REQUIRED', 'Workflow Authority now requires approval; effect was not dispatched');
           }
           // Granted is `approved`, or `executed` with a committed outcome once
@@ -418,6 +429,7 @@ export class WorkflowEffectBoundary {
           effect_id: id, outcome: 'not_started' });
         throw error;
       }
+      const emailSend = input.emailSend?.();
       effect = { id, runId: resolved.run.id, projectId: resolved.run.projectId, flowId: resolved.run.flowId,
         versionId: resolved.version.id, versionDigest: resolved.versionDigest, stepName: resolved.stepName,
         executionPath: resolved.executionPath, route: input.route, toolName: input.toolName,
@@ -428,8 +440,10 @@ export class WorkflowEffectBoundary {
           piece: input.piece, action: input.action },
         decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now(),
         ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
-        ...(input.sender && Object.keys(input.sender).length ? { sender: input.sender } : {}) };
+        ...(input.sender && Object.keys(input.sender).length ? { sender: input.sender } : {}),
+        ...(emailSend ? { sendKey: emailSend.key, ...(emailSend.duplicateOf ? { duplicateOf: emailSend.duplicateOf } : {}) } : {}) };
       saveWorkflowEffect(effect!);
+      input.onRecorded?.(effect!);
     }
     let record = effect!;
     // The trail names who was judged: the workflow itself, or the sub-agent a
@@ -504,6 +518,9 @@ export class WorkflowEffectBoundary {
       if (input.approvalRequired && !decision.requiresApproval) {
         return { ...decision, requiresApproval: true, reason: `${decision.reason}; approval required by the calling gate` };
       }
+      // #957: the same email from another run in the last day asks first.
+      // The card's reason is then the "send again?" note alone.
+      if (record.duplicateOf && !decision.requiresApproval) return { ...decision, requiresApproval: true, reason: '' };
       return decision;
     };
     // A step released from waiting for a place (#1039) that Pause holds
@@ -640,8 +657,8 @@ export class WorkflowEffectBoundary {
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${flowLabel}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
-            urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: input.approvalReason && decision.reason === governedActionReason(decision.actionCategory)
-              ? input.approvalReason : decision.reason,
+            urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: `${input.approvalNote?.(record) ?? ''} ${input.approvalReason && decision.reason === governedActionReason(decision.actionCategory)
+              ? input.approvalReason : decision.reason}`.trim(),
             // `stepName` here is a label too: the context is read back only for
             // `target`, `confirm`, `intent` and `reviewSubject` (the Brief card
             // shows it, display only), and nothing matches on it.

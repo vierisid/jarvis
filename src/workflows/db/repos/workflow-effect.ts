@@ -44,6 +44,14 @@ export interface WorkflowEffect {
    */
   sender?: { account?: string; replyTo?: string; forwards?: string };
   /**
+   * #957: an email send's key over account, recipients, subject and body
+   * (runtime/email-send-dedup.ts), and the other run's send with the same key
+   * in the 24 hours before it, if any. Such a send always asks ("send
+   * again?"), and keeps asking on every resume, since this is kept.
+   */
+  sendKey?: string;
+  duplicateOf?: { runId: string; effectId: string; workflowName: string; at: number; state: 'sent' | 'may_have_sent' | 'waiting' };
+  /**
    * #1039: the step is waiting for a place in its flow's card budget, since
    * `since`. Kept when it waits again, so it keeps its place in the queue.
    */

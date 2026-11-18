@@ -168,10 +168,15 @@ export function governedActionReview(catalogId: string, args: unknown): Governed
  * bound to the frozen arguments alone.
  */
 export function withEmailSender(review: GovernedReview | null,
-  sender: { account?: string; replyTo?: string; forwards?: string } | undefined): GovernedReview | null {
-  if (!sender) return review;
+  sender: { account?: string; replyTo?: string; forwards?: string } | undefined,
+  earlier?: { runId: string; workflowName: string; at: number; state: 'sent' | 'may_have_sent' | 'waiting' }): GovernedReview | null {
+  if (!sender && !earlier) return review;
   const lead: GovernedReviewField[] = [];
-  for (const [label, value] of [['Sending account', sender.account], ['Replying to', sender.replyTo], ['Forwarding', sender.forwards]] as const) {
+  // #957: the same email from another run in the last day, first of all.
+  const when = earlier ? `${new Date(earlier.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+  const repeats = earlier ? `${earlier.state === 'sent' ? 'Sent' : earlier.state === 'may_have_sent' ? 'May have been sent' : 'Waiting for your approval'}`
+    + ` in run ${earlier.runId} of "${earlier.workflowName}" (${when})` : undefined;
+  for (const [label, value] of [['Same email before', repeats], ['Sending account', sender?.account], ['Replying to', sender?.replyTo], ['Forwarding', sender?.forwards]] as const) {
     const shown = typeof value === 'string' ? forCard(value, VALUE_MAX_CHARS) : '';
     if (shown) lead.push({ label, value: shown });
   }

@@ -280,6 +280,20 @@ const STATEMENTS: string[] = [
     json_extract(record, '$.flowId'), json_extract(record, '$.deferral.budget'), json_extract(record, '$.deferral.since'))
     WHERE status = 'pending' AND approval_id IS NULL AND json_valid(record) AND json_extract(record, '$.deferral.budget') IS NOT NULL`,
 
+  // #957: every email send a workflow recorded, by what it sends (account,
+  // recipients, subject, body), kept 24 hours so a re-triggered flow or a
+  // retried step that would send the same message asks first. No foreign
+  // key: deleting a run must not forget that its email may have gone out.
+  `CREATE TABLE IF NOT EXISTS workflow_email_send (
+    effect_id TEXT PRIMARY KEY,
+    send_key TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workflow_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workflow_email_send_key ON workflow_email_send(project_id, send_key, created_at)`,
+
   // A nested dispatch is bound to the parent's effect (including loop path).
   // Keep the child id even if its flow is deleted: missing is not success.
   `CREATE TABLE IF NOT EXISTS workflow_child_run (

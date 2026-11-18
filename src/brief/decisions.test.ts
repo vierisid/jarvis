@@ -568,6 +568,13 @@ test('an email card leads with the account it sends from and the message it answ
     { label: 'Replying to', value: '"Q3 invoice" (message 18c0ffee)' }]);
 });
 
+test('an email that repeats one from another run says so first on its card (#957)', () => {
+  const a = governedApproval('piece:smtp/send-email', 'send_email', { to: ['alice@example.test'], subject: 'Q4 invoice' });
+  const e = getWorkflowEffect(getDb().query<{ id: string }, [string]>('SELECT id FROM workflow_effect WHERE approval_id = ?').get(a.id)!.id)!;
+  saveWorkflowEffect({ ...e, duplicateOf: { runId: 'run-1', effectId: 'wfe_1', workflowName: 'Invoices', at: Date.UTC(2026, 10, 17, 9, 30), state: 'sent' } });
+  expect(queue.get(`approval:${a.id}`).review?.action?.fields[0]).toEqual({ label: 'Same email before', value: 'Sent in run run-1 of "Invoices" (2026-11-17 09:30 UTC)' });
+});
+
 test('a governed HTTP card shows the method, URL and body excerpt with credentials redacted by the shared HTTP rules (G-1)', () => {
   // Frozen as an older record might hold it: the card applies redactHttpInput again, so a rule added since covers it too.
   const a = governedApproval('piece:http/send_request', 'send_message', { method: 'POST', url: 'http://user:pw@203.0.113.10/hook?token=abc123',
