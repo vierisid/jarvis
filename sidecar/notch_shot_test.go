@@ -188,9 +188,11 @@ func TestAPictureOfTheWindowSaysWhichPartOfTheScreenItShows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Made smaller by a whole number of times until its longest side fits
-	// (here by two), with the ruler's bands round it.
-	if got := img.Bounds(); got.Dx() != 960+notchShotBandLeft || got.Dy() != 540+notchShotBandTop {
+	// Made exactly as small as asked: its longest side is notchShotMost, with
+	// the ruler's bands round it. (It used to be made smaller by a whole
+	// number only: a display 1920 wide was halved to 960, and small writing
+	// was read at half its size.)
+	if got := img.Bounds(); got.Dx() != notchShotMost+notchShotBandLeft || got.Dy() != 1080*notchShotMost/1920+notchShotBandTop {
 		t.Fatalf("the picture is %v", got)
 	}
 	part, err := handler(map[string]any{"x": float64(600), "y": float64(300), "w": float64(480), "h": float64(320)})
