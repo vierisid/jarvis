@@ -164,6 +164,10 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_HOME', 'JARVIS_SECRETS_DIR', 'JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE',
   'JARVIS_WORKFLOW_DATA_DIR', 'JARVIS_PIECES_DIR', 'JARVIS_SHARED_PIECES_DIR',
   'JARVIS_PIECE_METADATA_CACHE', 'JARVIS_ENGINE_CACHE_ROOT',
+  // The workflow engine's file sandbox (#1154): kept so a daemon the CLI
+  // restarts from a model's shell keeps `require` rather than the weaker
+  // default, and finds the same launcher.
+  'JARVIS_WORKFLOW_SANDBOX', 'JARVIS_SANDBOX_LAUNCHER',
   // How the daemon is reached and identified.
   'JARVIS_PORT', 'JARVIS_BRAIN_DOMAIN', 'JARVIS_PUBLIC_URL',
   'JARVIS_INSTALL_METHOD', 'JARVIS_VERSION',
