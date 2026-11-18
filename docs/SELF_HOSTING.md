@@ -553,8 +553,9 @@ The Settings switch applies at once and works on hosted installs too; a
 It does not cover `run_command`. A shell command can capture the screen or send
 input on its own, and a list of such commands would never be complete, so the
 terminal keeps its own approvals and `--no-local-tools` instead. The desktop
-app itself keeps running its screen and clipboard observers while the switch is
-off; the brain drops what they send, until a desktop app update can pause them.
+app (0.13.0 and later) also pauses its own screen and clipboard observers while
+the switch is off, so it takes no screenshots and reads no clipboard. An older
+desktop app keeps running them, and the brain drops what it sends.
 
 Workflows follow the switch too: while it is off, a workflow step that uses
 `get_clipboard` or `set_clipboard` (or any desktop tool) is refused, and a
