@@ -119,16 +119,28 @@ type notchMicUse struct {
 	Stop  uint64
 }
 
-// The programs people make calls with, by a piece of the name the system keeps
-// them under. A browser is one: a call in a browser is a call. Everything else
+// The programs people make calls with, by the name the system keeps them
+// under. A browser is one: a call in a browser is a call. Everything else
 // that holds the microphone (a dictation tool, a noise filter, an assistant
 // that listens for its name) is not a call, and some of those hold it all day.
-var notchCallApps = []string{
-	"chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "arc",
-	"zoom", "teams", "ms-teams", "msteams", "slack", "discord", "skype", "webex", "ciscocollab",
-	"whatsapp", "telegram", "signal", "facetime", "gotomeeting", "g2m", "bluejeans", "ringcentral",
-	"whereby", "around", "tuple", "loom",
-}
+//
+// Three lists, by how a name may be matched. A short name is also a piece of
+// other words: "arc" is in "SearchHost", and matched by any piece of a name,
+// Windows' own search was a calling program, and the notch held everything
+// for as long as it had the microphone (the hardening audit, 17 November
+// 2026).
+var (
+	// Only as a whole word of the name: "arc.exe", never "searchhost".
+	notchCallWords = []string{"arc", "g2m", "opera", "loom", "tuple", "around"}
+	// As the beginning of a word of the name: "zoom.exe", "Zoom.us", "teams2",
+	// "SkypeApp".
+	notchCallStarts = []string{"zoom", "brave", "teams", "slack", "skype", "webex"}
+	// As any piece of the name: long enough to be nobody else's.
+	notchCallPieces = []string{
+		"chrome", "msedge", "firefox", "vivaldi", "discord", "msteams", "ms-teams", "whatsapp", "telegram", "signal",
+		"facetime", "gotomeeting", "bluejeans", "ringcentral", "whereby", "ciscocollab",
+	}
+)
 
 // notchCallApp says whether a name in the record is a program people make
 // calls with.
@@ -138,9 +150,25 @@ func notchCallApp(name string) bool {
 	if at := strings.LastIndexAny(lower, "#\\/"); at >= 0 {
 		lower = lower[at+1:]
 	}
-	for _, app := range notchCallApps {
+	for _, app := range notchCallPieces {
 		if strings.Contains(lower, app) {
 			return true
+		}
+	}
+	// The words of the name: what stands between its dots, dashes and blanks.
+	words := strings.FieldsFunc(lower, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
+	})
+	for _, word := range words {
+		for _, app := range notchCallWords {
+			if word == app {
+				return true
+			}
+		}
+		for _, app := range notchCallStarts {
+			if strings.HasPrefix(word, app) {
+				return true
+			}
 		}
 	}
 	return false

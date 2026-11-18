@@ -8,7 +8,8 @@ import { Database } from 'bun:sqlite';
 import { NotchInbox } from '../inbox.ts';
 import type { NotchLine, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
-import { attachMailLayer } from './attach.ts';
+import { attachMailLayer, sendNudge } from './attach.ts';
+import type { MailReplySession, MailStep } from './mailbox.ts';
 import type { MailBrowser } from './browser.ts';
 import { MailSignedOut } from './tab.ts';
 
@@ -95,5 +96,58 @@ describe('the mail layer, put together', () => {
     h.layer.arrived('');
     await settle();
     expect(h.line()).toBeNull();
+  });
+});
+
+// The hardening audit, 17 November 2026: a chase's nudge went out twice. Sent
+// in its thread, not yet shown there, and sent again as a new mail.
+describe('a nudge is sent once', () => {
+  function box(session: Partial<MailReplySession>) {
+    const did: string[] = [];
+    const ok: MailStep = { ok: true };
+    const full: MailReplySession = {
+      write: async () => { did.push('write'); return session.write ? session.write() : ok; },
+      send: async () => { did.push('send'); return session.send ? session.send() : ok; },
+      discard: async () => { did.push('discard'); return ok; },
+      sent: async (since) => { did.push('read back'); return session.sent ? session.sent(since) : true; },
+    };
+    return {
+      did,
+      reply: async (_plan: unknown, work: (session: MailReplySession) => Promise<MailStep>) => work(full),
+      write: async () => { did.push('new mail'); return ok; },
+    };
+  }
+  const plan = { address: 'sam@northwind.example', thread: 'T1', subject: 'The contract', text: 'Any news?' };
+  const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, () => {});
+
+  test('Gmail says it went: it is sent, whatever the thread shows yet, and no new mail follows', async () => {
+    const b = box({ sent: async () => false });
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'send']);
+  });
+
+  test('no answer to the send, and the thread shows it: sent, once', async () => {
+    const b = box({ send: async () => ({ ok: false, why: 'Gmail did not answer' }), sent: async () => true });
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'send', 'read back']);
+  });
+
+  test('no answer to the send, and the thread does not show it: not sent again as a new mail', async () => {
+    const b = box({ send: async () => ({ ok: false, why: 'Gmail did not answer' }), sent: async () => false });
+    expect(await send(b)).toEqual({ ok: false, why: 'Gmail did not answer' });
+    expect(b.did).toEqual(['write', 'send', 'read back', 'discard']);
+    expect(b.did).not.toContain('new mail');
+  });
+
+  test('the thread would not take the words: nothing was pressed, so it goes as a mail of its own', async () => {
+    const b = box({ write: async () => ({ ok: false, why: 'the thread goes to others too' }) });
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'new mail']);
+  });
+
+  test('no thread: a new mail', async () => {
+    const b = box({});
+    expect(await send(b, { ...plan, thread: null as never })).toEqual({ ok: true });
+    expect(b.did).toEqual(['new mail']);
   });
 });

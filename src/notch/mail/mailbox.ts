@@ -31,6 +31,13 @@ export interface MailReplyPlan {
 
 export type MailStep = { ok: true } | { ok: false; why: string };
 
+/**
+ * Why a reply was not written when its thread already holds a draft with
+ * words in it (./page/reply.js says exactly this). That draft is somebody's:
+ * it is never written into and never thrown away.
+ */
+export const MAIL_WHY_DRAFT_THERE = 'a reply is already being written in that thread';
+
 /** One reply, with the tab to itself. */
 export interface MailReplySession {
   /** Opens the thread and writes the reply into it. Gmail keeps it as a draft. Nothing is sent. */

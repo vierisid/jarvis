@@ -45,6 +45,8 @@ export const NOTCH_LAST_ANSWER_MS = 10 * 60_000;
 export const NOTCH_NOT_CAUGHT = 'I did not catch that.';
 const WAITING_FOR_YES = 'Waiting for your yes.';
 const NOT_SAVED = 'Not saved.';
+/** A memory whose question was cut off by something else: the person never got to answer it. */
+const NOT_SAVED_CUT = 'I did not save that: something came up while I was asking. Say it again.';
 const WAITING_FOR_CHAT = 'Waiting for another chat to finish.';
 
 /** Why nothing was caught, for the ledger and for the one case where the sentence says more. */
@@ -129,7 +131,7 @@ export interface NotchAsksDeps {
    * Null when they are an instruction like any other. `did` is what the
    * ledger says was done; `run` does it, and shows what it shows by itself.
    */
-  side?: (text: string) => { did: string; run(): void } | null;
+  side?: (text: string, how?: NotchAskHow) => { did: string; run(): void } | null;
   /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
   learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /**
@@ -147,6 +149,11 @@ export interface NotchAsksDeps {
   undoJob?: (jobId: string) => void;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
+  /**
+   * Whether the person is on a call, where the notch holds everything
+   * (./around.ts). What is said to it then is turned away at the first key.
+   */
+  onCall?: () => boolean;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
   withdrawApproval?: (approvalId: string) => void;
   /** A small sign that the notch heard and will not act (a shake), for when no line can be shown. */
@@ -225,9 +232,17 @@ export interface NotchAsks {
   stop(): void;
 }
 
+/** How some words came: typed or spoken, and when the typing was sent or the talk keys went down. */
+export interface NotchAskHow {
+  source: NotchAskSource;
+  at: number;
+}
+
 interface Live {
   id: string;
   source: NotchAskSource;
+  /** When it was made: the typing was sent, or the talk keys went down. */
+  at: number;
   phase: NotchAskState;
   heard: string;
   /** What it is doing now, as one sentence. */
@@ -412,11 +427,27 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
 
   function make(id: string, source: NotchAskSource, phase: NotchAskState, heard: string): Live {
     const ask: Live = {
-      id, source, phase, heard, activity: null, turn: null, segment: '', whole: '', answer: null, note: null, missed: null,
+      id, source, at: Date.now(), phase, heard, activity: null, turn: null, segment: '', whole: '', answer: null, note: null, missed: null,
       approvals: new Set(), waiters: new Set(),
     };
     live.set(id, ask);
     return ask;
+  }
+
+  /**
+   * Brings up again the approvals an instruction waits on. Not more often
+   * than every fifteen seconds for one approval, and three times at most: an
+   * approval the person looked at and left open is not pushed at them.
+   */
+  const raisedAgain = new Map<string, { at: number; times: number }>();
+  function raiseAgain(ask: Live): void {
+    if (ask.activity !== WAITING_FOR_YES || !deps.raiseApproval) return;
+    for (const approvalId of ask.approvals) {
+      const before = raisedAgain.get(approvalId);
+      if (before && (before.times >= 3 || Date.now() - before.at < 15_000)) continue;
+      raisedAgain.set(approvalId, { at: Date.now(), times: (before?.times ?? 0) + 1 });
+      deps.raiseApproval(approvalId);
+    }
   }
 
   /** Something about `ask` changed: whoever is drawing it draws it again, and if nobody is, it gets its say. */
@@ -468,6 +499,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       ask.silent = true;
       ask.phase = 'stopped';
       ledger.finish(ask.id, 'stopped');
+      // Nothing is said about it, so nothing is left to be seen: left unseen,
+      // it came back after every restart as "Stopped. What was already done
+      // stays done.", one line for each walk that a next question had ended.
+      ledger.seen(ask.id);
       stop();
       inbox.remove(itemId(ask.id));
       forget(ask);
@@ -505,7 +540,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // and what is running does not stand in their way: "done" is said while
     // a showing runs, "undo that" after a job. They are claimed like anything
     // else, so they too happen once.
-    const side = !ask.files?.length ? deps.side?.(ask.heard) ?? null : null;
+    const side = !ask.files?.length ? deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null : null;
     if (side) {
       if (!ledger.claim(ask.id, 'notch')) { sync(ask); return; }
       ledger.did(ask.id, side.did);
@@ -542,11 +577,14 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       try {
         result = await deps.remember!(what, ask.heard, ask.id, confirm);
       } catch (error) {
-        // Something took the notch while the question was up: nothing was saved.
+        // Something took the notch while the question was up: nothing was
+        // saved, and the person never got to answer. That is said when the
+        // notch is theirs again: said to nobody, it sat in the count as
+        // "Stopped" and showed nothing when it was opened.
         if (error instanceof NotchStageEnded) {
-          ledger.finish(ask.id, 'stopped', { note: NOT_SAVED });
-          ask.phase = 'stopped';
-          ask.note = NOT_SAVED;
+          ledger.finish(ask.id, 'failed', { note: NOT_SAVED_CUT });
+          ask.phase = 'failed';
+          ask.note = NOT_SAVED_CUT;
           throw error;
         }
         log(`[notch] a memory could not be written: ${error instanceof Error ? error.message : String(error)}`);
@@ -652,6 +690,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           if (!ask.stopAsked) ask.silent = true;
           byTurn.delete(ref.turnId);
           ledger.finish(ask.id, 'stopped');
+          // Ended without a word: nothing is left to be seen of it.
+          if (ask.silent) ledger.seen(ask.id);
           ask.phase = 'stopped';
         } else if (pointed?.ok === true) {
           byTurn.delete(ref.turnId);
@@ -704,6 +744,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
       ask.approvals.add(payload.approvalId);
       ask.activity = WAITING_FOR_YES;
+      raisedAgain.set(payload.approvalId, { at: Date.now(), times: 0 });
       deps.raiseApproval?.(payload.approvalId);
       bump(ask);
       return;
@@ -795,7 +836,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     for (;;) {
       if (ask.source === 'typed' && ask.phase === 'heard') {
         // Words the notch acts on itself show what they set off, not a line of work.
-        if (!ask.files?.length && !deps.paused?.() && deps.side?.(ask.heard)) {
+        if (!ask.files?.length && !deps.paused?.() && deps.side?.(ask.heard, { source: ask.source, at: ask.at })) {
           await run(ask, stage);
           continue;
         }
@@ -857,6 +898,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           if (id === null) {
             id = stage.id();
             stage.put({ id, kind: 'work', say: workSay(ask), steps: 0, done: 0, mood: 'work' });
+            // The work line is up afresh and says it waits for a yes: what
+            // it waits for is brought up again. After everything was stopped
+            // and woken, or after a call, the work line came back alone and
+            // the approval it spoke of never got its turn.
+            raiseAgain(ask);
           } else {
             stage.surface.update(id, { say: workSay(ask) });
           }
@@ -883,7 +929,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         case 'done': {
           // The notch did it itself, and what it set off has its own line.
-          if (ask.silent) { forget(ask); return 'settled'; }
+          if (ask.silent) { ledger.seen(ask.id); forget(ask); return 'settled'; }
           const shape = answerShape(ask.answer ?? '');
           if (shape.kind === 'line' && /\?\s*$/.test(shape.text)) {
             // Jarvis asked something back. A question is not a result that
@@ -925,7 +971,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         }
         case 'failed': case 'stopped': {
           // A memory the person said no to: nothing was done, nothing is said.
-          if (ask.note === NOT_SAVED || ask.silent) { forget(ask); return 'settled'; }
+          if (ask.note === NOT_SAVED || ask.silent) { ledger.seen(ask.id); forget(ask); return 'settled'; }
           if (ask.phase === 'stopped') await stage.say(['Stopped. What was already done stays done.'], 2600, { mood: 'careful' });
           else await stage.say([ask.note ?? 'That did not work.'], 5200, { mood: 'sorry', mark: 'fail' });
           if (stage.surface.listening() === 0) return 'waits';
@@ -1107,6 +1153,17 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         const refused = crypto.randomUUID();
         ledger.open(refused, 'spoken');
         ledger.refused(refused, 'Everything is stopped. Wake me first.');
+        deps.attention?.();
+        return refused;
+      }
+      // On a call everything is held, and so is this: turned away now, with
+      // a shake. It used to be taken in silence, with no line and no shake,
+      // and ran when the call was over: "send Sam the deck", said an hour
+      // ago, was then done with nobody having seen that it was heard.
+      if (deps.onCall?.()) {
+        const refused = crypto.randomUUID();
+        ledger.open(refused, 'spoken');
+        ledger.refused(refused, 'You were on a call, and I hold everything until it is over.');
         deps.attention?.();
         return refused;
       }

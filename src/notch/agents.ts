@@ -150,6 +150,10 @@ export function agentSentence(text: string): AgentSentence | null {
   const schedule = scheduleIn(rest);
   if (schedule) {
     const job = told ? plainVerb(schedule.rest) : schedule.rest;
+    // Said without the word agent, what follows the schedule has to be
+    // something to do. "Every day I get so many emails from recruiters" says
+    // what happens to a person, and is not asking for anything to be made.
+    if (!made && /^(?:i|i'm|i've|we|we're|you|he|she|they|it|it's|there|my|our|his|her|their|the|this|that|these|those|someone|somebody|people|everyone)\b/i.test(job)) return null;
     return job.split(' ').filter(Boolean).length >= 2 ? { when: schedule.when, job } : null;
   }
   // "Every 5 minutes", "every invoice": not a schedule the notch can say, and not asked for as an agent.

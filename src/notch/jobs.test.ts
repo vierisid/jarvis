@@ -721,7 +721,7 @@ describe('what was done today, and taking it back from there', () => {
 // reason nobody foresaw.
 describe('why a step was not done', () => {
   test('each reason the desktop app gives is said in its own words', () => {
-    const reasons = ['gone', 'moved', 'outside', 'covered', 'own', 'elevated', 'front', 'pointer', 'off'];
+    const reasons = ['gone', 'moved', 'outside', 'covered', 'own', 'elevated', 'front', 'pointer', 'changed', 'off'];
     const said = reasons.map((why) => actRefusal(why));
     for (const line of said) expect(line).not.toBe('A step did not work.');
     expect(new Set(said).size).toBe(reasons.length);

@@ -15,6 +15,13 @@ const thread = String(args && args.thread || '').replace(/[^0-9a-f]/g, '');
 if (thread.length !== 16 || ![...document.querySelectorAll(`h2[data-legacy-thread-id="${thread}"]`)].some(visible)) return { ok: false, why: 'the thread on screen is not the one meant' };
 
 const editable = () => [...document.querySelectorAll('div[contenteditable="true"][role="textbox"], div.editable[contenteditable="true"]')].find(visible) || null;
+// What somebody wrote in a reply: its text without the signature and without the mail it answers,
+// which Gmail puts there by itself.
+const written = (box) => {
+  const copy = box.cloneNode(true);
+  for (const node of copy.querySelectorAll('.gmail_signature, [data-smartmail="gmail_signature"], .gmail_signature_prefix, .gmail_quote, .gmail_quote_container, .gmail_attr, .gmail_extra, blockquote')) node.remove();
+  return (copy.textContent || '').replace(/[\s\u00a0\u200b]+/g, ' ').trim();
+};
 // The reply's own frame: the nearest thing above the text that also holds the fields a mail is
 // sent with. Who it goes to is shown there, and nowhere else is looked at: the thread names many people.
 const frameOf = (box) => {
@@ -68,6 +75,13 @@ if (step === 'write') {
   // Gmail fills in who it goes to a moment after the reply opens.
   for (let tries = 0; tries < 12 && !goesToTheExpected(frame); tries++) await sleep(250);
   if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', people: addressedIn(frame).size, expected: expected.size };
+  // A reply that already holds words is somebody's draft: the owner's own, half written, or an
+  // earlier one of these that could not be sent. Nothing is written into it. Written at its start,
+  // the new words went out with the old ones after them: the same text twice in one mail, or the
+  // owner's unfinished sentence sent in their name.
+  // (The words of this refusal are MAIL_WHY_DRAFT_THERE in ../mailbox.ts: the draft is then left alone.)
+  const already = written(box);
+  if (already) return { ok: false, why: 'a reply is already being written in that thread', held: already.length };
   box.focus();
   // The caret at the very start, with nothing selected: text typed over a selection replaces it.
   const caret = document.createRange();

@@ -629,7 +629,11 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
   function item(request: ApprovalRequest, raised = false): NotchItem {
     const requestId = request.id;
     return {
-      ...(raised ? { urgent: true } : {}),
+      // One the person's own instruction is waiting on: it takes the notch,
+      // and when something urgent takes the notch from it for a moment, it
+      // has it back afterwards. Handed to the work line instead, the notch
+      // said "Waiting for your yes." with nothing on it to say yes to.
+      ...(raised ? { urgent: true, returns: true } : {}),
       id: itemId(requestId),
       subject: itemId(requestId),
       // An agent stopped in the middle of its work is a running clock: it

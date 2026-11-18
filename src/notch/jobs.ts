@@ -233,6 +233,7 @@ export function actRefusal(why: string | undefined): string {
     case 'elevated': return 'That window runs as administrator, and I cannot reach it.';
     case 'front': return 'Another window came to the front.';
     case 'pointer': return 'The pointer was moved while I was pressing, so I stopped.';
+    case 'changed': return 'Something else is at that place now.';
     case 'off': return 'Desktop control is switched off in settings.';
     default: return 'A step did not work.';
   }

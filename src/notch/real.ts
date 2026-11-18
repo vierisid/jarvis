@@ -429,7 +429,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // First of all: with a draft of a reply open, what is said is what that reply is to say.
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
-      side: (text) => dayOne?.route(text) ?? mail?.mail.route(text) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
+      side: (text, how) => dayOne?.route(text) ?? mail?.mail.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
         ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
@@ -462,6 +462,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
+      // On a call everything is held, what is said to the notch too (./around.ts).
+      onCall: () => around?.onCall() ?? false,
       // The instruction is over: what it was still asking for is asked no more.
       withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },
       attention: () => surface.act({ gesture: 'shake' }),

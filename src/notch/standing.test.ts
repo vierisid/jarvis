@@ -134,6 +134,29 @@ describe('what is said that asks for an eye or a chase', () => {
     for (const no of ['Get me a coffee', 'Chase the dog', 'What is the answer?', 'Reply to Sam by Friday']) expect(chaseRequest(no)).toBeNull();
   });
 
+  // The hardening audit, 17 November 2026: ordinary sentences were taken by
+  // the notch and answered "Whose answer? Say the name." or chased a person
+  // called "up". Where nobody is named and nobody is meant, the words are an
+  // instruction like any other.
+  test('a sentence that only looks like a chase or an eye goes on as an instruction', () => {
+    for (const no of [
+      'Get me the answer to question five',
+      'Chase up the signature page in my downloads',
+      'Get rid of the reply I drafted',
+      'Get started on the answer for the board',
+      'Chase down that signature file',
+    ]) expect(chaseRequest(no)).toBeNull();
+    for (const no of [
+      'Let me know if the supplier responds',
+      'Tell me when the server answers',
+      'Let me know when my order gets back to me',
+    ]) expect(eyeRequest(no)).toBeNull();
+    // Put as a chase with nobody named, it is still one, and the notch asks whose.
+    expect(chaseRequest('Chase him until he answers')).toMatchObject({ who: '' });
+    expect(chaseRequest('Get their signature by Monday')).toMatchObject({ who: '', thing: 'signature', day: 'Monday' });
+    expect(eyeRequest('Tell me when someone replies')).toEqual({ who: '' });
+  });
+
   test('a day that was said is the next one that comes, at six in the evening', () => {
     expect(chaseDay('friday')).toBe('Friday');
     expect(chaseDay('Next Monday.')).toBe('Monday');

@@ -15,6 +15,14 @@ func TestNotchCallAppIsAProgramPeopleCallWith(t *testing.T) {
 		`MSTeams_8wekyb3d8bbwe`,
 		`5319275A.WhatsAppDesktop_cv1g1gvanyjgm`,
 		`C:#Program Files (x86)#Microsoft#Edge#Application#msedge.exe`,
+		// By a whole word, or by how a word begins.
+		`C:#Users#sam#AppData#Local#Arc#arc.exe`,
+		`C:#Program Files#Opera#opera.exe`,
+		`C:#Users#sam#AppData#Local#Microsoft#Teams#current#ms-teams.exe`,
+		`Microsoft.SkypeApp_kzf8qxf38zg5c`,
+		`us.zoom.xos`,
+		`C:#Users#sam#AppData#Local#slack#slack.exe`,
+		`C:#Program Files#BraveSoftware#Brave-Browser#Application#brave.exe`,
 	} {
 		if !notchCallApp(name) {
 			t.Errorf("%s was not taken for a calling program", name)
@@ -27,6 +35,14 @@ func TestNotchCallAppIsAProgramPeopleCallWith(t *testing.T) {
 		// A folder named like a calling program does not make what is in it one.
 		`C:#Users#sam#zoom-backgrounds#recorder.exe`,
 		``,
+		// The hardening audit, 17 November 2026: a short name is a piece of
+		// other names. "arc" is in SearchHost, "opera" in an operator's tool,
+		// "loom" in a bloom filter's.
+		`C:#Windows#SystemApps#MicrosoftWindows.Client.CBS_cw5n1h2txyewy#SearchHost.exe`,
+		`C:#Program Files#Acme#OperatorConsole.exe`,
+		`C:#Tools#bloomfilter.exe`,
+		`C:#Tools#turnaround.exe`,
+		`Microsoft.WindowsSearch_cw5n1h2txyewy`,
 	} {
 		if notchCallApp(name) {
 			t.Errorf("%s was taken for a calling program", name)

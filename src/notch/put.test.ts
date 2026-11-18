@@ -135,7 +135,7 @@ describe('show it a thing, then point at a place', () => {
     await h.reply('yes');
     // As rows of cells, with the form they are to take: the desktop app makes the table.
     expect(h.sent[0]).toEqual({
-      do: 'paste', screen: true, x: 900, y: 500, as: 'table', hand: 0,
+      do: 'paste', screen: true, x: 900, y: 500, in: 'Notepad', as: 'table', hand: 0,
       rows: [['Acme', '1,200.00', 'paid'], ['Lumen', '430.33', 'late'], ['Northwind', '91.00', 'paid']],
     });
     // The pointer goes home when it is done.
@@ -264,7 +264,7 @@ describe('the form a thing is put in', () => {
     await settle();
     expect(h.said()).toBe('Put 1,291 here?');
     await h.reply('yes');
-    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, text: '1,291', hand: 0 });
+    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, in: 'Notepad', text: '1,291', hand: 0 });
   });
 
   test('what the words ask for', () => {
@@ -418,7 +418,8 @@ describe('a circle the program says nothing about is read off its picture', () =
     await settle();
     expect(h.said()).toBe('Put 5 rows here as a table?');
     await h.reply('yes');
-    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, as: 'table', hand: 0, rows: READ });
+    // The program the place was in goes with it: a yes that comes late puts nothing where another program is by then.
+    expect(h.sent[0]).toEqual({ do: 'paste', screen: true, x: 900, y: 500, in: 'Notepad', as: 'table', hand: 0, rows: READ });
     expect(JSON.stringify(h.sent)).not.toContain('Telemetry');
     expect(h.said()).toBe('There. It is in Notepad.');
     // Put once. A click on the field after that is a look like any other.

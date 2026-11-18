@@ -27,3 +27,17 @@ func TestAPressGoesOnlyWhereThePointerWasPut(t *testing.T) {
 		t.Error("moved away is not on the place")
 	}
 }
+
+// The hardening audit, 17 November 2026: "Put 3 rows here?" kept a bare place
+// on the screen, and a yes minutes later pasted into whatever was there.
+func TestAPlacePointedAtIsOnlyActedOnWhileTheSameProgramIsThere(t *testing.T) {
+	if !notchActStillIn("", "excel") {
+		t.Error("nothing asked: as before")
+	}
+	if !notchActStillIn("excel", "excel") {
+		t.Error("the same program is there")
+	}
+	if notchActStillIn("excel", "chrome") || notchActStillIn("excel", "") {
+		t.Error("another program, or none, is there now")
+	}
+}

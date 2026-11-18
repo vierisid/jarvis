@@ -97,6 +97,44 @@ const mailNamed = (person: MailPerson, asked: string): boolean => {
   return asked.split(/\s+/).every((part) => words.includes(part)) || person.address.split('@')[0] === asked.replace(/\s+/g, '.');
 };
 
+/**
+ * Sends one nudge: in its thread when it has one, as a new mail when it has
+ * none or when the thread would not take the words.
+ *
+ * Once Send was pressed in the thread the nudge may be on its way whatever is
+ * read afterwards, and it is never sent a second time as a new mail. It used
+ * to be: the thread does not show a mail for a moment after it is sent, that
+ * read as "not sent", and the same nudge went out again as a mail of its own
+ * (the hardening audit, 17 November 2026).
+ */
+export async function sendNudge(
+  box: Pick<Mailbox, 'reply' | 'write'>,
+  plan: { address: string; thread: string | null; subject: string; text: string },
+  now: () => number,
+  log: (line: string) => void,
+): Promise<MailStep> {
+  if (plan.thread) {
+    const since = now();
+    let pressed = false;
+    const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
+      const written = await session.write();
+      if (!written.ok) return written;
+      pressed = true;
+      const sent = await session.send();
+      // Gmail said it went: it went. The thread showing it is a matter of a moment.
+      if (sent.ok) return { ok: true };
+      // No answer to the send (it can take longer than is waited for): the thread is asked.
+      if ((await session.sent(since)) === true) return { ok: true };
+      await session.discard();
+      return sent;
+    });
+    if (inThread.ok || pressed) return inThread;
+    // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
+    log('[notch] a nudge could not be written in its thread, so it goes as a new mail');
+  }
+  return box.write({ to: plan.address, subject: plan.subject, text: plan.text });
+}
+
 export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): NotchMailLayer {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));
@@ -235,21 +273,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
       async send(plan) {
         const box = mailbox();
         if (!box) return { ok: false, why: 'the mailbox cannot be reached' };
-        if (plan.thread) {
-          const since = now();
-          const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
-            const written = await session.write();
-            if (!written.ok) return written;
-            const sent = await session.send();
-            if (!sent.ok) { await session.discard(); return sent; }
-            // Read back: a mail that Gmail did not take is not called sent.
-            return (await session.sent(since)) === false ? { ok: false, why: 'Gmail does not show it as sent' } : { ok: true };
-          });
-          if (inThread.ok) return inThread;
-          // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
-          log(`[notch] a nudge could not be written in its thread, so it goes as a new mail`);
-        }
-        return box.write({ to: plan.address, subject: plan.subject, text: plan.text });
+        return sendNudge(box, plan, now, log);
       },
     },
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },

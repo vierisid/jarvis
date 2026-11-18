@@ -791,6 +791,26 @@ describe('an approval the person\'s own instruction is stopped at', () => {
     expect(h.said()).toBe('Look up where Steam is installed?');
   });
 
+  // The hardening audit, 17 November 2026: something urgent took the notch
+  // for a moment and it did not go back to the approval, so the notch said it
+  // was waiting for a yes with nothing on it to say yes to.
+  test('raised, it has the notch back after something urgent took it for a moment', async () => {
+    const h = harness({ mine: () => true });
+    const req = h.ask();
+    h.notch.raise(req.id);
+    await settle();
+    expect(h.said()).toBe('Write file?');
+    h.inbox.add({
+      id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, once: true, title: () => ['A meeting'],
+      play: async (stage) => { await stage.say(['Your call starts in two minutes.'], 1500); return 'settled'; },
+    });
+    await settle();
+    expect(h.said()).toBe('Your call starts in two minutes.');
+    await h.answer('done');
+    expect(h.said()).toBe('Write file?');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('pending');
+  });
+
   test('any other approval still folds and waits in the count', async () => {
     const h = harness({ mine: () => false });
     h.ask();

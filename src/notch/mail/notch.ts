@@ -61,7 +61,7 @@ import { NOTCH_NAME } from '../name.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
 import type { NotchStage } from '../stage.ts';
-import type { Mailbox, MailReplyPlan } from './mailbox.ts';
+import { MAIL_WHY_DRAFT_THERE, type Mailbox, type MailReplyPlan } from './mailbox.ts';
 import type { MailProposalRow, MailStore } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
 import type { MailLook, MailWatch } from './watch.ts';
@@ -91,6 +91,12 @@ export const MAIL_TELL_AGAIN = 'change';
 export const MAIL_STEERS = ['say no', 'say yes', 'ask for more time'] as const;
 /** How long after a draft left the notch for the talk keys what is said is still about that draft. */
 export const MAIL_STEER_SAID_MS = 45_000;
+/**
+ * How long after a draft left the notch the talk keys may still have gone
+ * down for what they carry to be about that draft. The keys are what takes
+ * the draft off, so they go down before it leaves, or with it; this is room.
+ */
+export const MAIL_STEER_KEYS_MS = 3000;
 
 /**
  * Whether what was said, with a draft in hand, is what the reply is to say:
@@ -148,7 +154,7 @@ export interface NotchMail {
    * are what the reply is to say, and it is written again. Null when no
    * draft is in hand, or the words are a question.
    */
-  route(text: string): { did: string; run(): void } | null;
+  route(text: string, how?: { source: 'spoken' | 'typed'; at: number }): { did: string; run(): void } | null;
 }
 
 /** The one thing mail is in the inbox. */
@@ -331,6 +337,14 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         if (stopped) {
           const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
           await stage.say(gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
+          return 'waits';
+        }
+        if (!wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE) {
+          // Somebody's draft is in that thread: the owner's own, or an earlier
+          // one that did not go. It is not written into, and above all it is
+          // not thrown away.
+          log('[notch] a reply was not written: its thread already holds a draft');
+          await stage.say(['There is a draft in that thread already. I left it alone, and nothing was sent.'], 5200, { mood: 'careful', src: 'mail' });
           return 'waits';
         }
         if (!wrote.ok) {
@@ -541,9 +555,20 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * ago, is what that reply is to say: it is written again with it and comes
    * back up. Has no effect until `run`.
    */
-  function route(text: string): { did: string; run(): void } | null {
+  function route(text: string, how?: { source: 'spoken' | 'typed'; at: number }): { did: string; run(): void } | null {
     const hand = inHand;
-    if (!hand || !(hand.showing || now() - hand.leftAt < MAIL_STEER_SAID_MS) || !mailSteer(text)) return null;
+    if (!hand || !mailSteer(text)) return null;
+    // A draft that has left the notch is still meant only by what was said
+    // with the keys that took it off. It used to be meant by anything said or
+    // typed in the next 45 seconds: a draft pushed aside by a meeting's
+    // warning, then "open the Q3 deck", and the deck was never opened. The
+    // words were taken as what the reply should say (the hardening audit,
+    // 17 November 2026).
+    if (!hand.showing) {
+      if (now() - hand.leftAt >= MAIL_STEER_SAID_MS) return null;
+      // The keys went down while the draft was still up, or within a moment of its going.
+      if (!how || how.source !== 'spoken' || how.at > hand.leftAt + MAIL_STEER_KEYS_MS) return null;
+    }
     const said = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
     const row = store.proposal(hand.id);
     if (!said || !row || row.state !== 'ready') return null;

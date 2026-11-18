@@ -708,6 +708,11 @@ func notchActWindows(act notchAct) (*RPCResult, error) {
 		if err != nil {
 			return refuse(err.(*notchActError))
 		}
+		// A place on the screen that was pointed at a while ago: the program
+		// that was there is asked for again.
+		if act.Screen && !notchActStillIn(act.In, notchAppKey(whereAppOf(win32RootWindow(win32WindowFromPoint(at.X, at.Y))))) {
+			return refuse(&notchActError{"changed", "another program is at that place now"})
+		}
 		before, had := clipboardText()
 		if !clipboardSet(plain, html) {
 			return refuse(&notchActError{"failed", "the clipboard could not be written"})

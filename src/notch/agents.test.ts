@@ -108,6 +108,13 @@ describe('a sentence that asks for an agent', () => {
     expect(agentSentence('Every day at 8am check my calendar for clashes')).toEqual({ when: 'day at 8:00', job: 'check my calendar for clashes' });
     expect(agentSentence('Every morning tell me what changed overnight')).toEqual({ when: 'day at 9:00', job: 'tell me what changed overnight' });
     expect(agentSentence('each evening file the receipts of the day')).toEqual({ when: 'day at 18:00', job: 'file the receipts of the day' });
+    // The hardening audit, 17 November 2026: what happens to a person every day is not something to make.
+    for (const no of [
+      'Every day I get so many emails from recruiters',
+      'Every Monday we have the planning call at ten',
+      'Every morning my inbox is full again',
+      'Every week there are more of these invoices',
+    ]) expect(agentSentence(no)).toBeNull();
     expect(agentSentence('Daily, send Sam the numbers')).toEqual({ when: 'day at 9:00', job: 'send Sam the numbers' });
     // In "an agent that sends…" the schedule may stand anywhere, and what it does is read back as what to do.
     expect(agentSentence('Make an agent that sends Sam the numbers every week')).toEqual({ when: 'Monday at 9:00', job: 'send Sam the numbers' });
