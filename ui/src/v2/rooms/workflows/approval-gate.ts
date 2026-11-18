@@ -14,6 +14,7 @@
  * each `/api/workflows/pieces` entry, so the badge cannot drift from the gate.
  */
 
+import { CATEGORY_LABELS, type ActionCategory } from "../../../brief/authority/model";
 import type { FlowStepNode, PieceCatalogEntry } from "./useWorkflowEditor";
 
 export const NOT_APPROVAL_GATED_LABEL = "Not approval-gated";
@@ -41,3 +42,28 @@ export const RETRY_UNAVAILABLE_MESSAGE = "Retry is not available for steps that 
 
 /** Said where "Continue on failure" cannot apply (`CONTINUE_UNAVAILABLE_MESSAGE` in the daemon's step-admission.ts). */
 export const CONTINUE_UNAVAILABLE_MESSAGE = "Continue on failure is not available for a step that asks a person, so the steps after it run only after a yes.";
+
+/**
+ * #955 option B: what a verified piece's step says about Authority. The
+ * category is the daemon's (`gatedCategory` on the action), so the badge
+ * cannot drift from the gate. Whether the step then runs, asks or is refused
+ * is the Authority settings' call, so the copy names only the category.
+ */
+export function stepGatedCategory(step: FlowStepNode, catalog: readonly PieceCatalogEntry[]): { label: string; tooltip: string } | null {
+  if (step.type !== "PIECE" || !step.settings?.pieceName || !step.settings.actionName) return null;
+  const action = catalog.find((p) => p.name === step.settings?.pieceName)?.actions.find((a) => a.name === step.settings?.actionName);
+  const category = action?.gatedCategory;
+  if (!action || action.notApprovalGated === true || typeof category !== "string") return null;
+  const name = CATEGORY_LABELS[category as ActionCategory] ?? category;
+  if (action.gatedByInput === true) {
+    return {
+      label: `Authority: up to ${name}`,
+      tooltip: `Jarvis checks this step with Authority each time it runs. Its category follows the step's settings (an HTTP request's method, for example), at most ${name}. Your Authority settings decide whether it runs, asks you first or is refused.`,
+    };
+  }
+  return {
+    label: `Authority: ${name}`,
+    tooltip: `Jarvis checks this step with Authority as ${name} each time it runs. Your Authority settings decide whether it runs, asks you first or is refused.`,
+  };
+}
+

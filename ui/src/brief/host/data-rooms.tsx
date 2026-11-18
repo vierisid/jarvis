@@ -1,7 +1,7 @@
-import { useHumanInputCount, useOwnerAttention } from './HumanInputs';
+import { useHumanInputCount } from './HumanInputs';
 import { NeedsYouContext, documentDecisionCount, isHeldNote } from './needs-you';
 import { EmergencyStatusContext } from './EmergencyStatus';
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useState } from 'react';
 import { StoredNoticesContext } from '../navigation/StoredNoticesContext';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import { PendingDecisions, ForgetMemory } from './canonical-commands';
@@ -87,32 +87,10 @@ export function namedInDocuments(all: Pick<Snapshot<readonly DecisionView[]>, 's
   if (!(all.state === 'ready' || all.state === 'empty' || all.state === 'stale')) return true;
   return !!approvalId && !!all.data?.some(row => row.actions.length > 0 && row.paper.decision.approval?.approvalId === approvalId);
 }
-/**
- * Everything that currently asks something of the owner, counted from the sources Needs you shows: document
- * decisions with an action, the other queued decisions (workflow approvals, permissions, recoveries) and the
- * rest of the attention list (workflow input requests, voice confirmations, live approvals). Each argument is
- * null while its source is unread or failing, and then so is the total: an unknown queue is not an empty one.
- */
-export function waitingOnOwner(documents: ReadonlyArray<{ actions: readonly unknown[] }> | null, others: number | null, attention: number | null): number | null {
-  return documents === null || others === null || attention === null ? null
-    : documents.filter(row => row.actions.length > 0).length + others + attention;
-}
 /** The document rows Today may count: a settled read (an empty queue is []) or cached rows; otherwise unknown. */
 export function settledDocuments<T>(state: Snapshot<readonly T[]>): readonly T[] | null {
   if (state.data) return state.state === 'ready' || state.state === 'stale' ? state.data : null;
   return todayDecisionSnapshot(state).state === 'empty' ? [] : null;
-}
-function useOtherDecisionCount(read: () => Promise<readonly unknown[]>, enabled: boolean): number | null {
-  const [count, setCount] = useState<number | null>(null);
-  useEffect(() => {
-    if (!enabled) { setCount(0); return; }
-    let alive = true, reading = false;
-    const load = async () => { if (reading) return; reading = true;
-      try { const rows = await read(); if (alive) setCount(rows.length); } catch { if (alive) setCount(null); } finally { reading = false; } };
-    void load(); const timer = setInterval(() => void load(), 10000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [read, enabled]);
-  return count;
 }
 export function createDataRooms(host: { scopeId: string; transport: HostTransport; capabilities(): unknown;
   storage: Storage; reconciliation: BriefReconciliationClient; createGoal(): void }) {
@@ -145,10 +123,12 @@ export function createDataRooms(host: { scopeId: string; transport: HostTranspor
     const initialGoal = useBriefProjection(initialGoalRead);
     const g = useBriefProjection(goalRead), d = useBriefProjection(decisionRead), o = useBriefProjection(opportunityRead), outcome = useBriefProjection(outcomes), rec = useBriefProjection(recommendations);
     const decisionSnapshot = todayDecisionSnapshot(d);
-    // Same count as the sidebar badge; alone (no workspace around it) only the document decisions are known.
-    const waiting = useContext(NeedsYouContext)?.count ?? documentDecisionCount(d.data);
-    // What the Getting started all-clear waits for (#1340); null while any source is unread.
-    const allClearWaiting = waitingOnOwner(settledDocuments(d), useOtherDecisionCount(ports.otherDecisions, isBriefCapabilityEnabled(host.capabilities(), 'decisions')), useOwnerAttention());
+    // The workspace's one count, shared with the sidebar badge and the room. Alone (no workspace around it)
+    // only the document decisions are known, so there is no all-clear. Like the badge, it is hidden while Jarvis cannot be reached.
+    const shared = useContext(NeedsYouContext);
+    const waiting = shared ? (shared.lost ? 0 : shared.count) : documentDecisionCount(d.data);
+    // The Getting started all-clear (#1340) reads the same count, and only once every source is read.
+    const allClearWaiting = shared && !shared.lost ? shared.settled : null;
     const emergency = useContext(EmergencyStatusContext);
     const [operation, setOperation] = useState<DecisionOperation>();
     const runs = useBriefProjection(recentRuns);

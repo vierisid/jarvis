@@ -198,6 +198,13 @@ export interface PieceCatalogActionOrTrigger {
   requireAuth?: boolean;
   /** Set by the daemon on an ungoverned action of a partly governed piece (#955). */
   notApprovalGated?: boolean;
+  /**
+   * Set by the daemon on a verified piece's action: the Authority category it
+   * is judged as (#955 option B), the worst case when `gatedByInput` says the
+   * step's settings can narrow it.
+   */
+  gatedCategory?: string;
+  gatedByInput?: boolean;
   /** Set by the daemon on an action that asks a person: "Continue on failure" does not apply to it. */
   continueUnavailable?: boolean;
   /**
