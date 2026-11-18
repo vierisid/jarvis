@@ -637,3 +637,40 @@ describe('pass 12: a new agent is met the way the prototype met it', () => {
     expect(no.acts()).toEqual([]);
   });
 });
+
+// Undo on a receipt (./today.ts): the making of an agent can be taken back from the list of what was done.
+describe('an agent that was made, in the list of what was done, with Undo', () => {
+  test('it is a row from when it was made, and Undo switches it off without deleting it', async () => {
+    const h = harness();
+    const start = h.now();
+    await h.makes();
+    const [row] = h.agents.done(start);
+    expect(row).toMatchObject({ small: 'on', undo: true });
+    expect(row!.id).toStartWith('agent:');
+    expect(row!.text).toStartWith('Made ');
+    expect(row!.text).toContain('send Sam the numbers');
+    const flowId = row!.id.slice('agent:'.length);
+    expect(text(h.agents.undo(row!.id) ?? [])).toEndWith(' is switched off. It is still in Agents.');
+    expect(h.did).toContain(`pause ${flowId}`);
+    expect(h.did.some((one) => one.startsWith('remove'))).toBe(false);
+    expect(h.flows.get(flowId)!.enabled).toBe(false);
+    // The row stands as what it now is, and has no Undo left.
+    expect(h.agents.done(start)).toMatchObject([{ small: 'switched off', undo: false }]);
+    expect(h.agents.undo(row!.id)).toBeNull();
+    // It is still an agent: the list has it.
+    expect(h.agents.store.list()).toHaveLength(1);
+  });
+
+  test('an agent made before the span, one whose workflow is gone, and a row that is no agent are nothing', async () => {
+    const h = harness();
+    const start = h.now();
+    await h.makes();
+    expect(h.agents.done(h.now() + 1)).toEqual([]);
+    const [row] = h.agents.done(start);
+    h.flows.delete(row!.id.slice('agent:'.length));
+    expect(h.agents.done(start)).toEqual([]);
+    expect(h.agents.undo(row!.id)).toBeNull();
+    for (const id of ['job:1', 'chase:c1', 'agent:nothing', '']) expect(h.agents.undo(id)).toBeNull();
+  });
+});
+

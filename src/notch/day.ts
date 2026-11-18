@@ -6,7 +6,9 @@
  * moment it is said and of nothing else:
  *
  *   morning   the first time they are there today: what was done overnight,
- *             and how many things need them
+ *             and how many things need them. Yes opens "Overnight": the
+ *             receipts of what was done, each with Undo where it can be
+ *             taken back, and from there the things that need them
  *   back      after twenty minutes away: who wrote and is waiting, and what
  *             moved in the calendar. Said only when it is more than one new
  *             mail: one new mail is its own line and needs no summary
@@ -19,7 +21,7 @@
  */
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import { notchDayOf } from './presence.ts';
-import type { NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { notchCalendarChanges, type NotchMeeting } from './soon.ts';
 import type { NotchStage } from './stage.ts';
@@ -37,6 +39,17 @@ export interface NotchDayDeps {
   waiting(): number;
   /** The morning line is on the notch: whoever keeps the day of the last one writes it down (./presence.ts). */
   morningSaid?: () => void;
+  /**
+   * What the morning line opens when something was done while they were
+   * away: the receipts of it, each with Undo where it can be taken back
+   * (./today.ts). `undo` takes one back by its row: it comes back with what
+   * to say, with null when there is nothing to say, or with `left` when the
+   * taking back has taken the notch itself (a paste is undone in view).
+   */
+  overnight?: {
+    blocks(since: number): NotchBlock[];
+    undo(row: string): NotchPart[] | null | 'left';
+  };
   /** Whether the person is away now: the evening line is not said to an empty chair. */
   away?(): boolean;
   mail?: {
@@ -139,12 +152,43 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       const counts = (): [number, number] => [deps.done(since, now()), deps.waiting()];
       // What the round shows is what "need you" counted: a tap on the notch, once this line has ended.
       const show = (): void => { setTimeout(() => inbox.open(), 0); };
-      const [, waiting] = counts();
+      const [done, waiting] = counts();
       log('[notch] the first time today: the morning line');
       // A morning line is for its morning: one that never got its say is not said the day after.
       const day = notchDayOf(now());
+      /**
+       * "Overnight" (the prototype's sheet): what was done, as receipts with
+       * Undo, and how many things need them. Yes goes on to those. With
+       * nothing done there is nothing to show before them, and yes goes
+       * straight to the round, as it did.
+       */
+      const overnight = deps.overnight;
+      const sheet = overnight && done > 0 ? async (stage: NotchStage): Promise<void> => {
+        const id = stage.id();
+        const needs = (): number => deps.waiting();
+        const blocks = (): NotchBlock[] => {
+          const k = needs();
+          return [...overnight.blocks(since), ...(k > 0 ? [{ kind: 'note' as const, say: [em(things(k)), k === 1 ? ' needs you.' : ' need you.'] }] : [])];
+        };
+        stage.put({ id, kind: 'sheet', say: ['Overnight'], blocks: blocks(), mood: 'look', ...(needs() > 0 ? { yes: 'show', stay: true } : {}) });
+        for (;;) {
+          const answer = await stage.answer(id, ['yes', 'no', 'button']);
+          if (answer.act === 'no') return;
+          if (answer.act === 'yes') { if (needs() > 0) show(); return; }
+          if (answer.button !== 'undo' || !answer.row) continue;
+          const said = overnight.undo(answer.row);
+          // The taking back has the notch from here: it shows itself.
+          if (said === 'left') return;
+          if (said) {
+            await stage.say(said, 3400, { mark: 'check' });
+            stage.put({ id, kind: 'sheet', say: ['Overnight'], blocks: blocks(), mood: 'look', ...(needs() > 0 ? { yes: 'show', stay: true } : {}) });
+          } else {
+            stage.surface.update(id, { blocks: blocks() });
+          }
+        }
+      } : null;
       inbox.add(line('morning', 'rest', () => (notchDayOf(now()) === day ? notchMorningLine(...counts()) : null),
-        { mood: 'happy', told: deps.mail?.told, said: deps.morningSaid, ...(waiting > 0 ? { show } : {}) }));
+        { mood: 'happy', told: deps.mail?.told, said: deps.morningSaid, ...(sheet ? { show: sheet } : waiting > 0 ? { show } : {}) }));
     },
     left() {
       before = deps.calendar ? [...deps.calendar.ahead()] : null;

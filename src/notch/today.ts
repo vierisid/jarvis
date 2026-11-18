@@ -20,9 +20,11 @@ export interface NotchTodayRow {
   at: number;
   text: string;
   /** Where the row comes from, for the small word on its right. */
-  kind: 'approved' | 'promise' | 'mail' | 'job';
-  /** In place of the small word: what a sent mail cost. */
+  kind: 'approved' | 'promise' | 'mail' | 'job' | 'more';
+  /** In place of the small word: what a sent mail cost, or how a thing that was started stands. */
   small?: string;
+  /** A thing the notch started that is not one of the others: the row's id, and whether it can still be taken back. */
+  more?: { id: string; undo: boolean };
   /** A job done where it could be seen: its id, and whether what it pasted can still be taken back. */
   job?: { id: string; undoable: boolean };
 }
@@ -36,8 +38,18 @@ export interface NotchTodayDeps {
   sentMail?(since: number): { at: number; text: string; small: string }[];
   /** Jobs Jarvis did where they could be seen (jobs.ts), since a moment. */
   jobs?(since: number): { id: string; at: number; text: string; undoable: boolean }[];
+  /**
+   * What else was started since a moment and is still the notch's to take
+   * back: a watch for somebody's reply, a chase, an agent that was made.
+   * `id` names the row, `small` is how it stands in a word, `undo` whether it
+   * can still be taken back.
+   */
+  more?(since: number): NotchDone[];
   now?: () => number;
 }
+
+/** One thing that was started and may be taken back: a row of the list with its own id. */
+export interface NotchDone { id: string; at: number; text: string; small: string; undo: boolean }
 
 /** The most rows the list shows. */
 export const NOTCH_TODAY_MAX = 12;
@@ -98,6 +110,11 @@ export function notchDoneBetween(deps: NotchTodayDeps, since: number, now: numbe
     const points = [...job.text];
     rows.push({ at: job.at, text: points.length <= ROW_CHARS ? job.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'job', job: { id: job.id, undoable: job.undoable } });
   }
+  for (const one of deps.more?.(since) ?? []) {
+    if (one.at < since || one.at > now) continue;
+    const points = [...one.text];
+    rows.push({ at: one.at, text: points.length <= ROW_CHARS ? one.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'more', small: one.small, more: { id: one.id, undo: one.undo } });
+  }
   return rows.sort((a, b) => b.at - a.at);
 }
 
@@ -106,19 +123,29 @@ const clock = (at: number): string => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 };
 
-/** The list as the blocks of a sheet. */
-export function notchTodayBlocks(rows: NotchTodayRow[]): NotchBlock[] {
-  if (rows.length === 0) return [{ kind: 'note', say: ['Nothing done yet today.'] }];
+/** The button that takes a thing back. It is on a row only while the thing can really be taken back. */
+const UNDO = { buttons: [{ id: 'undo', label: 'Undo', quiet: true }] };
+
+/**
+ * The list as the blocks of a sheet. A row has Undo when what it says can be
+ * taken back: a paste, a watch, a chase, an agent. A mail that was sent and
+ * an action that was carried out have none: they cannot be unsent or undone,
+ * and a button that says otherwise would be a lie.
+ */
+export function notchTodayBlocks(rows: NotchTodayRow[], none = 'Nothing done yet today.'): NotchBlock[] {
+  if (rows.length === 0) return [{ kind: 'note', say: [none] }];
   const shown = rows.slice(0, NOTCH_TODAY_MAX);
   const blocks: NotchBlock[] = shown.map((row): NotchBlock => (row.kind === 'job'
     // What Jarvis did where it could be seen. What it pasted can be taken back from here.
     ? {
       kind: 'row', lead: clock(row.at), say: [row.text], id: `job:${row.job?.id ?? ''}`,
-      ...(row.job?.undoable ? { buttons: [{ id: 'undo', label: 'Undo', quiet: true }] } : { small: 'done' }),
+      ...(row.job?.undoable ? UNDO : { small: 'done' }),
     }
-    : {
-      kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'mail' ? `sent · ${row.small ?? ''}`.replace(/ · $/, '') : row.kind === 'promise' ? 'promised' : 'approved',
-    }));
+    : row.kind === 'more'
+      ? { kind: 'row', lead: clock(row.at), say: [row.text], id: row.more?.id ?? '', ...(row.more?.undo ? UNDO : { small: row.small ?? 'done' }) }
+      : {
+        kind: 'row', lead: clock(row.at), say: [row.text], small: row.kind === 'mail' ? `sent · ${row.small ?? ''}`.replace(/ · $/, '') : row.kind === 'promise' ? 'promised' : 'approved',
+      }));
   if (rows.length > shown.length) blocks.push({ kind: 'note', say: [`And ${rows.length - shown.length} more, in the dashboard.`] });
   return blocks;
 }

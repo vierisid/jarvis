@@ -155,6 +155,12 @@ export interface NotchAsksDeps {
   afterTurn?: (since: number) => void;
   /** Takes back what a job of today pasted: the Undo on its row in Home. */
   undoJob?: (jobId: string) => void;
+  /**
+   * Takes back another thing a row of today stands for (./today.ts): a
+   * watch, a chase, an agent that was made. Comes back with what to say, or
+   * null when the row is none of these or the thing is over already.
+   */
+  undoRow?: (row: string) => NotchPart[] | null;
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /**
@@ -1137,6 +1143,12 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (answer.act === 'button' && answer.button === 'undo' && answer.row?.startsWith('job:') && deps.undoJob) {
         deps.undoJob(answer.row.slice(4));
         return;
+      }
+      // Undo on any other row: taken back at once, said in a line, and Home is back with the row as it stands now.
+      if (answer.act === 'button' && answer.button === 'undo' && answer.row && deps.undoRow) {
+        const said = deps.undoRow(answer.row);
+        if (said) await stage.say(said, 3400, { mark: 'check' });
+        continue;
       }
       if (answer.act === 'ask') {
         const text = (answer.text ?? '').trim();

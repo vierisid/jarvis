@@ -293,6 +293,15 @@ export interface NotchAgents {
   adopt(since: number): void;
   /** The clock: runs that have ended are counted, told of, and the next rung is offered. Tests call it by hand. */
   tick(): void;
+  /** The agents made since a moment, for the list of what was done (./today.ts). One that is switched on can be taken back. */
+  done(since: number): { id: string; at: number; text: string; small: string; undo: boolean }[];
+  /**
+   * Takes back the making of an agent, by the id its row has: it is switched
+   * off, not deleted. Deleting is asked for in the agents' own list, where it
+   * is a question. Comes back with what to say, or null when it is no agent
+   * or is off already.
+   */
+  undo(id: string): NotchPart[] | null;
   stop(): void;
 }
 
@@ -677,6 +686,28 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     open,
     adopt,
     tick,
+    done(since) {
+      return store.list().filter((agent) => agent.madeAt >= since).flatMap((agent) => {
+        const seen = deps.workflows.look(agent.flowId);
+        // One whose workflow is gone was deleted: it is not something that was done and stands.
+        if (!seen) return [];
+        const sentence = [...agent.sentence];
+        return [{
+          id: `agent:${agent.flowId}`, at: agent.madeAt,
+          text: `Made ${agent.name}: ${sentence.length <= 120 ? agent.sentence : `${sentence.slice(0, 119).join('').trimEnd()}…`}`,
+          small: seen.enabled ? 'on' : 'switched off', undo: seen.enabled,
+        }];
+      });
+    },
+    undo(id) {
+      if (!id.startsWith('agent:')) return null;
+      const agent = store.get(id.slice('agent:'.length));
+      const seen = agent ? deps.workflows.look(agent.flowId) : null;
+      if (!agent || !seen?.enabled) return null;
+      if (!deps.workflows.pause(agent.flowId, true)) return [em(agent.name), ' could not be switched off. It is still on.'];
+      log('[notch] an agent was switched off from the list of what was done');
+      return [em(agent.name), ' is switched off. It is still in Agents.'];
+    },
     stop() { stopped = true; },
   };
 }
