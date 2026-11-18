@@ -100,6 +100,16 @@ describe("a new draft never starts from a version that does not run", () => {
     expect(copy.body.trigger).toEqual(withStep());
     expect(copy.body.displayName).toBe("Second");
   });
+
+  test("two drafts saved in the same millisecond: the copy is of the one created last", async () => {
+    const flow = createFlow({});
+    createDraftVersion({ flowId: flow.id, displayName: "First", trigger: graph() as never });
+    createDraftVersion({ flowId: flow.id, displayName: "Second", trigger: withStep() as never });
+    getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE flow_id = ?", [1, flow.id]);
+    const copy = await post(flow.id, {});
+    expect(copy.body.trigger).toEqual(withStep());
+    expect(copy.body.displayName).toBe("Second");
+  });
 });
 
 describe("a draft's graph is checked when it is saved", () => {
