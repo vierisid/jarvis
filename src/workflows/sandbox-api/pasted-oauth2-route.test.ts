@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { CredentialResolver } from "../credentials/adapter";
-import type { TokenTransport } from "../credentials/pasted-oauth2";
+import { UNREACHABLE_BACKOFF_MS, type TokenTransport } from "../credentials/pasted-oauth2";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { graphDigest } from "../runtime/continuation";
 import { setEncryptionKey } from "../db/encryption";
@@ -142,7 +142,12 @@ describe("#954 pasted OAuth2 connections through the engine endpoint", () => {
     const failed = updateRun(run.id, { status: "FAILED", failedStep: { name: "read_mail", displayName: "Read mail", errorMessage: "Failed to load connection" } })!;
     expect(runFailure(getFlowRun(failed.id)!)).toMatchObject({ category: "target_offline", effect: "none", code: "CONNECTION_REFRESH_UNREACHABLE" });
 
+    // Within the backoff the fetch fails at once, without a request.
     tokenAnswer = () => ({ status: 200, body: { access_token: "ya29.back", expires_in: 3599 } });
+    const calls = tokenCalls;
+    expect((await fetchConnection()).status).toBe(503);
+    expect(tokenCalls).toBe(calls);
+    clock += UNREACHABLE_BACKOFF_MS;
     expect((await fetchConnection()).status).toBe(200);
     expect(getFlowRun(run.id)!.connectionBindings![0]!.credentialFailure).toBeUndefined();
   });
