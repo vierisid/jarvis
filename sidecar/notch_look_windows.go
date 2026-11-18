@@ -325,7 +325,8 @@ func (w *lookWindows) Snapshot(screen lookRect) lookSnapshot {
 type lookInkCmd struct {
 	// 1 begin, 2 line, 3 tag, 4 end; 6 the hand goes to a rectangle and rings
 	// it, 7 that was clicked, 8 every hand goes home; 9 a hand of a job goes to
-	// a place, 10 the words beside the person's own pointer
+	// a place, 10 the words beside the person's own pointer; 11 a mark sweeps
+	// over a rectangle, 12 the mark is taken away
 	kind   uint8
 	a, b   lookPoint
 	screen lookRect
@@ -362,6 +363,13 @@ func (w *lookWindows) Point(r lookRect, label string, stay time.Duration) {
 }
 func (w *lookWindows) PointHit() { w.post(lookInkCmd{kind: 7}) }
 func (w *lookWindows) PointEnd() { w.post(lookInkCmd{kind: 8}) }
+
+// Mark sweeps a citron mark over a rectangle of the screen and leaves it
+// there for `stay`, or until MarkEnd (notch_mark.go).
+func (w *lookWindows) Mark(r lookRect, stay time.Duration) {
+	w.post(lookInkCmd{kind: 11, bounds: r, stay: stay})
+}
+func (w *lookWindows) MarkEnd() { w.post(lookInkCmd{kind: 12}) }
 
 // HandTo sends one of the hands to a place and says how long its way takes.
 func (w *lookWindows) HandTo(n int, at lookPoint, beside bool) time.Duration {
@@ -564,7 +572,23 @@ func (w *lookWindows) inkThread() {
 		hover     *lookSheet
 		hoverText string
 		hoverAt   lookPoint
+		// The mark over the thing a line on the notch is about (notch_mark.go):
+		// its own small window, how far its sweep has come, and when it goes.
+		mark struct {
+			sheet  *lookSheet
+			began  time.Time
+			drawn  int
+			endAt  time.Time
+			radius float64
+		}
 	)
+	closeMark := func() {
+		if mark.sheet != nil {
+			mark.sheet.destroy()
+			mark.sheet = nil
+		}
+		mark.drawn = 0
+	}
 	anyHand := func() bool {
 		for _, h := range hands {
 			if h != nil {
@@ -741,6 +765,8 @@ func (w *lookWindows) inkThread() {
 		case 1:
 			closeAll()
 			closeHover()
+			// The person is drawing: what Jarvis had marked is not left under their line.
+			closeMark()
 			screen, scale = cmd.screen, cmd.scale
 			s, err := newLookSheet(screen.X, screen.Y, screen.W, screen.H)
 			if err != nil {
@@ -814,6 +840,22 @@ func (w *lookWindows) inkThread() {
 			if cmd.reply != nil {
 				cmd.reply <- took
 			}
+		case 11:
+			// A mark over a thing. The one that was there, if any, makes way.
+			closeMark()
+			_, markScale := w.Screen(lookPoint{cmd.bounds.X + cmd.bounds.W/2, cmd.bounds.Y + cmd.bounds.H/2})
+			made, err := newLookSheet(cmd.bounds.X, cmd.bounds.Y, cmd.bounds.W, cmd.bounds.H)
+			if err != nil {
+				log.Printf("[notch] look: no mark: %v", err)
+				return
+			}
+			began := time.Now()
+			mark.sheet, mark.began, mark.drawn, mark.endAt, mark.radius = made, began, 0, began.Add(cmd.stay), 4*markScale
+			// Clear at first: the sweep begins a moment later.
+			made.show(nil)
+			made.raise()
+		case 12:
+			closeMark()
 		case 10:
 			// The words beside the person's pointer: what would be put here.
 			if cmd.text == "" {
@@ -840,11 +882,11 @@ func (w *lookWindows) inkThread() {
 				flying = true
 			}
 		}
-		if sheet != nil || hover != nil || anyHand() {
+		if sheet != nil || hover != nil || anyHand() || mark.sheet != nil {
 			// Something is up: its messages are answered, its time is watched,
 			// and what is moving is moved.
 			every := 30 * time.Millisecond
-			if flying || ring.on {
+			if flying || ring.on || (mark.sheet != nil && mark.drawn < int(mark.sheet.w)) {
 				every = 8 * time.Millisecond
 			}
 			tick = time.After(every)
@@ -926,7 +968,19 @@ func (w *lookWindows) inkThread() {
 			ink.paint(sheet.pixels, dirty)
 			sheet.show(&dirty)
 		}
-		if sheet != nil || hover != nil || anyHand() {
+		if mark.sheet != nil {
+			// The sweep, from the left, as far as it has come by now.
+			width, height := int(mark.sheet.w), int(mark.sheet.h)
+			if upTo := notchMarkUpTo(now.Sub(mark.began), width); upTo > mark.drawn {
+				notchMarkFill(mark.sheet.pixels, width, height, mark.drawn, upTo, mark.radius, notchMarkPixel())
+				mark.drawn = upTo
+				mark.sheet.show(nil)
+			}
+			if now.After(mark.endAt) {
+				closeMark()
+			}
+		}
+		if sheet != nil || hover != nil || anyHand() || mark.sheet != nil {
 			pump()
 			if !endAt.IsZero() && now.After(endAt) {
 				if anyHand() {

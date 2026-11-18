@@ -879,6 +879,110 @@ func (l *NotchLook) PointWait(r lookRect, label string, wait time.Duration) (loo
 	}
 }
 
+// lookMarker is a pair of hands that can also lay a mark over a thing
+// (notch_mark.go). Not every system's hands can: where they cannot, marking
+// is not available and the line it belongs to comes without one.
+type lookMarker interface {
+	Mark(r lookRect, stay time.Duration)
+	MarkEnd()
+}
+
+// Mark sweeps a mark over a rectangle of the screen. An error when there is
+// nothing to draw it with here, or the person is drawing a line.
+func (l *NotchLook) Mark(r lookRect, stay time.Duration) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	marker, ok := l.hands.(lookMarker)
+	if l.hands == nil || !ok {
+		return fmt.Errorf("marking is not available on this computer")
+	}
+	if l.pen.Busy() {
+		return fmt.Errorf("the person is drawing a line")
+	}
+	marker.Mark(r, stay)
+	return nil
+}
+
+// MarkClear takes the mark away, if one is up.
+func (l *NotchLook) MarkClear() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if marker, ok := l.hands.(lookMarker); ok && l.hands != nil {
+		marker.MarkEnd()
+	}
+}
+
+// makeNotchMarkHandler serves notch.mark: a mark over the thing a line on the
+// notch is about, in the window the person is in.
+//
+// It is drawn only over the window that was looked at, as it was looked at:
+// the brain says where that window was (`in`), and when the window in front
+// is no longer there, the mark would lie over something else and is not
+// drawn. Nor is it drawn where this program looks away, or outside that
+// window, or over more than a mark covers.
+func makeNotchMarkHandler(l *NotchLook) RPCHandler {
+	return func(params map[string]any) (*RPCResult, error) {
+		if clear, _ := params["clear"].(bool); clear {
+			l.MarkClear()
+			return &RPCResult{Result: map[string]any{"cleared": true}}, nil
+		}
+		number := func(from map[string]any, key string) (int, bool) {
+			raw, ok := from[key].(float64)
+			if !ok || math.IsNaN(raw) || math.Abs(raw) > 200000 {
+				return 0, false
+			}
+			return int(math.Round(raw)), true
+		}
+		rect := func(from map[string]any) (lookRect, bool) {
+			var r lookRect
+			var okX, okY, okW, okH bool
+			r.X, okX = number(from, "x")
+			r.Y, okY = number(from, "y")
+			r.W, okW = number(from, "w")
+			r.H, okH = number(from, "h")
+			return r, okX && okY && okW && okH
+		}
+		r, ok := rect(params)
+		if !ok {
+			return nil, fmt.Errorf("notch.mark: x, y, w and h must be numbers of screen pixels")
+		}
+		in, _ := params["in"].(map[string]any)
+		was, ok := rect(in)
+		if !ok {
+			return nil, fmt.Errorf("notch.mark: the window that was looked at must be given")
+		}
+		if platformNotchFront == nil {
+			return nil, fmt.Errorf("notch.mark: %w", errNotchLookNotHere)
+		}
+		window, app, title, err := platformNotchFront()
+		if err != nil {
+			return nil, fmt.Errorf("notch.mark: %w", err)
+		}
+		// Decided before anything is drawn (notch_where.go).
+		if away := notchLookAway(notchAppKey(app), title); away != "" {
+			return &RPCResult{Result: map[string]any{"marked": false, "why": "away"}}, nil
+		}
+		if hands := notchActHands(); hands != nil {
+			// As a picture of it is cut: only what is on the display the window is on.
+			screen, _ := hands.Screen(lookPoint{window.X + window.W/2, window.Y + window.H/2})
+			window = shotClip(window, screen)
+		}
+		if !notchMarkSame(window.X, window.Y, window.W, window.H, was.X, was.Y, was.W, was.H) {
+			return &RPCResult{Result: map[string]any{"marked": false, "why": "moved"}}, nil
+		}
+		if !notchMarkFits(r.X, r.Y, r.W, r.H, window.X, window.Y, window.W, window.H) {
+			return &RPCResult{Result: map[string]any{"marked": false, "why": "size"}}, nil
+		}
+		ms, _ := params["ms"].(float64)
+		if err := l.Mark(r, notchMarkStay(ms)); err != nil {
+			return nil, fmt.Errorf("notch.mark: %w", err)
+		}
+		// That one was drawn, and how large: never where, and never over what.
+		log.Printf("[notch] a mark was drawn over a thing of %d by %d", r.W, r.H)
+		return &RPCResult{Result: map[string]any{"marked": true}}, nil
+	}
+}
+
 // PointClear takes away whatever is being pointed at and sends the pointer
 // home. A wait for a click ends with "replaced".
 func (l *NotchLook) PointClear() {

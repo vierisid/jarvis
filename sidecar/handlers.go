@@ -145,6 +145,7 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		// switch is on (notchOnly): with it off this program holds none of
 		// what says where it must not look.
 		registry["notch.point"] = notchOnly(notch, "notch.point", makeNotchPointHandler(notchLooker))
+		registry["notch.mark"] = notchOnly(notch, "notch.mark", makeNotchMarkHandler(notchLooker))
 		registry["notch.window"] = notchOnly(notch, "notch.window", makeNotchWindowHandler())
 		// The same window as a picture with a ruler, for a program that says
 		// nothing about itself (notch_shot.go).

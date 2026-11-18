@@ -2428,8 +2428,6 @@ What is not done, or not proven:
 - **It sees one picture.** "The same error twice" is seen when both are on
   the screen. What scrolled away, or happened in that window a minute ago,
   is not known to it.
-- **It does not point.** The prototype sweeps a citron mark over the thing
-  before the line arrives.
 - **Whether the thing gets done is the agent's.** The reply in Slack is
   typed by the same agent, with the same tools and the same approvals, as
   if the sentence had been typed in Home. This adds nothing to what the
@@ -2573,6 +2571,76 @@ What is not done, or not proven:
 - **Work that is running is not steered by voice.** The prototype's "skip
   the fees" said over a running paste is not built: while something runs,
   the talk keys are refused.
+
+## It points before it speaks
+
+In the prototype a line about a thing in the app in front comes with a
+mark: a soft citron stroke sweeps over the thing, the way a marker goes
+over a line of text, and the notch leans toward it. The product pointed
+only when it was asked where something is. The owner asked for the
+prototype's way on 18 November 2026, as the fourth of the things it has
+and the product did not.
+
+How it goes. The look that finds a thing to offer (the chapter "Speaking
+up first") is also asked where the thing is, on the ruler of the picture,
+and what it shows. Before the offer is made, a close-up of that place is
+taken and a model marks the thing's edges in it: the same two steps "where
+is" takes, for the same reason. When the offer's line is put on the notch
+the brain asks the desktop app for a mark over that rectangle
+(`notch.mark`), and the lip reaches toward it. The desktop app draws the
+mark in a small window of its own: nothing for a quarter of a second, then
+a sweep from left to right in a little over half a second
+(`sidecar/notch_mark.go`). It stays while the line is up, and is taken
+away with it.
+
+211. **The mark is a picture laid over the screen, and nothing else.** It
+    is drawn in a window that takes no click and never has the keyboard,
+    like the pointer and the ring. Nothing under it is touched or read,
+    and the person's pointer is not moved.
+212. **It is drawn only over the window that was looked at, as it was
+    looked at.** The brain says where that window was. When the window in
+    front is no longer there (moved, resized, another one), the desktop
+    app draws nothing and says "moved". It draws nothing where it looks
+    away, nothing that reaches outside the window, and nothing while the
+    person is drawing a line of their own.
+213. **A mark is over a thing, not over a window.** At most
+    `notchMarkMaxW` by `notchMarkMaxH` pixels on the desktop app's side.
+    On the brain's side at most `NOTCH_NOTICE_MARK_MAX_H` high and a fifth
+    of the window. A thing the close-up cannot find, a speck, or a box
+    that is most of the close-up, is not marked.
+214. **Only while their hands are still.** The mark is asked for when the
+    line is put, and only if the person's hands have not been on the keys
+    or the mouse: a window that was scrolled since the look has the thing
+    somewhere else.
+215. **The mark is the line's.** It goes when the line is answered, when it
+    folds, and when something else takes the notch. A mark that the
+    desktop app draws only after the line has left is taken away then.
+    Left alone it goes by itself after `NOTCH_NOTICE_MARK_MS`, and after
+    30 seconds at the very latest.
+216. **Without a mark the offer is made all the same.** No place in what
+    the model said, a close-up that could not be had, a desktop app that
+    cannot draw one: the line comes as it did before.
+217. **Where the thing is, and what it shows, are no part of what a yes
+    runs.** They go to the close-up as outside text and to the desktop app
+    as four numbers. The instruction is still built from the two
+    sentences on the notch alone.
+
+What is not done, or not proven:
+
+- **No mark has been seen on a screen.** The sweep's arithmetic, the
+  desktop app's refusals and the brain's side are tested; the drawing is
+  compiled for Windows and was never run.
+- **It can be off.** The place comes from a model reading a ruler on a
+  picture, twice. "Where is" has the same limit and shows it with a ring;
+  here a mark that is beside the thing is simply beside it.
+- **What changes by itself is not followed.** A chat that scrolls because
+  somebody wrote, a page that reloads: the mark stays where the thing was.
+- **Only for what the noticing offers.** Mail lines, meeting lines and
+  approvals come as they did, without a mark.
+- **One more picture and one more question to the model for each offer**
+  that has a place.
+- **Not on a Mac.** The Mac's hands cannot draw a mark yet, so there the
+  offer comes without one.
 
 ## The keys
 

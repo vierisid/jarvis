@@ -201,7 +201,7 @@ export interface NotchRealDeps {
    * question to a model that sees pictures. Needs `asks` (a yes runs an
    * instruction) and what `where` knows of the app in front.
    */
-  notice?: { see: NotchNoticeDeps['see']; read?: NotchNoticeDeps['read']; think: NotchNoticeDeps['think']; noClock?: boolean };
+  notice?: { see: NotchNoticeDeps['see']; read?: NotchNoticeDeps['read']; think: NotchNoticeDeps['think']; mark?: NotchNoticeDeps['mark']; unmark?: NotchNoticeDeps['unmark']; noClock?: boolean };
   /**
    * Doing it in view (pass 10): jobs done where they can be seen, with
    * Jarvis's own pointers; a job caught by itself when it is done twice by
@@ -669,6 +669,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       maySpeak: () => !(emergency && emergency.getState() !== 'normal') && !(presence?.isAway() ?? false) && !(quiet?.now() ?? false) && !(around?.onCall() ?? false),
       busy: () => surface.current().line !== null,
       see: deps.notice.see, read: deps.notice.read, think: deps.notice.think,
+      // It points before it speaks: a mark over the thing, and the notch leans toward it.
+      mark: deps.notice.mark, unmark: deps.notice.unmark,
+      toward: (aim) => surface.act({ lip: 'reach', aim }),
       run: (text) => { asks?.offered(text); },
       now: dayNow,
     });
