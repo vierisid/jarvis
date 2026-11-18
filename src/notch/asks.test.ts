@@ -272,6 +272,37 @@ describe('typing in Home', () => {
   });
 });
 
+describe('Undo on a row of today, in Home', () => {
+  const rows = [{ kind: 'row' as const, id: 'chase:c1', lead: '10:00', say: ["Getting Sam's answer by Friday"], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] }];
+
+  test('takes the thing back, says so in a line, and Home is back as it stands now', async () => {
+    const undone: string[] = [];
+    let today = rows;
+    const h = harness({ deps: { today: () => today, undoRow: (row) => { undone.push(row); today = []; return ['Stopped. I will not write to Sam again. What I sent stays sent.']; } } });
+    await h.open();
+    await h.answer('button', { button: 'undo', row: 'chase:c1' });
+    expect(undone).toEqual(['chase:c1']);
+    expect(h.said()).toBe('Stopped. I will not write to Sam again. What I sent stays sent.');
+    await h.answer('done');
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    const shown = h.line();
+    expect(shown?.kind === 'ask' ? (shown.blocks ?? []).some((block) => block.kind === 'row' && block.id === 'chase:c1') : true).toBe(false);
+  });
+
+  test('a row that stands for nothing that can be taken back says nothing, and a paste goes its own way', async () => {
+    const undone: string[] = [];
+    const jobs: string[] = [];
+    const h = harness({ deps: { today: () => rows, undoRow: (row) => { undone.push(row); return null; }, undoJob: (id) => { jobs.push(id); } } });
+    await h.open();
+    await h.answer('button', { button: 'undo', row: 'chase:c1' });
+    expect(undone).toEqual(['chase:c1']);
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    await h.answer('button', { button: 'undo', row: 'job:j7' });
+    expect(jobs).toEqual(['j7']);
+    expect(undone).toEqual(['chase:c1']);
+  });
+});
+
 describe('an offer of the notch that was taken with a yes', () => {
   const SAID = 'Leo asked for the October revenue. Reply to him here with the number.';
 

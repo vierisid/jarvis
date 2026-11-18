@@ -58,6 +58,7 @@ import { attachNotchMoves, type NotchMoves } from './moves.ts';
 import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
+import type { NotchPart } from './protocol.ts';
 import { attachNotchSaid } from './said.ts';
 import { whereQuestion } from './point.ts';
 
@@ -305,7 +306,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
     sentMail: (since: number) => mail?.sentSince(since) ?? [],
     jobs: (since: number) => jobs?.done(since) ?? [],
+    // What else was started and can be taken back: a watch, a chase, an agent that was made.
+    more: (since: number) => [...(standing?.done(since) ?? []), ...(agents?.done(since) ?? [])],
   };
+  /** Undo on a row of what was done that is not a paste: what to say, or null when the row stands for nothing that can be taken back. */
+  const undoRow = (row: string): NotchPart[] | null => standing?.undo(row) ?? agents?.undo(row) ?? null;
   // Made after the inbox, which opens it: yes at rest with nothing waiting.
   let asks: NotchAsks | null = null;
   const today = notchTodayScript(todayDeps);
@@ -501,6 +506,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       },
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
+      undoRow,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
       // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
@@ -634,6 +640,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       waiting: () => inbox.waiting().filter((item) => !lines.has(item.id) && !item.id.startsWith('soon:')).length + (layer?.store.ready().length ?? 0),
       away: () => presence?.isAway() ?? false,
       morningSaid: () => presence?.morningSaid(),
+      // What the morning line opens: the receipts of the night, with Undo where a thing can be taken back.
+      overnight: {
+        blocks: (since) => notchTodayBlocks(notchDoneBetween(todayDeps, since, dayNow()), 'Nothing was done overnight.'),
+        undo: (row) => {
+          if (row.startsWith('job:')) { if (!jobs) return null; jobs.undo(row.slice(4)); return 'left'; }
+          return undoRow(row);
+        },
+      },
       mail: layer ? { newSince: (at) => layer.mail.newSince(at), told: () => layer.mail.told(), open: (stage) => layer.mail.open(stage) } : undefined,
       calendar: soon ? { ahead: () => soon!.ahead(), look: () => soon!.look() } : undefined,
       now: dayNow,

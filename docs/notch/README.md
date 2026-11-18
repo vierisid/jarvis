@@ -2642,6 +2642,61 @@ What is not done, or not proven:
 - **Not on a Mac.** The Mac's hands cannot draw a mark yet, so there the
   offer comes without one.
 
+## Overnight, and Undo on what was done
+
+The prototype's morning: "Morning. 2 jobs done overnight. 2 need you.", and
+yes opens a sheet, "Overnight", with a receipt for each thing done and
+Undo beside it. In its list of the day every receipt has Undo. In the
+product the morning was one line, and only a paste could be taken back.
+The owner asked for the prototype's way on 18 November 2026, as the fifth
+of the things it has and the product did not.
+
+How it goes. The morning line's yes opens "Overnight" when something was
+done while the person was away (`src/notch/day.ts`): the same rows Today
+is made of, for the span since they left (`notchDoneBetween`), and under
+them how many things need them. Yes there goes on to those. Today, and so
+Overnight, has three more kinds of row than before: a watch that was set
+("tell me when Sam replies"), a chase that was started, an agent that was
+made (`src/notch/today.ts`, `more`). Each has Undo while it can be taken
+back.
+
+218. **Undo is on a receipt only while the thing can really be taken
+    back.** A paste whose rows can be removed, a watch, a chase that is
+    still under way, an agent that is switched on. A mail that was sent, a
+    promise that was kept and an action that was approved and carried out
+    have none: they cannot be unsent or undone, and a button that says
+    otherwise would be a lie.
+219. **What Undo does is what the row says in reverse, and no more.** A
+    watch is closed. A chase is stopped for good, by the same move as Stop
+    in its list, and the line says that what was sent stays sent. An agent
+    is switched off, not deleted: deleting is asked for in the agents' own
+    list, where it is a question. A paste is taken back in view, as from
+    Today.
+220. **It is said in one line, and the list is back as it stands.** The
+    row of a watch is gone, the row of a chase says "stopped", the row of
+    an agent says "switched off". None of them has Undo any more, and a
+    second Undo of the same row does nothing.
+221. **Overnight is the span since they left, counted when it is opened.**
+    The receipts are read from what the product keeps, each time, as
+    Today is. Nothing is recorded for the sheet.
+222. **With nothing done, the morning's yes goes straight to what needs
+    them**, as before. With things done and nothing that needs them, the
+    line has its yes all the same, and the sheet is the receipts alone.
+
+What is not done, or not proven:
+
+- **Not every receipt has Undo.** The prototype's has, because nothing in
+  it is real. A sent mail is the commonest thing done overnight, and it
+  cannot be taken back.
+- **An agent's runs are not receipts.** "Nora replied to 4 new leads" is
+  the prototype's row. Here a run that needed no approval leaves no
+  sentence a person could read (see Today), so it is not listed, and what
+  an agent did in a run cannot be taken back from the notch.
+- **A memory that was saved is not a row.** It can be forgotten in Memory.
+- **The pieces are tested each by itself.** The sheet, the rows and each
+  way of taking back have their tests; the whole of it together, on a
+  brain with mail and agents, has not run.
+
 ## The keys
 
 | What | Keys | How it is told |
@@ -2848,6 +2903,7 @@ What is not done, or not proven:
 | brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |
 | brain to desktop app | `notch.window` | none | The window the person is in, as it describes itself: `{window_title, app, elements: [{id, name, control_type, rect: {x, y, w, h}}]}` (`app` is the program's name), places in the screen's own pixels. `{away: why}` and nothing else where the desktop app looks away What the program has open on top of it (a menu, a dropped-down list) comes first in `elements`, counted in `popups`. |
 | brain to desktop app | `notch.point` | `{x, y, w, h}` in the screen's own pixels, `label?`, `ms?` (0.5 to 15 s); with `wait_ms` (up to 90 s) it answers only when the person has clicked or the wait is over; `{clear: true}` takes it away | `{pointed: true}`, and with `wait_ms` also `{clicked, inside, why}` (`why`: `click`, `time`, `replaced`, `gone`). Jarvis's pointer flies to the rectangle and a ring is drawn round it. The click is seen, never kept, and where it was is not said. Refused while the person is drawing a line. |
+| brain to desktop app | `notch.mark` | `{x, y, w, h}` in the screen's own pixels, `in: {x, y, w, h}` (where the window was when it was looked at), `ms?` (1 to 30 s); `{clear: true}` takes it away | `{marked: true}`, or `{marked: false, why}` (`why`: `moved`, `away`, `size`). A citron mark sweeps over the rectangle and stays. Nothing is drawn when the window in front is not where the looked-at one was, where the desktop app looks away, outside that window, or over more than a mark covers. Refused while the person is drawing a line, and where the hands cannot mark (the Mac). |
 | desktop app to brain | event `notch.watch` | The shape of what the hands did: `{kind: "click", app, win: {id, pid, w, h}, pt: {x, y}, mods?, ts}` (the place is in the window, from its top left corner); `{kind: "keys", keys, app, win, ts}` (a named key or a shortcut, never a key that types); `{kind: "typed", ts}`; `{kind: "gap", ts}` | none. Nothing is told from one of Jarvis's own windows, of anything a program pressed, or where the desktop app looks away |
 | brain to desktop app | `notch.watch` | `{on: boolean}` | `{watching}`. Puts the hooks in for the notch's own watching, or lets them go. They come out when the notch goes off or the brain is gone |
 | brain to desktop app | `notch.act` | `{do, ...}`. `click`: `win`, `x`, `y` in the window (or `screen: true` and a place on the screen), `hand` 0 to 2, `mods?`, `double?`. `keys`: `win`, `keys`. `type`: `win`, `text` (up to 4000 signs), typed where the keyboard is when that window is the one in front. `find`: `win`, `app?`, `front?`: the window a step named as it is now, or the topmost window of that program at the same size, brought forward with `front`; adds `{win, app}`. `copy`: `win`, `keys?`, `right?`, `down?` (cells taken in first). `paste`: a place (or `front: true` for the caret of the window in front), and `text`, or `rows` (rows of cells) with `as`: `cells`, `table`, `list` or `text`. `hand`: a place or `beside: true`. `home`. `front`. `count`: `win`, `x`, `y`, `dx`, `dy`, `most`. `pitch`: `win`, `x`, `y`, `dy` | `{done: true}`, or `{done: false, why}` with one of `gone`, `moved`, `outside`, `covered`, `own`, `elevated`, `front`, `failed`: then nothing was done. `copy` adds the shape `{empty, rows, cols, chars, hash}`, never the text. `paste` adds `{win, app, pt, shape}`. `hand` adds `{ms}`. `count` adds `{known, left}`. `pitch` (`win`, `x`, `y`, `dy`: how far the hand went) adds `{known, dy}`: how far one step really is, measured on the screen. One at a time |

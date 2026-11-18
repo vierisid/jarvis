@@ -586,3 +586,77 @@ describe('until it is done', () => {
     expect(h.sent.length).toBe(2);
   });
 });
+
+// Undo on a receipt (./today.ts): a watch and a chase can be taken back from the list of what was done.
+describe('what was started, in the list of what was done, with Undo', () => {
+  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.pass(9000); };
+
+  test('an eye and a chase are each a row from the moment they are started, and both can be taken back', async () => {
+    const h = harness({ waitMs: 60_000 });
+    const start = h.now();
+    await h.speak('Tell me when Sam replies');
+    await h.pass(9000);
+    expect(h.standing.done(start)).toMatchObject([{ text: "Watching for Sam's reply", small: 'watching', undo: true }]);
+    expect(h.standing.done(start)[0]!.id).toStartWith('eye:');
+    // Asked for a later span, it is not in it.
+    expect(h.standing.done(h.now() + 1)).toEqual([]);
+
+    const c = harness({ waitMs: 60_000 });
+    await chase(c);
+    expect(c.standing.done(start)).toMatchObject([{ text: "Getting Sam's answer by Friday", small: 'on it', undo: true }]);
+    expect(c.standing.done(start)[0]!.id).toStartWith('chase:');
+  });
+
+  test('Undo on an eye closes it: nothing is watched for, and the row is gone', async () => {
+    const h = harness();
+    const start = h.now();
+    await h.speak('Tell me when Sam replies');
+    await h.pass(9000);
+    const [row] = h.standing.done(start);
+    expect(text(h.standing.undo(row!.id) ?? [])).toBe("No longer watching for Sam's reply.");
+    expect(h.standing.counts().eyes).toBe(0);
+    expect(h.eyes.at(-1)).toBe(false);
+    expect(h.standing.done(start)).toEqual([]);
+    // A second Undo of the same row is nothing.
+    expect(h.standing.undo(row!.id)).toBeNull();
+    // And when Sam writes, nothing is said.
+    h.arrives(thread(SAM.address, h.now() + 1000));
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('Undo on a chase stops it for good, and says that what went stays sent', async () => {
+    const h = harness({ waitMs: 60_000 });
+    const start = h.now();
+    await chase(h);
+    expect(h.sent).toHaveLength(1);
+    const [row] = h.standing.done(start);
+    expect(text(h.standing.undo(row!.id) ?? [])).toBe('Stopped. I will not write to Sam again. What I sent stays sent.');
+    expect(h.standing.counts().chases).toBe(0);
+    // The row stands as what it now is, with no Undo left on it.
+    expect(h.standing.done(start)).toMatchObject([{ small: 'stopped', undo: false }]);
+    expect(h.standing.undo(row!.id)).toBeNull();
+    // Its steps say what happened.
+    h.inbox.present('chases', (stage) => h.standing.open(stage, 'chases'));
+    await settle();
+    const blocks = (h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks;
+    expect(blocks.map((block) => ('say' in block ? text(block.say as NotchPart[]) : ''))).toContain('You took it back.');
+    await h.reply('no');
+    // No more nudges, ever.
+    for (let i = 0; i < 5; i++) { h.advance(24 * HOUR); await h.standing.tick(); await settle(); }
+    expect(h.sent).toHaveLength(1);
+  });
+
+  test('a chase that is over is not taken back, and a row that is neither is nothing', async () => {
+    const h = harness({ waitMs: 60_000 });
+    const start = h.now();
+    await chase(h);
+    const [row] = h.standing.done(start);
+    h.arrives(thread(SAM.address, h.now()));
+    await settle();
+    expect(h.standing.done(start)).toMatchObject([{ small: 'done', undo: false }]);
+    expect(h.standing.undo(row!.id)).toBeNull();
+    for (const id of ['job:1', 'agent:f1', 'eye:nothing', 'chase:nothing', '']) expect(h.standing.undo(id)).toBeNull();
+  });
+});
+

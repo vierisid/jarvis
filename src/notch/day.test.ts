@@ -14,7 +14,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 40; i++) await P
 const text = (parts: NotchPart[] | null | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
 const meeting = (title: string, startInMin: number): NotchMeeting => ({ title, start: NINE + startInMin * MIN, end: NINE + (startInMin + 30) * MIN });
 
-function harness(options: { done?: number; waiting?: number; mailNew?: number; away?: boolean; calendar?: NotchMeeting[] } = {}) {
+function harness(options: { done?: number; waiting?: number; mailNew?: number; away?: boolean; calendar?: NotchMeeting[]; overnight?: (row: string) => NotchPart[] | null | 'left' } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -27,7 +27,11 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
   fromPage({ type: 'hello', v: 1 });
   let homes = 0;
   const inbox = new NotchInbox(surface, { log: () => {}, home: async (stage) => { homes++; await stage.say(['Home.'], 1000); } });
-  const state = { now: NINE, done: options.done ?? 0, waiting: options.waiting ?? 0, mailNew: options.mailNew ?? 0, away: options.away ?? false, calendar: options.calendar ?? [], told: 0, opened: 0, asked: [] as [number, number][], looks: 0 };
+  const state = {
+    now: NINE, done: options.done ?? 0, waiting: options.waiting ?? 0, mailNew: options.mailNew ?? 0, away: options.away ?? false, calendar: options.calendar ?? [], told: 0, opened: 0, asked: [] as [number, number][], looks: 0,
+    /** The receipts of the night, as rows: what was taken back is gone from them. */
+    receipts: [{ id: 'chase:c1', text: "Getting Sam's answer by Friday" }, { id: 'job:j1', text: 'Pasted 7 from Notepad into Excel' }], since: [] as number[], undone: [] as string[],
+  };
   const day = attachNotchDay(inbox, {
     settings: new NotchSettings(new Database(':memory:')),
     done: (since, until) => { state.asked.push([since, until]); return state.done; },
@@ -35,6 +39,12 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
     away: () => state.away,
     mail: { newSince: () => state.mailNew, told: () => { state.told++; }, open: async (stage) => { state.opened++; await stage.say(['The list.'], 1000); } },
     calendar: { ahead: () => state.calendar, look: async () => { state.looks++; return true; } },
+    ...(options.overnight ? {
+      overnight: {
+        blocks: (since: number) => { state.since.push(since); return state.receipts.map((one) => ({ kind: 'row' as const, id: one.id, lead: '03:10', say: [one.text], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] })); },
+        undo: (row: string) => { state.undone.push(row); const said = options.overnight!(row); if (said !== null && said !== 'left') state.receipts = state.receipts.filter((one) => one.id !== row); return said; },
+      },
+    } : {}),
     now: () => state.now,
     log: () => {},
   });
@@ -43,7 +53,8 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
     day, inbox, state, line,
     homes: () => homes,
     said: (): string => text(line()?.say),
-    async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
+    async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await settle(); },
+    rows: (): string[] => { const shown = line(); return shown?.kind === 'sheet' ? shown.blocks.map((block) => ('say' in block ? text(block.say as NotchPart[]) : '')) : []; },
   };
 }
 
@@ -112,6 +123,92 @@ describe('the morning line', () => {
     await h.inbox.open();
     await settle();
     expect(h.said()).toBe('Morning. 1 thing done overnight. 5 need you.');
+  });
+});
+
+// The prototype: "Morning. 2 jobs done overnight. 2 need you." and yes opens "Overnight", with receipts and Undo.
+describe('the morning line opens Overnight', () => {
+  const SINCE = NINE - 14 * 60 * MIN;
+
+  test('yes shows the receipts of what was done since they left, and how many things need them', async () => {
+    const h = harness({ done: 2, waiting: 3, overnight: () => null });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    expect(h.said()).toBe('Morning. 2 things done overnight. 3 need you.');
+    await h.answer('yes');
+    expect(h.said()).toBe('Overnight');
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'show', stay: true });
+    expect(h.rows()).toEqual(["Getting Sam's answer by Friday", 'Pasted 7 from Notepad into Excel', '3 things need you.']);
+    // The receipts are of that span: from when they left.
+    expect(h.state.since.at(-1)).toBe(SINCE);
+    // Nothing is opened yet: the round comes on a yes.
+    expect(h.homes()).toBe(0);
+    await h.answer('yes');
+    await settle();
+    expect(h.homes()).toBe(1);
+  });
+
+  test('with things done and nothing that needs them, the line still has its yes, and the sheet is the receipts alone', async () => {
+    const h = harness({ done: 2, waiting: 0, overnight: () => null });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    expect(h.said()).toBe('Morning. 2 things done overnight. Nothing needs you.');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'show' });
+    await h.answer('yes');
+    expect(h.said()).toBe('Overnight');
+    expect(h.rows()).toEqual(["Getting Sam's answer by Friday", 'Pasted 7 from Notepad into Excel']);
+    expect((h.line() as { yes?: string }).yes).toBeUndefined();
+    await h.answer('no');
+    expect(h.line()).toBeNull();
+    expect(h.homes()).toBe(0);
+  });
+
+  test('Undo on a receipt takes it back, says so, and the sheet is back without it', async () => {
+    const h = harness({ done: 2, waiting: 1, overnight: () => ['Stopped. I will not write to ', { em: 'Sam' }, ' again. What I sent stays sent.'] });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    await h.answer('yes');
+    await h.answer('button', { button: 'undo', row: 'chase:c1' });
+    expect(h.state.undone).toEqual(['chase:c1']);
+    expect(h.said()).toBe('Stopped. I will not write to Sam again. What I sent stays sent.');
+    await h.answer('done');
+    expect(h.said()).toBe('Overnight');
+    expect(h.rows()).toEqual(['Pasted 7 from Notepad into Excel', '1 thing needs you.']);
+  });
+
+  test('an Undo that takes the notch itself ends the sheet: a paste is taken back in view', async () => {
+    const h = harness({ done: 2, waiting: 1, overnight: () => 'left' });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    await h.answer('yes');
+    await h.answer('button', { button: 'undo', row: 'job:j1' });
+    expect(h.state.undone).toEqual(['job:j1']);
+    expect(h.line()).toBeNull();
+    expect(h.homes()).toBe(0);
+  });
+
+  test('a receipt that can no longer be taken back says nothing, and the sheet stays with what stands', async () => {
+    const h = harness({ done: 2, waiting: 0, overnight: () => null });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    await h.answer('yes');
+    await h.answer('button', { button: 'undo', row: 'chase:c1' });
+    expect(h.said()).toBe('Overnight');
+    // Another button, or one with no row, is nothing.
+    await h.answer('button', { button: 'other', row: 'chase:c1' });
+    await h.answer('button', { button: 'undo' });
+    expect(h.state.undone).toEqual(['chase:c1']);
+  });
+
+  test('with nothing done there is nothing to show first: yes goes to what needs them, as before', async () => {
+    const h = harness({ done: 0, waiting: 2, overnight: () => null });
+    h.day.morning({ since: SINCE, ms: 14 * 60 * MIN });
+    await settle();
+    expect(h.said()).toBe('Morning. Nothing was done overnight. 2 things need you.');
+    await h.answer('yes');
+    await settle();
+    expect(h.homes()).toBe(1);
+    expect(h.state.since).toEqual([]);
   });
 });
 

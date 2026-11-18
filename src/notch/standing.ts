@@ -362,6 +362,18 @@ export interface NotchStanding {
   tick(): Promise<void>;
   /** How many eyes are kept, and how many chases are under way. */
   counts(): { eyes: number; chases: number };
+  /**
+   * What was started since a moment, for the list of what was done (./today.ts):
+   * each eye that is still kept, each chase. An eye, and a chase that is
+   * still under way, can be taken back.
+   */
+  done(since: number): { id: string; at: number; text: string; small: string; undo: boolean }[];
+  /**
+   * Takes one of them back, by the id its row has: an eye is closed, a chase
+   * is stopped. Comes back with what to say, or null when it is none of
+   * these or is over already. A mail that went stays sent, and the words say so.
+   */
+  undo(id: string): NotchPart[] | null;
   stop(): void;
 }
 
@@ -733,6 +745,40 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     open: (stage, which) => (which === 'eyes' ? openEyes(stage) : openChases(stage)),
     tick,
     counts: () => ({ eyes: store.eyes().length, chases: store.chases().filter(live).length }),
+    done(since) {
+      const stands: Record<NotchChaseState, string> = { on: 'on it', stuck: 'stuck', done: 'done', dropped: 'stopped' };
+      return [
+        ...store.eyes().filter((eye) => eye.createdAt >= since)
+          .map((eye) => ({ id: `eye:${eye.id}`, at: eye.createdAt, text: `Watching for ${first(eye.name)}'s reply`, small: 'watching', undo: true })),
+        ...store.chases().filter((chase) => chase.createdAt >= since)
+          .map((chase) => ({ id: `chase:${chase.id}`, at: chase.createdAt, text: `Getting ${chaseWhat(chase)} by ${chase.day}`, small: stands[chase.state] ?? 'done', undo: live(chase) })),
+      ];
+    },
+    undo(id) {
+      if (id.startsWith('eye:')) {
+        const eye = store.eyes().find((one) => `eye:${one.id}` === id);
+        if (!eye || !store.dropEye(eye.id)) return null;
+        paintEye();
+        log('[notch] an eye was taken back from the list of what was done');
+        return ['No longer watching for ', em(`${first(eye.name)}'s reply`), '.'];
+      }
+      if (id.startsWith('chase:')) {
+        // Moved from under way to stopped, and only from there: a chase that ended a moment ago is not stopped again.
+        if (!store.move(id.slice('chase:'.length), ['on', 'stuck'], 'dropped', now())) return null;
+        const chase = store.chase(id.slice('chase:'.length))!;
+        step(chase, 'You took it back.');
+        store.putChase(chase);
+        // What it was about to ask is asked no more.
+        deps.inbox.remove(`chase-stuck-${chase.id}`);
+        paintEye();
+        log('[notch] a chase was taken back from the list of what was done');
+        // The first mail went when it started: that is said, not hidden behind the word undo.
+        return chase.nudges > 0
+          ? ['Stopped. I will not write to ', em(first(chase.name)), ' again. What I sent stays sent.']
+          : ['Stopped. Nothing was sent to ', em(first(chase.name)), '.'];
+      }
+      return null;
+    },
     stop() { stopped = true; },
   };
 }
