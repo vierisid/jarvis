@@ -160,3 +160,21 @@ export function governedActionReview(catalogId: string, args: unknown): Governed
   }
   return fields.length || more ? { fields, more } : null;
 }
+
+/**
+ * #957: an email send's card leads with the account it goes out from and the
+ * message it answers (`WorkflowEffect.sender`), taken when the effect was
+ * recorded. Display only, reduced like any card value; the approval stays
+ * bound to the frozen arguments alone.
+ */
+export function withEmailSender(review: GovernedReview | null,
+  sender: { account?: string; replyTo?: string; forwards?: string } | undefined): GovernedReview | null {
+  if (!sender) return review;
+  const lead: GovernedReviewField[] = [];
+  for (const [label, value] of [['Sending account', sender.account], ['Replying to', sender.replyTo], ['Forwarding', sender.forwards]] as const) {
+    const shown = typeof value === 'string' ? forCard(value, VALUE_MAX_CHARS) : '';
+    if (shown) lead.push({ label, value: shown });
+  }
+  if (!lead.length) return review;
+  return { fields: [...lead, ...(review?.fields ?? [])], more: review?.more ?? 0 };
+}

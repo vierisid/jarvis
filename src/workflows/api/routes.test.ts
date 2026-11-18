@@ -574,6 +574,32 @@ describe("workflow API: a partly governed piece badges only its ungoverned actio
   });
 });
 
+describe("workflow API: a verified action carries the category Authority judges it as (#955 option B)", () => {
+  test("Gmail, HTTP and a community piece", async () => {
+    const action = (name: string) => ({ name, displayName: name, description: "", props: {} });
+    const piece = (name: string, actions: string[]) => ({ name, displayName: name, description: "",
+      actions: Object.fromEntries(actions.map((a) => [a, action(a)])), triggers: {} });
+    const reg = new (await import("../runtime/piece-catalog")).PieceCatalog([
+      piece("@activepieces/piece-gmail", ["send_email", "gmail_get_mail"]),
+      piece("@activepieces/piece-http", ["send_request"]),
+      piece("@activepieces/piece-activecampaign", ["create_contact"]),
+      piece("@activepieces/piece-hubspot", ["create-or-update-contact", "create-deal"]),
+    ] as any);
+    const get = createWorkflowRoutes({ pieceRegistry: reg })["/api/workflows/pieces"]?.GET;
+    const { body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces"));
+    const actions = Object.fromEntries((body as Array<{ name: string; actions: Array<{ name: string; gatedCategory?: string; gatedByInput?: boolean }> }>)
+      .flatMap((p) => p.actions.map((a) => [`${p.name}/${a.name}`, [a.gatedCategory ?? null, a.gatedByInput ?? false]])));
+    expect(actions).toEqual({
+      "@activepieces/piece-gmail/send_email": ["send_email", false],
+      "@activepieces/piece-gmail/gmail_get_mail": ["read_data", false],
+      "@activepieces/piece-http/send_request": [expect.any(String), true],
+      "@activepieces/piece-activecampaign/create_contact": [null, false],
+      "@activepieces/piece-hubspot/create-or-update-contact": ["write_data", false],
+      "@activepieces/piece-hubspot/create-deal": [null, false],
+    });
+  });
+});
+
 describe("workflow API: flows", () => {
   test("POST /api/workflows creates a flow + initial draft version", async () => {
     const post = routes["/api/workflows"]?.POST;

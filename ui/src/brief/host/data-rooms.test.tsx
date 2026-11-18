@@ -4,6 +4,8 @@ import { BriefCapabilities } from '../../../../src/brief/capabilities';
 import { BriefReconciliationClient } from '../reconciliation/client';
 import { createHostTransport } from './http';
 import { CompanionContext } from '../shell/pebble-layout/PebbleCompanion';
+import { NeedsYouContext, type NeedsYouState } from './needs-you';
+import { GETTING_STARTED_IDS } from '../../../../src/brief/getting-started-contract';
 
 let React: typeof import('react'), createRoot: typeof import('react-dom/client').createRoot, Rooms: typeof import('./data-rooms');
 beforeAll(async () => {
@@ -49,6 +51,52 @@ test('Today shows the unplanned interview goal notice, and drops it once the ser
   }
 });
 
+test('Today shows the workspace\'s one Needs you count, waits for every source before an all-clear, hides it while Jarvis is lost, and never polls decisions itself', async () => {
+  const provider = { readiness: () => 'ready' as const };
+  const caps = new BriefCapabilities([{ id: 'reconciliation', provider }, { id: 'decisions', provider }, { id: 'profileSettings', provider }], ['reconciliation', 'decisions', 'profileSettings']).snapshot();
+  const row = { decisionId: 'approval:a', revision: 'r', state: 'pending', kind: 'permission', title: 'Send report', supportedActions: [] };
+  const calls: string[] = [];
+  const transport = createHostTransport((async (path: string) => {
+    calls.push(path);
+    if (path === '/api/brief/getting-started') return Response.json({ revision: 1, completed: GETTING_STARTED_IDS, hidden: false });
+    if (path === '/api/brief/decisions?limit=50') return Response.json({ state: 'ready', data: { items: [row], nextCursor: null } });
+    if (path === '/api/brief/decisions/approval%3Aa/document') return Response.json({ decision: { ...row, actions: ['approve'] }, actions: ['approve'], document: null });
+    return Response.json({ state: 'unavailable' }, { status: 503 });
+  }) as unknown as typeof fetch);
+  const reconciliation = new BriefReconciliationClient({ capabilities: async () => caps, pollMs: 3_600_000 });
+  const rooms = Rooms.createDataRooms({ scopeId: 'scope', transport, capabilities: () => caps, storage: window.localStorage, reconciliation, createGoal() {} });
+  const host = document.createElement('div'), companion = document.createElement('aside'); document.body.append(host, companion); const root = createRoot(host);
+  const Today = rooms.rooms.today!.Body!;
+  const until = async (done: () => boolean) => { for (let i = 0; i < 400 && !done(); i++) await React.act(async () => { await new Promise(r => setTimeout(r, 0)); }); return done(); };
+  const text = () => host.textContent ?? '';
+  const render = (state: Pick<NeedsYouState, 'count' | 'settled' | 'lost'>) => React.act(async () => root.render(<CompanionContext.Provider value={{ target: companion, setPresent: () => {} }}>
+    <NeedsYouContext.Provider value={{ ...state, others: null, failed: false, reload() {}, clear() {}, inbox: null }}><div className="brief-root">
+      <Today shell={{ navigate() {}, route: { room: 'today', selection: {} } } as never} /></div></NeedsYouContext.Provider></CompanionContext.Provider>));
+  reconciliation.start();
+  try {
+    await render({ count: 2, settled: null, lost: false });
+    const more = () => [...host.querySelectorAll('button')].find(b => b.textContent?.includes('Continue setting up Jarvis'));
+    expect(await until(() => !!more())).toBe(true);
+    await React.act(async () => more()!.click());
+    // A source is still unread: the button shows what is known, the all-clear line waits.
+    expect(text()).toContain('Review 2 requests');
+    expect(text()).toContain('Checking what needs you');
+    expect(text()).not.toContain('Nothing needs you');
+    await render({ count: 2, settled: 2, lost: false });
+    expect(text()).toContain('Review 2 requests'); expect(text()).toContain('2 items need you.');
+    await render({ count: 0, settled: 0, lost: false });
+    expect(text()).not.toMatch(/Review \d+ request/); expect(text()).toContain('Nothing needs you right now.');
+    // Jarvis cannot be reached: the counts are from before the outage, so Today shows none, like the badge.
+    await render({ count: 2, settled: 2, lost: true });
+    expect(text()).not.toMatch(/Review \d+ request/); expect(text()).not.toContain('items need you'); expect(text()).not.toContain('Nothing needs you');
+    // Today's document read is the only decision read: it takes the other decisions from the workspace, not from a poll of its own.
+    await React.act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(calls.filter(path => path === '/api/brief/decisions?limit=50')).toHaveLength(1);
+  } finally {
+    await React.act(async () => root.unmount()); host.remove(); companion.remove(); reconciliation.stop(); rooms.retire(); transport.stop();
+  }
+});
+
 test('Needs you never shows an all-clear while the independent permission list has cards or an unknown status', () => {
   const snap = (state: string, data: unknown, extra: object = {}) => ({ state, data, refreshing: false, reason: null, ...extra }) as any;
   expect(Rooms.onlyOtherDecisions(snap('empty', null), 2)).toBe(true);
@@ -79,15 +127,6 @@ test('a link names a document request only while the Needs you document list sho
   // Until the document read settles, it may still hold the request.
   expect(Rooms.namedInDocuments(snap('loading', null), 'a')).toBe(true);
   expect(Rooms.namedInDocuments(snap('ready', [doc('a', ['approve'])]), undefined)).toBe(false);
-});
-test('Today counts document decisions, other queued decisions and the attention list, and any unread source is unknown', () => {
-  const doc = (n: number) => Array.from({ length: n }, () => ({ actions: [{}] }));
-  expect(Rooms.waitingOnOwner([], 0, 0)).toBe(0);
-  expect(Rooms.waitingOnOwner([...doc(2), { actions: [] }], 3, 4)).toBe(9);
-  expect(Rooms.waitingOnOwner([], 20, 0)).toBe(20);
-  expect(Rooms.waitingOnOwner(doc(1), null, 0)).toBeNull();
-  expect(Rooms.waitingOnOwner(null, 0, 0)).toBeNull();
-  expect(Rooms.waitingOnOwner([], 0, null)).toBeNull();
 });
 test('Today counts document decisions only from a settled read or cached rows', () => {
   const snap = (state: string, data: unknown, extra: object = {}) => ({ state, data, asOf: 1, refreshing: false, reason: null, ...extra }) as any;

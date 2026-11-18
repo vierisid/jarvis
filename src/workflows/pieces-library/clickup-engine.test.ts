@@ -65,7 +65,7 @@ beforeAll(async()=>{
  api=new SandboxApi({services:buildSandboxServiceBackends({credentialResolver:resolver,llmManager:{} as any,channelService:{} as any,wsService:{} as any,eventBuffer:new WorkflowEventBuffer(),approvalManager:new ApprovalManager(),auditTrail:new AuditTrail(),emergencyController:new EmergencyController(),authorityEngine:new AuthorityEngine({default_level:10,governed_categories:[],overrides:[],context_rules:[],learning:{enabled:false,suggest_threshold:10},emergency_state:'normal'})})});
  await api.start({port:0});
  const bundle=await buildEngineBundle();
- runtime=new EngineRuntime({api,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code'),egressPolicy:'private-allowed'});
+ runtime=new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */,api,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code'),egressPolicy:'private-allowed'});
 },120000);
 afterAll(async()=>{
  if(!gate)return;

@@ -346,6 +346,18 @@ test('R4: an existing F20 database upgrades its active receipt to a durable draf
   expect(service.change(r.restore)).toMatchObject({ status: 'accepted', item: { versionId: selected.id } });
   expect(getLatestDraft(flow.id)?.id).toBe(selected.id); expect(getFlowVersion(old.id)?.sampleData).not.toBeNull();
 });
+test('an existing database upgrades its latest-draft view to break same-millisecond ties on creation order', () => {
+  const { flow, old, selected } = twoDrafts(), db = getWorkflowDb();
+  db.run('DROP VIEW brief_workflow_draft_selection');
+  db.run(`CREATE VIEW brief_workflow_draft_selection AS
+    SELECT f.id AS flow_id, COALESCE(
+      (SELECT v.id FROM flow_version v WHERE v.id = s.pinned_draft_id AND v.flow_id = f.id AND v.state = 'DRAFT'),
+      (SELECT v.id FROM flow_version v WHERE v.flow_id = f.id AND v.state = 'DRAFT' ORDER BY v.updated DESC LIMIT 1)
+    ) AS version_id FROM flow f LEFT JOIN brief_workflow_slots s ON s.flow_id = f.id`);
+  createSchema(db);
+  db.run('UPDATE flow_version SET updated = 1 WHERE id IN (?, ?)', [old.id, selected.id]);
+  expect(getLatestDraft(flow.id)?.id).toBe(selected.id);
+});
 test('R4: explicit Enable checks CODE permission against the pinned draft', () => {
   const { flow, old, selected } = twoDrafts();
   updateDraftVersion(old.id, { trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: {

@@ -92,6 +92,31 @@ test('a partly governed piece badges only the actions the daemon marks', () => {
   expect(gate.stepNotApprovalGated(step('create-or-update-contact'), partial)).toBe(false);
 });
 
+test('a verified step shows the Authority category the daemon sends (#955 option B)', async () => {
+  const verified = [{ name: '@activepieces/piece-gmail', displayName: 'Gmail', description: '', triggers: [],
+    actions: [{ name: 'create_contact', displayName: '', description: '', inputSchema: null, gatedCategory: 'send_email' }] }];
+  await renderNode({ ...nodeData('@activepieces/piece-gmail'), catalog: verified as any });
+  const note = host.querySelector('.wf-node__gated');
+  expect(note?.textContent).toContain('Authority: Send email');
+  expect(note?.getAttribute('role')).toBe('note');
+  expect(note?.getAttribute('title')).toMatch(/checks this step with Authority as Send email/);
+  expect(host.textContent).not.toContain(gate.NOT_APPROVAL_GATED_LABEL);
+});
+
+test('a category the step settings decide reads as the worst case, and an ungoverned or unflagged action shows none', () => {
+  const actions = [
+    { name: 'send_request', displayName: '', description: '', inputSchema: null, gatedCategory: 'delete_data', gatedByInput: true },
+    { name: 'plain', displayName: '', description: '', inputSchema: null },
+    { name: 'mixed', displayName: '', description: '', inputSchema: null, gatedCategory: 'write_data', notApprovalGated: true },
+  ];
+  const cat = [{ name: '@activepieces/piece-http', displayName: 'HTTP', description: '', triggers: [], actions }];
+  const step = (actionName: string, type = 'PIECE') => ({ name: 's', type, settings: { pieceName: '@activepieces/piece-http', actionName } }) as any;
+  expect(gate.stepGatedCategory(step('send_request'), cat)?.label).toBe('Authority: up to Delete data');
+  expect(gate.stepGatedCategory(step('plain'), cat)).toBeNull();
+  expect(gate.stepGatedCategory(step('mixed'), cat)).toBeNull();
+  expect(gate.stepGatedCategory(step('send_request', 'PIECE_TRIGGER'), cat)).toBeNull();
+});
+
 test('the Authority room says governed categories do not reach community workflow steps', async () => {
   const config = { default_level: 3, governed_categories: ['send_email'], overrides: [], context_rules: [],
     learning: { enabled: true, suggest_threshold: 5 }, emergency_state: 'normal' };

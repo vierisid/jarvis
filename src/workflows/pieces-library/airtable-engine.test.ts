@@ -175,7 +175,7 @@ beforeAll(async () => {
     fixtureBundle,
     redirect + readFileSync(bundle.bundlePath, "utf8"),
   );
-  runtime = new EngineRuntime({
+  runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */,
     api,
     bundlePath: fixtureBundle,
     expectedDigest: createHash("sha256")

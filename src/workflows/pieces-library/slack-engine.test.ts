@@ -69,7 +69,7 @@ beforeAll(async()=>{
  const fixtureBundle=join(dir,'engine-fixture.cjs');
  writeFileSync(fixtureBundle,readFileSync(bundle.bundlePath,'utf8').replaceAll('https://slack.com/api/chat.postMessage',`http://127.0.0.1:${provider.port}/api/chat.postMessage`));
  const digest=createHash('sha256').update(readFileSync(fixtureBundle)).digest('hex');
- runtime=new EngineRuntime({api,bundlePath:fixtureBundle,expectedDigest:digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code'),egressPolicy:'private-allowed'});
+ runtime=new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */,api,bundlePath:fixtureBundle,expectedDigest:digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code'),egressPolicy:'private-allowed'});
 },120000);
 afterAll(async()=>{
  if(!gate)return;

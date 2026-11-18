@@ -24,6 +24,14 @@ import type {
   ResolvedConnection,
 } from "./adapter";
 import { credentialFingerprint } from "./adapter";
+import { googleSendRefusal, type GoogleSendState } from "../../integrations/google-scopes";
+import { GOVERNED_PIECE_ADAPTERS } from "../runtime/piece-effects";
+
+const GMAIL_PIECE = "@activepieces/piece-gmail";
+/** Gmail actions that send mail, as the governed adapter categorises them: they need gmail.send. */
+const GMAIL_SEND_ACTIONS: ReadonlySet<string> = new Set(
+  GOVERNED_PIECE_ADAPTERS.find((adapter) => adapter.pieceName === GMAIL_PIECE)?.categories.send_email ?? [],
+);
 
 export const JARVIS_GOOGLE_PREFIX = "jarvis:google";
 
@@ -53,6 +61,7 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
   readonly pieceDetails = JARVIS_GOOGLE_PIECE_DETAILS;
 
   private readonly getAuth: () => GoogleAuth | null;
+  private readonly sendState: () => GoogleSendState;
 
   /**
    * Accepts either a `GoogleAuth` instance or a getter. The daemon passes a
@@ -61,8 +70,73 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
    * without re-registering the source; a bare instance is kept for tests
    * and simple embedders.
    */
-  constructor(auth: GoogleAuth | (() => GoogleAuth | null)) {
+  constructor(
+    auth: GoogleAuth | (() => GoogleAuth | null),
+    /**
+     * #957: whether the connection may send mail now. Defaults to read-only,
+     * so an embedder that does not say gets the shipped default.
+     */
+    sendState: () => GoogleSendState = () => ({ canSend: false, reason: "not_granted" }),
+  ) {
     this.getAuth = typeof auth === "function" ? auth : () => auth;
+    this.sendState = sendState;
+  }
+
+  /** The account's address, by grant: reconnecting (perhaps to another account) asks again. */
+  private account: { grant: string; email: string } | null = null;
+
+  /**
+   * #957: the connected account's address, for an email send's card, or null
+   * when it cannot be read just now. gmail.readonly reads the profile, so no
+   * scope is added for it.
+   */
+  async accountLabel(fetchImpl: typeof fetch = fetch): Promise<string | null> {
+    const grant = this.identity(JARVIS_GOOGLE_PREFIX);
+    if (!grant) return null;
+    if (this.account?.grant === grant) return this.account.email;
+    const profile = await this.gmailGet("users/me/profile", fetchImpl) as { emailAddress?: unknown } | null;
+    const email = profile?.emailAddress;
+    if (typeof email !== "string" || email.length > 320 || !/^[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+$/u.test(email)) return null;
+    this.account = { grant, email };
+    return email;
+  }
+
+  /**
+   * #957: the subject of the message a reply or forward answers, for its
+   * card, or null when it cannot be read.
+   */
+  async messageSubject(id: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(id)) return null;
+    const data = await this.gmailGet(`users/me/messages/${id}?format=metadata&metadataHeaders=Subject`, fetchImpl) as
+      { payload?: { headers?: unknown } } | null;
+    const headers = data?.payload?.headers;
+    if (!Array.isArray(headers)) return null;
+    for (const header of headers) {
+      if (header && typeof header === "object" && typeof header.name === "string" && header.name.toLowerCase() === "subject"
+        && typeof header.value === "string") return header.value.slice(0, 1000);
+    }
+    return null;
+  }
+
+  /** One read of the Gmail API with this grant; null on any failure. Errors never leave it (they can carry tokens). */
+  private async gmailGet(path: string, fetchImpl: typeof fetch): Promise<unknown> {
+    try {
+      const resolved = await this.resolve(JARVIS_GOOGLE_PREFIX);
+      const token = resolved?.value.access_token;
+      if (typeof token !== "string" || !token) return null;
+      const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/${path}`, {
+        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5_000), redirect: "error",
+      });
+      return response.ok ? await response.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** A Gmail send needs the gmail.send grant (and, hosted, the system config's leave). */
+  actionRefusal(pieceName: string, actionName: string): string | null {
+    if (pieceName !== GMAIL_PIECE || !GMAIL_SEND_ACTIONS.has(actionName)) return null;
+    return googleSendRefusal(this.sendState());
   }
 
   canResolve(externalId: string): boolean {

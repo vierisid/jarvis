@@ -35,11 +35,17 @@ export function ensureWorkflowRemovalSchema(db: Database): void {
         AND v.state = 'DRAFT' AND f.published_version_id IS NULL
     ) WHERE receipt_id IS NOT NULL AND pinned_draft_id IS NULL`);
     // One selector shared by reads, CODE/readiness gates and trigger dispatch.
-    // Other workflows retain the existing updated-time selection rule.
+    // Other workflows retain the existing updated-time selection rule; two
+    // drafts saved in the same millisecond go to the one created last (rowid).
+    // Upgrade databases whose view predates that tiebreak: same columns, so a
+    // rolled-back version reads the new view unchanged.
+    const selection = db.query<{ sql: string }, []>(
+      `SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'brief_workflow_draft_selection'`).get();
+    if (selection && !selection.sql.includes('v.rowid DESC')) db.run('DROP VIEW brief_workflow_draft_selection');
     db.run(`CREATE VIEW IF NOT EXISTS brief_workflow_draft_selection AS
       SELECT f.id AS flow_id, COALESCE(
         (SELECT v.id FROM flow_version v WHERE v.id = s.pinned_draft_id AND v.flow_id = f.id AND v.state = 'DRAFT'),
-        (SELECT v.id FROM flow_version v WHERE v.flow_id = f.id AND v.state = 'DRAFT' ORDER BY v.updated DESC LIMIT 1)
+        (SELECT v.id FROM flow_version v WHERE v.flow_id = f.id AND v.state = 'DRAFT' ORDER BY v.updated DESC, v.rowid DESC LIMIT 1)
       ) AS version_id FROM flow f LEFT JOIN brief_workflow_slots s ON s.flow_id = f.id`);
     // Explicit authoring/publication ends the pin. Runtime/sample writes do not.
     db.run(`CREATE TRIGGER IF NOT EXISTS brief_draft_pin_insert AFTER INSERT ON flow_version

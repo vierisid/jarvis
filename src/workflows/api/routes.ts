@@ -138,6 +138,7 @@ import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers
 import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import { userPieces, type PieceLookup } from "../runtime/piece-catalog";
 import { canContinuePastStep, canRetryStep, isCommunityAction, isCommunityPiece } from "../runtime/step-admission";
+import { resolveGovernedPieceAction } from "../runtime/piece-effects";
 import { CATALOG, excludedReason, findCatalogEntry, sharedBuildCatalog, withdrawnPiece } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
 import { estimateMinutesPerRun, MAX_TIME_SAVED_PER_RUN } from "../time-saved-estimate";
@@ -273,6 +274,20 @@ export const RUN_TRIGGERED_BY_MAX_CHARS = 200;
  * owner out of running a workflow by hand.
  */
 export const MAX_QUEUED_MANUAL_RUNS = 500;
+
+/**
+ * The Authority category a verified (or governed core) piece's action is
+ * judged as, for the editor's step badge (#955 option B). With no input the
+ * category is the table's worst case; `gatedByInput` says the step's own
+ * settings (an HTTP request's method) can narrow it. Nothing for an
+ * ungoverned action, which carries `notApprovalGated` instead.
+ */
+function gatedCategoryOf(pieceName: string, actionName: string): { gatedCategory?: string; gatedByInput?: true } {
+  if (isCommunityAction(pieceName, actionName)) return {};
+  const resolved = resolveGovernedPieceAction(pieceName, actionName);
+  if (!resolved) return {};
+  return { gatedCategory: resolved.category, ...(resolved.byInput ? { gatedByInput: true as const } : {}) };
+}
 
 function isRunEnvironment(value: unknown): value is RunEnvironment {
   return value === "PRODUCTION" || value === "TESTING";
@@ -999,6 +1014,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               inputSchema: a.inputSchema ?? null,
               // A partly governed piece badges only its ungoverned actions.
               ...(!isCommunityPiece(p.name) && isCommunityAction(p.name, a.name) ? { notApprovalGated: true } : {}),
+              // #955 option B (#1153): a verified action shows the category Authority judges it as.
+              ...gatedCategoryOf(p.name, a.name),
               // A step that asks a person stops on a "no": "Continue on failure" does not apply.
               ...(canContinuePastStep(p.name, a.name) ? {} : { continueUnavailable: true }),
               // Optional declared output sample (Jarvis extension to AP).

@@ -73,7 +73,7 @@ beforeAll(async () => {
     emergencyController: new EmergencyController(), auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(),
     llmManager: {} as any, channelService: {} as any, wsService: {} as any });
   api = new SandboxApi({ services }); await api.start({ port: 0 });
-  runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
+  runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */, api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
   const handle = await runtime.acquire({ runId: 'form-fixture-metadata', projectId: DEFAULT_IDS.project });
   try { configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(await handle.extractPieceMetadata({ pieceName: PIECE, pieceVersion: '0.18.2' }))]) }); }
   finally { await handle.release(); }

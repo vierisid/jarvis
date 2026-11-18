@@ -65,7 +65,7 @@ beforeAll(async()=>{
   return Response.json(await fixtureRequest(events,{changed,fail,oversized})(provider,u.pathname+u.search,init.body?JSON.parse(init.body):undefined));
  }) as typeof fetch,llmManager:{chat:async()=>{throw Error('No LLM may execute');}} as any,channelService:{sendWorkflowNotification:async()=>{throw Error('No external notification');}} as any,
  wsService:{broadcastNotificationToDashboard:(text:string)=>{notifications.push(text);if(loseNotification)throw Error('Unknown delivery');return 1;}} as any});
- api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
+ api=new SandboxApi({services});await api.start({port:0});runtime=new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */,api,pool:true,bundlePath:bundle.bundlePath,expectedDigest:bundle.digest,cwd:dir,customPiecesPaths:[dir],devPieces:[],baseCodeDir:join(dir,'code')});
  const handle=await runtime.acquire({runId:'meeting-metadata',projectId:DEFAULT_IDS.project});try{const entries=[];for(const[pieceName,pieceVersion]of Object.entries(versions))entries.push(metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName,pieceVersion})));catalog=new PieceCatalog(entries);if(process.env.JARVIS_MEETING_CATALOG_EXPORT)writeFileSync(process.env.JARVIS_MEETING_CATALOG_EXPORT,JSON.stringify(entries));configureWorkflowReadiness({pieces:catalog});}finally{await handle.release();}
  worker=new Worker({log:()=>{},handlers:{[RUN_FLOW]:createRunFlowHandler({executor:new EngineFlowExecutor(runtime)})}});
 },120_000);

@@ -246,7 +246,11 @@ Practical consequences:
   audit row and obeys Pause and Kill. The dashboard says so (#955) in the
   Library's Community section (both modes), under governed categories in the
   Authority room, and with a "Not approval-gated" badge on each community
-  action step in the flow editor. Since #961 the HTTP request step is governed
+  action step in the flow editor. A verified or governed core step shows the
+  category Authority judges it as instead ("Authority: Send email"), or its
+  worst case when its settings decide ("Authority: up to Delete data" for an
+  HTTP request); the daemon sends it as `gatedCategory` on each action of
+  `/api/workflows/pieces`. Since #961 the HTTP request step is governed
   (see `Core pieces` below), and so are the GraphQL, SMTP and FTP/SFTP steps.
   The built-in steps that act only inside the run (delay, signed-in approval
   requests, schedule, store, the file, text, date, math, image, PDF, CSV, XML,
@@ -1439,7 +1443,39 @@ latest version and ran it. Now:
 
 ### Trust model
 
-The engine and the CODE-step child it spawns run as the daemon's own OS user, with no OS sandbox (#1154). The sanitized environment is defense in depth only: same-user code can read the daemon's own environment through `/proc`, read and write anything that user can (`~/.jarvis` included, and so other flows' files and store entries), and use the network. Treat a CODE step, and a third-party piece, as code you run on the host. A warm engine is reused only within one project and flow, which keeps accidental in-memory state apart, not hostile code.
+The engine and the CODE-step child it spawns run as the daemon's own OS user, with no OS sandbox (#1154). The sanitized environment is defense in depth only: same-user code can read the daemon's own environment through `/proc`, read and write anything that user can (`~/.jarvis` included, and so other flows' files and store entries), and use the network (an engine's proxy-aware traffic goes through its egress proxy, see "Engine-wide egress" below). Treat a CODE step, and a third-party piece, as code you run on the host. A warm engine is reused only within one project and flow, which keeps accidental in-memory state apart, not hostile code.
+
+### Engine-wide egress (#1153)
+
+The per-step guards above hold the HTTP, GraphQL, SMTP and SFTP steps and the
+engine's file download. Everything else in the engine (a community piece's own
+HTTP client, a CODE step's `fetch`) goes through the engine's egress proxy:
+each engine starts with `HTTP_PROXY` and `HTTPS_PROXY` pointing at a proxy
+the daemon runs on 127.0.0.1 (`runtime/egress-proxy.ts`), and a CODE step
+inherits them. The proxy applies the same rule as the per-step guards
+(`destinationAllowed`: the install's policy, and never loopback, link-local,
+the metadata addresses or the machine's own addresses), for `CONNECT` (https)
+and plain http alike. It resolves a name once, refuses it if any address it
+resolves to is refused, and connects to the address it checked. A refusal is a
+`403` with `X-Jarvis-Egress: refused` and the reason, logged by the daemon
+once a minute per destination; nothing is sent to the destination. The one
+local destination it forwards to is the daemon's sandbox API, which the engine
+and its pieces call by design. The per-step guards stay as they were: the
+HTTP step and the others connect directly, never through a proxy.
+
+What it does not hold:
+
+- clients that ignore the proxy variables: Bun's `node:http` and `node:https`
+  without an agent, WebSockets, raw sockets (`node:net`, `node:tls`), UDP and
+  DNS itself. A CODE step or a piece using them reaches the network directly;
+- a CODE step that unsets the variables or passes its own agent;
+- the network a sandboxed engine reaches anyway. Landlock's network rules
+  (Linux 6.7, ABI 4) restrict TCP by port only, not by address, so they are
+  not used.
+
+So on a hosted or shared machine, block link-local addresses (169.254.0.0/16
+and fe80::/10) for the daemon's user at the network layer as well (see
+docs/SELF_HOSTING.md, "Workflow network egress").
 
 ### `{{ ... }}` expressions are data, not JavaScript
 
@@ -1508,8 +1544,10 @@ threshold); without one, including rows saved before #954, on first use.
   token the provider rotated if theirs still held the retired one.
 - A refresh the provider refuses is not retried until the stored value
   changes. An unreachable endpoint is retried once per 15-minute window while
-  the stored token may still work (it is handed out meanwhile), and at every
-  fetch once the token is known to have expired. A fetch that waited for
+  the stored token may still work (it is handed out meanwhile). Once the token
+  is known to have expired it is retried after 30 s, doubling with each failure
+  in a row up to 5 minutes; fetches in between fail at once with the same
+  reason instead of each waiting out the deadline. A fetch that waited for
   another refresh re-reads the row first, so a refresh token the provider
   rotated meanwhile is never sent again.
 - A token known to have expired that cannot be refreshed is not handed out:
@@ -1519,7 +1557,9 @@ threshold); without one, including rows saved before #954, on first use.
   `CONNECTION_REFRESH_UNREACHABLE`, `CONNECTION_CHANGED`) and whether the run
   had already handed the credential out; the run's failure reads both, so a
   step that may have acted before (a retry, a loop round) never reads as
-  "nothing was done".
+  "nothing was done". For a step that names several connections, a hand-out
+  of any of them counts, and when the engine's error names the connection
+  that failed to load, only that connection's reason is read.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or

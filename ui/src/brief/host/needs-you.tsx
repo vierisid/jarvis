@@ -42,6 +42,14 @@ export function needsYouCount({ documents, others, humanInputs, notices = 0 }: {
   return documents + needsAttention(others).length + humanInputs + notices;
 }
 
+/**
+ * The count once every source has been read, else null. An unread or failing source is not an empty
+ * one, so Today's all-clear (#1340) waits for this and never shows "nothing needs you" by default.
+ */
+export function settledNeedsYouCount(count: number, known: { documents: boolean; others: boolean; humanInputs: boolean; notices: boolean }): number | null {
+  return known.documents && known.others && known.humanInputs && known.notices ? count : null;
+}
+
 /** "5 min ago" style label; anything under a minute is "just now". */
 export function relativeTime(at: number, now = Date.now()): string {
   const minutes = Math.floor(Math.max(0, now - at) / 60_000);
@@ -87,7 +95,15 @@ export function pendingByWorkflow(rows: readonly QueuedDecision[]): Map<string, 
 }
 export const siblingNote = (count: number | undefined) => count && count > 1 ? `${count} waiting from this workflow` : null;
 
-export type NeedsYouState = { count: number; others: QueuedDecision[] | null; failed: boolean; reload(): void; clear(): void; inbox: ReactNode };
+export type NeedsYouState = {
+  /** What is known to wait now; a source still unread adds nothing yet. */
+  count: number;
+  /** `count` once every source is read, else null: the only number an all-clear may be drawn from. */
+  settled: number | null;
+  /** Jarvis cannot be reached: the counts are from before the outage, so they are not shown. */
+  lost: boolean;
+  others: QueuedDecision[] | null; failed: boolean; reload(): void; clear(): void; inbox: ReactNode;
+};
 /** Provided once by the workspace so every room reads the same list and count. Absent in isolated renders. */
 export const NeedsYouContext = createContext<NeedsYouState | null>(null);
 
