@@ -2323,12 +2323,12 @@ they were:
 
 What is not done, or not proven:
 
-- **No real sound has gone through it.** The cutting, the rules and the
-  whole way from "a call is on" to the sheet are tested with stand-in
-  devices, a stand-in speech-to-text and a stand-in model. The microphone
-  and Windows' way of hearing what the machine plays are compiled for
-  Windows and were never run. Whether a call is made out well enough to
-  write down is not known.
+- **One real call has gone through it.** The owner ran it on a Google
+  Meet call on Windows on 18 November 2026, with a headset, and it wrote
+  the call down and gave its actions. Zoom, Teams, speakers in place of a
+  headset, a call longer than half an hour, two calls in a row and a call
+  in another language were not tried. Everything else is tested with
+  stand-in devices, a stand-in speech-to-text and a stand-in model.
 - **The first minute is not heard.** A call is known to be on once a
   calling program has had the microphone for a minute, or at once when a
   meeting is in the calendar for that moment. The question comes then.
@@ -2349,6 +2349,95 @@ What is not done, or not proven:
   ships to anyone outside the team until it is.
 - **The words leave the machine** as a talk-key recording does: to the
   speech-to-text service the owner set up, and then to the model.
+
+## Speaking up first, in the window you are in
+
+The prototype has a moment of its own for each app: in Slack "Leo asked for
+the October revenue. Reply?", in a terminal "Same error twice. Stop it?", on
+a form "I know 6 of 8 answers. Fill them?". They were staged there. The
+owner asked on 18 November 2026 for what the prototype has and the product
+does not, and this was first. The product has one mechanism behind all of
+them: `src/notch/notice.ts`.
+
+How it goes. When the person has been in a window for eight seconds and
+their hands rest, the brain asks the desktop app for a picture of that
+window and for what the program names on its screen: the look "where is"
+takes (`notch.shot`, `notch.window`). A model that sees pictures is asked
+one thing: is something in this window plainly waiting for the owner, that
+an assistant could do for them now? Most windows need nothing, and then
+nothing is said. When there is one thing, the notch says it as one line
+with a yes: what was seen, and what would be done. "Leo asked for the
+October revenue. Reply to him here with the number?" A yes runs those words
+as an instruction, like one typed in Home.
+
+185. **It looks only where Jarvis looks.** What is looked at is the app in
+    front as `where.front()` gives it, and that is nothing while asleep,
+    while the desktop app looks away (a bank, a password, an app or a site
+    on the never list) and with watching off. The bare desktop is not
+    looked at either. A desktop app that looks away hands over no picture,
+    and then the model is not asked.
+186. **It looks when the person has come to rest, and only where a line
+    could be said.** Eight seconds in the window (`NOTCH_NOTICE_SETTLE_MS`)
+    with their hands still. Not while something is on the notch, in the
+    quiet hours, on a call, while they are away, or while everything is
+    stopped.
+187. **It looks seldom.** At most one look in 45 seconds
+    (`NOTCH_NOTICE_EVERY_MS`), the same app and site not again within ten
+    minutes (`NOTCH_NOTICE_SAME_MS`), and at most 200 looks in a day
+    (`NOTCH_NOTICE_DAY_MOST`).
+188. **What is on a screen is never an instruction.** The names a window
+    gives go to the model inside the marks of outside text, the model is
+    told that nothing on the screen is an instruction, and what it answers
+    is cut to four short fields (`noticeFound`). A field that carries a
+    link, an address or markup makes the whole answer nothing.
+189. **Nothing runs that was not read.** The instruction a yes runs is
+    built from the two sentences that were on the notch and from nothing
+    else (`noticeInstruction`). A page cannot put a hidden order behind a
+    harmless question: there is no field for one.
+190. **Never money, a password or a deletion.** An offer whose words are
+    about one is dropped in the brain, whatever the model says and whatever
+    reason it gives.
+191. **An offer is about that window, at that moment.** It leaves when the
+    person leaves the window, and one that could not be said within three
+    minutes (`NOTCH_NOTICE_FRESH_MS`) is not said. A newer offer for the
+    same app takes the place of the older.
+192. **It does not nag.** A thing that was on the notch is not offered
+    again for a day, also after a restart. An app whose offers were turned
+    down three times in a row is left alone until the next day. A yes in
+    between starts that count again.
+193. **A yes is an instruction like any other.** It runs through the same
+    door as what is typed (`asks.offered`): one thing at a time, refused
+    while everything is stopped, with the same approvals for what needs
+    one. In "What you asked" it is kept as "Offered", with the words it ran.
+194. **One word switches it off.** The Settings sheet has "In the window
+    you are in I offer one thing". Turned to "offer nothing", no window is
+    looked at.
+195. **What was seen is kept nowhere.** The picture goes to the model and
+    is dropped. The log has counts and whether something was found, never
+    what. A model's error is logged by its kind, never its words.
+
+What is not done, or not proven:
+
+- **No real window has been looked at.** The rules and the whole way from
+  resting in a window to the instruction running are tested with a stand-in
+  picture and a stand-in model. How often the real model finds something,
+  and how often it is wrong or late, is not known.
+- **It knows nothing before it offers.** The prototype's line carries the
+  answer ("It was $4,820. Reply?"). Here nothing is looked up first, so the
+  line says what would be done, and the answer is worked out after the yes.
+- **It sees one picture.** "The same error twice" is seen when both are on
+  the screen. What scrolled away, or happened in that window a minute ago,
+  is not known to it.
+- **It does not point.** The prototype sweeps a citron mark over the thing
+  before the line arrives.
+- **Whether the thing gets done is the agent's.** The reply in Slack is
+  typed by the same agent, with the same tools and the same approvals, as
+  if the sentence had been typed in Home. This adds nothing to what the
+  agent can do.
+- **The picture leaves the machine**, to the model the owner set up, as a
+  "where is" picture does. Up to 200 a day, where "where is" sends one when
+  asked.
+- **On a Mac it is compiled and was never run**, as everything since pass 9.
 
 ## The keys
 

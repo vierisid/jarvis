@@ -576,3 +576,127 @@ describe('a call that is listened to, put together', () => {
     expect(rows()).toContain('On a call I [offer to listen], and hear [both sides].');
   });
 });
+
+describe('noticing, put together', () => {
+  function assembled(think: () => string) {
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC(_sidecarId, _method, params) { const message = (params as { message?: NotchToPage }).message; if (message) pushed.push(message); return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    let whereSays: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const state = { now: new Date(2026, 10, 18, 10, 0).getTime(), looks: 0, paused: false };
+    const submitted: { text: string; requestId: string }[] = [];
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      emergency: { getState: () => (state.paused ? 'paused' : 'normal'), pause() { state.paused = true; }, resume() { state.paused = false; }, subscribe() { return () => {}; } } as never,
+      asks: {
+        db: getDb(), modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null,
+        turns: () => ({
+          ready: () => true, conversation: () => 'conv-notch',
+          submit(turn: { text: string; requestId: string }) { submitted.push({ text: turn.text, requestId: turn.requestId }); },
+          cancel() {}, onEvent: () => () => {}, look: () => null, mark() {},
+        }) as never,
+      },
+      where: { port: { onEvent(listener) { whereSays = listener; }, dispatchRPC: async () => ({}) } },
+      day: { db: getDb(), noClock: true, now: () => state.now },
+      notice: {
+        noClock: true,
+        see: async () => { state.looks++; return { picture: new Uint8Array([1]), x: 0, y: 0, w: 800, h: 600, app: 'slack' }; },
+        think: async () => think(),
+      },
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    live = real;
+    const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    const line = (): NotchLine | null => surface.current().line;
+    const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map((part) => (typeof part === 'string' ? part : part && typeof part === 'object' && 'em' in part ? String((part as { em: unknown }).em) : part && typeof part === 'object' && 'word' in part ? `[${(part as { word: { value: string } }).word.value}]` : '')).join('');
+    return {
+      real, state, submitted, line, wait, fromPage,
+      said: (): string => text(line()?.say),
+      rows: (): string[] => { const shown = line(); return (shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks : []).filter((block) => block.kind === 'row').map((block) => text((block as { say: unknown }).say)); },
+      inFront(payload: Record<string, unknown>): void { whereSays('pc', { event_type: 'notch.where', payload: { look: '', still: true, never: [], ...payload } }); },
+      async rests(): Promise<string> {
+        await real.notice!.tick();
+        state.now += 8000;
+        const did = await real.notice!.tick();
+        await wait();
+        return did;
+      },
+      async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await wait(); },
+    };
+  }
+  const SLACK = (): string => JSON.stringify({ offer: true, seen: 'Leo asked for the October revenue.', act: 'Reply to him here with the number', yes: 'reply', about: 'leo october revenue' });
+
+  test('from resting in a window to the instruction running, and the switch in Settings', async () => {
+    const h = assembled(SLACK);
+    expect(h.real.notice).not.toBeNull();
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    expect(await h.rests()).toBe('looked');
+    expect(h.said()).toBe('Leo asked for the October revenue. Reply to him here with the number?');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'reply' });
+    expect(h.submitted).toEqual([]);
+    await h.answer('yes');
+    // What runs is what was read, as an instruction of its own kind.
+    expect(h.submitted).toHaveLength(1);
+    expect(h.submitted[0]!.text).toBe('Leo asked for the October revenue. Reply to him here with the number.');
+    expect(h.submitted[0]!.requestId).toStartWith('notch-offered-');
+    expect(h.said()).toBe('On it: Leo asked for the October revenue. Reply to him here with the number.');
+  });
+
+  test('Settings has its row, and "offer nothing" stops the looking', async () => {
+    const h = assembled(SLACK);
+    h.fromPage({ type: 'open' });
+    await h.wait();
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'ask', text: 'settings' });
+    await h.wait();
+    expect(h.said()).toBe('Settings');
+    expect(h.rows()).toContain('In the window you are in I [offer one thing].');
+    await h.answer('word', { word: 'notice', value: 'offer nothing' });
+    expect(h.rows()).toContain('In the window you are in I [offer nothing].');
+    await h.answer('no');
+    await h.wait();
+    while (h.line()) { await h.answer('no'); }
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    expect(await h.rests()).toBe('waits');
+    expect(h.state.looks).toBe(0);
+  });
+
+  test('nothing is looked at where Jarvis looks away, on the bare desktop, while a line is up, or while everything is stopped', async () => {
+    const h = assembled(SLACK);
+    // A bank: the desktop app looks away, and there is no window in front to look at.
+    h.inFront({ app: 'chrome.exe', name: 'Chrome', site: 'bank.example', look: 'bank' });
+    expect(await h.rests()).toBe('waits');
+    // The bare desktop.
+    h.inFront({ app: 'explorer.exe', name: 'Explorer', title: '' });
+    expect(await h.rests()).toBe('waits');
+    // Hands on the keys.
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general', still: false });
+    expect(await h.rests()).toBe('waits');
+    // Something is on the notch.
+    h.inFront({ app: 'slack.exe', name: 'Slack', title: 'general' });
+    h.fromPage({ type: 'open' });
+    await h.wait();
+    expect(h.line()).not.toBeNull();
+    expect(await h.real.notice!.tick()).toBe('waits');
+    while (h.line()) { await h.answer('no'); }
+    // Everything is stopped.
+    h.state.paused = true;
+    expect(await h.real.notice!.tick()).toBe('waits');
+    expect(h.state.looks).toBe(0);
+    h.state.paused = false;
+    h.real.where!.refresh();
+    // Awake again, the wait in a window starts anew, and then it looks.
+    expect(await h.real.notice!.tick()).toBe('waits');
+    expect(await h.rests()).toBe('looked');
+    expect(h.state.looks).toBe(1);
+  });
+});
+

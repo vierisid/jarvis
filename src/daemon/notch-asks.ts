@@ -489,6 +489,39 @@ export function notchCallDeps(options: Pick<NotchAskOptions, 'db' | 'config' | '
   };
 }
 
+/**
+ * What noticing needs of the product (src/notch/notice.ts): a picture of the
+ * window the person is in and what the program names in it, both taken by
+ * their own desktop app under its looking-away rules, and one question to a
+ * model that sees pictures. Nothing is looked at with watching switched off.
+ */
+export function notchNoticeDeps(options: Pick<NotchAskOptions, 'llm'>): NonNullable<NotchRealDeps['notice']> {
+  /** The computer the person is at: the one the desktop tools would go to. */
+  const machine = (): { manager: NonNullable<ReturnType<typeof getSidecarManager>>; id: string } | null => {
+    const manager = getSidecarManager();
+    if (!manager) return null;
+    let target: string | null = null;
+    try { target = resolveToolTarget(undefined, 'desktop', 'notch', { quiet: true }); } catch { target = null; }
+    if (!target) return null;
+    return { manager, id: findSidecar(target, manager.listSidecars())?.id ?? target };
+  };
+  return {
+    async see() {
+      const at = machine();
+      if (!at || !isScreenCaptureEnabled()) return null;
+      return pointSeen(await at.manager.dispatchRPC(at.id, 'notch.shot', {}, { initial: 8000, max: 8000 }));
+    },
+    async read() {
+      const at = machine();
+      if (!at || !isScreenCaptureEnabled()) return null;
+      return at.manager.dispatchRPC(at.id, 'notch.window', {}, { initial: 6000, max: 6000 });
+    },
+    // The owner did not ask for this look: it is the assistant's own, and waits behind what they did ask for.
+    think: (messages, signal) => runWithOrigin('background', async () =>
+      (await options.llm().chatTier('medium', 'notch_notice', messages, { max_tokens: 220, temperature: 0, ...(signal ? { signal } : {}) })).content),
+  };
+}
+
 export function notchScriptDeps(options: {
   llm(): LLMManager;
   type(text: string): void;

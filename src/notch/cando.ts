@@ -53,6 +53,7 @@ export const NOTCH_CAN: readonly NotchCan[] = [
     tries: [{ words: 'watch me', by: 'watch' }, { words: 'done', by: 'done' }, { words: 'run it', by: 'run' }],
   },
   { id: 'twice', lead: 'Twice by hand', say: ['Do the same thing twice and I offer to go on from there.'] },
+  { id: 'notice', lead: 'In your apps', say: ['When your hands rest I look at the window you are in. If one thing there waits for you, I offer to do it. Settings switches that off.'] },
   {
     id: 'eye', lead: 'Keep an eye',
     say: ['"', em('Tell me when Sam replies'), '". I tell you the moment it happens.'],
