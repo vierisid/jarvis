@@ -13,7 +13,10 @@
  *             moved in the calendar. Said only when it is more than one new
  *             mail: one new mail is its own line and needs no summary
  *   evening   from six in the evening, if they are there: what was done today
- *             and what still waits
+ *             and what still waits. And when something that was promised
+ *             for today was not kept, the prototype's line before it: "1
+ *             thing slipped today: ... Move it to tomorrow at 9:00?" A yes
+ *             opens it again and re-dates it, the way the dashboard does
  *
  * Each waits for a still moment like everything that speaks up by itself.
  * When a line has told of replies that wait, those are told: they do not each
@@ -64,6 +67,17 @@ export interface NotchDayDeps {
     ahead(): NotchMeeting[];
     look(): Promise<boolean>;
   };
+  /**
+   * What was promised for today and was not kept: the evening offers to move
+   * it. `today` gives those between two moments. `move` opens them again
+   * with a new due time, and says how many it moved. Which promises may be
+   * opened again is the source's to say: one that may have partly run is not
+   * among them.
+   */
+  slipped?: {
+    today(since: number, until: number): { id: string; what: string }[];
+    move(ids: string[], at: number): number;
+  };
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -98,6 +112,49 @@ export function notchEveningLine(done: number, waiting: number): NotchPart[] {
   return [...first, ...second];
 }
 
+/** The times the evening offers to move a thing to. */
+export const NOTCH_MOVE_TO = ['tomorrow at 9:00', 'Friday at 9:00', 'next week'] as const;
+/** The most of a slipped thing's words the line carries. */
+const SLIPPED_CHARS = 60;
+
+/**
+ * The moment a time is, as the evening's word says it: "tomorrow at 9:00",
+ * "Friday at 15:30", "today at 20:00", "next week" (Monday at nine). The next
+ * such moment after `now`, on this machine's clock. Null when the words are
+ * no such time, or the moment is not ahead.
+ */
+export function notchMoveAt(value: string, now: number): number | null {
+  const said = value.trim().toLowerCase().replace(/\s+/g, ' ');
+  const at = new Date(now);
+  const set = (days: number, hour: number, minute: number): number => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(hour, minute, 0, 0); return d.getTime(); };
+  if (said === 'next week') return set(((8 - at.getDay()) % 7) || 7, 9, 0);
+  const parts = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at (\d{1,2}):(\d{2})$/.exec(said);
+  if (!parts) return null;
+  const hour = Number(parts[2]), minute = Number(parts[3]);
+  if (hour > 23 || minute > 59) return null;
+  let days = 0;
+  if (parts[1] === 'tomorrow') days = 1;
+  else if (parts[1] !== 'today') {
+    const wanted = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(parts[1]!);
+    // The next such day: a day named on that day itself means a week on.
+    days = ((wanted - at.getDay() + 7) % 7) || 7;
+  }
+  const moment = set(days, hour, minute);
+  return moment > now ? moment : null;
+}
+
+/** The line about what slipped: one thing by its words, several by their number, and where to as a word that can be changed. */
+export function notchSlippedLine(things: readonly { what: string }[], when: string, options: readonly string[]): NotchPart[] {
+  const word: NotchPart = { word: { name: 'when', value: when, options: options.includes(when) ? [...options] : [when, ...options], label: 'Move to', read: 'dayTime' } };
+  const [only] = things;
+  if (things.length === 1 && only) {
+    const points = [...only.what.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '')];
+    const what = points.length <= SLIPPED_CHARS ? points.join('') : `${points.slice(0, SLIPPED_CHARS - 1).join('').trimEnd()}…`;
+    return [em('1 thing'), ' slipped today: ', what, '. Move it to ', word, '?'];
+  }
+  return [em(`${things.length} things`), ' slipped today. Move them to ', word, '?'];
+}
+
 /** What changed while they were away, as one sentence. Null when it is not worth a line. */
 export function notchBackLine(mail: number, calendar: NotchPart[][]): NotchPart[] | null {
   // One new mail is its own line ("In Gmail: you have not replied to Marco"): it needs no summary.
@@ -122,7 +179,11 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
   let eveningQueued = '';
 
   /** A line that is news, said once. With `show`, yes opens what it spoke of. */
-  const line = (id: string, cls: NotchItem['class'], say: () => NotchPart[] | null, options: { mood?: 'happy' | 'sleepy' | 'idle'; show?: (stage: NotchStage) => Promise<void> | void; ms?: number; told?: () => void; said?: () => void } = {}): NotchItem => ({
+  const line = (id: string, cls: NotchItem['class'], say: () => NotchPart[] | null, options: {
+    mood?: 'happy' | 'sleepy' | 'idle'; show?: (stage: NotchStage) => Promise<void> | void; ms?: number; told?: () => void; said?: () => void;
+    /** Something that is asked before the line is said: the evening's offer to move what slipped. */
+    before?: (stage: NotchStage) => Promise<void>;
+  } = {}): NotchItem => ({
     id,
     subject: id,
     class: cls,
@@ -136,6 +197,7 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       options.told?.();
       // It is on the notch: written down as said now, and not when it was queued.
       options.said?.();
+      if (options.before) await options.before(stage);
       if (!options.show) {
         await stage.say(words, options.ms ?? 5200, { mood: options.mood ?? 'idle', comes: 'pair' });
         return 'settled';
@@ -219,11 +281,43 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       eveningQueued = today;
       const start = new Date(at);
       start.setHours(0, 0, 0, 0);
-      // And it is for its evening. One that could not be said (no notch was
-      // up) was said the next morning as "Today: 5 things done", counted
-      // from yesterday.
+      // The prototype's evening: what was promised for today and was not kept, with the way to move it.
+      // Asked first, on the same turn of the notch, and then the day is counted: a second line of its own
+      // would have waited in the count and said nothing.
+      const slipped = deps.slipped;
+      const still = (): { id: string; what: string }[] => { try { return slipped && notchDayOf(now()) === today ? slipped.today(start.getTime(), now()) : []; } catch { return []; } };
+      // The Friday of the choices is not tomorrow said twice: on a Thursday it is Monday.
+      const options = NOTCH_MOVE_TO.map((one) => (one === 'Friday at 9:00' && new Date(at).getDay() === 4 ? 'Monday at 9:00' : one));
+      const move = slipped ? async (stage: NotchStage): Promise<void> => {
+        // Counted now, not when the evening began: what was opened again in the meantime has not slipped.
+        if (still().length === 0) return;
+        let when: string = options[0]!;
+        const id = stage.id();
+        stage.put({ id, kind: 'offer', say: notchSlippedLine(still(), when, options), yes: 'move', mood: 'sleepy', comes: 'pair' });
+        for (;;) {
+          const answer = await stage.answer(id, ['yes', 'no', 'fold', 'word']);
+          if (answer.act === 'word') {
+            // A time that is one, and ahead: any other leaves the word as it was.
+            const typed = (answer.value ?? '').trim();
+            if (answer.word === 'when' && notchMoveAt(typed, now()) !== null) when = typed;
+            stage.surface.update(id, { say: notchSlippedLine(still(), when, options) });
+            continue;
+          }
+          if (answer.act !== 'yes') return;
+          const to = notchMoveAt(when, now());
+          const things = still();
+          let moved = 0;
+          try { moved = to === null ? 0 : slipped.move(things.map((one) => one.id), to); } catch { moved = 0; }
+          log(`[notch] what slipped today was moved: ${moved} of ${things.length}`);
+          await stage.say(moved > 0 ? ['Moved to ', em(when), '.'] : ['I could not move it. It is in the dashboard, as it was.'], moved > 0 ? 2800 : 4200,
+            moved > 0 ? { mood: 'sleepy', mark: 'check' } : { mood: 'sorry', mark: 'fail' });
+          return;
+        }
+      } : undefined;
+      // The line that counts the day. It is for its evening: one that could not be said (no notch was up) was
+      // said the next morning as "Today: 5 things done", counted from yesterday.
       inbox.add(line('evening', 'rest', () => (notchDayOf(now()) === today ? notchEveningLine(deps.done(start.getTime(), now()), deps.waiting()) : null),
-        { mood: 'sleepy', said: () => deps.settings.set(EVENING, today, now()) }));
+        { mood: 'sleepy', said: () => deps.settings.set(EVENING, today, now()), before: move }));
     },
   };
 }

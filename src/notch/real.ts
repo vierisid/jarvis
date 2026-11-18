@@ -109,6 +109,14 @@ export interface NotchRealDeps {
     create(what: string, options: { when_due: number; assigned_to: string; created_from: string }): { id: string; when_due: number | null };
     /** Promises that were kept, for Today. */
     kept(): { what: string; completed_at: number | null }[];
+    /**
+     * Promises that were due between two moments and were not kept, and may
+     * be opened again: the evening offers to move them (./day.ts). One that
+     * may have partly run is not among them.
+     */
+    slipped?(since: number, until: number): { id: string; what: string }[];
+    /** Opens those again, due at that moment. How many were moved. */
+    move?(ids: string[], at: number): number;
     /** Adds a line to the fixture promise's log. Given only when fixtures may be made. */
     appendFixtureLog?: (line: string) => void;
   };
@@ -662,6 +670,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       waiting: () => inbox.waiting().filter((item) => !lines.has(item.id) && !item.id.startsWith('soon:')).length + (layer?.store.ready().length ?? 0),
       away: () => presence?.isAway() ?? false,
       morningSaid: () => presence?.morningSaid(),
+      // What was promised for today and not kept: the evening offers to move it.
+      slipped: deps.promises?.slipped && deps.promises.move
+        ? { today: (since, until) => deps.promises!.slipped!(since, until), move: (ids, at) => deps.promises!.move!(ids, at) }
+        : undefined,
       // What the morning line opens: the receipts of the night, with Undo where a thing can be taken back.
       overnight: {
         blocks: (since) => notchTodayBlocks(notchDoneBetween(todayDeps, since, dayNow()), 'Nothing was done overnight.'),
