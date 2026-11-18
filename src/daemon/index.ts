@@ -170,6 +170,7 @@ import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
 import { notchMailBrowser, notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
 import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
+import { notchMoveSlipped, notchSlipped } from "./notch-slipped.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
@@ -4777,6 +4778,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           executor,
           create: (what, options) => createCommitment(what, options),
           kept: () => findCommitments({ status: 'completed' }),
+          // What was due today and was not kept, and the way to move it: the evening line offers it.
+          slipped: (since, until) => notchSlipped(since, until),
+          move: (ids, at) => notchMoveSlipped(ids, at),
           appendFixtureLog: notchDemoState === 'open'
             ? (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line)
             : undefined,

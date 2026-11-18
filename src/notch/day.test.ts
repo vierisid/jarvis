@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { attachNotchDay, notchBackLine, notchEveningLine, notchMorningLine } from './day.ts';
+import { attachNotchDay, notchBackLine, notchEveningLine, notchMorningLine, notchMoveAt, notchSlippedLine } from './day.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import { NotchSettings } from './settings.ts';
@@ -14,7 +14,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 40; i++) await P
 const text = (parts: NotchPart[] | null | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
 const meeting = (title: string, startInMin: number): NotchMeeting => ({ title, start: NINE + startInMin * MIN, end: NINE + (startInMin + 30) * MIN });
 
-function harness(options: { done?: number; waiting?: number; mailNew?: number; away?: boolean; calendar?: NotchMeeting[]; overnight?: (row: string) => NotchPart[] | null | 'left' } = {}) {
+function harness(options: { done?: number; waiting?: number; mailNew?: number; away?: boolean; calendar?: NotchMeeting[]; overnight?: (row: string) => NotchPart[] | null | 'left'; slipped?: { id: string; what: string }[]; cannotMove?: boolean } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -31,6 +31,8 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
     now: NINE, done: options.done ?? 0, waiting: options.waiting ?? 0, mailNew: options.mailNew ?? 0, away: options.away ?? false, calendar: options.calendar ?? [], told: 0, opened: 0, asked: [] as [number, number][], looks: 0,
     /** The receipts of the night, as rows: what was taken back is gone from them. */
     receipts: [{ id: 'chase:c1', text: "Getting Sam's answer by Friday" }, { id: 'job:j1', text: 'Pasted 7 from Notepad into Excel' }], since: [] as number[], undone: [] as string[],
+    /** What was promised for today and not kept, and what was moved where. */
+    slipped: [...(options.slipped ?? [])], moved: [] as { ids: string[]; at: number }[], spans: [] as [number, number][],
   };
   const day = attachNotchDay(inbox, {
     settings: new NotchSettings(new Database(':memory:')),
@@ -39,6 +41,12 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
     away: () => state.away,
     mail: { newSince: () => state.mailNew, told: () => { state.told++; }, open: async (stage) => { state.opened++; await stage.say(['The list.'], 1000); } },
     calendar: { ahead: () => state.calendar, look: async () => { state.looks++; return true; } },
+    ...(options.slipped ? {
+      slipped: {
+        today: (since: number, until: number) => { state.spans.push([since, until]); return state.slipped; },
+        move: (ids: string[], at: number) => { if (options.cannotMove) return 0; state.moved.push({ ids, at }); state.slipped = state.slipped.filter((one) => !ids.includes(one.id)); return ids.length; },
+      },
+    } : {}),
     ...(options.overnight ? {
       overnight: {
         blocks: (since: number) => { state.since.push(since); return state.receipts.map((one) => ({ kind: 'row' as const, id: one.id, lead: '03:10', say: [one.text], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] })); },
@@ -319,3 +327,131 @@ describe('the evening line', () => {
     expect(h.said()).toBe('Today: 4 things done. 1 still waits.');
   });
 });
+
+// The prototype: "1 thing slipped today: Anna's contract. Move it to tomorrow at 9:00?"
+describe('what slipped today', () => {
+  /** A Monday at 18:30. */
+  const EVENING = new Date(2026, 10, 16, 18, 30).getTime();
+  const at = (day: number, hour: number, minute = 0): number => new Date(2026, 10, day, hour, minute).getTime();
+  const word = (h: ReturnType<typeof harness>): { value: string; options: string[] } => (h.line()!.say.find((part) => typeof part !== 'string' && 'word' in part) as { word: { value: string; options: string[] } }).word;
+  const whole = (parts: NotchPart[]): string => parts.map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : 'word' in part ? `[${part.word.value}]` : '')).join('');
+
+  test('the line names one thing by its words, several by their number, and where to as a word that can be changed', () => {
+    const options = ['tomorrow at 9:00', 'Friday at 9:00', 'next week'];
+    expect(whole(notchSlippedLine([{ what: "Send Anna the contract." }], 'tomorrow at 9:00', options))).toBe("1 thing slipped today: Send Anna the contract. Move it to [tomorrow at 9:00]?");
+    expect(whole(notchSlippedLine([{ what: 'One' }, { what: 'Two' }], 'tomorrow at 9:00', options))).toBe('2 things slipped today. Move them to [tomorrow at 9:00]?');
+    const line = notchSlippedLine([{ what: 'x'.repeat(300) }], 'Thursday at 15:00', options);
+    expect(whole(line).length).toBeLessThan(140);
+    // A time of the owner's own is the first of the choices.
+    expect((line.find((part) => typeof part !== 'string' && 'word' in part) as { word: { options: string[]; read?: string } }).word).toMatchObject({ options: ['Thursday at 15:00', ...options], read: 'dayTime' });
+  });
+
+  test('a time is the next such moment, on this machine\'s clock', () => {
+    expect(notchMoveAt('tomorrow at 9:00', EVENING)).toBe(at(17, 9));
+    expect(notchMoveAt('Friday at 9:00', EVENING)).toBe(at(20, 9));
+    expect(notchMoveAt(' friday  at 15:30 ', EVENING)).toBe(at(20, 15, 30));
+    // The day it is said on means a week on.
+    expect(notchMoveAt('Monday at 9:00', EVENING)).toBe(at(23, 9));
+    // Next week is its Monday at nine, also when it is said on a Sunday or a Monday.
+    expect(notchMoveAt('next week', EVENING)).toBe(at(23, 9));
+    expect(notchMoveAt('next week', at(22, 12))).toBe(at(23, 9));
+    expect(notchMoveAt('next week', at(18, 12))).toBe(at(23, 9));
+    // Today, when the hour is still ahead.
+    expect(notchMoveAt('today at 20:00', EVENING)).toBe(at(16, 20));
+    expect(notchMoveAt('today at 9:00', EVENING)).toBeNull();
+    for (const no of ['', 'soon', 'tomorrow', 'tomorrow at 25:00', 'tomorrow at 9:75', 'Friday', 'in an hour', 'tomorrow at nine']) expect(notchMoveAt(no, EVENING)).toBeNull();
+  });
+
+  test('in the evening it is offered before the line that counts the day, and yes moves it', async () => {
+    const h = harness({ done: 3, waiting: 0, slipped: [{ id: 'p1', what: "Send Anna the contract" }] });
+    h.state.now = EVENING;
+    h.day.tick();
+    await settle();
+    expect(whole(h.line()!.say)).toBe("1 thing slipped today: Send Anna the contract. Move it to [tomorrow at 9:00]?");
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'move', mood: 'sleepy' });
+    expect(word(h).options).toEqual(['tomorrow at 9:00', 'Friday at 9:00', 'next week']);
+    // Counted for today: from midnight to now.
+    expect(h.state.spans.at(-1)).toEqual([at(16, 0), EVENING]);
+    await h.answer('yes');
+    expect(h.state.moved).toEqual([{ ids: ['p1'], at: at(17, 9) }]);
+    expect(h.said()).toBe('Moved to tomorrow at 9:00.');
+    await h.answer('done');
+    // Then the day is counted.
+    expect(h.said()).toBe('Today: 3 things done. Nothing waits.');
+  });
+
+  test('another time can be picked or typed, and that is where it goes', async () => {
+    const h = harness({ slipped: [{ id: 'p1', what: 'One' }, { id: 'p2', what: 'Two' }] });
+    h.state.now = EVENING;
+    h.day.tick();
+    await settle();
+    expect(whole(h.line()!.say)).toBe('2 things slipped today. Move them to [tomorrow at 9:00]?');
+    await h.answer('word', { word: 'when', value: 'Thursday at 15:00' });
+    expect(whole(h.line()!.say)).toBe('2 things slipped today. Move them to [Thursday at 15:00]?');
+    // What is no time, or not ahead, leaves the word as it was.
+    await h.answer('word', { word: 'when', value: 'whenever' });
+    await h.answer('word', { word: 'when', value: 'today at 9:00' });
+    expect(word(h).value).toBe('Thursday at 15:00');
+    await h.answer('yes');
+    expect(h.state.moved).toEqual([{ ids: ['p1', 'p2'], at: at(19, 15) }]);
+    expect(h.said()).toBe('Moved to Thursday at 15:00.');
+  });
+
+  test('on a Thursday the second choice is Monday: tomorrow is Friday already', async () => {
+    const h = harness({ slipped: [{ id: 'p1', what: 'One' }] });
+    h.state.now = at(19, 18, 30);
+    h.day.tick();
+    await settle();
+    expect(word(h).options).toEqual(['tomorrow at 9:00', 'Monday at 9:00', 'next week']);
+  });
+
+  test('Esc moves nothing, and it is not offered again that evening', async () => {
+    const h = harness({ slipped: [{ id: 'p1', what: 'One' }] });
+    h.state.now = EVENING;
+    h.day.tick();
+    await settle();
+    await h.answer('no');
+    expect(h.state.moved).toEqual([]);
+    await settle();
+    expect(h.said()).toBe('Nothing was done today. Nothing waits.');
+    await h.answer('done');
+    h.state.now += 10 * MIN;
+    h.day.tick();
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('with nothing slipped there is only the line that counts the day, and where it cannot be known nothing is offered', async () => {
+    for (const options of [{ slipped: [] }, {}]) {
+      const h = harness({ done: 1, ...options });
+      h.state.now = EVENING;
+      h.day.tick();
+      await settle();
+      expect(h.said()).toBe('Today: 1 thing done. Nothing waits.');
+    }
+  });
+
+  test('what was kept in the meantime is not offered: it is asked again before the line is shown', async () => {
+    const h = harness({ slipped: [{ id: 'p1', what: 'One' }] });
+    h.state.now = EVENING;
+    h.inbox.present('other', async (stage) => { await stage.say(['Something else.'], 1000); });
+    await settle();
+    h.day.tick();
+    await settle();
+    // Opened again in the dashboard while the notch was busy.
+    h.state.slipped = [];
+    await h.answer('done');
+    await settle();
+    expect(h.said()).not.toContain('slipped');
+  });
+
+  test('when it cannot be moved it says so, and nothing is called moved', async () => {
+    const h = harness({ slipped: [{ id: 'p1', what: 'One' }], cannotMove: true });
+    h.state.now = EVENING;
+    h.day.tick();
+    await settle();
+    await h.answer('yes');
+    expect(h.said()).toBe('I could not move it. It is in the dashboard, as it was.');
+  });
+});
+

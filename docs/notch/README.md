@@ -872,9 +872,8 @@ What is not done, or not proven, in pass 8:
 - **One path per event is not enforced across the product.** With a Google
   connection the older observers still raise their own events for the same
   mail and calendar. The notch's own lines are one each.
-- **The evening line counts; it does not offer to move what slipped.** The
-  prototype's "1 thing slipped today. Move it to tomorrow?" needs a way to
-  change when a promise is due, which the product does not have.
+- **The evening line offers to move what slipped** since 18 November (see
+  "What slipped today"). Before, it only counted.
 - **The lines of the day and the quiet hours have their defaults** (a day
   begins at 05:00, the evening line from 18:00, away after twenty minutes, a
   meeting ten minutes before). Only the quiet hours can be changed, in Home.
@@ -2922,6 +2921,48 @@ What is not done, or not proven:
 - **Only the owner's agents.** A workflow that is not an agent is said as
   before, with nothing to press.
 - **No real failed run has gone through it.**
+
+## What slipped today
+
+The prototype's evening: "1 thing slipped today: Anna's contract. Move it
+to tomorrow at 9:00?", with the time as a word that can be changed. The
+product's evening line only counted. The owner asked for the prototype's
+way on 18 November 2026, as the eleventh of the things it has and the
+product did not.
+
+How it goes. A promise is a commitment with a due time. One that was due
+today and is closed as not kept has slipped: the person cancelled it inside
+its window, or it could not be kept (`src/daemon/notch-slipped.ts`). In the
+evening, before the line that counts the day, the notch names it and offers
+to move it (`src/notch/day.ts`). A yes opens the promise again with the new
+due time, the way the dashboard and the commitments tool do, and the
+executor keeps it then. "Moved to tomorrow at 9:00." Then the day is
+counted.
+
+246. **Only what may be opened again is offered.** A promise a restart
+    interrupted may have partly run, and the executor closed it so that it
+    is not run again: the evening does not undo that. Linked work has its
+    own contract. Neither is offered, and neither is moved when asked by
+    its id.
+247. **The time is a moment that is ahead.** "Tomorrow at 9:00", a weekday
+    and an hour, "today at 20:00", "next week" (its Monday at nine). A day
+    named on that day itself means a week on. What is no such time, or is
+    not ahead, leaves the word as it was (`notchMoveAt`).
+248. **It is counted when it is asked, not when the evening began.** What
+    was opened again in the meantime is not offered.
+249. **Esc moves nothing, and it is not offered again that evening.** The
+    promise stays as it is, in the dashboard.
+250. **What cannot be moved is said so.** Nothing is called moved that was
+    not.
+
+What is not done, or not proven:
+
+- **Only promises.** A chase whose day has passed asks its own question
+  ("Wait until Monday?"). A mail that was not answered, a meeting that was
+  missed, a job that stopped: none of these is counted as slipped.
+- **A promise that failed is run again as it was.** Why it failed is in the
+  dashboard. If the reason still holds tomorrow, it fails again.
+- **Not seen on a real evening.**
 
 ## The keys
 
