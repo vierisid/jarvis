@@ -28,10 +28,20 @@ import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
 import { workflowRoot } from "../../sandbox-api/config";
 import { redactEngineText } from "../../runtime/engine-console-redaction";
 import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spawn";
+import {
+  codeTreeFor,
+  decideSandbox,
+  defaultSandboxMode,
+  detectSandboxSupport,
+  dirIdentity,
+  type SandboxMode,
+  type SandboxSupport,
+} from "./sandbox";
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
 import type { EgressPolicy } from "../../runtime/http-egress";
 import { leaseCodeTreeOf, materializeCodeActions } from "./code-materialize";
+import { collectCodeActions } from "./flow-version-adapter";
 import { onCodeStepsRevoked } from "../../runtime/cancellation-signals";
 import {
   ackTimeoutMsForOperation,
@@ -131,6 +141,16 @@ export interface EngineRuntimeOptions {
    * `engineTranspilerCache` in spawn.ts).
    */
   warmTranspilerCache?: boolean;
+  /**
+   * The engine's file sandbox (#1154, sandbox.ts): `prefer` sandboxes when
+   * this machine can and warns when it cannot, `require` refuses to start an
+   * engine it cannot sandbox, `off` never sandboxes. Default: what the
+   * daemon configured from `workflows.sandbox` (configureEngineSandbox), else
+   * the JARVIS_WORKFLOW_SANDBOX env var, else `prefer`.
+   */
+  sandbox?: SandboxMode;
+  /** Tests only: what this machine can do, instead of asking the launcher. */
+  sandboxSupport?: () => SandboxSupport;
 }
 
 export interface AcquireOptions {
@@ -148,6 +168,13 @@ export interface AcquireOptions {
    * same kind of work in the same project.
    */
   flowId?: string;
+  /**
+   * The flow version the engine will run (#1154). A sandboxed engine can read
+   * only this version's CODE tree, granted when it starts, so a warm engine
+   * is reused only for the same version. Without it a sandboxed engine runs
+   * no CODE step.
+   */
+  flowVersionId?: string;
   /** Per-run engineToken TTL in seconds. Default 1 hour. */
   tokenTtlSeconds?: number;
 }
@@ -242,6 +269,12 @@ export class EngineHandle {
     private readonly api: SandboxApi,
     private readonly baseCodeDir: string,
     releaseImpl?: () => Promise<void>,
+    /**
+     * The flow version whose CODE tree the engine's sandbox can read: a
+     * version id, `null` for a sandboxed engine granted none, `undefined`
+     * for an engine with no sandbox.
+     */
+    private readonly sandboxCodeVersion?: string | null,
   ) {
     this.releaseImpl = releaseImpl ?? (() => this.killAndTerminate());
   }
@@ -372,6 +405,15 @@ export class EngineHandle {
   }
 
   private async executeFlowOnTree(upstream: UpstreamFlowVersion, opts: ExecuteFlowOnHandleOptions): Promise<FlowRun> {
+    // A sandboxed engine reads only the CODE tree it was started for. Say so
+    // now rather than let each CODE step fail on a permission error.
+    if (this.sandboxCodeVersion !== undefined && this.sandboxCodeVersion !== upstream.id
+      && collectCodeActions(upstream).length > 0) {
+      throw new Error(
+        `executeFlow(run ${this.runId}): this engine's sandbox was not opened for flow version ${upstream.id}, ` +
+          `so its CODE steps cannot be read; acquire the engine with that flowVersionId`,
+      );
+    }
     await materializeCodeActions(upstream, this.baseCodeDir);
 
     const baseExecuteFlowOptions: ExecuteFlowOptions = {
@@ -634,11 +676,26 @@ interface WarmEngine {
   engineClient: EngineContract;
   /** What it may be reused for: poolKey() of the acquire that spawned it. */
   key: string;
+  /** See EngineHandle's `sandboxCodeVersion`. */
+  sandboxCodeVersion: string | null | undefined;
+  /**
+   * The CODE tree its sandbox reads and that directory's identity at spawn.
+   * Landlock grants a directory, not a name: once the tree is replaced (pruned
+   * and made again) the engine can no longer read it, so it is not reused.
+   */
+  codeTree?: { path: string; identity: string | null };
 }
 
-/** The warm pool reuses an engine only for the same project and flow (#1154). */
-export function poolKey(opts: Pick<AcquireOptions, "projectId" | "flowId">): string {
-  return JSON.stringify([opts.projectId, opts.flowId ?? null]);
+function codeTreeReplaced(engine: WarmEngine): boolean {
+  return engine.codeTree !== undefined && dirIdentity(engine.codeTree.path) !== engine.codeTree.identity;
+}
+
+/**
+ * The warm pool reuses an engine only for the same project and flow (#1154),
+ * and the same flow version, whose CODE tree a sandboxed engine was granted.
+ */
+export function poolKey(opts: Pick<AcquireOptions, "projectId" | "flowId" | "flowVersionId">): string {
+  return JSON.stringify([opts.projectId, opts.flowId ?? null, opts.flowVersionId ?? null]);
 }
 
 /**
@@ -723,6 +780,8 @@ export class EngineRuntime {
   private readonly cwd: string;
   private readonly devPieces: string[];
   private readonly egressPolicy: EgressPolicy | undefined;
+  private readonly sandboxMode: SandboxMode;
+  private readonly sandboxSupport: () => SandboxSupport;
   private readonly poolEnabled: boolean;
   private readonly poolIdleTtlMs: number;
   /**
@@ -806,6 +865,8 @@ export class EngineRuntime {
     // still override via `opts.devPieces` for tests.
     this.devPieces = opts.devPieces ?? discoverJarvisDevPieces();
     this.egressPolicy = opts.egressPolicy;
+    this.sandboxMode = opts.sandbox ?? defaultSandboxMode();
+    this.sandboxSupport = opts.sandboxSupport ?? (() => detectSandboxSupport());
     // A workflow whose CODE-step permission was taken back keeps no warm
     // engine (#1426): the process group a CODE step ran under, and anything
     // it left running there, goes now rather than at the idle timeout.
@@ -853,7 +914,9 @@ export class EngineRuntime {
     // Parked for another project or flow: never handed to this one (#1154).
     // Retired now rather than left to its idle timer, since this acquire's
     // engine takes the slot when it is released.
-    if (this.poolEnabled && this.idleEngine && this.idleEngine.key !== poolKey(opts)) {
+    // Or whose sandbox no longer covers its CODE tree, which was replaced
+    // since it started.
+    if (this.poolEnabled && this.idleEngine && (this.idleEngine.key !== poolKey(opts) || codeTreeReplaced(this.idleEngine))) {
       const stale = this.idleEngine;
       this.idleEngine = null;
       this.clearIdleEvictionTimer();
@@ -906,12 +969,18 @@ export class EngineRuntime {
         this.api,
         this.baseCodeDir,
         () => this.returnToPoolOrKill(warm),
+        warm.sandboxCodeVersion,
       );
     }
     return this.spawnFresh(opts);
   }
 
   private async spawnFresh(opts: AcquireOptions): Promise<EngineHandle> {
+    // Before anything is registered: under `require`, an engine that cannot
+    // be sandboxed is refused here, with nothing to undo (#1154).
+    // An overridden runtime is a test's stand-in for Bun, run as it is.
+    const sandbox = this.runtime === undefined ? decideSandbox(this.sandboxMode, this.sandboxSupport) : null;
+    const codeTreePath = sandbox ? codeTreeFor(this.baseCodeDir, opts.flowVersionId) : null;
     const sandboxId = SandboxRegistry.newSandboxId();
     const { token, expiresAt } = await this.api.signer.mint(
       { sandboxId, runId: opts.runId, projectId: opts.projectId },
@@ -927,6 +996,14 @@ export class EngineRuntime {
     });
 
     mkdirSync(this.baseCodeDir, { recursive: true });
+    // Landlock grants a directory that exists: make the run's CODE tree now,
+    // before the engine starts, and materialize into it later.
+    let codeTree: WarmEngine["codeTree"];
+    if (codeTreePath) {
+      mkdirSync(codeTreePath, { recursive: true });
+      codeTree = { path: codeTreePath, identity: dirIdentity(codeTreePath) };
+    }
+    const sandboxCodeVersion = sandbox ? (codeTree ? opts.flowVersionId! : null) : undefined;
 
     const spawnOptions: SpawnEngineOptions = {
       bundlePath: this.bundlePath,
@@ -944,6 +1021,7 @@ export class EngineRuntime {
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
     if (this.warmTranspilerCache) spawnOptions.warmTranspilerCache = true;
+    if (sandbox) spawnOptions.sandbox = { launcher: sandbox.launcher, ...(codeTree ? { codeTree: codeTree.path } : {}) };
     let proc: SpawnedEngine;
     try {
       proc = spawnEngine(spawnOptions);
@@ -1019,7 +1097,9 @@ export class EngineRuntime {
             `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS if acquires start timing out.`,
         );
       }
-      const warm: WarmEngine = { sandboxId, proc, engineClient, key: poolKey(opts) };
+      const warm: WarmEngine = {
+        sandboxId, proc, engineClient, key: poolKey(opts), sandboxCodeVersion, ...(codeTree ? { codeTree } : {}),
+      };
       const releaseImpl = this.poolEnabled
         ? () => this.returnToPoolOrKill(warm)
         : undefined;
@@ -1035,6 +1115,7 @@ export class EngineRuntime {
         this.api,
         this.baseCodeDir,
         releaseImpl,
+        sandboxCodeVersion,
       );
     } catch (e) {
       // Make sure the subprocess is gone before bubbling. A timed-out engine

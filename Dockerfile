@@ -344,6 +344,24 @@ RUN set -eu; \
     sha256sum "/out/engine/$hash/main.js" | cut -d' ' -f1 > "/out/engine/$hash/main.js.sha256"; \
     echo "staged engine bundle $hash"
 
+# ─── Stage 3b: The engine's sandbox launcher (#1154) ───────────────
+# A static Go binary (sandbox-launcher/) that applies a Landlock ruleset and
+# execs the workflow engine, so piece and CODE-step code cannot read the
+# daemon's data folder. Static (CGO_ENABLED=0), so it runs on the slim base
+# with nothing installed. Built on the build platform for the target
+# architecture, named the way the daemon looks it up (Node's arch names).
+# Same Go image and digest as .github/scripts/webview-toolchain.Dockerfile,
+# at the go line of sandbox-launcher/go.mod.
+FROM --platform=$BUILDPLATFORM golang:1.25.0-bookworm@sha256:81dc45d05a7444ead8c92a389621fafabc8e40f8fd1a19d7e5df14e61e98bc1a AS sandbox
+ARG TARGETARCH
+WORKDIR /src
+COPY sandbox-launcher/ ./
+RUN set -eu; \
+    case "$TARGETARCH" in amd64) arch=x64;; arm64) arch=arm64;; *) echo "no sandbox launcher for $TARGETARCH" >&2; exit 1;; esac; \
+    mkdir -p /out; \
+    CGO_ENABLED=0 GOOS=linux GOARCH="$TARGETARCH" GOFLAGS=-mod=readonly \
+      go build -trimpath -ldflags="-s -w" -o "/out/jarvis-sandbox-linux-$arch" .
+
 # ─── Stage 4: Production image ─────────────────────────────────────
 FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS production
 
@@ -396,6 +414,9 @@ COPY --from=workflows /out/core-pieces/ ./src/workflows/activepieces/packages/pi
 # 999 and fails bootstrap, which is #613). The assertion after USER jarvis
 # below is what keeps that from ever shipping.
 COPY --from=workflows /out/engine/ ./engine-cache/
+# Root-owned like the rest of /app: the daemon (uid jarvis) runs it and can
+# never replace it. src/workflows/runner/engine-runtime/sandbox.ts finds it here.
+COPY --from=sandbox /out/ ./sandbox-launcher/dist/
 
 # Install jarvis as a global command
 # Note: `bun link` can't be used here — it symlinks through /root/.bun/ which

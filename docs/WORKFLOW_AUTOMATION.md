@@ -1439,7 +1439,33 @@ latest version and ran it. Now:
 
 ### Trust model
 
-The engine and the CODE-step child it spawns run as the daemon's own OS user, with no OS sandbox (#1154). The sanitized environment is defense in depth only: same-user code can read the daemon's own environment through `/proc`, read and write anything that user can (`~/.jarvis` included, and so other flows' files and store entries), and use the network. Treat a CODE step, and a third-party piece, as code you run on the host. A warm engine is reused only within one project and flow, which keeps accidental in-memory state apart, not hostile code.
+The engine and the CODE-step child it spawns run as the daemon's own OS user. On Linux they run inside a Landlock file sandbox (#1154); elsewhere, or where Landlock is missing, they have the daemon's file access.
+
+**What the sandbox allows.** The engine starts through `jarvis-sandbox` (`sandbox-launcher/`, a small static Go binary), which applies a Landlock ruleset and then execs Bun. Landlock is inherited, so the CODE-step children the engine starts are under the same rules. A sandboxed engine can:
+
+- read (and execute): the Bun binary, the engine bundle and its empty bunfig, the vendored pieces tree, the piece search roots (installed pieces in `~/.jarvis/pieces` and a host's shared pieces dir), the run's own CODE tree (`~/.jarvis/workflow-codes/<flowVersionId>`), and the system files a process needs: libraries, CA certificates, DNS and time zone configuration, `/etc/passwd` and `/etc/group`, and `/proc`;
+- read and write: a private directory made for that engine, which is its `TMPDIR` and `HOME` and is removed when it exits, and `/dev/null`. Nothing written there can be executed.
+
+Everything else is denied, including the rest of the data folder: the vault database, the keychain, `google-tokens.json`, `workflow-encryption.key`, other flows' CODE trees, run logs and step files. Landlock also refuses a sandboxed process the daemon's `/proc/<pid>/environ` and memory. A warm engine is reused only for the same project, flow and flow version, since its CODE tree is granted when it starts; a tree that was replaced since then retires it.
+
+**The setting.** `workflows.sandbox` in `config.yaml` (or `JARVIS_WORKFLOW_SANDBOX`, which the file overrides):
+
+- `prefer` (the default): sandbox where the machine can, and otherwise run the engine unsandboxed with a warning in the log;
+- `require`: refuse to start an engine that cannot be sandboxed, so runs fail with that reason instead;
+- `off`: never sandbox.
+
+It is file-owned like the artifact paths: a dashboard or settings save never sets it. The daemon logs what engines run under at boot (`workflow engine sandbox: Landlock ABI <n> ...` or the reason it is unavailable).
+
+**Where it is unavailable.** Linux before 5.13, a kernel without `landlock` in its `lsm=` list, a seccomp profile that blocks the Landlock calls, a missing launcher (a source install without Go; `bun run build:sandbox` builds it), and macOS and Windows. It needs no privilege and no extra container capability: the Docker image ships the launcher and works under Docker's default profile.
+
+**What it does not cover.**
+
+- The network. A sandboxed engine reaches what the per-step egress guards allow (#961, #1153), and raw sockets from a CODE step or a piece are not filtered.
+- A unix socket that already exists, such as a Docker socket the daemon's user can open.
+- Before Linux 6.2 (Landlock ABI 3), truncating a file by path; before 6.10 (ABI 5), device ioctls; before 6.12 (ABI 6), signalling processes outside the sandbox and abstract unix sockets.
+- Anything in memory of the engine itself: a third-party piece and a CODE step in the same run share the engine process and its run's credentials.
+
+Treat a CODE step, and a third-party piece, as code you run on the host with the access above. The sanitized environment of a CODE child is defense in depth only.
 
 ### `{{ ... }}` expressions are data, not JavaScript
 

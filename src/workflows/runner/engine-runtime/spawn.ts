@@ -22,8 +22,10 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, realpathSync, utimesSync } from "node:fs";
+import { accessSync, constants as fsConstants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { landlockAllowList, launcherArgs } from "./sandbox";
 import { isSecretEnvName } from "../../../util/subprocess-env";
 import { EGRESS_POLICY_ENV, HOST_ADDRESSES_ENV, REQUEST_TIMEOUT_ENV, type EgressPolicy } from "../../runtime/http-egress";
 import { DEFAULT_TIMEOUT_S } from "./operation-builder";
@@ -116,6 +118,13 @@ export interface SpawnEngineOptions {
   cwd?: string;
   /** See `EngineRuntimeOptions.warmTranspilerCache`. Build time only. */
   warmTranspilerCache?: boolean;
+  /**
+   * Start the engine inside the file sandbox (#1154, sandbox.ts): through
+   * `launcher`, reading only what `landlockAllowList` names and writing only
+   * a private directory made for this engine, which becomes its TMPDIR and
+   * HOME. `codeTree` is the run's CODE tree, `<workflow-codes>/<flowVersionId>`.
+   */
+  sandbox?: { launcher: string; codeTree?: string };
 }
 
 /**
@@ -555,16 +564,63 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   const args = opts.runtime
     ? [opts.bundlePath]
     : [engineConfigArg(), "--no-env-file", "--smol", "--no-install", "--disable-warning=DEP0169", opts.bundlePath];
-  const child = spawn(runtime, args, {
-    env,
-    cwd: opts.cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    // Its own process group (POSIX), so the processes a CODE step starts
-    // (no-op-code-sandbox.ts) are signalled with it: they are in its group,
-    // and a SIGKILL to the engine's pid alone left them running with the
-    // daemon's init as their parent. See `signalEngine`.
-    detached: ENGINE_PROCESS_GROUPS,
-  });
+  let command = runtime;
+  let argv = args;
+  let privateDir: string | undefined;
+  if (opts.sandbox) {
+    // Its own directory, 0700, removed when it exits: the only place the
+    // sandboxed engine and its CODE children can write.
+    privateDir = mkdtempSync(join(tmpdir(), "jarvis-engine-"));
+    const ownTmp = join(privateDir, "tmp");
+    const ownHome = join(privateDir, "home");
+    mkdirSync(ownTmp, { mode: 0o700 });
+    mkdirSync(ownHome, { mode: 0o700 });
+    env["TMPDIR"] = ownTmp;
+    // The daemon's HOME holds its data folder, which the engine cannot read;
+    // anything that writes under ~ writes here instead.
+    env["HOME"] = ownHome;
+    const allow = landlockAllowList({
+      runtime,
+      bundlePath: opts.bundlePath,
+      bunfigPath: ENGINE_BUNFIG_PATH,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.customPiecesPaths ? { customPiecesPaths: opts.customPiecesPaths } : {}),
+      ...(opts.sandbox.codeTree ? { codeTree: opts.sandbox.codeTree } : {}),
+      ...(transpilerCache ? { transpilerCache } : {}),
+      privateDir,
+    });
+    command = opts.sandbox.launcher;
+    argv = launcherArgs(allow, [runtime, ...args]);
+  }
+  const removePrivateDir = (): void => {
+    if (!privateDir) return;
+    try {
+      rmSync(privateDir, { recursive: true, force: true });
+    } catch (e) {
+      // From an exit handler: a throw here would be the daemon's, not the engine's.
+      console.warn(`[engine-spawn] could not remove ${privateDir}: ${(e as Error).message}`);
+    }
+  };
+  let child: ChildProcess;
+  try {
+    child = spawn(command, argv, {
+      env,
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Its own process group (POSIX), so the processes a CODE step starts
+      // (no-op-code-sandbox.ts) are signalled with it: they are in its group,
+      // and a SIGKILL to the engine's pid alone left them running with the
+      // daemon's init as their parent. See `signalEngine`.
+      detached: ENGINE_PROCESS_GROUPS,
+    });
+  } catch (e) {
+    removePrivateDir();
+    throw e;
+  }
+  if (privateDir) {
+    child.once("exit", removePrivateDir);
+    child.once("error", removePrivateDir);
+  }
 
   // Mark the bundle as in use so the cache pruner leaves it alone. A daemon
   // holds one bundle for its whole life but only runs a process from it some

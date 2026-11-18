@@ -659,6 +659,7 @@ export class TriggerManager {
           runId: triggerHookRunId('enable', flow.id, version),
           projectId: flow.project_id,
           flowId: flow.id,
+          flowVersionId: version.id,
         });
         try {
           if (!workflowTriggerCurrent(flow.id, version.id, generation)) return;
@@ -847,6 +848,7 @@ export class TriggerManager {
         runId: triggerHookRunId('disable', flowId, version),
         projectId: flow.project_id,
         flowId,
+        flowVersionId: version.id,
       });
       try {
         const upstreamVersion = toUpstreamFlowVersion(version);
@@ -1371,6 +1373,7 @@ export class TriggerManager {
         runId: triggerHookRunId('poll', flowId, version),
         projectId: flow.project_id,
         flowId,
+        flowVersionId: version.id,
       });
       try {
         // RUN hook = "poll the trigger and return its items" without executing
