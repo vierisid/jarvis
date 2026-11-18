@@ -78,7 +78,8 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { Database } from 'bun:sqlite';
-import { loadConfig } from '../config/loader.ts';
+import { loadConfig, resolveDataPaths } from '../config/loader.ts';
+import { takeDataDirArg } from './lifecycle.ts';
 import { acquireLockAt, lockPathFor } from '../daemon/pid.ts';
 import { keychainDir, migrateKeychain } from '../vault/keychain.ts';
 import {
@@ -213,7 +214,13 @@ function isNewerVersion(candidate: string, baseline: string): boolean {
   return false;
 }
 
-export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<number> {
+export async function cmdExport(argv: string[], io: CliIo = defaultIo): Promise<number> {
+  // `--data-dir` finds the database `jarvis start --data-dir` uses.
+  const { dataDir: dataDirArg, rest: args, error: dataDirError } = takeDataDirArg(argv);
+  if (dataDirError) {
+    io.err(`error: ${dataDirError}`);
+    return 2;
+  }
   // Complete by default. `--full` is the old spelling of the default.
   const full = !args.includes('--no-secrets');
   let out: string | undefined;
@@ -221,7 +228,7 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
   if (outIdx !== -1) {
     out = args[outIdx + 1];
     if (!out || (out.startsWith('--') && out !== '-')) {
-      io.err('usage: jarvis export [--out <path>|-] [--no-secrets]');
+      io.err('usage: jarvis export [--out <path>|-] [--no-secrets] [--data-dir <path>]');
       return 2;
     }
   }
@@ -235,7 +242,9 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
   try {
     const config = await loadConfig();
     const dataDir = config.daemon.data_dir;
-    const dbPath = config.daemon.db_path;
+    // The daemon's database, which `--data-dir` moves (resolveDataPaths). The
+    // other entries stay where the daemon keeps them, under data_dir.
+    const { dbPath } = resolveDataPaths(config.daemon, { dataDir: dataDirArg });
     if (!existsSync(dbPath)) {
       io.err(`error: no database at ${dbPath} — nothing to export`);
       return 1;
@@ -602,16 +611,18 @@ function readFileSyncText(path: string): string {
 }
 
 export async function cmdRestore(
-  args: string[],
+  argv: string[],
   io: CliIo = defaultIo,
   /** Test-only fault injection: throw right after the named entry has swapped
    * in, so tests can drive the rollback path deterministically (rename gives
    * no natural same-filesystem failure hook). Never set in production. */
   _hooks: { failAfterSwap?: string } = {},
 ): Promise<number> {
+  // No running daemon to ask here (restore needs it stopped): `--data-dir` only.
+  const { dataDir: dataDirArg, rest: args, error: dataDirError } = takeDataDirArg(argv, { running: () => undefined });
   const archive = args.filter((a) => !a.startsWith('--'))[0];
-  if (!archive) {
-    io.err('usage: jarvis restore <archive|-> [--allow-missing-keys]');
+  if (dataDirError || !archive) {
+    io.err(dataDirError ? `error: ${dataDirError}` : 'usage: jarvis restore <archive|-> [--allow-missing-keys] [--data-dir <path>]');
     return 2;
   }
   const fromStdin = archive === '-';
@@ -620,7 +631,8 @@ export async function cmdRestore(
   try {
     const config = await loadConfig();
     const dataDir = config.daemon.data_dir;
-    const dbPath = config.daemon.db_path;
+    // The database the daemon will open (resolveDataPaths), --data-dir included.
+    const { dbPath } = resolveDataPaths(config.daemon, { dataDir: dataDirArg });
 
     if (!fromStdin && !existsSync(archive)) {
       io.err(`error: no archive at ${archive}`);

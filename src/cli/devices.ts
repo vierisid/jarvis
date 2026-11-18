@@ -15,7 +15,8 @@
  * to stderr so provisioning can capture stdout verbatim.
  */
 
-import { loadConfig } from '../config/loader.ts';
+import { loadConfig, resolveDataPaths } from '../config/loader.ts';
+import { takeDataDirArg } from './lifecycle.ts';
 import { initDatabase, getDb } from '../vault/schema.ts';
 import { enrollDevice } from '../sidecar/enrollment.ts';
 import type { SidecarRecord } from '../sidecar/types.ts';
@@ -32,12 +33,15 @@ const defaultIo: CliIo = {
   err: (line) => console.error(line),
 };
 
-async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string }> {
+async function openVault(io: CliIo, dataDirArg?: string): Promise<{ dataDir: string; brainUrl: string }> {
   const config = await loadConfig();
+  // The database the daemon opens: `--data-dir` moves it (resolveDataPaths).
+  // The device keys stay under data_dir, where the daemon keeps them.
+  const paths = resolveDataPaths(config.daemon, { dataDir: dataDirArg });
   // An empty database here would enroll a device against a vault the daemon
   // is about to refuse (or, worse, accept as new): stop with the restore hint.
-  assertDatabaseUsable(config.daemon.db_path, config.daemon.data_dir);
-  initDatabase(config.daemon.db_path, { quiet: true });
+  assertDatabaseUsable(paths.dbPath, paths.dataDir);
+  initDatabase(paths.dbPath, { quiet: true });
   const resolved = resolveExternalOrigin(config);
   for (const warning of resolved.warnings) io.err(`warning: ${warning}`);
   const brainUrl = resolved.httpOrigin;
@@ -53,7 +57,12 @@ async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string
   return { dataDir: config.daemon.data_dir, brainUrl };
 }
 
-export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<number> {
+export async function cmdEnroll(argv: string[], io: CliIo = defaultIo): Promise<number> {
+  const { dataDir: dataDirArg, rest: args, error: dataDirError } = takeDataDirArg(argv);
+  if (dataDirError) {
+    io.err(`error: ${dataDirError}`);
+    return 2;
+  }
   const json = args.includes('--json');
   const rotate = args.includes('--rotate');
   const name = args.filter((a) => !a.startsWith('--'))[0];
@@ -63,7 +72,7 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
   }
 
   try {
-    const { dataDir, brainUrl } = await openVault(io);
+    const { dataDir, brainUrl } = await openVault(io, dataDirArg);
     const result = await enrollDevice(dataDir, brainUrl, name, { onExisting: 'upsert', rotate });
     if (json) {
       io.out(
@@ -89,7 +98,12 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
   }
 }
 
-export async function cmdSidecars(args: string[], io: CliIo = defaultIo): Promise<number> {
+export async function cmdSidecars(argv: string[], io: CliIo = defaultIo): Promise<number> {
+  const { dataDir: dataDirArg, rest: args, error: dataDirError } = takeDataDirArg(argv);
+  if (dataDirError) {
+    io.err(`error: ${dataDirError}`);
+    return 2;
+  }
   const sub = args.filter((a) => !a.startsWith('--'))[0] ?? 'list';
   const json = args.includes('--json');
   if (sub !== 'list') {
@@ -98,7 +112,7 @@ export async function cmdSidecars(args: string[], io: CliIo = defaultIo): Promis
   }
 
   try {
-    await openVault(io);
+    await openVault(io, dataDirArg);
     const rows = getDb()
       .query('SELECT * FROM sidecars ORDER BY enrolled_at DESC')
       .all() as SidecarRecord[];
@@ -128,7 +142,12 @@ export async function cmdSidecars(args: string[], io: CliIo = defaultIo): Promis
   }
 }
 
-export async function cmdRevoke(args: string[], io: CliIo = defaultIo): Promise<number> {
+export async function cmdRevoke(argv: string[], io: CliIo = defaultIo): Promise<number> {
+  const { dataDir: dataDirArg, rest: args, error: dataDirError } = takeDataDirArg(argv);
+  if (dataDirError) {
+    io.err(`error: ${dataDirError}`);
+    return 2;
+  }
   const json = args.includes('--json');
   const sid = args.filter((a) => !a.startsWith('--'))[0];
   if (!sid) {
@@ -137,7 +156,7 @@ export async function cmdRevoke(args: string[], io: CliIo = defaultIo): Promise<
   }
 
   try {
-    await openVault(io);
+    await openVault(io, dataDirArg);
     // Deletes the enrollment row: new connections are rejected immediately,
     // and a running daemon severs any LIVE session for this sid within ~30s
     // (its revocation sweep re-checks enrollment; this CLI is a separate
