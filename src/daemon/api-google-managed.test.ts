@@ -36,7 +36,7 @@ const MANAGED = {
   connect_url: CONNECT_URL,
 };
 
-function routes(google: Record<string, string> | undefined, googleTokensPath?: string) {
+function routes(google: Record<string, string | boolean> | undefined, googleTokensPath?: string) {
   return createApiRoutes({
     daemonStartedAt: Date.now(),
     healthMonitor: {} as ApiContext['healthMonitor'],
@@ -206,6 +206,34 @@ describe('managed (hosted) Google mode', () => {
         connect_url: CONNECT_URL,
       });
       expect(revoked.reconnect_reason).toContain('connect Google again');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports what the grant allows: hosted sends only with the system config leave and the scope (#957)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-status-'));
+    const tokensPath = join(dir, 'google-tokens.json');
+    const write = (scope?: string) => Bun.write(tokensPath, JSON.stringify({ access_token: 'a', refresh_token: '1//r',
+      expiry_date: Date.now() + 3_600_000, token_type: 'Bearer', ...(scope ? { scope } : {}) }));
+    const read = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly';
+    const send = `${read} https://www.googleapis.com/auth/gmail.send`;
+    const sendStatus = async (google: Record<string, string | boolean>) => {
+      const body = await (await routes(google, tokensPath)['/api/auth/google/status']!.GET!(new Request('http://localhost/api/auth/google/status'))).json();
+      return { scopes: body.scopes, can_send: body.can_send, send_available: body.send_available };
+    };
+    const SELF = { client_id: 'id', client_secret: 'secret' };
+    try {
+      // A grant saved before scopes were recorded is the read-only one.
+      await write();
+      expect(await sendStatus(SELF)).toEqual({ scopes: ['gmail.readonly', 'calendar.readonly'], can_send: false, send_available: true });
+      await write(send);
+      expect(await sendStatus(SELF)).toEqual({ scopes: ['gmail.readonly', 'calendar.readonly', 'gmail.send'], can_send: true, send_available: true });
+      // Hosted: the same grant cannot send until the control plane allows it.
+      expect(await sendStatus(MANAGED)).toMatchObject({ can_send: false, send_available: false });
+      expect(await sendStatus({ ...MANAGED, gmail_send: true })).toMatchObject({ can_send: true, send_available: true });
+      await write(read);
+      expect(await sendStatus({ ...MANAGED, gmail_send: true })).toMatchObject({ can_send: false, send_available: true });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

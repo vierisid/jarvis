@@ -122,7 +122,7 @@ import { CANCELED_EFFECT_WARNING, continuedFailureLabel } from "./useWorkflowsDa
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 import { isHumanInputStep } from "../../../../../src/workflows/runtime/human-input-contract";
-import { CONTINUE_UNAVAILABLE_MESSAGE, NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepNotApprovalGated } from "./approval-gate";
+import { CONTINUE_UNAVAILABLE_MESSAGE, NOT_APPROVAL_GATED_LABEL, NOT_APPROVAL_GATED_TOOLTIP, RETRY_UNAVAILABLE_MESSAGE, stepGatedCategory, stepNotApprovalGated } from "./approval-gate";
 import { plainActionName, plainPieceName } from "../../../../../src/workflows/pieces-library/plain-piece-name";
 import { accessibleText } from "./accessible-text";
 
@@ -3337,6 +3337,7 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
     : subAction && removedPiece ? plainActionName(subAction) : subAction;
   const isUnconfigured = step.type === "PIECE" && (!step.settings?.pieceName || !step.settings.actionName);
   const notApprovalGated = stepNotApprovalGated(step, catalog);
+  const gated = notApprovalGated ? null : stepGatedCategory(step, catalog);
 
   const routerKind = step.settings?.routerKind;
   let kindLabel: string | null;
@@ -3488,6 +3489,11 @@ export function StepNode({ data }: NodeProps): React.ReactElement {
         <div className="wf-node__ungated" role="note" title={NOT_APPROVAL_GATED_TOOLTIP}>
           <Chip tone="warn" dot={false}>{NOT_APPROVAL_GATED_LABEL}</Chip>
           <span className="wf-node__ungated-desc">{NOT_APPROVAL_GATED_TOOLTIP}</span>
+        </div>
+      ) : gated ? (
+        <div className="wf-node__gated" role="note" title={gated.tooltip}>
+          <Chip tone="neutral" dot={false}>{gated.label}</Chip>
+          <span className="wf-node__ungated-desc">{gated.tooltip}</span>
         </div>
       ) : null}
       <div className="wf-node__body">

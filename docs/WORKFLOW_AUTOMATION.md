@@ -246,7 +246,11 @@ Practical consequences:
   audit row and obeys Pause and Kill. The dashboard says so (#955) in the
   Library's Community section (both modes), under governed categories in the
   Authority room, and with a "Not approval-gated" badge on each community
-  action step in the flow editor. Since #961 the HTTP request step is governed
+  action step in the flow editor. A verified or governed core step shows the
+  category Authority judges it as instead ("Authority: Send email"), or its
+  worst case when its settings decide ("Authority: up to Delete data" for an
+  HTTP request); the daemon sends it as `gatedCategory` on each action of
+  `/api/workflows/pieces`. Since #961 the HTTP request step is governed
   (see `Core pieces` below), and so are the GraphQL, SMTP and FTP/SFTP steps.
   The built-in steps that act only inside the run (delay, signed-in approval
   requests, schedule, store, the file, text, date, math, image, PDF, CSV, XML,
@@ -1534,8 +1538,10 @@ threshold); without one, including rows saved before #954, on first use.
   token the provider rotated if theirs still held the retired one.
 - A refresh the provider refuses is not retried until the stored value
   changes. An unreachable endpoint is retried once per 15-minute window while
-  the stored token may still work (it is handed out meanwhile), and at every
-  fetch once the token is known to have expired. A fetch that waited for
+  the stored token may still work (it is handed out meanwhile). Once the token
+  is known to have expired it is retried after 30 s, doubling with each failure
+  in a row up to 5 minutes; fetches in between fail at once with the same
+  reason instead of each waiting out the deadline. A fetch that waited for
   another refresh re-reads the row first, so a refresh token the provider
   rotated meanwhile is never sent again.
 - A token known to have expired that cannot be refreshed is not handed out:
@@ -1545,7 +1551,9 @@ threshold); without one, including rows saved before #954, on first use.
   `CONNECTION_REFRESH_UNREACHABLE`, `CONNECTION_CHANGED`) and whether the run
   had already handed the credential out; the run's failure reads both, so a
   step that may have acted before (a retry, a loop round) never reads as
-  "nothing was done".
+  "nothing was done". For a step that names several connections, a hand-out
+  of any of them counts, and when the engine's error names the connection
+  that failed to load, only that connection's reason is read.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or

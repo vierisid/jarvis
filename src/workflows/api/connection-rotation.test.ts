@@ -188,3 +188,48 @@ describe("a run cut off by its connection says why", () => {
     expect(listed.failure.next.map((n) => n.step)).not.toContain("run_again");
   });
 });
+
+describe("a step that names two connections (#1153)", () => {
+  const twoConnections = { name: "trigger", type: "EMPTY", nextAction: { name: "send_it", displayName: "Send it", type: "PIECE",
+    settings: { pieceName: PIECE, actionName: "send", input: { auth: "{{connections['account']}}", copyTo: "{{connections['second']}}" } } } } as never;
+
+  function failedRun(errorMessage: string, afterBind: (runId: string) => void) {
+    connect("one");
+    upsertConnection({ externalId: "second", pieceName: PIECE, displayName: "Second", pieceVersion: "1", type: "SECRET_TEXT", value: { secret_text: "two" } });
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Copy", trigger: twoConnections });
+    publishFlowVersion(flow.id);
+    updateFlowStatus(flow.id, "ENABLED");
+    pinFlowBindings(flow.id);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    expect(enforceRunConnectionBinding(run.id, DEFAULT_IDS.project, "account")).toBeNull();
+    expect(enforceRunConnectionBinding(run.id, DEFAULT_IDS.project, "second")).toBeNull();
+    afterBind(run.id);
+    updateRun(run.id, { status: "FAILED", failedStep: { name: "send_it", displayName: "Send it", errorMessage } });
+    return runFailure(getFlowRun(run.id)!)!;
+  }
+
+  test("acting with one and failing to fetch the other may have taken effect", () => {
+    const failure = failedRun("Failed to load connection (second)", (id) => {
+      recordRunCredentialOutcome(id, "account", null);
+      recordRunCredentialOutcome(id, "second", { code: "CONNECTION_EXPIRED", message: "The access token expired" });
+    });
+    expect(failure).toMatchObject({ code: "CONNECTION_EXPIRED", effect: "unknown",
+      outcome: "This run had already used another connection this step uses, so this step may already have taken effect." });
+    expect(failure.next.map((n) => n.step)).toContain("check_before_running_again");
+  });
+
+  test("a failure left on another connection is not blamed when the error names the one that failed to load", () => {
+    const failure = failedRun("Failed to load connection (second)", (id) => {
+      recordRunCredentialOutcome(id, "account", { code: "CONNECTION_EXPIRED", message: "The access token expired" });
+    });
+    expect(failure.code).not.toBe("CONNECTION_EXPIRED");
+  });
+
+  test("the connection the error names is read when it has the failure", () => {
+    const failure = failedRun("connection (account) expired, reconnect again", (id) => {
+      recordRunCredentialOutcome(id, "account", { code: "CONNECTION_EXPIRED", message: "The access token expired" });
+    });
+    expect(failure).toMatchObject({ code: "CONNECTION_EXPIRED", effect: "none" });
+  });
+});

@@ -135,16 +135,34 @@ export const CONNECTION_BINDING_REFUSED = 'CONNECTION_BINDING_REFUSED';
  * attempt, an earlier round of a loop, a fetch mid-step) is `handedOut`'s and
  * the effect records' to say.
  *
+ * When the step's error names the connection whose load failed (the engine's
+ * "Failed to load connection (id)" or "connection (id) expired"), only that
+ * one is read (#1153): another connection the step names may carry a failure
+ * left by an earlier step, which is not why this one failed.
+ *
+ * `bindings` is every binding of a connection this step names, for the
+ * caller to ask whether any was handed out.
+ *
  * A run read for a list carries no bindings, so they are read here, once, for
  * the failed step only; a list and the run's page then give the same advice.
  */
-function credentialFailureFor(run: FlowRun, node: FlowTriggerNode): { binding: RunConnectionBindingView; code: string; message: string } | null {
+function credentialFailureFor(run: FlowRun, node: FlowTriggerNode, errorMessage: string | undefined):
+  { binding: RunConnectionBindingView; bindings: RunConnectionBindingView[]; code: string; message: string } | null {
   const named = new Set(nodeConnectionReferences(node).map(([externalId]) => externalId));
   const bindings = (run.connectionBindings ?? runConnectionBindingViews(run.id)).filter(binding => named.has(binding.externalId));
-  const refused = bindings.find(binding => binding.refusal);
-  if (refused?.refusal) return { binding: refused, code: CONNECTION_BINDING_REFUSED, message: refused.refusal.message };
-  const failed = bindings.find(binding => binding.credentialFailure);
-  return failed?.credentialFailure ? { binding: failed, code: failed.credentialFailure.code, message: failed.credentialFailure.message } : null;
+  const failedLoad = failedConnectionIn(errorMessage);
+  const candidates = failedLoad && named.has(failedLoad) ? bindings.filter(binding => binding.externalId === failedLoad) : bindings;
+  const refused = candidates.find(binding => binding.refusal);
+  if (refused?.refusal) return { binding: refused, bindings, code: CONNECTION_BINDING_REFUSED, message: refused.refusal.message };
+  const failed = candidates.find(binding => binding.credentialFailure);
+  return failed?.credentialFailure ? { binding: failed, bindings, code: failed.credentialFailure.code, message: failed.credentialFailure.message } : null;
+}
+
+/** The connection id the engine's connection-load error names, or null. */
+function failedConnectionIn(errorMessage: string | undefined): string | null {
+  if (!errorMessage) return null;
+  const match = /Failed to load connection \(([^()\s"]+)\)/u.exec(errorMessage) ?? /connection \(([^()\s"]+)\) expired, reconnect again/u.exec(errorMessage);
+  return match ? match[1]! : null;
 }
 
 const JARVIS_TOOL_PIECE = '@jarvispieces/piece-jarvis-tool';
@@ -310,17 +328,22 @@ export function runFailure(run: FlowRun, effects?: WorkflowEffect[], nodes?: Flo
     ?? (own.length === 0 ? unsupportedToolRefusal(node, step.errorMessage) : null);
   let evidence: FailureEvidence;
   let sideEffects = true;
-  const credential = !outcome && node ? credentialFailureFor(run, node) : null;
+  const credential = !outcome && node ? credentialFailureFor(run, node, step.errorMessage) : null;
   if (credential) {
     // A typed reason recorded by the connection fetch: that fetch handed nothing out.
-    const { binding, code, message } = credential;
+    const { binding, bindings, code, message } = credential;
     const typed = projectFailure({ source: 'action', outcome: { status: 'blocked', code, message, effect: 'not_started' } },
       { label, sideEffects: false }, links);
     // The step may still have acted before it: a dispatch on its own record, or, for a step with no
-    // records of its own, a credential this run handed out earlier (a retry, a loop round, a mid-step fetch).
-    const acted = own.some(dispatched) || (!!binding.handedOut && untracked(node!));
+    // records of its own, a credential this run handed out earlier (a retry, a loop round, a mid-step
+    // fetch). Any connection the step names counts (#1153): a step that acted with one and then
+    // failed fetching another may have taken effect.
+    const usedThis = !!binding.handedOut;
+    const usedOther = bindings.some(other => other !== binding && other.handedOut);
+    const acted = own.some(dispatched) || ((usedThis || usedOther) && untracked(node!));
     const reading = acted ? { ...typed, effect: 'unknown' as const,
-      outcome: 'This run had already used this connection, so this step may already have taken effect.',
+      outcome: usedThis || own.some(dispatched) ? 'This run had already used this connection, so this step may already have taken effect.'
+        : 'This run had already used another connection this step uses, so this step may already have taken effect.',
       next: recoverySteps(...typed.next.map(n => n.step).filter(s => s !== 'run_again' && s !== 'open_details'), 'check_before_running_again', 'open_details') }
       : typed;
     return withOtherSteps(reading, otherSteps(run, records, graph, step.name), 'Steps before it');

@@ -374,7 +374,15 @@ export interface GoogleStatus {
    */
   configured: boolean;
   is_authenticated: boolean;
+  /** The scopes the grant holds, short names ("gmail.readonly"). */
   scopes: string[];
+  /**
+   * #957: Jarvis's Google connection may send mail: the grant holds gmail.send
+   * and, hosted, the system config allows it. Every send still asks first.
+   */
+  can_send?: boolean;
+  /** Sending can be turned on here: always self-hosted; hosted only when the control plane allows it. */
+  send_available?: boolean;
   token_expiry: number | null;
   /**
    * Control-plane MANAGED (hosted). The credentials came from the system config
@@ -1104,14 +1112,15 @@ export function useSettingsData() {
     [refresh],
   );
 
-  const initGoogleAuth = useCallback(async (): Promise<
+  const initGoogleAuth = useCallback(async (opts: { send?: boolean } = {}): Promise<
     | { ok: true; auth_url: string }
     | { ok: false; message: string }
   > => {
     try {
+      // #957: read-only unless the owner chose sending for this connection.
       const r = await postJson<{ auth_url: string }>(
         "/api/auth/google/init",
-        {},
+        { send: opts.send === true },
       );
       return { ok: true, auth_url: r.auth_url };
     } catch (err) {

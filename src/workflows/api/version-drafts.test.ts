@@ -68,6 +68,8 @@ describe("a new draft never starts from a version that does not run", () => {
     publishFlowVersion(flow.id);
     const v2 = createDraftVersion({ flowId: flow.id, displayName: "Digest renamed", trigger: routerStep() as never });
     publishFlowVersion(flow.id, v2.id);
+    // Both made in the same millisecond: creation order still decides.
+    getWorkflowDb().run("UPDATE flow_version SET created = ? WHERE flow_id = ?", [1, flow.id]);
     publishFlowVersion(flow.id, v1.id);
     const copy = await post(flow.id, {});
     expect(copy.status).toBe(201);
@@ -94,6 +96,16 @@ describe("a new draft never starts from a version that does not run", () => {
     // The latest draft is the most recently updated one; two writes in one millisecond tie.
     getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE id = ?", [1, first.id]);
     getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE id = ?", [2, second.id]);
+    const copy = await post(flow.id, {});
+    expect(copy.body.trigger).toEqual(withStep());
+    expect(copy.body.displayName).toBe("Second");
+  });
+
+  test("two drafts saved in the same millisecond: the copy is of the one created last", async () => {
+    const flow = createFlow({});
+    createDraftVersion({ flowId: flow.id, displayName: "First", trigger: graph() as never });
+    createDraftVersion({ flowId: flow.id, displayName: "Second", trigger: withStep() as never });
+    getWorkflowDb().run("UPDATE flow_version SET updated = ? WHERE flow_id = ?", [1, flow.id]);
     const copy = await post(flow.id, {});
     expect(copy.body.trigger).toEqual(withStep());
     expect(copy.body.displayName).toBe("Second");
@@ -156,9 +168,16 @@ describe("the workflow keeps its name across versions", () => {
     const v2 = (await patch(flow.id, (await post(flow.id, { displayName: "Renamed once" })).body.id, { displayName: "Renamed once" })).body;
     publishFlowVersion(flow.id, v2.id);
     expect(((await call("/api/workflows", "GET", {})).body as unknown as Array<{ displayName: string }>)[0]!.displayName).toBe("Renamed once");
+    // Both made in the same millisecond: creation order still decides.
+    getWorkflowDb().run("UPDATE flow_version SET created = ? WHERE flow_id = ?", [1, flow.id]);
     publishFlowVersion(flow.id, v1.id);
     expect(((await call("/api/workflows", "GET", {})).body as unknown as Array<{ displayName: string }>)[0]!.displayName).toBe("Renamed once");
     expect(getFlowVersion(v1.id)!.state).toBe("LOCKED");
+    // A newer version published over an older one keeps its own new name.
+    const v3 = createDraftVersion({ flowId: flow.id, displayName: "Renamed twice", trigger: withStep() as never });
+    getWorkflowDb().run("UPDATE flow_version SET created = ? WHERE flow_id = ?", [1, flow.id]);
+    publishFlowVersion(flow.id, v3.id);
+    expect(getFlowVersion(v3.id)!.displayName).toBe("Renamed twice");
   });
 });
 

@@ -84,6 +84,21 @@ describe('Google OAuth API external origin', () => {
     expect(await response.text()).toContain('already used or has expired');
   });
 
+  it('asks Google for gmail.send only when the owner chose sending (#957)', async () => {
+    const routes = makeRoutes();
+    const scopeOf = async (init: RequestInit) => {
+      const response = await routes['/api/auth/google/init']!.POST!(new Request('http://localhost:3142/api/auth/google/init', { method: 'POST', ...init }));
+      return response.status === 200 ? new URL((await response.json() as { auth_url: string }).auth_url).searchParams.get('scope')!.split(' ') : response.status;
+    };
+    const readOnly = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar.readonly'];
+    expect(await scopeOf({})).toEqual(readOnly);
+    expect(await scopeOf({ body: '{}' })).toEqual(readOnly);
+    expect(await scopeOf({ body: JSON.stringify({ send: false }) })).toEqual(readOnly);
+    expect(await scopeOf({ body: JSON.stringify({ send: true }) })).toEqual([...readOnly, 'https://www.googleapis.com/auth/gmail.send']);
+    expect(await scopeOf({ body: JSON.stringify({ send: 'yes' }) })).toBe(400);
+    expect(await scopeOf({ body: 'not json' })).toBe(400);
+  });
+
   describe('callback happy path', () => {
     const realFetch = globalThis.fetch;
     const realHome = process.env.HOME;

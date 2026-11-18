@@ -75,6 +75,13 @@ export type GoogleConfig = {
   refresh_url?: string;
   /** This instance's control-plane id, used to name itself when refreshing. */
   instance_id?: string;
+  /**
+   * HOSTED ONLY (#957). True when the control plane allows this instance's
+   * Google connection to send mail. Without it a hosted instance stays
+   * read-only even if the delivered grant holds `gmail.send`. Self-hosted
+   * ignores it: there the grant the owner chose in Settings decides.
+   */
+  gmail_send?: boolean;
 };
 
 /**

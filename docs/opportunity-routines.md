@@ -116,7 +116,22 @@ awareness:
 
 and restart Jarvis (a `config.yaml` change is imported at the next start).
 
-After at least a few working days with awareness on:
+### Capture plan
+
+1. Use at least two machines, one on Linux (the sidecar reads screens with
+   tesseract) and one on macOS (Apple Vision through `ocr-helper`), since the two
+   engines break lines and spell words differently. A Windows machine is a bonus.
+2. Turn awareness on, raise both retention limits as above and restart Jarvis.
+3. Work normally for 5 to 10 working days, and do the jobs the families cover
+   where they are real for you: chasing unpaid invoices, following up leads, a
+   daily, weekly or monthly report, meeting follow-ups, expense matching, support
+   triage. Do them in the apps you really use; do not stage screens.
+4. On each machine running the brain, run both scripts below, read the phrase
+   output, and share the two JSON files.
+5. Put both retention limits back and restart. The old captures are then deleted
+   at the next retention sweep.
+
+### Counting where captures stop
 
 ```sh
 bun run scripts/measure-routine-ocr.ts            # $JARVIS_HOME/jarvis.db or ~/.jarvis/jarvis.db
@@ -139,9 +154,43 @@ It reads the last 14 days of `screen_captures` read-only and prints counts only:
 - The proposals the assessment would make, before dismissals or known patterns.
 
 No OCR text, title, app name, capture id, device id or timestamp is printed, so
-the report can be shared. A phrase change
-should cite these counts from more than one machine, before and after, and keep
-the existing fixtures and the single-repeated-view case passing.
+the report can be shared as is.
+
+### Listing the words real screens show
+
+```sh
+bun run scripts/mine-routine-phrases.ts --out routine-phrases.json
+bun run scripts/mine-routine-phrases.ts path/to/jarvis.db --min-count 5 --top 60
+```
+
+It reads the same 14 days read-only and, for each family, lists the most frequent
+2 and 3 word sequences on:
+- `source`: the captures that matched the family's source phrase;
+- `following`: the captures on the same device within 30 minutes after one,
+  where the operation and output screens would be.
+
+Each sequence carries the captures and days it was seen on, and `allCaptures`,
+how many of all read captures show it. A sequence close to `allCaptures` is
+window chrome, not the routine. Captures stopped by a gate (private, reading,
+oversize, excluded) are never read.
+
+This prints words from the screens, so it is default-deny: a sequence is kept
+only if every word is plain letters (anything with a digit, `@`, a dot or more
+than 20 letters breaks it, which drops emails, amounts, dates, ids and links),
+it does not start or end with a stopword, and it was seen on at least
+`--min-count` captures (default 3) on `--min-days` days (default 2; neither can
+go below 2). A customer or colleague name seen on many days can still pass, so
+read the file and delete any line you do not want to share before sharing it.
+`--out` writes the file readable by you only; without it the JSON goes to stdout.
+
+A family whose `sourceCaptures` is 0 although you did that job means the source
+phrase itself does not match your app; say which words your app shows for that
+list instead.
+
+### Changing the phrases
+
+A phrase change should cite the counts from more than one machine, before and
+after, and keep the existing fixtures and the single-repeated-view case passing.
 
 ## Turning it off
 

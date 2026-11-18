@@ -324,8 +324,10 @@
   50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 30%, transparent); }
 }
 
-/* "Not approval-gated" (#955): a community piece step runs without asking. */
-.wf-node__ungated {
+/* "Not approval-gated" (#955): a community piece step runs without asking.
+   A verified step's Authority category (#955 option B) sits in the same row. */
+.wf-node__ungated,
+.wf-node__gated {
   display: flex;
   margin-bottom: 4px;
 }

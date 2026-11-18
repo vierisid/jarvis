@@ -375,7 +375,9 @@ writes `THIRD_PARTY_NOTICES.md` into the tree when it passes. The weekly
 `sync-pieces-catalog` run does the same install and scan on the regenerated
 catalog (`scripts/check-piece-licenses.ts --install <dir>`) and fails first;
 its catalog PR still opens, titled "(review needed)" with the problems at the
-top of its body. The `pieces-licenses` job in `test.yml` runs the same scan on
+top of its body. Every run whose scan fails, with or without a PR, also opens
+or rewrites one issue labelled `pieces-license-scan` with the problems, and the
+first run whose scan passes closes it. The `pieces-licenses` job in `test.yml` runs the same scan on
 any PR that changes the catalog, the policy, the scan or the shared build, and
 fails the PR. When either fails: fix or pin the dependency, add a reviewed entry if the package
 simply lacks a declaration, or leave the piece out: of everything with
