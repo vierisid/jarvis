@@ -53,6 +53,7 @@ jobs:
       toast: ${{ steps.filter.outputs.toast }}
       pieces-licenses: ${{ steps.filter.outputs.pieces-licenses }}
       webview-build: ${{ steps.filter.outputs.webview-build }}
+      engine-sandbox: ${{ steps.filter.outputs.engine-sandbox }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -113,6 +114,15 @@ jobs:
               - 'scripts/build-shared-runtime.ts'
               - 'src/util/subprocess-env.ts'
               - 'src/workflows/activepieces/LICENSE.activepieces'
+              - '.github/actions/bun-setup/**'
+              - '.github/workflows/test.yml'
+            # The workflow engine's macOS sandbox (#1154): see
+            # engine-sandbox-darwin below.
+            engine-sandbox:
+              - 'src/workflows/runner/engine-runtime/sandbox.ts'
+              - 'src/workflows/runner/engine-runtime/sandbox.test.ts'
+              - 'src/workflows/runner/engine-runtime/spawn.ts'
+              - 'src/workflows/runner/engine-runtime/engine-runtime.ts'
               - '.github/actions/bun-setup/**'
               - '.github/workflows/test.yml'
             # What the webview_go bump's sealed build runs (#1255): see
@@ -325,6 +335,30 @@ jobs:
             src/cli/stop-port-ownership.test.ts \
             src/cli/stop-verifies-lock-holder.test.ts \
             src/daemon/pid.test.ts
+
+  # ─── The workflow engine's sandbox on macOS (#1154) ─────────────
+  # The ubuntu `test` job runs every engine suite inside Landlock. This runs
+  # the sandbox suite and the end-to-end flows inside sandbox-exec, with the
+  # sandbox required, so a profile that keeps Bun or a flow from running, or
+  # that lets a planted secret be read, fails here. Scoped to those two files
+  # and to changes in the sandbox's own code: macOS minutes bill at 10x.
+  engine-sandbox-darwin:
+    needs: changes
+    if: needs.changes.outputs.engine-sandbox == 'true'
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/bun-setup
+      - name: Sandbox and end-to-end tests under sandbox-exec
+        run: |
+          bun test --retry=2 \
+            src/workflows/runner/engine-runtime/sandbox.test.ts \
+            src/workflows/runner/engine-runtime/end-to-end.test.ts
+        env:
+          JARVIS_TEST_ENGINE_BUILD: "1"
+          JARVIS_WORKFLOW_SANDBOX: require
 
   # ─── Sidecar compile + test gate (cgo) ─────────────────────────
   # The sidecar is a cgo program (webview_go + GTK overlays). The local
