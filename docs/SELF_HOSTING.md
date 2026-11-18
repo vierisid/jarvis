@@ -973,7 +973,7 @@ runs.
 
 Workflow pieces and CODE steps run in the workflow engine, a Bun process the
 daemon starts as its own user. On Linux the engine starts inside a Landlock
-sandbox (#1154): it can read the engine and piece code, the CODE tree of the
+sandbox, and on macOS inside a `sandbox-exec` profile (#1154): it can read the engine and piece code, the CODE tree of the
 flow version it runs and the system files a process needs, and write only a
 private temporary directory. The rest of the data folder (the database, the
 keychain, `.secrets.*`, `google-tokens.json`, `workflow-encryption.key`,
@@ -991,7 +991,8 @@ workflow engine sandbox: Landlock ABI 6 (prefer), launcher /app/sandbox-launcher
 or, when it cannot sandbox, `workflow engine sandbox: UNAVAILABLE ...` with
 the reason, followed by a warning the first time an engine starts unsandboxed.
 
-What it needs:
+On macOS it needs nothing: `sandbox-exec` ships with the system, and the
+first engine start checks that it works. What it needs on Linux:
 
 - Linux 5.13 or later with `landlock` in the kernel's `lsm=` list (most
   distributions since 2022; check `cat /sys/kernel/security/lsm`). Linux 6.2
@@ -1035,6 +1036,30 @@ An instance that sets `JARVIS_HOME` starts with a read-only or missing `$HOME` (
 - Template seeding never stops the daemon: a templates folder that cannot be created or read is skipped with a warning and the built-in templates load.
 
 Not moved, and failing only when used with a read-only home: the controlled browser's profiles (`~/.jarvis/browser`), uploaded content (`~/.jarvis/content`), the dashboard window layout (`~/.jarvis/window-state.json`), and Bun's package cache (`~/.bun/install/cache`, used when a piece is installed; set `BUN_INSTALL_CACHE_DIR` to move it).
+
+### Where the database lives
+
+The database is `jarvis.db` in the data folder: `--data-dir` when `jarvis start`
+is given one, else `JARVIS_HOME`, else `daemon.data_dir` in config.yaml, else
+`~/.jarvis`. Set `daemon.db_path` to put it somewhere else; a relative
+`db_path` is a file inside the data folder.
+
+Before this, `jarvis start --data-dir <folder>` (or a `daemon.data_dir` with no
+`db_path`) still kept the database at `~/.jarvis/jarvis.db`. Such an install
+keeps working: when the data folder already has files in it but no
+`jarvis.db`, and `~/.jarvis/jarvis.db` exists, Jarvis keeps using that file and says so at every
+start and in `jarvis doctor`. Nothing is moved for you. To move it, stop
+Jarvis, move `~/.jarvis/jarvis.db` (and `jarvis.db-wal` and `jarvis.db-shm`
+next to it, if they exist) into the data folder, and start again. To keep it
+where it is, set `daemon.db_path` to it. A data folder that does not exist yet
+or is empty is a new install and gets its own `jarvis.db`.
+
+`--data-dir` is a `jarvis start` flag, so the commands that open the database
+without the daemon (`jarvis export`, `restore`, `doctor`, `enroll`, `sidecars`
+and `revoke`) take it too: pass the same `--data-dir`. While the daemon is
+running they use the folder it was started with when you leave it out;
+`restore` needs the daemon stopped, so give it the flag. `jarvis uninstall`
+removes `~/.jarvis` (or `JARVIS_HOME`) and never a `--data-dir` folder.
 
 ### Backup and restore
 

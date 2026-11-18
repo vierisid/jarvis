@@ -143,7 +143,7 @@ Daemon server configuration.
 daemon: {
   port: number;          // HTTP + WebSocket server port (default: 3142)
   data_dir: string;      // Data directory path (default: ~/.jarvis)
-  db_path: string;       // SQLite database path (default: ~/.jarvis/jarvis.db)
+  db_path: string;       // SQLite database path (default: <data_dir>/jarvis.db)
   public_url?: string;   // Public HTTPS origin behind a reverse proxy
   log_file_path?: string;      // Mirror stdout/stderr to this file (unset = none)
   log_file_max_bytes?: number; // Ring size for that file (default: 1 MiB)

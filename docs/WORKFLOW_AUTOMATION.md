@@ -1443,7 +1443,7 @@ latest version and ran it. Now:
 
 ### Trust model
 
-The engine and the CODE-step child it spawns run as the daemon's own OS user. On Linux they run inside a Landlock file sandbox (#1154); elsewhere, or where Landlock is missing, they have the daemon's file access.
+The engine and the CODE-step child it spawns run as the daemon's own OS user. On Linux they run inside a Landlock file sandbox and on macOS inside a `sandbox-exec` profile (#1154); on Windows, or where neither is available, they have the daemon's file access.
 
 **What the sandbox allows.** The engine starts through `jarvis-sandbox` (`sandbox-launcher/`, a small static Go binary), which applies a Landlock ruleset and then execs Bun. Landlock is inherited, so the CODE-step children the engine starts are under the same rules. A sandboxed engine can:
 
@@ -1451,6 +1451,8 @@ The engine and the CODE-step child it spawns run as the daemon's own OS user. On
 - read and write: a private directory made for that engine, which is its `TMPDIR` and `HOME` and is removed when it exits, and `/dev/null`. Nothing written there can be executed.
 
 Everything else is denied, including the rest of the data folder: the vault database, the keychain, `google-tokens.json`, `workflow-encryption.key`, other flows' CODE trees, run logs and step files. Landlock also refuses a sandboxed process the daemon's `/proc/<pid>/environ` and memory. A warm engine is reused only for the same project, flow and flow version, since its CODE tree is granted when it starts; a tree that was replaced since then retires it.
+
+**macOS.** The engine starts under `/usr/bin/sandbox-exec` with a profile generated from the same allow-list (with macOS's system paths: `/System`, `/usr`, `/private/etc`, the time zone database and `/dev`): every file read and write is denied except on the listed paths, and nothing in the private directory can be executed. File metadata (`stat`) stays readable everywhere, because module resolution walks parent directories, so a sandboxed engine can tell that a file exists and its size, not read it. The first engine start runs a self-check (Bun starts under the profile and cannot list the home directory); if it fails, the setting's fallback applies. Apple marks `sandbox-exec` deprecated, but it ships with every macOS release.
 
 **The setting.** `workflows.sandbox` in `config.yaml` (or `JARVIS_WORKFLOW_SANDBOX`, which the file overrides):
 
@@ -1460,7 +1462,7 @@ Everything else is denied, including the rest of the data folder: the vault data
 
 It is file-owned like the artifact paths: a dashboard or settings save never sets it. The daemon logs what engines run under at boot (`workflow engine sandbox: Landlock ABI <n> ...` or the reason it is unavailable).
 
-**Where it is unavailable.** Linux before 5.13, a kernel without `landlock` in its `lsm=` list, a seccomp profile that blocks the Landlock calls, a missing launcher (a source install without Go; `bun run build:sandbox` builds it), and macOS and Windows. It needs no privilege and no extra container capability: the Docker image ships the launcher and works under Docker's default profile.
+**Where it is unavailable.** Linux before 5.13, a kernel without `landlock` in its `lsm=` list, a seccomp profile that blocks the Landlock calls, a missing launcher (a source install without Go; `bun run build:sandbox` builds it), a macOS whose `sandbox-exec` fails the self-check, and Windows. It needs no privilege and no extra container capability: the Docker image ships the launcher and works under Docker's default profile.
 
 **What it does not cover.**
 

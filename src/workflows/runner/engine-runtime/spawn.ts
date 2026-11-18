@@ -25,7 +25,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants as fsConstants, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { landlockAllowList, launcherArgs } from "./sandbox";
+import { engineAllowList, sandboxArgv, type ActiveSandbox } from "./sandbox";
 import { isSecretEnvName } from "../../../util/subprocess-env";
 import { EGRESS_POLICY_ENV, HOST_ADDRESSES_ENV, REQUEST_TIMEOUT_ENV, type EgressPolicy } from "../../runtime/http-egress";
 import { DEFAULT_TIMEOUT_S } from "./operation-builder";
@@ -120,11 +120,12 @@ export interface SpawnEngineOptions {
   warmTranspilerCache?: boolean;
   /**
    * Start the engine inside the file sandbox (#1154, sandbox.ts): through
-   * `launcher`, reading only what `landlockAllowList` names and writing only
+   * `launcher` (jarvis-sandbox on Linux, sandbox-exec on macOS), reading only
+   * what `engineAllowList` names and writing only
    * a private directory made for this engine, which becomes its TMPDIR and
    * HOME. `codeTree` is the run's CODE tree, `<workflow-codes>/<flowVersionId>`.
    */
-  sandbox?: { launcher: string; codeTree?: string };
+  sandbox?: ActiveSandbox & { codeTree?: string };
   /**
    * The egress proxy (#1153, runtime/egress-proxy.ts) every proxy-aware
    * client in the engine, and in the CODE steps it starts, connects through.
@@ -593,7 +594,7 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     // The daemon's HOME holds its data folder, which the engine cannot read;
     // anything that writes under ~ writes here instead.
     env["HOME"] = ownHome;
-    const allow = landlockAllowList({
+    const allow = engineAllowList({
       runtime,
       bundlePath: opts.bundlePath,
       bunfigPath: ENGINE_BUNFIG_PATH,
@@ -602,9 +603,9 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
       ...(opts.sandbox.codeTree ? { codeTree: opts.sandbox.codeTree } : {}),
       ...(transpilerCache ? { transpilerCache } : {}),
       privateDir,
-    });
+    }, opts.sandbox.kind === "seatbelt" ? "darwin" : "linux");
     command = opts.sandbox.launcher;
-    argv = launcherArgs(allow, [runtime, ...args]);
+    argv = sandboxArgv(opts.sandbox, allow, [runtime, ...args]);
   }
   const removePrivateDir = (): void => {
     if (!privateDir) return;

@@ -1054,7 +1054,7 @@ export class EngineRuntime {
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
     if (this.warmTranspilerCache) spawnOptions.warmTranspilerCache = true;
-    if (sandbox) spawnOptions.sandbox = { launcher: sandbox.launcher, ...(codeTree ? { codeTree: codeTree.path } : {}) };
+    if (sandbox) spawnOptions.sandbox = { ...sandbox, ...(codeTree ? { codeTree: codeTree.path } : {}) };
     if (proxyUrl) spawnOptions.egressProxyUrl = proxyUrl;
     let proc: SpawnedEngine;
     try {

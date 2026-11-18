@@ -24,8 +24,10 @@ import {
   decideSandbox,
   detectSandboxSupport,
   EngineSandboxUnavailableError,
-  landlockAllowList,
+  engineAllowList,
   launcherArgs,
+  sandboxArgv,
+  seatbeltProfile,
   resetSandboxSupportCache,
   resolveSandboxMode,
   type SandboxSupport,
@@ -50,8 +52,10 @@ describe("workflows.sandbox", () => {
   test("off never asks the machine; a sandbox that is there is used", () => {
     expect(decideSandbox("off", () => { throw new Error("probed"); })).toBeNull();
     const landlock: SandboxSupport = { kind: "landlock", launcher: "/opt/jarvis-sandbox", abi: 6 };
-    expect(decideSandbox("require", () => landlock)).toEqual({ launcher: "/opt/jarvis-sandbox", abi: 6 });
-    expect(decideSandbox("prefer", () => landlock)).toEqual({ launcher: "/opt/jarvis-sandbox", abi: 6 });
+    expect(decideSandbox("require", () => landlock)).toEqual(landlock);
+    expect(decideSandbox("prefer", () => landlock)).toEqual(landlock);
+    const seatbelt: SandboxSupport = { kind: "seatbelt", launcher: "/usr/bin/sandbox-exec" };
+    expect(decideSandbox("require", () => seatbelt)).toEqual(seatbelt);
   });
 
   test("prefer without a sandbox runs unsandboxed and warns once; require refuses", () => {
@@ -68,9 +72,9 @@ describe("workflows.sandbox", () => {
   test("a missing launcher or an unsupported platform is reported, not guessed", () => {
     resetSandboxSupportCache();
     expect(detectSandboxSupport({ platform: "win32" }).kind).toBe("none");
-    const missing = detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: "/nonexistent/jarvis-sandbox" } });
+    const missing = detectSandboxSupport({ platform: "linux", env: { JARVIS_SANDBOX_LAUNCHER: "/nonexistent/jarvis-sandbox" } });
     expect(missing).toEqual({ kind: "none", reason: expect.stringContaining("does not exist") });
-    expect(detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: "relative" } }).kind).toBe("none");
+    expect(detectSandboxSupport({ platform: "linux", env: { JARVIS_SANDBOX_LAUNCHER: "relative" } }).kind).toBe("none");
   });
 
   test("a kernel without Landlock reads as no sandbox", () => {
@@ -87,7 +91,7 @@ describe("workflows.sandbox", () => {
   });
 
   test("the allow-list holds the run's own paths and nothing of the data folder", () => {
-    const allow = landlockAllowList({
+    const allow = engineAllowList({
       runtime: "/usr/local/bin/bun-not-there",
       bundlePath: "/data/.jarvis/cache/engine/abc/main.js",
       bunfigPath: "/app/engine-bunfig.toml",
@@ -96,7 +100,7 @@ describe("workflows.sandbox", () => {
       codeTree: "/data/.jarvis/workflow-codes/v1",
       transpilerCache: "0",
       privateDir: "/tmp/jarvis-engine-x",
-    });
+    }, "linux");
     expect(allow.readOnly).toContain("/data/.jarvis/cache/engine/abc");
     expect(allow.readOnly).toContain("/data/.jarvis/workflow-codes/v1");
     expect(allow.readOnly).toContain("/usr/local/bin/bun-not-there");
@@ -106,6 +110,30 @@ describe("workflows.sandbox", () => {
     expect(allow.readWrite).toEqual(["/dev/null", "/tmp/jarvis-engine-x"]);
     expect(launcherArgs({ readOnly: ["/a"], readWrite: ["/b"] }, ["/bun", "main.js"]))
       .toEqual(["--ro", "/a", "--rw", "/b", "--", "/bun", "main.js"]);
+  });
+
+  test("the macOS profile denies files by default and allows exactly the list", () => {
+    const allow = engineAllowList({
+      runtime: "/opt/homebrew/bin/bun-not-there",
+      bundlePath: "/Users/me/.jarvis/cache/engine/abc/main.js",
+      bunfigPath: "/app/engine-bunfig.toml",
+      codeTree: "/Users/me/.jarvis/workflow-codes/v1",
+      privateDir: "/private/var/folders/x/T/jarvis-engine-1",
+    }, "darwin");
+    expect(allow.readOnly).toContain("/System");
+    expect(allow.readOnly).toContain("/private/etc");
+    expect(allow.readOnly).not.toContain("/proc");
+    const profile = seatbeltProfile({ ...allow, readOnly: [...allow.readOnly, '/odd "path\\x'] });
+    const lines = profile.trim().split("\n");
+    expect(lines.slice(0, 4)).toEqual(["(version 1)", "(allow default)", "(deny file-read* file-write*)", "(allow file-read-metadata)"]);
+    expect(lines[4]).toContain('(subpath "/Users/me/.jarvis/workflow-codes/v1")');
+    expect(lines[4]).toContain('(subpath "/Users/me/.jarvis/cache/engine/abc")');
+    expect(lines[4]).not.toContain('(subpath "/Users/me/.jarvis")');
+    expect(lines[4]).toContain('(subpath "/odd \\"path\\\\x")');
+    expect(lines[5]).toBe('(allow file-write* (subpath "/dev/null") (subpath "/private/var/folders/x/T/jarvis-engine-1"))');
+    expect(lines[6]).toBe('(deny process-exec* (subpath "/private/var/folders/x/T/jarvis-engine-1"))');
+    expect(sandboxArgv({ kind: "seatbelt", launcher: "/usr/bin/sandbox-exec" }, allow, ["/bun", "main.js"]))
+      .toEqual(["-p", seatbeltProfile(allow), "/bun", "main.js"]);
   });
 
   test("only a plain version id becomes a code tree", () => {
@@ -144,7 +172,7 @@ describe("a sandboxed engine", () => {
   let secrets: string[];
   let siblingTree: string;
   let launcher: string | null = null;
-  let landlock: SandboxSupport = NONE;
+  let landlock: SandboxSupport = NONE; // the sandbox this machine has, Landlock or Seatbelt
   let bundle: { bundlePath: string; digest: string | null } | null = null;
 
   beforeAll(async () => {
@@ -154,10 +182,12 @@ describe("a sandboxed engine", () => {
     await api.start({ port: 0 });
     bundle = findCachedBundle() ?? (await buildEngineBundle());
     if (buildOptIn) await buildAllJarvisPieces();
-    launcher = launcherForTests();
-    if (launcher) {
-      resetSandboxSupportCache();
-      landlock = detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: launcher } });
+    resetSandboxSupportCache();
+    if (process.platform === "darwin") {
+      landlock = detectSandboxSupport();
+    } else {
+      launcher = launcherForTests();
+      if (launcher) landlock = detectSandboxSupport({ env: { JARVIS_SANDBOX_LAUNCHER: launcher } });
     }
     // A data folder laid out like the daemon's: the secrets beside the code
     // trees, and another flow's tree beside this one's.
@@ -236,8 +266,8 @@ describe("a sandboxed engine", () => {
     }
   }
 
-  test.skipIf(skipEngine || process.platform !== "linux")("cannot read the secrets planted in the data folder, and still runs its CODE step", async () => {
-    if (landlock.kind !== "landlock") {
+  test.skipIf(skipEngine || (process.platform !== "linux" && process.platform !== "darwin"))("cannot read the secrets planted in the data folder, and still runs its CODE step", async () => {
+    if (landlock.kind === "none") {
       console.warn(`[sandbox.test] skipped: ${landlock.kind === "none" ? landlock.reason : ""}`);
       return;
     }
@@ -247,9 +277,11 @@ describe("a sandboxed engine", () => {
     });
     try {
       const result = await runProbe(runtime);
-      expect(result.secrets).toEqual(secrets.map(() => "EACCES"));
+      // EACCES from Landlock, EPERM from Seatbelt.
+      const denied = landlock.kind === "seatbelt" ? "EPERM" : "EACCES";
+      expect(result.secrets).toEqual(secrets.map(() => denied));
       // Landlock refuses a sandboxed process the daemon's /proc/<pid>/environ.
-      expect(result.daemonEnviron).toBe("EACCES");
+      if (landlock.kind === "landlock") expect(result.daemonEnviron).toBe("EACCES");
       expect(result.ownSource).toBe("READ:exports");
       expect(result.scratch).toBe("READ:ok");
       // The egress proxy (#1153) is a TCP port on loopback, which the file
