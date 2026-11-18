@@ -43,6 +43,8 @@ export interface NotchPresenceDeps {
   back?(away: { since: number; ms: number }): void;
   /** The first time they are there today. */
   morning?(away: { since: number | null; ms: number }): void;
+  /** Their hands are on again, after any time still. Told every time, before `back` and `morning`. */
+  hands?(): void;
   now?: () => number;
   /** The clock for the wait before "left". Tests give one they can wind forward. */
   clock?: { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
@@ -58,6 +60,8 @@ export class NotchPresence {
   private away = false;
   /** Whether their hands have been on since the brain started. Until then nothing is known of when they were last there. */
   private everThere = false;
+  /** The day whose morning was told to whoever says the morning line. Kept here only: the settings hold the day it was said. */
+  private morningTold = '';
   private timer: unknown = null;
   private readonly now: () => number;
   private readonly clock: NonNullable<NotchPresenceDeps['clock']>;
@@ -75,6 +79,11 @@ export class NotchPresence {
   /** Whether they are away now: still for twenty minutes or more. */
   isAway(): boolean {
     return this.away;
+  }
+
+  /** How long their hands have been still, in milliseconds. 0 while they move, and while nothing is known. */
+  stillFor(): number {
+    return this.isStill === true && this.stillSince !== null ? Math.max(0, this.now() - this.stillSince) : 0;
   }
 
   /** The desktop app's word about their hands (./where.ts). */
@@ -103,15 +112,26 @@ export class NotchPresence {
     this.stillSince = null;
     this.away = false;
     if (this.timer) { this.clock.clearTimeout(this.timer); this.timer = null; }
+    this.tell(() => this.deps.hands?.());
     const ms = since === null ? 0 : at - since;
     // The first time today, after a night away or with nothing known of before (the brain has just started).
     const today = notchDayOf(at);
-    if (this.deps.settings.get<string>(MORNING, '') !== today && (first || ms >= NOTCH_MORNING_AWAY_MS)) {
-      this.deps.settings.set(MORNING, today, at);
+    if (this.deps.settings.get<string>(MORNING, '') !== today && this.morningTold !== today && (first || ms >= NOTCH_MORNING_AWAY_MS)) {
+      // Told once a day, and written down when the line has been said
+      // (`morningSaid`), not here. Written here, a brain that restarted
+      // while the line still waited for a still moment said no morning
+      // line that day.
+      this.morningTold = today;
       this.tell(() => this.deps.morning?.({ since, ms }));
       return;
     }
     if (wasAway && since !== null) this.tell(() => this.deps.back?.({ since, ms }));
+  }
+
+  /** The morning line has been said: there is none again today, also after a restart. */
+  morningSaid(): void {
+    const at = this.now();
+    this.deps.settings.set(MORNING, notchDayOf(at), at);
   }
 
   stop(): void {

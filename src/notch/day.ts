@@ -35,6 +35,8 @@ export interface NotchDayDeps {
   done(since: number, until: number): number;
   /** How many things wait for the person's word now, replies that are drafted included. */
   waiting(): number;
+  /** The morning line is on the notch: whoever keeps the day of the last one writes it down (./presence.ts). */
+  morningSaid?: () => void;
   /** Whether the person is away now: the evening line is not said to an empty chair. */
   away?(): boolean;
   mail?: {
@@ -103,9 +105,11 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
   const log = deps.log ?? ((line: string) => console.log(line));
   /** What the calendar held when they went away. Null when they are not away, or it was not known. */
   let before: NotchMeeting[] | null = null;
+  /** The day whose evening line is in the inbox, said or not. */
+  let eveningQueued = '';
 
   /** A line that is news, said once. With `show`, yes opens what it spoke of. */
-  const line = (id: string, cls: NotchItem['class'], say: () => NotchPart[] | null, options: { mood?: 'happy' | 'sleepy' | 'idle'; show?: (stage: NotchStage) => Promise<void> | void; ms?: number; told?: () => void } = {}): NotchItem => ({
+  const line = (id: string, cls: NotchItem['class'], say: () => NotchPart[] | null, options: { mood?: 'happy' | 'sleepy' | 'idle'; show?: (stage: NotchStage) => Promise<void> | void; ms?: number; told?: () => void; said?: () => void } = {}): NotchItem => ({
     id,
     subject: id,
     class: cls,
@@ -117,6 +121,8 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       const words = say();
       if (!words) return 'settled';
       options.told?.();
+      // It is on the notch: written down as said now, and not when it was queued.
+      options.said?.();
       if (!options.show) {
         await stage.say(words, options.ms ?? 5200, { mood: options.mood ?? 'idle', comes: 'pair' });
         return 'settled';
@@ -135,7 +141,10 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       const show = (): void => { setTimeout(() => inbox.open(), 0); };
       const [, waiting] = counts();
       log('[notch] the first time today: the morning line');
-      inbox.add(line('morning', 'rest', () => notchMorningLine(...counts()), { mood: 'happy', told: deps.mail?.told, ...(waiting > 0 ? { show } : {}) }));
+      // A morning line is for its morning: one that never got its say is not said the day after.
+      const day = notchDayOf(now());
+      inbox.add(line('morning', 'rest', () => (notchDayOf(now()) === day ? notchMorningLine(...counts()) : null),
+        { mood: 'happy', told: deps.mail?.told, said: deps.morningSaid, ...(waiting > 0 ? { show } : {}) }));
     },
     left() {
       before = deps.calendar ? [...deps.calendar.ahead()] : null;
@@ -159,11 +168,18 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
     tick() {
       const at = now();
       const today = notchDayOf(at);
-      if (new Date(at).getHours() < NOTCH_EVENING_HOUR || deps.settings.get<string>(EVENING, '') === today || deps.away?.()) return;
-      deps.settings.set(EVENING, today, at);
+      if (new Date(at).getHours() < NOTCH_EVENING_HOUR || deps.settings.get<string>(EVENING, '') === today || eveningQueued === today || deps.away?.()) return;
+      // Queued once a day, and written down when it has been said: written
+      // down here, a brain that restarted before the line got its still
+      // moment said no evening line that day.
+      eveningQueued = today;
       const start = new Date(at);
       start.setHours(0, 0, 0, 0);
-      inbox.add(line('evening', 'rest', () => notchEveningLine(deps.done(start.getTime(), now()), deps.waiting()), { mood: 'sleepy' }));
+      // And it is for its evening. One that could not be said (no notch was
+      // up) was said the next morning as "Today: 5 things done", counted
+      // from yesterday.
+      inbox.add(line('evening', 'rest', () => (notchDayOf(now()) === today ? notchEveningLine(deps.done(start.getTime(), now()), deps.waiting()) : null),
+        { mood: 'sleepy', said: () => deps.settings.set(EVENING, today, now()) }));
     },
   };
 }

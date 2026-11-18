@@ -154,6 +154,8 @@ export interface NotchAsksDeps {
    * (./around.ts). What is said to it then is turned away at the first key.
    */
   onCall?: () => boolean;
+  /** How long the person's hands have been still, in milliseconds (./presence.ts). 0 while they move, or when it is not known. */
+  stillFor?: () => number;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
   withdrawApproval?: (approvalId: string) => void;
   /** A small sign that the notch heard and will not act (a shake), for when no line can be shown. */
@@ -199,7 +201,19 @@ export interface NotchAsksDeps {
   log?: (line: string) => void;
 }
 
+/**
+ * How long the hands have to have been still, before an answer came and all
+ * the while it was on the notch, for it to count as said to nobody. It is
+ * then said once more when the hands are on again.
+ */
+export const NOTCH_ANSWER_UNSEEN_STILL_MS = 2 * 60_000;
+
 export interface NotchAsks {
+  /**
+   * The person's hands are on again. An answer that came while they were
+   * off, and was on the notch with nobody there, is said again now.
+   */
+  handsOn(): void;
   /** Something was typed, or asked about files that go with it. Comes back with the instruction's id. */
   typed(text: string, files?: NotchAskFile[]): string;
   /** The talk keys went down: a recording has begun. Comes back with the instruction's id. */
@@ -273,6 +287,10 @@ interface Live {
   walk?: () => void;
   /** It ended because something else took its place: nothing is said about it. */
   silent?: boolean;
+  /** Its answer was on the notch while nobody was there, and waits for their hands to be on again. */
+  unread?: boolean;
+  /** And it has been said a second time, for them: not a third. */
+  reread?: boolean;
   approvals: Set<string>;
   waiters: Set<() => void>;
 }
@@ -947,6 +965,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             if (said) typed(said);
             return 'settled';
           }
+          // How long the hands had been still when the answer came: asked before it is shown.
+          const stillBefore = deps.stillFor?.() ?? 0;
           if (shape.kind === 'line') {
             const ms = Math.min(12_000, Math.max(3200, 2400 + 60 * [...shape.text].length));
             await stage.say([shape.text], ms);
@@ -965,6 +985,15 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
           }
           // Shown to nobody is not shown: it comes round again.
           if (stage.surface.listening() === 0) return 'waits';
+          // A line that came and went while the hands were off the machine
+          // (still for minutes before it came, and still all the while it
+          // was up) was read by nobody: a ten-minute job ended, said so for
+          // a few seconds to an empty chair, and was marked seen. It waits
+          // in the count, and is said once more when the hands are on again.
+          if (shape.kind === 'line' && !ask.reread && stillBefore >= NOTCH_ANSWER_UNSEEN_STILL_MS && (deps.stillFor?.() ?? 0) > stillBefore) {
+            ask.unread = true;
+            return 'waits';
+          }
           ledger.seen(ask.id);
           forget(ask);
           return 'settled';
@@ -1146,6 +1175,14 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   return {
     typed,
     home,
+    handsOn() {
+      for (const ask of [...live.values()]) {
+        if (!ask.unread) continue;
+        ask.unread = false;
+        ask.reread = true;
+        bump(ask, true);
+      }
+    },
     listen(talkId) {
       // Said where nothing can be done with it: it is turned away now, at
       // the first key, not after it was said and not when Jarvis next wakes.

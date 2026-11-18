@@ -439,6 +439,57 @@ describe('"Remember that"', () => {
   });
 });
 
+// The hardening audit, 17 November 2026: a ten-minute job ended after the
+// person had left, said so for a few seconds to an empty chair, and was
+// marked seen. On their return nothing said it had finished.
+describe('an answer that comes while nobody is there', () => {
+  test('is kept, and said once more when their hands are on again', async () => {
+    let still = 0;
+    const h = harness({ deps: { stillFor: () => still } });
+    await h.type('tidy the downloads folder');
+    const turn = h.door.running();
+    // They leave. Five minutes later it is done.
+    still = 5 * 60_000;
+    h.door.say(turn, 'Tidied: 41 files in 6 folders.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('Tidied: 41 files in 6 folders.');
+    // The line has its time and goes, with the hands still off.
+    still += 8000;
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+    // Not seen: it is in the count, and the ledger still holds it as unseen.
+    expect(h.count()).toBe(1);
+    expect(h.ledger.unseen()).toHaveLength(1);
+    // Their hands are on again: it is said again, for them.
+    still = 0;
+    h.asks.handsOn();
+    await settle();
+    expect(h.said()).toBe('Tidied: 41 files in 6 folders.');
+    await h.answer('done');
+    expect(h.ledger.unseen()).toEqual([]);
+    expect(h.count()).toBe(0);
+    // And only once: hands on again later says nothing more.
+    h.asks.handsOn();
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('with their hands on, or still only for a moment, an answer is seen as ever', async () => {
+    let still = 20_000;
+    const h = harness({ deps: { stillFor: () => still } });
+    await h.type('what is two plus two?');
+    const turn = h.door.running();
+    h.door.say(turn, 'It is four.');
+    h.door.end(turn);
+    await settle();
+    still += 4000;
+    await h.answer('done');
+    expect(h.ledger.unseen()).toEqual([]);
+    expect(h.count()).toBe(0);
+  });
+});
+
 describe('an approval the turn asks for', () => {
   // The hardening audit, 17 November 2026: an approval an instruction waits on
   // could become unreachable. Something urgent took the notch for a moment,
