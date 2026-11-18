@@ -4749,7 +4749,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // News: a failure that opens while the notch is up is said once, in
         // the product's own sentence, and so is a background task that ends.
         openFailures: () => listOpenFailures(Date.now(), DEFAULT_IDS.project)
-          .map((row) => ({ key: row.failure.key, headline: row.failure.headline })),
+          // With the workflow it was a run of, and the next steps the product itself calls safe: an agent's
+          // failure is said as its own, and has a way out when there is one (src/notch/news.ts).
+          .map((row) => ({ key: row.failure.key, headline: row.failure.headline, flowId: row.failure.links.flowId, steps: row.failure.next.map((one) => one.step) })),
         onTaskEnded: (listener) => {
           const taskManager = agentService.getTaskManager();
           if (!taskManager) return false;

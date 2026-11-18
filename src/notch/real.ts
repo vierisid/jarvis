@@ -717,7 +717,15 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       noticeTimer.unref?.();
     }
   }
-  const news = attachNotchNews(inbox, { openFailures: deps.openFailures, log });
+  const news = attachNotchNews(inbox, {
+    openFailures: deps.openFailures, log,
+    // An agent's failure is said as its own, and has a way out when the product names a safe one: the
+    // notch's Connections for a sign-in, and the run again.
+    agent: (flowId) => { const agent = agents?.store.get(flowId) ?? null; return agent ? { name: agent.name } : null; },
+    connections: prefs ? (stage) => prefs.connections(stage) : undefined,
+    run: deps.agents ? (flowId) => deps.agents!.workflows.run(flowId) : undefined,
+    paused: deps.emergency ? () => deps.emergency!.getState() !== 'normal' : undefined,
+  });
   news.sync();
   const failureTimer = setInterval(() => news.sync(), NOTCH_FAILURE_LOOK_MS);
   failureTimer.unref?.();

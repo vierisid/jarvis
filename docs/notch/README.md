@@ -2880,6 +2880,49 @@ What is not done, or not proven:
   it sent or changed.
 - **The hour of the next run is not shown**, only the schedule's words.
 
+## An agent that stopped, with a way out
+
+The prototype: "Otto stopped. Stripe wants you to sign in again.", and yes
+signs in. In the product a run that ended badly was news: the product's
+sentence about it, said once, with nothing to press. The owner asked for
+the prototype's way on 18 November 2026, as the tenth of the things it has
+and the product did not.
+
+How it goes. The product keeps its open failures, and for each one it
+names the next steps that are safe to take (`failures/projection.ts`,
+`next`). The notch now reads those with the failure (`src/notch/news.ts`).
+When a failed run was one of the owner's agents, the line is that agent's:
+"Tony stopped." and the product's sentence. When the product names
+"connect", the line has a yes, "sign in", which opens the notch's
+Connections; when they are closed the run is offered once: "Run Tony again
+now?". When the product names "run it again", the yes runs it.
+
+241. **Which way out is safe is the product's judgement, never the
+    notch's.** A yes is on the line only for the two steps the notch can
+    take, and only when the product named them for that failure. A
+    failure whose safe step is to look at the details, to wait, or to check
+    before running again has no yes: it is said, with the agent's name.
+242. **After a sign-in the run is offered, not taken for granted.** The
+    notch opens its Connections and cannot know what was done there. The
+    product's own words for the step are "reconnect, then run it again",
+    so that is what is offered next, as a question.
+243. **A failure that was settled elsewhere offers nothing.** Before the
+    line is shown again it is asked whether the failure is still open.
+244. **Esc is a no and it does not come back; left alone it waits in the
+    count.** It stays open in the dashboard either way.
+245. **With everything stopped nothing is run.**
+
+What is not done, or not proven:
+
+- **It does not say which service.** The prototype's line names Stripe.
+  The product's sentence says what failed in its own words, and the
+  Connections sheet shows which connection needs a sign-in.
+- **It does not pick up where it stopped.** The run is run again from its
+  start. The prototype said "Nothing was missed": that is not claimed.
+- **Only the owner's agents.** A workflow that is not an agent is said as
+  before, with nothing to press.
+- **No real failed run has gone through it.**
+
 ## The keys
 
 | What | Keys | How it is told |
