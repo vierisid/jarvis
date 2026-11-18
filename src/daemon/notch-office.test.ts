@@ -30,6 +30,21 @@ describe('memory, as the notch lists it', () => {
     ]);
   });
 
+  // The hardening audit, 17 November 2026: only some 400 facts were ever looked
+  // at, so the sheet could say it knew nothing about someone it knew.
+  test('asked about someone, the whole memory is asked, and the newest come first', () => {
+    const sam = createEntity('person', 'Sam Reed');
+    createFact(sam.id, 'prefers', 'calls', { source: 'you told me', sourceRef: 'notch:old', quote: 'Remember that Sam prefers calls', confirmed: true });
+    const other = createEntity('person', 'Leo');
+    for (let i = 0; i < 420; i++) createFact(other.id, `noted ${i}`, `thing ${i}`, { source: 'conversation', sourceRef: `chat:${i}`, quote: `Leo noted thing ${i}` });
+    // The list is the newest part, and has its limit.
+    expect(notchMemoryFacts()).toHaveLength(400);
+    // Sam's one old fact is found all the same, by the whole name and by the first.
+    expect(notchMemoryFacts('Sam Reed').map((fact) => fact.text)).toEqual(['prefers calls']);
+    expect(notchMemoryFacts('sam').map((fact) => fact.about)).toEqual(['Sam Reed']);
+    expect(notchMemoryFacts('Nobody')).toEqual([]);
+  });
+
   test('forgetting from the notch is the product\'s own Forget: the fact and its evidence are gone, and it is not learned again from the same place', () => {
     const sam = createEntity('person', 'Sam Reed');
     // Learned by itself from a conversation, as the product's own extraction learns.
