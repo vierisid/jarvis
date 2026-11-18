@@ -2144,9 +2144,15 @@ it says otherwise.
     seen.** A walk ended by the next question, a thing the notch did
     itself: marked seen where it ends. A memory whose question was cut off
     by something urgent says so when the notch is free.
-151. **On a call nothing is taken, what is said to the notch included.** It
-    is turned away at the first key with a shake, and the ledger says why.
-    It never runs when the call is over.
+151. **On a call nothing comes up by itself, and what the person says is
+    still taken.** The call's hold keeps back everything that would speak
+    up unasked, and lets through what the person starts themselves and what
+    they are waiting on (`hold(reason, { own: true })` and `heldBack` in
+    `src/notch/inbox.ts`): the talk keys work, the words are shown, the
+    turn runs and its answer is shown. They are turned away, at the first
+    key and with a shake, only while the call is being listened to: then
+    the microphone is the call's (`callHeard`). Stopping everything is the
+    other kind of hold: it keeps everything back.
 152. **An answer is not said to an empty chair.** A line that came and went
     while the hands had been off the machine for two minutes
     (`NOTCH_ANSWER_UNSEEN_STILL_MS`) stays in the count and is said once
@@ -2334,8 +2340,10 @@ What is not done, or not proven:
   calendar entry are not read.
 - **An action is a line in the notes.** It does not become a reminder, a
   task or an agent.
-- **It cannot be told to stop by voice.** What is said to the notch during
-  a call is turned away. Esc twice stops the listening, and a mute does.
+- **It cannot be told to stop by voice.** While a call is listened to,
+  what is said to the notch is turned away: the microphone is the call's.
+  Esc twice stops the listening, and a mute does. On a call that is not
+  listened to, the talk keys work as ever.
 - **The others on the call are not told**, and the statement of where that
   is allowed (decision 5 of 8 August) is still not written. Nothing of this
   ships to anyone outside the team until it is.

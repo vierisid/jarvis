@@ -398,6 +398,30 @@ describe('a call that can be listened to', () => {
     expect(offers).toBe(2);
   });
 
+  // The owner, 18 November 2026: on a call that is not listened to, the talk
+  // keys work. What the person starts is let through the call's hold, and
+  // talking while the question is still up takes the question's place.
+  test('what the person starts themselves is shown during the call; what comes by itself still waits', async () => {
+    const h = harness({ meetingNow: () => true, listen: { offer: async (stage) => { await stage.offer(['On a call. Listen and write it down?'], 'listen'); return false; }, ended: () => null } });
+    const asked = (id: string): NotchItem => ({ ...h.item(id), asked: true, urgent: true, returns: true });
+    await h.tell({ call: true });
+    expect(h.said()).toBe('On a call. Listen and write it down?');
+    // He does not answer the question: he holds the talk keys.
+    h.inbox.add(asked('talk'));
+    await settle();
+    expect(h.said()).toBe('talk?');
+    await h.answer('yes');
+    // The call is held from here on, for everything he did not start.
+    h.inbox.add(h.item('mail'));
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    // And he can talk to it again, any time during the call.
+    h.inbox.add(asked('talk again'));
+    await settle();
+    expect(h.said()).toBe('talk again?');
+  });
+
   test('a call that was not listened to ends as it always did', async () => {
     const h = harness({ meetingNow: () => true, listen: { offer: async () => false, ended: () => null } });
     await h.tell({ call: true });

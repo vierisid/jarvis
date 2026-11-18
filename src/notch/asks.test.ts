@@ -794,26 +794,54 @@ describe('first batch of the edge-case audit', () => {
     expect(row(h)).toMatchObject({ state: 'refused', note: 'Everything is stopped. Wake me first.', heard: '' });
   });
 
-  // The hardening audit, 17 November 2026: said during a call it was taken in
-  // silence, with no line and no shake, and ran an hour later when the call
-  // was over.
-  test('spoken during a call: turned away at the first key, and it never runs when the call is over', async () => {
-    let onCall = true;
-    const h = harness({ deps: { onCall: () => onCall } });
+  // The owner, 18 November 2026: on a call he declined to have listened to, the
+  // talk keys have to work. They are turned away only while the call is being
+  // listened to: then the microphone is the call's.
+  test('spoken while a call is listened to: turned away at the first key, and it never runs later', async () => {
+    let heard = true;
+    const h = harness({ deps: { callHeard: () => heard } });
     h.asks.listen('t1');
     h.asks.released('t1');
     h.asks.words('t1', 'send Sam the deck');
     await settle();
     expect(h.shakes()).toBe(1);
     expect(h.line()).toBeNull();
-    onCall = false;
+    heard = false;
     await h.advance(5000);
     expect(h.door.texts()).toEqual([]);
-    expect(row(h)).toMatchObject({ state: 'refused', note: 'You were on a call, and I hold everything until it is over.', heard: '' });
-    // After the call it is heard as ever.
-    await h.speak('t2', 'send Sam the deck');
+    expect(row(h)).toMatchObject({ state: 'refused', note: 'I was listening to your call, and take nothing else while I do.', heard: '' });
+  });
+
+  test('spoken on a call that is not listened to: taken, shown and run, though everything else is held', async () => {
+    const h = harness({ deps: { callHeard: () => false } });
+    // A call is on: what comes by itself is held, what the person starts is not.
+    h.inbox.hold('call', { own: true });
+    h.inbox.add({ id: 'mail', subject: 'mail', class: 'person', speaks: true, title: () => ['A mail'], play: async (stage) => { await stage.say(['A mail came.'], 2000); return 'settled'; } });
+    await settle();
+    expect(h.line()).toBeNull();
+    h.asks.listen('t1');
+    await settle();
+    expect(h.shakes()).toBe(0);
+    expect(h.line()).toMatchObject({ kind: 'listen' });
+    h.asks.released('t1');
+    h.asks.words('t1', 'send Sam the deck');
+    await settle();
     await h.advance(1500);
     expect(h.door.texts()).toEqual(['send Sam the deck']);
+    expect(h.said()).toBe('On it: send Sam the deck');
+    // Its answer is shown during the call too: he asked for it.
+    const turn = h.door.running();
+    h.door.say(turn, 'Sent to Sam.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('Sent to Sam.');
+    await h.answer('done');
+    // And the mail still waits for the call to be over.
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+    h.inbox.release('call');
+    await settle();
+    expect(h.said()).toBe('A mail came.');
   });
 
   test('spoken while something runs: refused at the first key, not after it was all said', async () => {

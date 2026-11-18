@@ -150,10 +150,12 @@ export interface NotchAsksDeps {
   /** An approval this instruction's turn is waiting for should take the notch now. */
   raiseApproval?: (approvalId: string) => void;
   /**
-   * Whether the person is on a call, where the notch holds everything
-   * (./around.ts). What is said to it then is turned away at the first key.
+   * Whether a call is being listened to and written down (./call.ts). What
+   * is said to the notch then is turned away at the first key: the
+   * microphone is the call's. On a call that is not listened to, the talk
+   * keys work as ever.
    */
-  onCall?: () => boolean;
+  callHeard?: () => boolean;
   /** How long the person's hands have been still, in milliseconds (./presence.ts). 0 while they move, or when it is not known. */
   stillFor?: () => number;
   /** The instruction ended while one of its approvals was still unanswered: it is asked no more. */
@@ -1193,14 +1195,16 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         deps.attention?.();
         return refused;
       }
-      // On a call everything is held, and so is this: turned away now, with
-      // a shake. It used to be taken in silence, with no line and no shake,
-      // and ran when the call was over: "send Sam the deck", said an hour
-      // ago, was then done with nobody having seen that it was heard.
-      if (deps.onCall?.()) {
+      // A call is being listened to: the microphone is the call's, and what
+      // is said goes into its notes. Turned away now, with a shake. On a call
+      // that is not listened to the keys work as ever (the owner, 18 November
+      // 2026: "if I decline that, then I should be able to use the speech to
+      // text if I wanted to"): the call's hold lets through what the person
+      // starts themselves (./inbox.ts, `heldBack`).
+      if (deps.callHeard?.()) {
         const refused = crypto.randomUUID();
         ledger.open(refused, 'spoken');
-        ledger.refused(refused, 'You were on a call, and I hold everything until it is over.');
+        ledger.refused(refused, 'I was listening to your call, and take nothing else while I do.');
         deps.attention?.();
         return refused;
       }
