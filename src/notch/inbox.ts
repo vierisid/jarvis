@@ -313,6 +313,11 @@ export class NotchInbox {
     this.opener = opener;
   }
 
+  /** Takes an opener away again, if it is still the one that is set: somebody else's is left alone. */
+  dropOpener(opener: () => boolean): void {
+    if (this.opener === opener) this.opener = null;
+  }
+
   /** Says the count again, whatever was said before. For after something else had the notch. */
   refresh(): void {
     this.shownCount = -1;

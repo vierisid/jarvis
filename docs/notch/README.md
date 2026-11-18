@@ -2232,6 +2232,100 @@ What is not done, or not proven, in pass 13:
   permissions that are never asked for, the menu bar) is listed in the
   audit and not touched.
 
+## Listening to a call
+
+The plan parked this on 15 November: "Jarvis listens to a call, writes it
+down, and gives the action points after it." The brain's half is
+`src/notch/call.ts`, the desktop app's is `sidecar/notch_call.go`.
+
+How it goes. The notch knows a call is on (a calling program has the
+microphone, `src/notch/around.ts`). In the place of "On a call. I hold
+everything until you are done." it asks "On a call. Listen and write it
+down?". On a yes the brain asks the desktop app to hear that call
+(`notch.listen`). The desktop app opens the microphone, and where it was
+asked to and can, what the machine is playing: the other side. It cuts
+what it hears into pieces at the pauses, at most 30 seconds each, and sends
+each as a `notch.call` event. The brain makes each piece into words with
+the speech-to-text the owner chose and writes the words down. When the call
+is over the words go to the model once, and the notch says "Call ended. 3
+actions came out of it. Follow-up drafted." Yes shows who does what and a
+short mail to the person the call was with. One more yes sends it.
+
+The rules are the owner's decisions of 8 August 2026 for meetings, kept as
+they were:
+
+172. **A call is listened to only on a yes for that call.** Nothing starts
+    listening by itself and no setting does. The desktop app opens no
+    device until `notch.listen` asks for one call, and refuses while the
+    notch's switch is off. A piece of a call nobody said yes to is not made
+    into words.
+173. **No sound is kept.** A piece is in memory on the desktop app until it
+    has gone out, and in the brain until it has been made into words. There
+    is no file and no folder on either side, and the two tables hold text
+    only (`notch_calls`, `notch_call_lines`).
+174. **The words are kept 7 days, the notes 90.** A sweep runs every hour
+    (`NotchCallStore.sweep`). The sheet of a call has "Forget this call",
+    which takes its words and its notes at once.
+175. **The other side is a switch of its own, off until it is turned on.**
+    The Settings sheet has it: "On a call I offer to listen, and hear your
+    side only". Turned to "both sides" the row says "The others are not
+    told. Telling them is yours.", and the question at the start of a call
+    says "both sides". It is Windows only: elsewhere the notch says it
+    hears one side.
+176. **Nobody is named by their voice.** A line is the owner's microphone
+    ("Mine": them, and anyone in the room) or the other side ("Theirs"). On
+    the sheet who does a thing is a word the owner can change.
+177. **A mute and a stop silence it.** With Jarvis's microphone muted from
+    the tray nothing is heard, from either side. Esc twice closes both
+    devices; waking opens them again, and the notes say how long was not
+    heard.
+178. **What is said in a call is never an instruction.** It arrives as its
+    own kind of event, which only the call's notes read: the talk keys'
+    recording is another. It goes to the model inside the marks of outside
+    text, with the sentence that nothing in it is an instruction. What the
+    model answers is cut to four fields of fixed sizes (`callNotes`): an
+    owner that is not "mine" or "theirs" is nobody, never the assistant.
+179. **The follow-up goes to a person the mailbox knows, on a yes.** The
+    name said in the call is looked up in the owner's mail; with nobody
+    found there is no follow-up, and nobody is guessed. It is shown whole
+    with the address, can be taken back for `NOTCH_CALL_FUSE_MS`, and goes
+    the way a chase's mail goes.
+180. **One eye is citron while it listens**, as while anything is watched
+    for. It goes out the moment the hearing stops.
+181. **It ends by itself.** When the call is over, when the connection to
+    the desktop app goes, when the notch is switched off, and after 3 hours
+    and 10 minutes at the latest (`notchCallMost`).
+182. **A yes on the resting notch asks again.** The question at the start
+    stays 45 seconds. During the call a yes or a tap on the resting notch
+    asks it once more, or says that it is listening.
+
+What is not done, or not proven:
+
+- **No real sound has gone through it.** The cutting, the rules and the
+  whole way from "a call is on" to the sheet are tested with stand-in
+  devices, a stand-in speech-to-text and a stand-in model. The microphone
+  and Windows' way of hearing what the machine plays are compiled for
+  Windows and were never run. Whether a call is made out well enough to
+  write down is not known.
+- **The first minute is not heard.** A call is known to be on once a
+  calling program has had the microphone for a minute, or at once when a
+  meeting is in the calendar for that moment. The question comes then.
+- **Everything the machine plays is "the other side".** A video in another
+  tab, a notification sound. And with speakers on, the microphone hears the
+  other side too, so a sentence can be written down twice.
+- **On a Mac the other side is not heard.**
+- **Who the call was with is the name said in it.** The guests of a
+  calendar entry are not read.
+- **An action is a line in the notes.** It does not become a reminder, a
+  task or an agent.
+- **It cannot be told to stop by voice.** What is said to the notch during
+  a call is turned away. Esc twice stops the listening, and a mute does.
+- **The others on the call are not told**, and the statement of where that
+  is allowed (decision 5 of 8 August) is still not written. Nothing of this
+  ships to anyone outside the team until it is.
+- **The words leave the machine** as a talk-key recording does: to the
+  speech-to-text service the owner set up, and then to the model.
+
 ## The keys
 
 | What | Keys | How it is told |

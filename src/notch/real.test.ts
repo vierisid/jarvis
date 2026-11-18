@@ -469,3 +469,110 @@ describe('words the notch acts on itself, typed into Home as a person types them
     real.stop();
   });
 });
+
+// Listening to a call, put together as the product puts it together: the
+// notch hears that a call is on, asks, the desktop app's pieces are made into
+// words, and when the call is over the notch says what came out of it.
+describe('a call that is listened to, put together', () => {
+  test('from "a call is on" to "2 actions came out of it", with the row in Settings and in Home', async () => {
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC(_sidecarId, _method, params) { const message = (params as { message?: NotchToPage }).message; if (message) pushed.push(message); return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const timers: { fn: () => void; at: number }[] = [];
+    let now = 0;
+    const clock = {
+      setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; },
+      clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+    };
+    let around: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    let call: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
+    const asked: { on: boolean; id: string; far: boolean }[] = [];
+    const heard = [
+      'Thanks for making the time today Sam, I wanted to go through the pricing for the five seats and the date we start.',
+      'Sure. Five seats on the Pro plan works for us, and I would like to begin on the first of December if legal agrees.',
+      'Good, then I send you the pricing for five seats by Friday and you check the start date with your legal team.',
+    ];
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      day: { db: getDb(), noClock: true, around: { onEvent(listener) { around = listener; }, onSidecarDisconnected() {} } },
+      calls: {
+        db: getDb(), noClock: true,
+        port: { onEvent(listener) { call = listener; }, onSidecarDisconnected() {} },
+        async listen(_sidecarId, ask) {
+          asked.push(ask);
+          if (!ask.on) { call('pc', { event_type: 'notch.call', payload: { id: ask.id, phase: 'end', reason: 'asked' } }); return { listening: false }; }
+          return { listening: true, far: ask.far, why: '' };
+        },
+        stt: () => ({ transcribe: async () => heard.shift() ?? '' }),
+        think: async () => JSON.stringify({ summary: 'Pricing and a start date were agreed.', with: 'Sam', actions: [{ what: 'Send pricing for 5 seats', owner: 'mine', by: 'Friday' }, { what: 'Check the start date with legal', owner: 'theirs', by: '' }], followup: 'As agreed.' }),
+      },
+      clock,
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    live = real;
+    const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    const pass = async (ms: number): Promise<void> => {
+      const until = now + ms;
+      for (;;) {
+        const next = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!next) break;
+        now = next.at; timers.splice(timers.indexOf(next), 1); next.fn();
+        await wait();
+      }
+      now = until;
+      await wait();
+    };
+    const line = (): NotchLine | null => surface.current().line;
+    const said = (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
+    const answer = async (act: NotchAnswerAct): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act }); await wait(); };
+
+    // A calling program has the microphone for a minute: a call.
+    around('pc', { event_type: 'notch.around', payload: { call: true } });
+    await pass(60_000);
+    expect(said()).toBe('On a call. Listen and write it down?');
+    expect(asked).toEqual([]);
+    await answer('yes');
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ on: true, far: false });
+    expect(said()).toBe('Listening. I hold everything else until you are done.');
+    await answer('done');
+    // The eye is lit while it listens.
+    expect(pushed.some((message) => message.type === 'act' && message.eye === true)).toBe(true);
+    for (const source of ['mic', 'far', 'mic']) {
+      call('pc', { event_type: 'notch.call', payload: { id: asked[0]!.id, phase: 'piece', source, seq: 1, at: Date.now(), ms: 8000, voiced_ms: 7000, rate: 16_000 }, binary: { type: 'inline', data: Buffer.alloc(16_000 * 2 * 8, 1).toString('base64') } });
+      await wait();
+    }
+    // The calling program lets the microphone go: after a quarter of a minute the call is over.
+    around('pc', { event_type: 'notch.around', payload: { call: false } });
+    await pass(15_000);
+    expect(asked.at(-1)).toMatchObject({ on: false });
+    expect(said()).toBe('Call ended. 2 actions came out of it.');
+    expect(pushed.filter((message) => message.type === 'act' && message.eye !== undefined).at(-1)).toMatchObject({ eye: false });
+    await answer('yes');
+    expect(said()).toBe('After the call with Sam');
+    await answer('no');
+    // Home has its row, and Settings the two words.
+    fromPage({ type: 'open' });
+    await wait();
+    const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map((part) => (typeof part === 'string' ? part : part && typeof part === 'object' && 'em' in part ? String((part as { em: unknown }).em) : part && typeof part === 'object' && 'word' in part ? `[${(part as { word: { value: string } }).word.value}]` : '')).join('');
+    const rows = (): string[] => { const shown = line(); return (shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks : []).filter((block) => block.kind === 'row').map((block) => text((block as { say: unknown }).say)); };
+    expect(rows()).toContain('Your last call: 2 actions.');
+    fromPage({ type: 'answer', id: line()!.id, act: 'ask', text: 'settings' });
+    await wait();
+    expect(said()).toBe('Settings');
+    expect(rows()).toContain('On a call I [offer to listen], and hear [your side only].');
+    fromPage({ type: 'answer', id: line()!.id, act: 'word', word: 'callside', value: 'both sides' });
+    await wait();
+    expect(rows()).toContain('On a call I [offer to listen], and hear [both sides].');
+  });
+});

@@ -28,7 +28,7 @@ export interface NotchCan {
   lead: string;
   say: NotchPart[];
   /** The sentences the row quotes, each with the part of the product that takes it. */
-  tries?: { words: string; by: 'where' | 'put' | 'watch' | 'done' | 'run' | 'eye' | 'chase' | 'agent' | 'remember' | 'memory' }[];
+  tries?: { words: string; by: 'where' | 'put' | 'watch' | 'done' | 'run' | 'eye' | 'chase' | 'agent' | 'remember' | 'memory' | 'call' }[];
 }
 
 /** Everything, in the order a person meets it. */
@@ -74,7 +74,12 @@ export const NOTCH_CAN: readonly NotchCan[] = [
     tries: [{ words: 'Remember that Anna prefers calls', by: 'remember' }, { words: 'what do you know about Anna', by: 'memory' }],
   },
   { id: 'mail', lead: 'Mail', say: ['I draft replies to people who wait for you, and bring them. "', em('tell me'), '" on a draft changes what it says.'] },
-  { id: 'quiet', lead: 'Quiet', say: ['Home has "Quiet for an hour". Nothing comes up while it is on, and on a call I hold everything.'] },
+  {
+    id: 'call', lead: 'A call',
+    say: ['On a call I ask whether to listen. Say yes and I write it down, and afterwards say what came out of it. Later: "', em('show my last call'), '".'],
+    tries: [{ words: 'show my last call', by: 'call' }],
+  },
+  { id: 'quiet', lead: 'Quiet', say: ['Home has "Quiet for an hour". Nothing comes up while it is on, and on a call I hold everything else.'] },
   { id: 'home', lead: 'Home', say: ['Tap ', { key: 'yes' }, ' with nothing on me: what waits, what I did today, Memory, Connections, Settings.'] },
 ];
 

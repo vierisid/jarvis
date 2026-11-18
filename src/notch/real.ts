@@ -32,6 +32,7 @@ import { attachNotchPromises } from './promises.ts';
 import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
+import { attachNotchCalls, type NotchCallDeps, type NotchCallPort, type NotchCalls } from './call.ts';
 import { attachNotchDrop, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
@@ -183,6 +184,15 @@ export interface NotchRealDeps {
    */
   day?: { db: Database; around?: NotchAroundPort; now?: () => number; noClock?: boolean };
   /**
+   * Listening to a call (./call.ts): with the person's yes for that call, the
+   * desktop app hears it, the pieces are made into words here, and when the
+   * call is over the notch says what came out of it. `port` is how the
+   * pieces arrive, `listen` asks a desktop app to hear or to stop, `stt` is
+   * what makes out speech, `think` is one question to the model. Needs `day`
+   * with `around`: a call has to be known to be on.
+   */
+  calls?: { db: Database; port: NotchCallPort; listen: NotchCallDeps['listen']; stt: NotchCallDeps['stt']; think: NotchCallDeps['think']; noClock?: boolean };
+  /**
    * Doing it in view (pass 10): jobs done where they can be seen, with
    * Jarvis's own pointers; a job caught by itself when it is done twice by
    * hand; a job shown with "Watch me"; and a thing put where the person
@@ -268,6 +278,12 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let put: NotchPutter | null = null;
   let standing: NotchStanding | null = null;
   let standingTimer: ReturnType<typeof setInterval> | null = null;
+  // Made further down, once the mail and the day are: what is said and shown before then finds it when it is asked.
+  let calls: NotchCalls | null = null;
+  let callTimer: ReturnType<typeof setInterval> | null = null;
+  // One of the notch's eyes is citron while something is watched for, or a call is listened to.
+  let eyeKept = false, eyeCall = false;
+  const paintEye = (): void => surface.setEye(eyeKept || eyeCall);
   let agents: NotchAgents | null = null;
   let agentsTimer: ReturnType<typeof setInterval> | null = null;
   const todayDeps = {
@@ -406,6 +422,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     moves: (stage) => moves.open(stage),
     canDo: (stage) => canDo.open(stage),
     dayOne: deps.dayOne ? () => dayOne?.again() : undefined,
+    // Listening to calls: whether it is offered, and whether the other side is heard.
+    calls: deps.calls ? { row: () => calls?.settingsRow() ?? null, set: (name, value) => calls?.setWord(name, value) ?? false } : undefined,
     connections: office?.connections,
     connect: office?.connect,
     // A page of the dashboard when it can be opened at one, the dashboard itself when not.
@@ -431,7 +449,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
       side: (text, how) => dayOne?.route(text) ?? mail?.mail.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
-        ?? memory?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
+        ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text) ?? null,
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
@@ -453,10 +471,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // What the assistant built in a turn is an agent like any other: switched on and named here.
       afterTurn: (since) => agents?.adopt(since),
       standing: {
-        rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? [])]; },
+        rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
         open: async (stage, row) => {
           if (row === 'agents') await agents?.open(stage);
           else if (row === 'eyes' || row === 'chases') await standing?.open(stage, row);
+          else if (row === 'calls') await calls?.open(stage, row);
         },
       },
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
@@ -539,7 +558,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     if (deps.standing) {
       const kept = attachNotchStanding({
         inbox, db: deps.mail.db, mail: mail.standing, paused, log,
-        eye: (on) => surface.setEye(on),
+        eye: (on) => { eyeKept = on; paintEye(); },
         fired: () => surface.act({ gesture: 'pop' }),
         ...(deps.standing.chaseWaitMs ? { waitMs: deps.standing.chaseWaitMs } : {}),
       });
@@ -558,10 +577,27 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     const layer = mail;
     const asleep = (): boolean => (deps.emergency ? deps.emergency.getState() !== 'normal' : false);
     if (layer) soon = attachNotchSoon(inbox, { calendar: (from, to) => layer.calendar(from, to), now: dayNow, log });
+    if (deps.day.around && deps.calls) {
+      const emergency = deps.emergency;
+      const kept = attachNotchCalls(deps.calls.port, {
+        inbox, db: deps.calls.db, settings, log,
+        listen: deps.calls.listen, stt: deps.calls.stt, think: deps.calls.think,
+        // The follow-up goes the way a chase's mail goes: in the thread with that person, or as a new mail.
+        mail: layer ? { find: (who) => layer.standing.find(who), send: (plan) => layer.standing.send(plan), owner: () => layer.standing.owner() } : undefined,
+        paused: asleep,
+        onPause: emergency ? (listener) => { emergency.subscribe((state) => listener(state !== 'normal')); } : undefined,
+        eye: (on) => { eyeCall = on; paintEye(); },
+        now: dayNow,
+      });
+      calls = kept;
+      kept.sweep();
+      if (!deps.calls.noClock) { callTimer = setInterval(() => kept.sweep(), 3_600_000); callTimer.unref?.(); }
+    }
     if (deps.day.around) {
       around = attachNotchAround(surface, inbox, deps.day.around, {
         meetingNow: () => soon?.meetingNow() ?? false,
         asleep,
+        listen: calls ? { offer: (stage, sidecarId) => calls!.offer(stage, sidecarId), ended: () => calls!.ended() } : undefined,
         // What could not be read while there was no connection is read now.
         backOnline: () => { void layer?.look('glance'); },
         clock: deps.clock,
@@ -686,6 +722,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       put?.stop();
       standing?.stop();
       if (standingTimer) clearInterval(standingTimer);
+      if (callTimer) clearInterval(callTimer);
+      calls?.stop();
       agents?.stop();
       if (agentsTimer) clearInterval(agentsTimer);
       for (const timer of jobTimers) clearInterval(timer);

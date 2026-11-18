@@ -113,6 +113,8 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   'notch.look',
   // The shape of what the person's hands do: a click as a window and a place, a named key (src/notch/catch.ts).
   'notch.watch',
+  // A piece of a call the person asked to have listened to, to be made into words (src/notch/call.ts).
+  'notch.call',
 ];
 
 /** Update phases a sidecar may report; anything else is dropped. */

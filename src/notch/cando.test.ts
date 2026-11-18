@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test';
 import { agentSentence } from './agents.ts';
 import { rememberSentence } from './asks.ts';
+import { callRequest } from './call.ts';
 import { NOTCH_CAN, canDoBlocks, canDoRequest } from './cando.ts';
 import { memoryRequest } from './memory.ts';
 import { whereQuestion } from './point.ts';
@@ -23,6 +24,7 @@ const TAKES: Record<string, (words: string) => boolean> = {
   agent: (words) => agentSentence(words) !== null,
   remember: (words) => rememberSentence(words) !== null,
   memory: (words) => memoryRequest(words) !== null,
+  call: (words) => callRequest(words),
 };
 
 describe('what I can do', () => {
@@ -50,7 +52,7 @@ describe('what I can do', () => {
 
   test('it names the things the owner said were missing, and the ones he did not think of', () => {
     const ids = NOTCH_CAN.map((can) => can.id);
-    for (const id of ['file', 'where', 'look', 'put', 'watch', 'twice', 'eye', 'chase', 'agent', 'memory', 'mail', 'quiet', 'home', 'talk', 'yes']) expect(ids).toContain(id);
+    for (const id of ['file', 'where', 'look', 'put', 'watch', 'twice', 'eye', 'chase', 'agent', 'memory', 'mail', 'call', 'quiet', 'home', 'talk', 'yes']) expect(ids).toContain(id);
     expect(new Set(ids).size).toBe(ids.length);
     const blocks = canDoBlocks();
     expect(blocks.filter((block) => block.kind === 'row').length).toBe(NOTCH_CAN.length);

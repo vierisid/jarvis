@@ -157,6 +157,15 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		// switch going off ends it (NotchService.Configure).
 		registry["notch.watch"] = makeNotchWatchHandler()
 		registry["notch.act"] = notchOnly(notch, "notch.act", makeNotchActHandler())
+		// Listening to a call, for the one call the person said yes to
+		// (notch_call.go). Stopping is always answered.
+		listen := makeNotchListenHandler(notchCalls)
+		registry["notch.listen"] = func(params map[string]any) (*RPCResult, error) {
+			if on, _ := params["on"].(bool); on && !notch.Enabled() {
+				return nil, fmt.Errorf("notch.listen: %w", errNotchOff)
+			}
+			return listen(params)
+		}
 		// Pass 12, day one: what lies on the desktop and in the documents and
 		// downloads, by name and kind. Only on a desktop app that may read
 		// files at all, and nothing of what is in a file (notch_files.go).
