@@ -1508,8 +1508,10 @@ threshold); without one, including rows saved before #954, on first use.
   token the provider rotated if theirs still held the retired one.
 - A refresh the provider refuses is not retried until the stored value
   changes. An unreachable endpoint is retried once per 15-minute window while
-  the stored token may still work (it is handed out meanwhile), and at every
-  fetch once the token is known to have expired. A fetch that waited for
+  the stored token may still work (it is handed out meanwhile). Once the token
+  is known to have expired it is retried after 30 s, doubling with each failure
+  in a row up to 5 minutes; fetches in between fail at once with the same
+  reason instead of each waiting out the deadline. A fetch that waited for
   another refresh re-reads the row first, so a refresh token the provider
   rotated meanwhile is never sent again.
 - A token known to have expired that cannot be refreshed is not handed out:
