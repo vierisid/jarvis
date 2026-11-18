@@ -249,20 +249,30 @@ describe("scripts/build-shared-runtime.ts", () => {
   });
 
   test("gates the installed tree after the install and before any piece runs, and exits on a violation", () => {
-    const install = script.indexOf('spawnSync(process.execPath, ["install"');
     const gate = script.indexOf('checkSharedTreeLicenses(piecesDir, catalog, { lockfile: piecesLimit === 0 ? "if-present" : "required" });');
     const engine = script.indexOf("new EngineRuntime(");
-    const extract = script.indexOf("buildPieceCatalog(");
-    expect(install).toBeGreaterThan(0);
-    expect(gate).toBeGreaterThan(install);
+    expect(gate).toBeGreaterThan(0);
     expect(engine).toBeGreaterThan(gate);
-    expect(extract).toBeGreaterThan(gate);
     const after = script.slice(gate, engine);
     expect(after).toMatch(/\n {2}if \(!licenses\.ok\) \{\n(?: {4}.*\n)*? {4}process\.exit\(1\);\n {2}\}\n/);
+    // Where it runs: the one pass after its install, --extract-only on the
+    // sealed tree; each before the extraction, so a refused tree never has a
+    // piece run.
+    const callback = script.slice(script.indexOf("await publishSharedEngine(bundle, engineOutDir, async () => {"));
+    const order = (text: string, steps: string[]) => steps.map((s) => text.indexOf(s));
+    const one = order(callback, ["installCatalog(piecesDir, catalog);", "gateLicenses(piecesDir, catalog);", "await extractMetadata({"]);
+    expect(one.every((i, n) => i > (n === 0 ? -1 : one[n - 1]!))).toBe(true);
+    const branch = script.slice(script.indexOf('if (phase === "extract") {\n  // The engine the host sealed'));
+    const two = order(branch, ["gateLicenses(piecesDirFrom!, catalog);", "await extractMetadata({"]);
+    expect(two.every((i, n) => i > (n === 0 ? -1 : two[n - 1]!))).toBe(true);
     // The notices are written after the pieces ran, from what was rendered
-    // before, by exclusive create so a link planted meanwhile is not followed.
-    expect(script.indexOf('writeFileSync(noticesPath, licenses.notices!, { flag: "wx" });')).toBeGreaterThan(script.indexOf("}, handOutDigest);"));
+    // before, by exclusive create so a link planted meanwhile is not followed:
+    // into <out>/pieces by the one pass, into its own <out> by --extract-only.
+    const writes = script.split('writeFileSync(noticesPath, licenses.notices!, { flag: "wx" });').length - 1;
+    expect(writes).toBe(2);
+    expect(script.lastIndexOf('writeFileSync(noticesPath, licenses.notices!, { flag: "wx" });')).toBeGreaterThan(script.indexOf("}, handOutDigest);"));
     expect(script).toContain('const noticesPath = resolve(out, "pieces", "THIRD_PARTY_NOTICES.md");');
+    expect(branch.indexOf('const noticesPath = resolve(out, "THIRD_PARTY_NOTICES.md");')).toBeGreaterThan(branch.indexOf("await extractMetadata({"));
   });
 
   test("an exclusive create refuses a link planted at the notices path, and leaves its target alone", () => {
