@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
@@ -212,14 +212,36 @@ export function defaultConfigPath(): string {
   return expandTilde('~/.jarvis/config.yaml');
 }
 
-export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
+/**
+ * Where the daemon keeps its data and its database: `--data-dir` first, then
+ * `daemon.data_dir` from the config (which JARVIS_HOME overrides, see
+ * applyEnvOverrides), then ~/.jarvis; the database is `daemon.db_path`, made
+ * absolute inside the data dir when relative. startDaemon and `jarvis start`'s
+ * first-run check both use this, so they cannot disagree about which install
+ * they are looking at.
+ */
+export function resolveDataPaths(
+  daemon: Pick<JarvisConfig['daemon'], 'data_dir' | 'db_path'>,
+  overrides: { dataDir?: string; dbPath?: string } = {},
+): { dataDir: string; dbPath: string } {
+  const dataDir = overrides.dataDir ?? daemon.data_dir ?? join(homedir(), '.jarvis');
+  const dbPath = overrides.dbPath ?? daemon.db_path ?? join(dataDir, 'jarvis.db');
+  return { dataDir, dbPath };
+}
+
+/** A relative db path names a file inside the data dir. */
+export function absoluteDbPath(dbPath: string, dataDir: string): string {
+  return isAbsolute(dbPath) ? dbPath : join(dataDir, dbPath);
+}
+
+export async function loadConfig(configPath?: string, opts: { quiet?: boolean } = {}): Promise<JarvisConfig> {
   const path = configPath || defaultConfigPath();
 
   const file = Bun.file(path);
   const exists = await file.exists();
 
   if (!exists) {
-    console.warn(`Config file not found at ${path}, using defaults`);
+    if (!opts.quiet) console.warn(`Config file not found at ${path}, using defaults`);
     const config = structuredClone(DEFAULT_CONFIG);
     config.daemon.data_dir = expandTilde(config.daemon.data_dir);
     config.daemon.db_path = expandTilde(config.daemon.db_path);
