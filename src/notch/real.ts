@@ -483,6 +483,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         // After everything that has words of its own: what was said over a line that is up answers that line.
         ?? saidLine.route(text, how) ?? null,
       keys: () => saidLine.keys(),
+      // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
+      people: () => mail?.store.people() ?? [],
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.

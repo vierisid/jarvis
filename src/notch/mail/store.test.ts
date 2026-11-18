@@ -174,3 +174,16 @@ describe('how a person is always written to', () => {
   });
 });
 
+describe('who the owner writes with', () => {
+  test('each person once, by the name their mail gives, the ones who wrote last first', () => {
+    const store = new MailStore(new Database(':memory:'));
+    store.put(row({ id: 'a', thread: 'a', messageAt: T, who: leo }));
+    store.put(row({ id: 'b', thread: 'b', messageAt: T + 2000, who: anna, state: 'silent' }));
+    store.put(row({ id: 'c', thread: 'c', messageAt: T + 1000, who: leo, state: 'sent' }));
+    store.put(row({ id: 'd', thread: 'd', messageAt: T + 3000, who: mailPerson('', 'nobody@lumen.example') }));
+    expect(store.people()).toEqual([{ name: 'Anna Conti', address: 'anna@lumen.example' }, { name: 'Leo Bianchi', address: 'leo@lumen.example' }]);
+    expect(store.people(1)).toHaveLength(1);
+    expect(new MailStore(new Database(':memory:')).people()).toEqual([]);
+  });
+});
+
