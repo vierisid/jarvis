@@ -229,11 +229,13 @@ const MOMENTS: Record<string, Moment> = {
   /** A call: things are held on the edge, then a follow-up, then a round. */
   async call(s) {
     await s.say(['On a call. I hold everything until you are done.'], 3000, { mood: 'focus' });
+    // A look asked for at rest is worn for a few seconds and no longer: it is asked for again with each thing
+    // that is parked, for as long as the call lasts.
     s.surface.act({ mood: 'focus' });
     await s.wait(1600);
-    s.surface.act({ park: 1 });
+    s.surface.act({ park: 1, mood: 'focus' });
     await s.wait(2400);
-    s.surface.act({ park: 2 });
+    s.surface.act({ park: 2, mood: 'focus' });
     await s.wait(2600);
     s.surface.act({ park: 0, gesture: 'wake' });
     await s.wait(1900);

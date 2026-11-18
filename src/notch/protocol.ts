@@ -374,7 +374,13 @@ export type NotchFromPage =
    * A file that was dropped and handed over arrives by itself, not as a
    * message: it is too large for one.
    */
-  | { type: 'drag'; state: 'over' | 'left' | 'lost' };
+  | { type: 'drag'; state: 'over' | 'left' | 'lost' }
+  /**
+   * The page's sign-in with the brain has ended (it lasts twelve hours at
+   * most): what it asks of the brain itself, like taking a dropped file, is
+   * refused from now on. The brain opens the page again, signed in anew.
+   */
+  | { type: 'signed-out' };
 
 const ANSWER_ACTS: ReadonlySet<string> = new Set<NotchAnswerAct>([
   'yes', 'no', 'fold', 'pick', 'button', 'go', 'word', 'ask', 'stop', 'undo', 'done',
@@ -393,6 +399,7 @@ export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
   const m = raw as Record<string, unknown>;
   if (m.type === 'open') return { type: 'open' };
   if (m.type === 'stop') return { type: 'stop' };
+  if (m.type === 'signed-out') return { type: 'signed-out' };
   if (m.type === 'drag') return m.state === 'over' || m.state === 'left' || m.state === 'lost' ? { type: 'drag', state: m.state } : null;
   if (m.type === 'hello') {
     return typeof m.v === 'number' && Number.isInteger(m.v) && m.v > 0 ? { type: 'hello', v: m.v } : null;

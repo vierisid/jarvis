@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { NOTCH_CAPABILITY, NOTCH_SPAWN_AGAIN_MS, attachNotch, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
+import { NOTCH_CAPABILITY, NOTCH_REOPEN_AFTER_MS, NOTCH_REOPEN_APART_MS, NOTCH_SPAWN_AGAIN_MS, attachNotch, createNotchReopen, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
 
 /** A sidecar manager that records what it is asked to do. */
 function fakePort(answer: () => Promise<unknown> = async () => ({ configured: true, enabled: true, surface: 'none' })) {
@@ -167,5 +167,50 @@ describe('attachNotch', () => {
       expect(lines.join('\n')).toContain(expected);
       if (keys === undefined) expect(lines.join('\n')).not.toContain('keys:');
     }
+  });
+});
+
+// The hardening audit, 17 November 2026: the page's sign-in ends (twelve hours at most, four when it asked
+// nothing), and from then every dropped file was refused: "Try dropping it again", for ever.
+describe('a page whose sign-in has ended is opened again', () => {
+  function reopener(spawn: Array<Record<string, unknown> | Error>) {
+    const calls: string[] = [];
+    const waits: number[] = [];
+    let now = 1_000_000;
+    let n = 0;
+    const reopen = createNotchReopen({
+      async dispatchRPC(_sidecarId, method) {
+        calls.push(method);
+        if (method !== 'notch.spawn') return { closed: true };
+        const got = spawn[Math.min(n++, spawn.length - 1)]!;
+        if (got instanceof Error) throw got;
+        return got;
+      },
+    }, { pageUrl: 'http://localhost:3143/notch.html', log: () => {}, wait: async (ms) => { waits.push(ms); }, now: () => now });
+    return { reopen, calls, waits, pass: (ms: number) => { now += ms; } };
+  }
+
+  test('closed, given a moment to be gone, and asked for anew', async () => {
+    const h = reopener([{ spawned: true, already: false }]);
+    expect(await h.reopen('s1')).toBe(true);
+    expect(h.calls).toEqual(['notch.close', 'notch.spawn']);
+    expect(h.waits).toEqual([NOTCH_REOPEN_AFTER_MS]);
+  });
+
+  test('"already there" is the window on its way out: it is asked for again', async () => {
+    const h = reopener([{ spawned: true, already: true }, { spawned: true, already: false }]);
+    expect(await h.reopen('s1')).toBe(true);
+    expect(h.calls).toEqual(['notch.close', 'notch.spawn', 'notch.spawn']);
+  });
+
+  test('not more than once a minute for one desktop app, whatever the page says', async () => {
+    const h = reopener([{ spawned: true, already: false }]);
+    await h.reopen('s1');
+    expect(await h.reopen('s1')).toBe(false);
+    expect(h.calls).toEqual(['notch.close', 'notch.spawn']);
+    // Another desktop app is its own.
+    expect(await h.reopen('s2')).toBe(true);
+    h.pass(NOTCH_REOPEN_APART_MS + 1);
+    expect(await h.reopen('s1')).toBe(true);
   });
 });

@@ -86,10 +86,19 @@ export function createFrames(onFrameEnd: () => void): Frames {
   const ask = () => { if (!raf && !stopped && live.size) raf = requestAnimationFrame(step); };
   const step = (ts: number) => {
     raf = 0; inside = true;
-    for (const fn of [...live]) { if (live.has(fn) && !fn(ts)) live.delete(fn); }
-    inside = false;
-    onFrameEnd();
-    ask();
+    // One movement that throws (a name the page does not know) is dropped. It must not leave "inside" set:
+    // then no frame was ever asked for again, nothing moved, no outline was reported, and only a reload
+    // brought the notch back.
+    try {
+      for (const fn of [...live]) {
+        let more = false;
+        try { more = live.has(fn) && fn(ts); } catch (error) { console.error('[notch] a movement failed and was dropped', error); }
+        if (!more) live.delete(fn);
+      }
+    } finally {
+      inside = false;
+    }
+    try { onFrameEnd(); } finally { ask(); }
   };
   return {
     run(fn) { live.add(fn); if (!inside) ask(); },

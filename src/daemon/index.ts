@@ -162,7 +162,7 @@ import {
   type DashboardSpawnSettled,
 } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
-import { attachNotch } from "../notch/attach.ts";
+import { attachNotch, createNotchReopen } from "../notch/attach.ts";
 import { createNotchDemo } from "../notch/demo.ts";
 import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
@@ -1227,6 +1227,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // What the notch shows lives here, so a desktop app that comes back
       // gets the same line again (src/notch/surface.ts).
       notchSurface = new NotchSurface(sidecarManager);
+      // A page whose sign-in has ended is opened again, signed in anew.
+      const notchReopen = createNotchReopen(sidecarManager, { pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
+      notchSurface.onSignedOut((sidecarId) => { void notchReopen(sidecarId); });
       if (notchDemoState === 'open') {
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.

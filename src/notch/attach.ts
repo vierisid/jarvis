@@ -59,6 +59,42 @@ export interface NotchConfigureResult {
   keys?: string;
 }
 
+/** How long a notch window that was closed is given to be gone before it is asked for again, and how long between two re-openings at the least. */
+export const NOTCH_REOPEN_AFTER_MS = 1500;
+export const NOTCH_REOPEN_APART_MS = 60_000;
+
+/**
+ * Opens the notch's page again on one desktop app: closed, then asked for
+ * anew, which signs it in with a fresh token. For a page whose sign-in has
+ * ended (it lasts twelve hours at most, and a notch is up all day and all
+ * night): it could no longer take a dropped file, and said "Try dropping it
+ * again" for ever. Not more often than once a minute for one desktop app.
+ */
+export function createNotchReopen(port: Pick<NotchSidecarPort, 'dispatchRPC'>, options: { pageUrl: string; log?: (line: string) => void; wait?: (ms: number) => Promise<void>; now?: () => number }): (sidecarId: string) => Promise<boolean> {
+  const log = options.log ?? ((line: string) => console.log(line));
+  const wait = options.wait ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const now = options.now ?? Date.now;
+  const last = new Map<string, number>();
+  return async (sidecarId) => {
+    const before = last.get(sidecarId);
+    if (before !== undefined && now() - before < NOTCH_REOPEN_APART_MS) return false;
+    last.set(sidecarId, now());
+    log('[notch] a page\'s sign-in has ended: it is opened again');
+    try { await port.dispatchRPC(sidecarId, 'notch.close', {}); } catch { /* it was not up */ }
+    for (let tried = 0; tried < 3; tried++) {
+      await wait(NOTCH_REOPEN_AFTER_MS);
+      try {
+        const got = await port.dispatchRPC(sidecarId, 'notch.spawn', { url: options.pageUrl }) as { already?: unknown } | null;
+        // "Already there" is the window that is on its way out: asked for again when it has gone.
+        if (got?.already !== true) return true;
+      } catch (error) {
+        log(`[notch] the page could not be opened again: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return false;
+  };
+}
+
 export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions): void {
   // Off: register nothing, so no later code path can reach dispatchRPC.
   if (!options.enabled) return;

@@ -96,6 +96,9 @@ interface Current {
 
 const DEFAULT_MOOD: Record<Exclude<Body, 'rest'>, NotchMood> = { line: 'look', choices: 'look', sheet: 'read', ask: 'listen', work: 'work' };
 
+/** How long a look that was asked for at rest is worn before the notch goes back to the face it rests with. */
+export const NOTCH_PASSING_MOOD_MS = 4000;
+
 export function createNotchSurface(
   root: HTMLElement,
   send: (message: NotchFromPage) => void,
@@ -137,7 +140,7 @@ export function createNotchSurface(
   const frames = createFrames(flush);
   const sounds = createSounds();
   const shape = createShape({ wrap, notch, nin, measure, blob, frames, reduce, width, changed });
-  const eyes = createEyes({ nin, eyes: eyesEl, shape, timers, reduce, busy: () => cur !== null });
+  const eyes = createEyes({ nin, eyes: eyesEl, shape, timers, reduce, busy: () => cur !== null, rest: () => restMood });
   const edge = createEdge({ line: lineSvg, blob, nin, frames, timers, shape, eyes, reduce, width, changed });
 
   let line: NotchLine | null = null;
@@ -146,6 +149,8 @@ export function createNotchSurface(
   /** Every `show` makes whatever was scheduled for the line before it void. */
   let tok = 0, shownAt = 0;
   let foldTimer = 0, folding = false;
+  /** A look given at rest goes back to the resting face after this long. */
+  let moodBack = 0;
   let restMood: NotchMood = 'idle';
   /** The app in front on this machine, as the brain last said. */
   let front: NotchWhereApp | null = null;
@@ -154,6 +159,7 @@ export function createNotchSurface(
   // Esc is taken from the app in front only while it would do something here.
   const escListeners = new Set<(want: boolean) => void>();
   let wantedEsc = false;
+  let escLater = 0;
   /** Whether the pointer is on the notch itself: on its body or on a sheet. */
   let pointerOnNotch = false;
   const syncEsc = (): void => {
@@ -162,7 +168,11 @@ export function createNotchSurface(
     // is theirs: it is taken for the work (it stops it) only while they point
     // at the notch. The stop hint can also be clicked.
     const up = cur !== null && !cur.done && (nin.dataset.body !== 'work' || pointerOnNotch);
-    const want = alive && born && (up || sentence.picking());
+    // A line that came by itself takes no Esc in its first moment (the key may be on its way to the app in
+    // front). It is not taken from that app either, then: it reached nobody.
+    const early = up && line?.unasked === true && tooSoon();
+    if (early && !escLater) escLater = timers.after(YES_DEAD_UNASKED_MS + 20, () => { escLater = 0; syncEsc(); });
+    const want = alive && born && ((up && !early) || sentence.picking());
     syncAsking();
     if (want === wantedEsc) return;
     wantedEsc = want;
@@ -225,7 +235,13 @@ export function createNotchSurface(
     const mine = tok;
     const check = (): void => {
       if (mine !== tok || !cur || cur.done) return;
-      if (wrap.matches(':hover') || nin.contains(document.activeElement) || sentence.picking()) {
+      // A hand is on it while the pointer is (as the desktop app tells it too: hover does not reach a page
+      // in a window that is never the active one on every system), while a field is being typed in, and
+      // while a word's choices are open. Not "whatever was clicked last": a click on the eyes or on a lit
+      // word left that button the focused element for good, and the offer never folded again.
+      const active = document.activeElement;
+      const typing = active instanceof HTMLElement && nin.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+      if (wrap.matches(':hover') || pointerOnNotch || typing || sentence.picking()) {
         foldTimer = timers.after(2000, check);
         return;
       }
@@ -395,13 +411,22 @@ export function createNotchSurface(
     show({ body: 'rest' }, instant);
   }
 
+  let pressedAt = -1000, pressed = '';
   /** What of a map is on the screen now, for the line that is up: it is drawn again with more in it, not from nothing. */
   let mapKnown = new Set<string>(), mapFor = '';
   const blocksOf = (blocks: readonly NotchBlock[]): HTMLElement => renderBlocks(blocks, {
     known: mapKnown,
     still: reduce,
     plain: (parts) => sentence.plain(parts),
-    button: (id, row) => { if (cur && !cur.done) answer('button', row === undefined ? { button: id } : { button: id, row }); },
+    button: (id, row) => {
+      // A double click is one press: the second answer was kept for the next thing that waited on this line.
+      const now = performance.now();
+      const which = `${id}\n${row ?? ''}`;
+      if (which === pressed && now - pressedAt < 400) return;
+      pressed = which;
+      pressedAt = now;
+      if (cur && !cur.done) answer('button', row === undefined ? { button: id } : { button: id, row });
+    },
     go: (row) => { if (cur && !cur.done) answer('go', { row }); },
   });
 
@@ -440,6 +465,22 @@ export function createNotchSurface(
     if (typeof l.step !== 'string' || !l.step) return;
     hintEl.append(el('span', 'count', [...l.step].slice(0, 24).join('')));
     shape.fit(instant, true);
+  }
+
+  /**
+   * Shows a line, and if it cannot be drawn (a block the page does not know,
+   * a part that is not one) leaves the notch as it was: the line before it,
+   * still answerable as itself. It used to be half replaced: the old line on
+   * the screen, and the keys answering for the new one that nobody saw.
+   */
+  function drawLine(l: NotchLine, instant = false): void {
+    const before = { line, cur };
+    try { showLine(l, instant); } catch (error) {
+      console.error('[notch] a line could not be drawn', error);
+      line = before.line;
+      cur = before.cur;
+      if (!cur) { try { rest(true); } catch { /* nothing more can be done here */ } }
+    }
   }
 
   function showLine(l: NotchLine, instant = false): void {
@@ -520,14 +561,19 @@ export function createNotchSurface(
       };
       // The window has no keyboard until it asks: a press on the field asks.
       input.addEventListener('pointerdown', () => { askFocus(true); });
-      input.addEventListener('blur', () => { if (input.isConnected) askFocus(false); });
+      input.addEventListener('blur', (e) => {
+        const to = e.relatedTarget;
+        const stays = to instanceof HTMLElement && nin.contains(to) && (to.tagName === 'INPUT' || to.tagName === 'TEXTAREA');
+        if (input.isConnected && !stays) askFocus(false);
+      });
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Enter') { e.preventDefault(); submit(); }
         else if (e.key === 'Escape') { e.preventDefault(); input.blur(); me.onEsc?.(); }
       });
       me.onYes = submit;
-      me.onEsc = () => { answer('no'); rest(); };
+      // Once it was asked, it is answered: an Esc after that says nothing more for this line.
+      me.onEsc = () => { if (me.done) return; answer('no'); rest(); };
       show({ body: 'ask', say: input, hint: { act: l.yes }, sheet: blocksOf(l.blocks), stag: true, ...common }, instant);
       // Opened to type in: the keyboard comes with it. Not for a line that is
       // only being drawn again (a page that came back): that would take the
@@ -599,6 +645,31 @@ export function createNotchSurface(
     shape.fit(false, true);
   }
 
+  /** Draws a sheet's blocks again once nothing is being typed in it, for as long as it is still that line. */
+  let laterFor = '';
+  function blocksLater(id: string): void {
+    if (laterFor === id) return;
+    laterFor = id;
+    const check = (): void => {
+      const l = line;
+      if (!l || l.id !== id || (l.kind !== 'sheet' && l.kind !== 'ask')) { laterFor = ''; return; }
+      if (sentence.typed() && sheetEl.contains(document.activeElement)) { timers.after(400, check); return; }
+      laterFor = '';
+      update({ type: 'update', id, blocks: l.blocks });
+    };
+    timers.after(400, check);
+  }
+
+  /** The line that is on its way in along the edge, not yet on the notch. */
+  let arriving: NotchLine | null = null;
+  /** Changes a line that is not drawn yet, as `update` changes one that is. */
+  function amend(l: NotchLine, m: Extract<NotchToPage, { type: 'update' }>): void {
+    if (m.say) l.say = m.say;
+    if (m.done !== undefined && l.kind === 'work') l.done = m.done;
+    if (l.kind === 'listen') { if (m.heard !== undefined) l.heard = m.heard; if (m.over) l.over = true; }
+    if (m.blocks && (l.kind === 'sheet' || l.kind === 'ask')) l.blocks = m.blocks;
+  }
+
   function update(m: Extract<NotchToPage, { type: 'update' }>): void {
     const l = line;
     if (!l || l.id !== m.id) return;
@@ -629,6 +700,10 @@ export function createNotchSurface(
     }
     if (m.blocks && (l.kind === 'sheet' || l.kind === 'ask')) {
       l.blocks = m.blocks;
+      // A field in the sheet is being typed in: drawing the sheet again would take the field away in the
+      // middle of a word, and the rest of the sentence would be typed into the app in front. The sheet is
+      // drawn again when the typing is over.
+      if (sentence.typed() && sheetEl.contains(document.activeElement)) { blocksLater(l.id); return; }
       const top = sheetEl.scrollTop;
       sentence.reset();
       sheetEl.classList.remove('stag');
@@ -687,11 +762,13 @@ export function createNotchSurface(
       if (m.eye) { nin.dataset.eye = 'eye'; shape.kick(-140); } else delete nin.dataset.eye;
     }
     if (m.mood) {
-      if (!cur) restMood = m.mood;
+      // A look that is asked for in passing is shown, and is not the face the notch rests with: that one is
+      // the brain's to keep (`face`), and at rest the notch goes back to it by itself.
       eyes.setMood(m.mood);
+      timers.cancel(moodBack);
+      if (!cur) { const mine = tok; moodBack = timers.after(NOTCH_PASSING_MOOD_MS, () => { if (mine === tok && !cur) eyes.setMood(restMood); }); }
     }
     if (m.gesture) {
-      if (m.gesture === 'wake' && !m.mood) restMood = 'idle';
       // The eye that was kept on something opens wide when that thing changes.
       if (m.gesture === 'pop' && nin.dataset.eye) {
         nin.classList.add('eyefire');
@@ -751,8 +828,9 @@ export function createNotchSurface(
           if (!born) return;
           if (message.line.arrive && (NOTCH_ARRIVALS as readonly string[]).includes(message.line.arrive) && !reduce) {
             const next = structuredClone(message.line), mine = ++tok;
-            edge.arrive(message.line.arrive, () => { if (mine === tok) showLine(next); });
-          } else showLine(structuredClone(message.line));
+            arriving = next;
+            edge.arrive(message.line.arrive, () => { if (arriving === next) arriving = null; if (mine === tok) drawLine(next); });
+          } else drawLine(structuredClone(message.line));
           return;
         case 'rest':
           if (born) rest();
@@ -774,6 +852,9 @@ export function createNotchSurface(
           if (born && !cur) shape.fit();
           return;
         case 'update':
+          // For a line that is still coming in along the edge: it lands as it now is. (It was dropped: an
+          // approval's "On screen: …", read a moment after it was sent, never appeared on its paper.)
+          if (born && arriving && arriving.id === message.id) { amend(arriving, message); return; }
           if (born) update(message);
           return;
         case 'act':
@@ -787,6 +868,19 @@ export function createNotchSurface(
       console.error('[notch] a message could not be shown', error);
     }
   }
+
+  // The page is not a browser to the person: no menu of its own on a right click, no zoom, no reload, no
+  // print, no find. (Zoomed, a click inside a sheet could read as a click away.)
+  const noMenu = (e: Event): void => { e.preventDefault(); };
+  const noZoom = (e: WheelEvent): void => { if (e.ctrlKey || e.metaKey) e.preventDefault(); };
+  const noBrowserKeys = (e: KeyboardEvent): void => {
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.toLowerCase();
+    if (k === 'f5' || k === 'f3' || k === 'f7' || k === 'f12' || (mod && ['r', 'p', 'f', 'g', 's', 'u', 'o', 'j', '+', '-', '=', '0'].includes(k))) e.preventDefault();
+  };
+  document.addEventListener('contextmenu', noMenu);
+  document.addEventListener('wheel', noZoom, { passive: false });
+  document.addEventListener('keydown', noBrowserKeys, true);
 
   // Lit words: a click moves to the next option, a drag or the wheel scrubs.
   let scrub: { word: HTMLElement; x: number; moved: boolean } | null = null, scrubbed = 0;
@@ -920,8 +1014,15 @@ export function createNotchSurface(
     if (on) return;
     if (sentence.picking()) sentence.closePick();
     const body = nin.dataset.body;
-    // A sheet that asks for a decision is not answered by a click meant for another app.
-    if (line?.kind === 'sheet' && line.stay) return;
+    // A sheet that asks for a decision is not answered by a click meant for another app: one that stays,
+    // and one with a yes (it came seconds after it was asked for, and the person's next click in their own
+    // app closed it and silently turned it down).
+    if (line?.kind === 'sheet' && (line.stay || line.yes)) return;
+    // Nor is a question about a file that was dropped: the press that picks up a second file to drop
+    // beside it is a click away, and the first file was forgotten.
+    if (line?.kind === 'ask' && line.blocks.some((block) => block.kind === 'file')) return;
+    // And nothing is, in its first moment: the press was on its way before the line was there.
+    if (tooSoon()) return;
     if (cur && !cur.done && (body === 'sheet' || body === 'ask')) cur.onEsc?.();
   }
 
@@ -932,6 +1033,10 @@ export function createNotchSurface(
     if (tooSoon()) return;
     if (!cur) { send({ type: 'open' }); return; }
     if (cur.done) return;
+    // Something is typed into a word's field and not taken yet: the yes takes it, as Enter would. It does
+    // not answer the line as it stood before the typing (a reply was sent unchanged while what it should say
+    // instead sat in the field).
+    if (sentence.typed()) { sentence.commit(); return; }
     if (cur.onYes) { cur.onYes(); return; }
     // Choices have no yes: the row of them nods, to say "pick one".
     if (optsEl.firstChild) {

@@ -48,6 +48,10 @@ export interface Sentence {
   closePick(): void;
   /** True while the strip of options is open. */
   picking(): boolean;
+  /** Something is typed in the open field and not yet taken. */
+  typed(): boolean;
+  /** Takes what is typed in the open field, as Enter does. */
+  commit(): void;
   /** Forget an open strip without laying anything out: the line is being replaced. */
   reset(): void;
 }
@@ -152,7 +156,16 @@ export function createSentence(deps: SentenceDeps): Sentence {
     pick.classList.remove('inrow');
   };
 
+  /** What Enter in the open field does. */
+  let commitTyped: (() => void) | null = null;
+  /** Whether a field is losing the keyboard to another field of the notch. */
+  const staysOnNotch = (e: FocusEvent): boolean => {
+    const to = e.relatedTarget;
+    return to instanceof HTMLElement && deps.nin.contains(to) && (to.tagName === 'INPUT' || to.tagName === 'TEXTAREA');
+  };
+
   function closePick(): void {
+    commitTyped = null;
     deps.cancel(pickTimer);
     const had = pick.firstChild;
     const typing = pick.contains(document.activeElement);
@@ -177,8 +190,11 @@ export function createSentence(deps: SentenceDeps): Sentence {
     if (!L) return;
     const f = document.createDocumentFragment();
     f.append(el('span', 'lab', L.label ?? 'Change'));
-    for (const o of L.long ? [] : L.options) {
-      const c = btn('o', o, () => { setLive(b, o); openPick(b); });
+    // A word that takes a sentence has its ready-made ones a click away too ("say no", "ask for more time"):
+    // they were handed over and never drawn.
+    for (const o of L.options) {
+      if (L.long && o === L.value) continue;
+      const c = btn('o', o, () => { setLive(b, o); if (L.long) closePick(); else openPick(b); });
       c.setAttribute('aria-pressed', String(o === L.value));
       f.append(c);
     }
@@ -195,24 +211,31 @@ export function createSentence(deps: SentenceDeps): Sentence {
       inp.setAttribute('aria-label', `Type your own: ${L.label ?? 'value'}`);
       // The window has no keyboard until it asks: a press on the field asks.
       inp.addEventListener('pointerdown', () => { deps.focus(true); });
-      inp.addEventListener('blur', () => { if (inp.isConnected) deps.focus(false); });
+      // The keyboard is given back when the field is left for somewhere that is not another field of the
+      // notch. (Any blur gave it back: clicking from here straight into the ask field left that one looking
+      // focused while what was typed went to the app in front.)
+      inp.addEventListener('blur', (e) => { if (inp.isConnected && !staysOnNotch(e)) deps.focus(false); });
+      const enter = (): void => {
+        if (!inp.value.trim()) { closePick(); return; }
+        const got = readLive(L, inp.value);
+        if (got == null) {
+          inp.value = '';
+          inp.placeholder = 'I did not get that';
+          inp.classList.add('no');
+          deps.refused();
+          return;
+        }
+        if (!L.options.includes(got)) L.options = [...L.options, got];
+        setLive(b, got);
+        closePick();
+      };
+      commitTyped = enter;
       inp.addEventListener('keydown', (e) => {
         e.stopPropagation();
         armPick();
         if (e.key === 'Enter') {
           e.preventDefault();
-          if (!inp.value.trim()) { closePick(); return; }
-          const got = readLive(L, inp.value);
-          if (got == null) {
-            inp.value = '';
-            inp.placeholder = 'I did not get that';
-            inp.classList.add('no');
-            deps.refused();
-            return;
-          }
-          if (!L.options.includes(got)) L.options = [...L.options, got];
-          setLive(b, got);
-          closePick();
+          enter();
         } else if (e.key === 'Escape') {
           e.preventDefault();
           closePick();
@@ -250,6 +273,10 @@ export function createSentence(deps: SentenceDeps): Sentence {
     nodes, plain, cycle, closePick,
     wordOf: (button) => (button ? words.get(button) : undefined),
     picking: () => !!pick.firstChild,
-    reset() { deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
+    /** Something is typed in the open field and not yet taken. */
+    typed: () => !!pick.querySelector('input')?.value.trim(),
+    /** Takes what is typed in the open field, as Enter does. */
+    commit() { commitTyped?.(); },
+    reset() { commitTyped = null; deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
   };
 }

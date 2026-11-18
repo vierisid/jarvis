@@ -3,7 +3,7 @@
  * Nothing is drawn until the brain answers the hello this sends.
  */
 import { connectNotch, notchFocus, notchSend } from './bridge.ts';
-import { notchUpload, watchNotchDrops } from './drop.ts';
+import { notchUpload, watchNotchDrops, watchNotchSignIn } from './drop.ts';
 import { drawInstalledCard, isInstalledCard } from './installed/card.ts';
 import { createNotchSurface } from './surface/index.ts';
 
@@ -16,5 +16,9 @@ if (root && isInstalledCard(window.location.search)) {
   const send = notchSend(host);
   connectNotch(createNotchSurface(root, send, { focus: notchFocus(host) }), host);
   // A file dragged to the notch: said to the brain while it is held over it, and sent when it is let go.
-  watchNotchDrops(document, { send, upload: (file, count) => notchUpload(file, count) });
+  // Said once: the brain then opens this page again, signed in anew.
+  let said = false;
+  const signedOut = (): void => { if (!said) { said = true; send({ type: 'signed-out' }); } };
+  watchNotchDrops(document, { send, upload: (file, count) => notchUpload(file, count, fetch, signedOut) });
+  watchNotchSignIn(signedOut);
 }

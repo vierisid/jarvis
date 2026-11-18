@@ -41,11 +41,17 @@ export function setKeyPairs(pairs: unknown): boolean {
     KEYS[kind] = [CAP[a], CAP[b]];
     KEYN[kind] = `${SPOKEN[a]} + ${SPOKEN[b]}`;
   };
+  // The same pairs again change nothing, and say so: a push of the pairs that are already shown drew the whole
+  // line again, which closed an open word, emptied a field that was being typed in, and started a result's
+  // time and a send's fuse from the beginning.
+  const before = `${KEYN.talk}|${KEYN.yes}`;
   set('talk', talk);
   set('yes', yes);
-  return true;
+  return `${KEYN.talk}|${KEYN.yes}` !== before || !pairsSet;
 }
+let pairsSet = false;
 setKeyPairs(DEFAULT_PAIRS);
+pairsSet = true;
 
 /** A pair of keys drawn as one keycap. */
 export function duo(kind: 'talk' | 'yes', tag: 'span' | 'kbd' = 'span', cls = 'cap'): HTMLElement {
