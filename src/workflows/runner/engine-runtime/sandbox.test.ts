@@ -194,7 +194,7 @@ describe("a sandboxed engine", () => {
         type: "CODE",
         displayName: "Probe",
         settings: {
-          input: { paths: secrets, daemonPid: process.pid },
+          input: { paths: secrets, daemonPid: process.pid, health: `${api.baseUrl}/health` },
           sourceCode: {
             packageJson: "{}",
             code:
@@ -206,7 +206,9 @@ describe("a sandboxed engine", () => {
               "    secrets: inputs.paths.map((p) => attempt(() => fs.readFileSync(p, 'utf8')))," +
               "    daemonEnviron: attempt(() => fs.readFileSync('/proc/' + inputs.daemonPid + '/environ', 'utf8').slice(0, 8))," +
               "    ownSource: attempt(() => fs.readFileSync(__filename, 'utf8').slice(0, 7))," +
-              "    scratch: attempt(() => { fs.writeFileSync(scratch, 'ok'); return fs.readFileSync(scratch, 'utf8'); })," +
+              "    scratch: attempt(() => { fs.writeFileSync(scratch, 'ok'); return fs.readFileSync(scratch, 'utf8'); }),"
+              + "    proxied: Boolean(process.env.HTTPS_PROXY),"
+              + "    health: await fetch(inputs.health).then((r) => r.status, (e) => e.code || e.name)," +
               "  } };" +
               "};",
           },
@@ -219,7 +221,7 @@ describe("a sandboxed engine", () => {
     return { flowId: flow.id, versionId: v.id };
   }
 
-  async function runProbe(runtime: EngineRuntime): Promise<{ secrets: string[]; daemonEnviron: string; ownSource: string; scratch: string }> {
+  async function runProbe(runtime: EngineRuntime): Promise<{ secrets: string[]; daemonEnviron: string; ownSource: string; scratch: string; proxied: boolean; health: number | string }> {
     const { flowId, versionId } = probeFlow();
     const run = createFlowRun({ flowId, flowVersionId: versionId, environment: "TESTING" });
     const handle = await runtime.acquire({ runId: run.id, projectId: DEFAULT_IDS.project, flowId, flowVersionId: versionId });
@@ -250,6 +252,10 @@ describe("a sandboxed engine", () => {
       expect(result.daemonEnviron).toBe("EACCES");
       expect(result.ownSource).toBe("READ:exports");
       expect(result.scratch).toBe("READ:ok");
+      // The egress proxy (#1153) is a TCP port on loopback, which the file
+      // sandbox does not touch: a sandboxed step's fetch goes through it.
+      expect(result.proxied).toBe(true);
+      expect(result.health).toBe(200);
     } finally {
       await runtime.shutdown();
     }

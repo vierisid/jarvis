@@ -1464,12 +1464,44 @@ It is file-owned like the artifact paths: a dashboard or settings save never set
 
 **What it does not cover.**
 
-- The network. A sandboxed engine reaches what the per-step egress guards allow (#961, #1153), and raw sockets from a CODE step or a piece are not filtered.
+- The network. A sandboxed engine reaches what the per-step egress guards and the engine's egress proxy allow (#961, #1153; see "Engine-wide egress" below), and raw sockets from a CODE step or a piece are not filtered.
 - A unix socket that already exists, such as a Docker socket the daemon's user can open.
 - Before Linux 6.2 (Landlock ABI 3), truncating a file by path; before 6.10 (ABI 5), device ioctls; before 6.12 (ABI 6), signalling processes outside the sandbox and abstract unix sockets.
 - Anything in memory of the engine itself: a third-party piece and a CODE step in the same run share the engine process and its run's credentials.
 
 Treat a CODE step, and a third-party piece, as code you run on the host with the access above. The sanitized environment of a CODE child is defense in depth only.
+
+### Engine-wide egress (#1153)
+
+The per-step guards above hold the HTTP, GraphQL, SMTP and SFTP steps and the
+engine's file download. Everything else in the engine (a community piece's own
+HTTP client, a CODE step's `fetch`) goes through the engine's egress proxy:
+each engine starts with `HTTP_PROXY` and `HTTPS_PROXY` pointing at a proxy
+the daemon runs on 127.0.0.1 (`runtime/egress-proxy.ts`), and a CODE step
+inherits them. The proxy applies the same rule as the per-step guards
+(`destinationAllowed`: the install's policy, and never loopback, link-local,
+the metadata addresses or the machine's own addresses), for `CONNECT` (https)
+and plain http alike. It resolves a name once, refuses it if any address it
+resolves to is refused, and connects to the address it checked. A refusal is a
+`403` with `X-Jarvis-Egress: refused` and the reason, logged by the daemon
+once a minute per destination; nothing is sent to the destination. The one
+local destination it forwards to is the daemon's sandbox API, which the engine
+and its pieces call by design. The per-step guards stay as they were: the
+HTTP step and the others connect directly, never through a proxy.
+
+What it does not hold:
+
+- clients that ignore the proxy variables: Bun's `node:http` and `node:https`
+  without an agent, WebSockets, raw sockets (`node:net`, `node:tls`), UDP and
+  DNS itself. A CODE step or a piece using them reaches the network directly;
+- a CODE step that unsets the variables or passes its own agent;
+- the network a sandboxed engine reaches anyway. Landlock's network rules
+  (Linux 6.7, ABI 4) restrict TCP by port only, not by address, so they are
+  not used.
+
+So on a hosted or shared machine, block link-local addresses (169.254.0.0/16
+and fe80::/10) for the daemon's user at the network layer as well (see
+docs/SELF_HOSTING.md, "Workflow network egress").
 
 ### `{{ ... }}` expressions are data, not JavaScript
 

@@ -92,7 +92,9 @@ beforeAll(async () => {
   }} }); await api.start({ port: 0 });
   // Unsandboxed (#1154): the fixture links piece-json from the repository's
   // node_modules, which is not on a sandboxed engine's allow-list.
-  runtime = new EngineRuntime({ api, pool:true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code'), sandbox: 'off' });
+  runtime = new EngineRuntime({ api, pool:true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code'), sandbox: 'off',
+    // Its pieces also call a loopback fixture, which the egress proxy refuses (#1153).
+    egressProxy: false });
   const handle = await runtime.acquire({ runId: 'form-fixture-metadata', projectId: DEFAULT_IDS.project });
   try {
     catalog=new PieceCatalog(await Promise.all([[PIECE,'0.18.2'],['@activepieces/piece-json','0.1.14'],[subflow.packageName,subflow.pieceVersion]].map(async([pieceName,pieceVersion])=>metadataToCatalogEntry(await handle.extractPieceMetadata({pieceName:pieceName!,pieceVersion:pieceVersion!})))));
