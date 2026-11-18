@@ -8,7 +8,7 @@ import { NotchInbox } from '../inbox.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import { MAIL_WHY_DRAFT_THERE, type MailReplyPlan, type MailReplySession, type MailStep, type Mailbox } from './mailbox.ts';
-import { MAIL_FUSE_MS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer } from './notch.ts';
+import { MAIL_FUSE_MS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer, mailToneFacts } from './notch.ts';
 import type { MailCalendarEvent } from './proposer.ts';
 import { MailStore, mailProposalId, type MailProposalRow } from './store.ts';
 import { mailPerson } from './thread.ts';
@@ -477,6 +477,16 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     expect(h.did).toEqual([]);
   });
 
+  test('a time offered from the line asks nothing about a tone: the draft was never opened', async () => {
+    const h = harness([offers({ tone: 'shorter' })]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    await h.answer('done');
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+  });
+
   test('a pick puts that time into the reply and sends it, with the fuse, and says what was offered', async () => {
     const h = harness([offers()]);
     await h.arrive();
@@ -712,6 +722,94 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     const h = harness([kept]);
     await h.arrive();
     expect(h.said()).toBe('You have not replied to Leo. I drafted a reply.');
+  });
+});
+
+// The prototype: after a reply went in a tone the owner chose, "Always use a short tone with Marco?"
+describe('a manner the owner chose becomes how that person is written to', () => {
+  /** A reply goes out in the tone the owner turned its draft to. */
+  const sentIn = async (h: ReturnType<typeof harness>, tone: string | null): Promise<void> => {
+    await h.arrive();
+    await h.answer('yes');
+    if (tone) await h.answer('word', { word: 'tone', value: tone });
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.said()).toBe('Sent to Leo.');
+    await h.answer('done');
+  };
+
+  test('after the reply went it asks once, and a yes is kept for that person', async () => {
+    const h = harness([row()]);
+    await sentIn(h, 'shorter');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'yes', src: 'mail' });
+    expect(h.said()).toBe('Always use a short tone with Leo?');
+    expect(h.store.tone(leo.address)).toBe('');
+    await h.answer('yes');
+    expect(h.said()).toBe('Remembered.');
+    expect(h.store.tone(leo.address)).toBe('shorter');
+    expect(h.store.tones()).toMatchObject([{ address: 'leo@lumen.example', name: 'Leo Bianchi', tone: 'shorter' }]);
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+    // The reply itself went before the question, and is sent whatever is answered.
+    expect(h.store.proposal(row().id)!.state).toBe('sent');
+  });
+
+  test('each manner has its own word in the question', async () => {
+    const h = harness([row()]);
+    await sentIn(h, 'warmer');
+    expect(h.said()).toBe('Always use a warm tone with Leo?');
+  });
+
+  test('a no is not asked again for that person and that manner; left alone, it may be asked the next time', async () => {
+    const no = harness([row()]);
+    await sentIn(no, 'shorter');
+    await no.answer('no');
+    expect(no.store.tone(leo.address)).toBe('');
+    expect(no.store.toneAsked(leo.address)).toBe('shorter');
+    // The next reply to Leo that goes shorter: no question.
+    const later = row({ id: mailProposalId(T2, AT + 5000), thread: T2, messageAt: AT + 5000 });
+    no.store.put(later);
+    no.mail.sync();
+    await sentIn(no, 'shorter');
+    expect(no.line()).toBeNull();
+
+    const left = harness([row()]);
+    await sentIn(left, 'shorter');
+    await left.answer('fold');
+    expect(left.store.toneAsked(leo.address)).toBe('');
+  });
+
+  test('a reply that went as the owner writes, or in the manner that already stands, asks nothing', async () => {
+    const own = harness([row()]);
+    await sentIn(own, null);
+    expect(own.line()).toBeNull();
+    // Prepared in the manner that stands for Leo, and sent as it was.
+    const stands = harness([row({ tone: 'shorter' })]);
+    stands.store.setTone(leo, 'shorter', AT);
+    await sentIn(stands, null);
+    expect(stands.line()).toBeNull();
+    // Turned to another manner on its draft: that one is asked about, and takes the place of the first.
+    const other = harness([row({ tone: 'shorter' })]);
+    other.store.setTone(leo, 'shorter', AT);
+    await sentIn(other, 'warmer');
+    expect(other.said()).toBe('Always use a warm tone with Leo?');
+    await other.answer('yes');
+    expect(other.store.tone(leo.address)).toBe('more warmly');
+  });
+
+  test('how people are written to stands in Memory, each as one thing that can be forgotten', () => {
+    const tones = [
+      { address: 'leo@lumen.example', name: 'Leo Bianchi', tone: 'shorter', at: 2 },
+      { address: 'anna@lumen.example', name: '', tone: 'more formally', at: 1 },
+      { address: 'x@lumen.example', name: 'X', tone: 'like a pirate', at: 0 },
+    ];
+    expect(mailToneFacts(tones)).toEqual([
+      { id: 'tone:leo@lumen.example', about: 'Leo Bianchi', text: 'gets short replies', source: 'you said so on the notch' },
+      { id: 'tone:anna@lumen.example', about: 'anna@lumen.example', text: 'gets formal replies', source: 'you said so on the notch' },
+    ]);
+    expect(mailToneFacts(tones, 'leo').map((one) => one.id)).toEqual(['tone:leo@lumen.example']);
+    expect(mailToneFacts(tones, ' ANNA ').map((one) => one.id)).toEqual(['tone:anna@lumen.example']);
+    expect(mailToneFacts(tones, 'sam')).toEqual([]);
   });
 });
 

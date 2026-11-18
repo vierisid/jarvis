@@ -371,6 +371,8 @@ export class MailWatch {
     let made: { proposal: MailProposal | null; cost: { model: string; input: number; output: number; cached: number } };
     // Which times are free is read off the calendar by rule. The model words them.
     const slots = calendar ? mailFreeSlots(calendar, at, this.deps.zone) : [];
+    // How this person is always written to, when the owner once said so ("Always use a short tone with Marco?").
+    const standing = this.deps.store.tone(last.from.address);
     try {
       made = await proposeMail({
         thread,
@@ -380,6 +382,7 @@ export class MailWatch {
         ...(calendar ? { calendar, slots } : {}),
         now: at,
         zone: this.deps.zone,
+        ...(standing ? { manner: standing } : {}),
       }, this.deps.think);
     } catch (error) {
       this.log(`[notch] a reply could not be prepared: ${error instanceof Error ? error.message.slice(0, 160) : 'the model did not answer'}`);
@@ -401,7 +404,8 @@ export class MailWatch {
       missing: proposal?.missing ?? '',
       lookFor: proposal?.lookFor ?? '',
       found: null,
-      tone: '',
+      // Written in the manner that stands for this person: the draft's own word says so.
+      tone: proposal?.needsReply ? standing : '',
       told: '',
       about: proposal?.about ?? '',
       slots: rowSlots(slots, proposal?.times),
