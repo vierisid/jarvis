@@ -249,6 +249,8 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .btn.icon:hover { background: var(--notch-raise); color: var(--n-ink); }
 .btn.icon svg { width: 14px; height: 14px; }
 .btn .cap { margin-left: -6px; }
+/* A choice's number is a key only while the notch has the keyboard (surface/index.ts, syncKeyboard). */
+.notch-nokb .btn .cap { display: none; }
 .btn.go .cap, .btn:hover .cap { box-shadow: inset 0 0 0 1px var(--notch-rule); }
 
 /* Choices and voice share the strip under the line. */

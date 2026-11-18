@@ -114,6 +114,9 @@ export function createNotchSurface(
   const nin = need<HTMLElement>(root, '.nin'), lead = need<HTMLElement>(root, '.lead'), eyesEl = need<HTMLElement>(root, '.eyes');
   const iconEl = need<HTMLElement>(root, '.appicon'), badgeEl = need<HTMLElement>(root, '.badge');
   const sayEl = need<HTMLElement>(root, '.say'), hintEl = need<HTMLElement>(root, '.hint');
+  // Hebrew and Arabic read from the right. Each word of a line is a box of its own, and boxes are laid out
+  // left to right unless the line is told to find its own direction: the words stood in the wrong order.
+  sayEl.dir = 'auto';
   const pickEl = need<HTMLElement>(root, '.pick'), optsEl = need<HTMLElement>(root, '.opts'), sheetEl = need<HTMLElement>(root, '.sheet');
   const measure = need<HTMLElement>(root, '.measure'), lineSvg = need<SVGSVGElement>(root, '.line');
 
@@ -350,7 +353,8 @@ export function createNotchSurface(
     sheetEl.classList.toggle('stag', !!v.stag);
 
     if (v.who) {
-      iconEl.replaceChildren(el('span', 'who', v.who.charAt(0)));
+      // The first letter whole: a name that begins with an emoji is two halves to charAt, and one was drawn.
+      iconEl.replaceChildren(el('span', 'who', [...v.who][0] ?? ''));
       nin.dataset.icon = '1';
     } else if (v.src && (NOTCH_APPS as readonly string[]).includes(v.src)) {
       iconEl.innerHTML = ICON[v.src];
@@ -951,6 +955,17 @@ export function createNotchSurface(
   };
   const onScroll = (): void => more();
   const onResize = (): void => { shape.fit(true); };
+  // The number on a choice is a key only while the notch has the keyboard, which it has only while a text
+  // field of its own is being typed in. At any other time a "2" goes to the app in front: the cap promised a
+  // key that typed into the person's document. So the caps are shown only while the numbers reach the notch.
+  // A choice can always be clicked.
+  const syncKeyboard = (): void => {
+    const has = typeof document.hasFocus === 'function' && document.hasFocus();
+    if (root.classList.contains('notch-nokb') === !has) return;
+    root.classList.toggle('notch-nokb', !has);
+    if (alive && born) shape.fit(true);
+  };
+  root.classList.toggle('notch-nokb', !(typeof document.hasFocus === 'function' && document.hasFocus()));
 
   notch.addEventListener('pointerdown', onPointerDown);
   root.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -960,6 +975,8 @@ export function createNotchSurface(
   root.addEventListener('keydown', onKey);
   sheetEl.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', onResize);
+  window.addEventListener('focus', syncKeyboard);
+  window.addEventListener('blur', syncKeyboard);
   // A font is only fetched when text first uses it, which is after that text
   // was measured: the first sentence would be sized for the fallback font and
   // left too wide. So the faces the notch writes in are asked for at once,
@@ -1110,6 +1127,8 @@ export function createNotchSurface(
       notch.removeEventListener('click', onClick);
       notch.removeEventListener('wheel', onWheel);
       root.removeEventListener('keydown', onKey);
+      window.removeEventListener('focus', syncKeyboard);
+      window.removeEventListener('blur', syncKeyboard);
       sheetEl.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
       document.fonts?.removeEventListener?.('loadingdone', onFonts);
