@@ -9,6 +9,7 @@ import type { NotchSurface } from './index.ts';
 // person can do with it sends.
 let createNotchSurface: (typeof import('./index.ts'))['createNotchSurface'];
 let partsText: (typeof import('./sentence.ts'))['partsText'];
+let NOTCH_GECKO_MS: number;
 let root: HTMLElement, surface: NotchSurface, sent: NotchFromPage[], focus: boolean[];
 
 const wait = (ms = 30): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +23,7 @@ beforeAll(async () => {
   GlobalRegistrator.register();
   ({ createNotchSurface } = await import('./index.ts'));
   ({ partsText } = await import('./sentence.ts'));
+  ({ NOTCH_GECKO_MS } = await import('./eyes.ts'));
 });
 afterAll(() => GlobalRegistrator.unregister());
 beforeEach(() => {
@@ -780,6 +782,17 @@ describe('pass 12 on the page: the movements of the prototype, played for real',
   test('a wink is one of the eyes\' own movements', () => {
     moving.receive({ type: 'act', gesture: 'wink' });
     expect(m('.eyes')!.classList.contains('wink')).toBe(true);
+  });
+
+  // Asked for on 18 November 2026: one eye closes and opens, and then the other, as a gecko blinks.
+  test('the gecko\'s blink is a movement of its own, and lasts long enough for both eyes', async () => {
+    moving.receive({ type: 'act', gesture: 'gecko' });
+    expect(m('.eyes')!.classList.contains('gecko')).toBe(true);
+    // A blink is over in a fraction of a second. This one is still going: the second eye has not had its turn.
+    await wait(700);
+    expect(m('.eyes')!.classList.contains('gecko')).toBe(true);
+    await wait(NOTCH_GECKO_MS - 700 + 120);
+    expect(m('.eyes')!.classList.contains('gecko')).toBe(false);
   });
 
   test('something leaves along the edge at once, and a new agent buds off a moment after the notch swells', async () => {

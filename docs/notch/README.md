@@ -2106,6 +2106,22 @@ What is not done, or not proven, in pass 12:
 - **The Mac side of the key change is the same shared code**, and has not
   run there.
 
+## The gecko's blink
+
+One movement is not the prototype's. The owner asked for it on 18 November
+2026: "how geckos open their eyes and close them one at a time".
+
+183. **One eye closes and opens, and then the other.** It is a gesture like
+    the others (`gecko` in `NOTCH_GESTURES`), drawn by the stylesheet
+    (`.eyes.gecko`) and slower than a blink: both halves together take
+    `NOTCH_GECKO_MS`. The two eyes are never closed at the same time, and
+    they come back as they were.
+184. **The resting notch does it by itself now and then.** In one of every
+    `NOTCH_GECKO_ONE_IN` moments in which it would blink, and only with its
+    eyes open at rest: about once a minute. "How I move" has a button for
+    it, under Eye movements. Under reduced motion it does not play, like
+    every other movement.
+
 ## Hardening
 
 Pass 13 was an audit of everything above, by six readers and two rigs, and

@@ -128,6 +128,10 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .nin .eyes.blink .eye b { transform: scaleY(.1); transition-duration: .06s; }
 .nin .eyes.sq .eye b { transform: scale(1.18, .72); transition-duration: .05s; } /* a tiny squash before every change of look */
 .nin .eyes.wink .eye.r b { transform: scaleY(.12); transition-duration: .07s; }
+/* The gecko's blink: one eye closes and opens, and then the other. Slower than a blink: a gecko takes its time. */
+.nin .eyes.gecko .eye.l b { animation: gecko .62s var(--ease) both; }
+.nin .eyes.gecko .eye.r b { animation: gecko .62s var(--ease) .7s both; }
+@keyframes gecko { 0%, 100% { transform: scaleY(var(--open)); } 28%, 60% { transform: scaleY(.1); } }
 .nin .eyes.peek-l { --gx: -2.4px; } .nin .eyes.peek-r { --gx: 2.4px; }
 .nin .eyes.pop { --ew: 7px; --eh: 9px; --er: 50%; }
 .nin .eyes.pop .eye { --s: 1.3; }

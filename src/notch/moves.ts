@@ -3,7 +3,7 @@
  *
  * The prototype kept a library beside its demo: 36 animations in four groups
  * (the lip, the body, along the edge, being born), 22 eye looks and 9 eye
- * movements. The owner, 17 November 2026: "one of the things that will give a
+ * movements. One eye movement has been added since: the gecko's blink. The owner, 17 November 2026: "one of the things that will give a
  * lot of reusability to Jarvis will be all of this animation. I'm talking
  * like, you know, popping out animation, eyes animation, the line."
  *
@@ -85,8 +85,11 @@ const LOOKS: [NotchMood, string][] = [
   ['focus', 'Do not disturb'], ['away', 'Looking away'],
 ];
 
-const GESTURES: ['blink' | 'wink' | 'nodg' | 'shake' | 'hop' | 'pop' | 'peek-l' | 'wake' | 'doze', string][] = [
-  ['blink', 'Blink'], ['wink', 'Wink'], ['nodg', 'Nod'], ['shake', 'Shake'], ['hop', 'Hop'], ['pop', 'Startle'], ['peek-l', 'Peek'], ['wake', 'Wake up'], ['doze', 'Doze off'],
+const GESTURES: ['blink' | 'wink' | 'gecko' | 'nodg' | 'shake' | 'hop' | 'pop' | 'peek-l' | 'wake' | 'doze', string][] = [
+  ['blink', 'Blink'], ['wink', 'Wink'],
+  // The one movement the prototype does not have: one eye, then the other.
+  ['gecko', 'Gecko blink'],
+  ['nodg', 'Nod'], ['shake', 'Shake'], ['hop', 'Hop'], ['pop', 'Startle'], ['peek-l', 'Peek'], ['wake', 'Wake up'], ['doze', 'Doze off'],
 ];
 
 const BIRTH_LABELS: Record<NotchBirth, string> = { run: 'Runs in', meet: 'Two meet', trace: 'Traced', bead: 'From a bead', eye: 'Opens like an eye', gather: 'The edge gathers' };
@@ -172,7 +175,7 @@ export const NOTCH_MOVES: readonly NotchMove[] = [
       // It wakes from sleep: its eyes are closed first.
       if (gesture === 'wake') { stage.surface.act({ mood: 'closed' }); await stage.wait(700); }
       stage.surface.act({ gesture });
-      await stage.wait(gesture === 'wake' ? 2600 : gesture === 'doze' ? 2400 : 1100);
+      await stage.wait(gesture === 'wake' ? 2600 : gesture === 'doze' ? 2400 : gesture === 'gecko' ? 2000 : 1100);
     },
   })),
 ];
