@@ -8,7 +8,7 @@ import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from './surf
 
 const settle = async (): Promise<void> => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
-function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean } = {}) {
+function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; listen?: NonNullable<Parameters<typeof attachNotchAround>[3]>['listen'] } = {}) {
   const pushed: NotchToPage[] = [];
   let pageEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   let aroundEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -48,6 +48,8 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean }
     async tell(payload: Record<string, unknown>, id = 'pc'): Promise<void> { aroundEvent(id, { event_type: NOTCH_AROUND_EVENT, payload }); await settle(); },
     async leave(id = 'pc'): Promise<void> { gone(id); await settle(); },
     async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
+    /** A yes or a tap with nothing on the notch. */
+    open(): void { fromPage({ type: 'open' }); },
     async pass(ms: number): Promise<void> {
       const until = now + ms;
       for (;;) {
@@ -308,5 +310,102 @@ describe('pass 12: after a call', () => {
     const acts = h.pushed.filter((m) => m.type === 'act');
     expect(acts.some((m) => m.type === 'act' && m.gesture === 'wake')).toBe(false);
     expect(acts.some((m) => m.type === 'act' && m.park === 0)).toBe(true);
+  });
+});
+
+// Listening to a call (./call.ts): the question takes the place of "On a
+// call. I hold everything", and what came out of the call is said before
+// what was held.
+describe('a call that can be listened to', () => {
+  test('the question is asked for this call, on the machine that said a call is on, and then everything is held', async () => {
+    const asked: string[] = [];
+    const h = harness({ meetingNow: () => true, listen: {
+      offer: async (stage, sidecarId) => {
+        asked.push(sidecarId);
+        const answer = await stage.offer(['On a call. Listen and write it down?'], 'listen');
+        if (answer.act !== 'yes') return false;
+        await stage.say(['Listening. I hold everything else until you are done.'], 3000);
+        return true;
+      },
+      ended: () => null,
+    } });
+    await h.tell({ call: true }, 'laptop');
+    expect(asked).toEqual(['laptop']);
+    expect(h.said()).toBe('On a call. Listen and write it down?');
+    await h.answer('yes');
+    // Its own words, and not "On a call. I hold everything" after them.
+    expect(h.said()).toBe('Listening. I hold everything else until you are done.');
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+    // Held from here on, as on any call.
+    h.inbox.add(h.item('mail'));
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+  });
+
+  test('a no is followed by the usual line, and the call is held as ever', async () => {
+    const h = harness({ meetingNow: () => true, listen: { offer: async (stage) => { await stage.offer(['On a call. Listen and write it down?'], 'listen'); return false; }, ended: () => null } });
+    await h.tell({ call: true });
+    await h.answer('no');
+    expect(h.said()).toBe('On a call. I hold everything until you are done.');
+  });
+
+  test('what came out of the call is said first, and what was held is offered after it', async () => {
+    let done: () => void = () => {};
+    let ended = 0;
+    const h = harness({ meetingNow: () => true, listen: {
+      offer: async (stage) => { await stage.say(['Listening. I hold everything else until you are done.'], 3000); return true; },
+      ended: () => { ended++; return new Promise<void>((resolve) => { done = resolve; }); },
+    } });
+    await h.tell({ call: true });
+    await h.answer('done');
+    h.inbox.add(h.item('mail'));
+    await settle();
+    await h.tell({ call: false });
+    await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    expect(ended).toBe(1);
+    // The notes are still being put on the notch: what was held waits for them.
+    expect(h.said()).not.toContain('I held');
+    done();
+    await settle();
+    expect(h.said()).toBe('Call ended. I held 1 thing.');
+  });
+
+  // The question at the start can go by unseen, and nothing can be said to the
+  // notch during a call: a yes on the resting notch asks it again.
+  test('a yes on the resting notch during the call asks once more, and not after the call', async () => {
+    let offers = 0;
+    const h = harness({ meetingNow: () => true, listen: {
+      offer: async (stage) => { offers++; const answer = await stage.offer(['On a call. Listen and write it down?'], 'listen'); return answer.act === 'yes'; },
+      ended: () => null,
+    } });
+    await h.tell({ call: true });
+    await h.answer('fold');
+    await h.answer('done');
+    expect(h.line()).toBeNull();
+    expect(offers).toBe(1);
+    h.open();
+    await settle();
+    expect(offers).toBe(2);
+    expect(h.said()).toBe('On a call. Listen and write it down?');
+    await h.answer('no');
+    // The call is over: a yes at rest is a yes at rest again.
+    await h.tell({ call: false });
+    await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    h.open();
+    await settle();
+    expect(offers).toBe(2);
+  });
+
+  test('a call that was not listened to ends as it always did', async () => {
+    const h = harness({ meetingNow: () => true, listen: { offer: async () => false, ended: () => null } });
+    await h.tell({ call: true });
+    await h.answer('done');
+    h.inbox.add(h.item('mail'));
+    await settle();
+    await h.tell({ call: false });
+    await h.pass(NOTCH_CALL_ENDS_AFTER_MS);
+    expect(h.said()).toBe('Call ended. I held 1 thing.');
   });
 });

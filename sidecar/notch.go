@@ -124,6 +124,8 @@ func (n *NotchService) Configure(enabled bool) bool {
 		n.closeSurface()
 		// And what the hands do is no longer watched: nobody is left to tell.
 		notchWatchOff()
+		// Nor is a call listened to with the notch off.
+		notchCalls.Stop("off")
 	}
 	return changed
 }

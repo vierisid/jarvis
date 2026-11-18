@@ -173,7 +173,7 @@ import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
+import { notchAskDeps, notchCallDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
 import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
@@ -4816,6 +4816,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // call, the lines of the day, and a lost connection. The desktop app
         // says when a call is on and whether its machine is online.
         day: { db: getDb(), around: sidecarManager },
+        // Listening to a call: asked for each call, no sound kept, the words
+        // kept a week and the notes ninety days (src/notch/call.ts).
+        calls: notchCallDeps({ db: getDb(), sidecars: sidecarManager, config: () => agentService.getConfig(), llm: () => agentService.getLLMManager() }),
         // Doing it in view (pass 10): a job done where it can be seen, one
         // caught by itself when it is done twice by hand, one shown with
         // "Watch me", and a thing put where the person points.
@@ -6785,7 +6788,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // pointed: for the notch's question about it, and for nothing else.
     // notch.watch is the shape of what the person's hands do: for the notch's
     // offer to take a repeated job over, and for nothing else.
-    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where', 'notch.around', 'notch.look', 'notch.watch'];
+    const notchSidecarEventTypes = ['notch.message', 'notch.talk', 'notch.where', 'notch.around', 'notch.look', 'notch.watch', 'notch.call'];
 
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double

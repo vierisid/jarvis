@@ -29,6 +29,7 @@ import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { BriefAttachmentProvider } from '../brief/attachments.ts';
 import { NotchFilesNotKept, type NotchTurnDoor } from '../notch/asks.ts';
 import { NOTCH_LOOK_FILE, NOTCH_LOOK_PICTURE, NOTCH_LOOK_QUESTION, NOTCH_LOOK_WINDOW, type NotchLookPort } from '../notch/look.ts';
+import type { NotchCallPort } from '../notch/call.ts';
 import { createNotchPoint, pointSeen } from '../notch/point.ts';
 import type { NotchRealDeps } from '../notch/real.ts';
 import { NOTCH_TOLD_SOURCE, createNotchRemember } from '../notch/remember.ts';
@@ -459,6 +460,35 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
 }
 
 /** The dev route's hold on the stand-in model, and its two ways of sending words (src/notch/script.ts). */
+/**
+ * What listening to a call needs of the product (src/notch/call.ts): a way to
+ * ask a desktop app to hear the call or to stop, the speech-to-text the owner
+ * chose, and one question to the model for the notes. The sound of a call is
+ * never written anywhere here: a piece arrives, is made into words, and is
+ * gone.
+ */
+export function notchCallDeps(options: Pick<NotchAskOptions, 'db' | 'config' | 'llm'> & {
+  /** The desktop apps: pieces of a call arrive as events, and one is asked to hear a call or to stop. */
+  sidecars: NotchCallPort & { dispatchRPC(sidecarId: string, method: string, params?: Record<string, unknown>, timing?: { initial: number; max: number }): Promise<unknown> };
+}): NonNullable<NotchRealDeps['calls']> {
+  return {
+    db: options.db,
+    port: options.sidecars,
+    async listen(sidecarId, ask) {
+      const got = await options.sidecars.dispatchRPC(sidecarId, 'notch.listen', { on: ask.on, id: ask.id, far: ask.far }, { initial: 8000, max: 8000 });
+      return typeof got === 'object' && got !== null ? got as { listening?: unknown; far?: unknown; why?: unknown } : null;
+    },
+    stt: () => {
+      const config = options.config();
+      const binding = effectiveSttForBinding(config);
+      return binding ? createSTTProvider(binding, usejarvisVoiceCredentials(config)) : null;
+    },
+    // One call's notes: a bounded answer, read as JSON and cut to its fields.
+    think: (messages, signal) => runWithOrigin('user', async () =>
+      (await options.llm().chatTier('medium', 'notch_call_notes', messages, { max_tokens: 900, temperature: 0, ...(signal ? { signal } : {}) })).content),
+  };
+}
+
 export function notchScriptDeps(options: {
   llm(): LLMManager;
   type(text: string): void;

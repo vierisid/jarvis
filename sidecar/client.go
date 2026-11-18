@@ -1096,6 +1096,28 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// Before the listener and the device are torn down below it.
 		defer notchTalk.forget()
 
+		// Listening to a call (notch_call.go): only when the brain asks for
+		// one call, which it does only on the person's yes for that call.
+		// What is heard goes out as its own kind of event, in order, and no
+		// sound is kept on this side or that.
+		notchCalls.Use(&notchCallEars{
+			Muted: micMuted,
+			Mic:   func(onChunk func([]byte)) (func(), error) { return notchCallOpen(false, onChunk) },
+			Far:   notchCallFarOpener(),
+		}, func(payload map[string]any, pcm []byte) {
+			evt := SidecarEvent{Type: "sidecar_event", EventType: notchCallEvent, Timestamp: time.Now().UnixMilli(), Priority: "high", Payload: payload}
+			if pcm != nil {
+				evt.Binary = BinaryDataInline{Type: "inline", MimeType: "audio/pcm"}
+			}
+			notchSays.do(func() {
+				// The kind and the size, never what was said.
+				if err := sendFn(ctx, evt, pcm); err != nil {
+					log.Printf("[notch] call: a %v did not reach the brain: %v", payload["phase"], err)
+				}
+			})
+		})
+		defer notchCalls.Forget()
+
 		// The brain's word on the wake word, when it comes. No word within a
 		// few seconds is a brain too old to send one: it listens, as it always
 		// did. A brain with the notch on never lets it open.

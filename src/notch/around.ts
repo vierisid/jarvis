@@ -16,7 +16,7 @@
  */
 import type { NotchInbox } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
-import type { NotchClock } from './stage.ts';
+import type { NotchClock, NotchStage } from './stage.ts';
 import { realNotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 
@@ -45,6 +45,17 @@ export interface NotchAroundDeps {
   asleep?(): boolean;
   /** The connection is back: what waited for it can go on. */
   backOnline?(): void;
+  /**
+   * Listening to the call (./call.ts). `offer` asks whether to, in the place
+   * of "On a call. I hold everything", and comes back true when it has said
+   * its own words. `ended` is the call being over: null when it was not
+   * listened to, otherwise what came out of it is put on the notch, and what
+   * was held comes after that.
+   */
+  listen?: {
+    offer(stage: NotchStage, sidecarId: string): Promise<boolean>;
+    ended(): Promise<void> | null;
+  };
   clock?: NotchClock;
   now?: () => number;
   log?: (line: string) => void;
@@ -91,6 +102,25 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     parking = clock.setTimeout(park, 2000);
   };
 
+  /**
+   * During a call that can be listened to, a yes or a tap on the resting
+   * notch asks once more whether to listen: the question at its start may
+   * have gone by unseen, and nothing else can be said to the notch during a
+   * call. Not while everything is stopped: then a yes wakes Jarvis.
+   */
+  let opener: (() => boolean) | null = null;
+  function askAgain(): void {
+    const listen = deps.listen;
+    const machine = from;
+    if (!listen || !machine || deps.asleep?.()) return;
+    const mine = (): boolean => {
+      if (!inCall || deps.asleep?.()) return false;
+      return inbox.present('call-ask', async (stage) => { await listen.offer(stage, machine); }, { held: true });
+    };
+    opener = mine;
+    inbox.setOpener(mine);
+  }
+
   function begin(): void {
     if (inCall || stopped) return;
     inCall = true;
@@ -99,13 +129,18 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     log('[notch] on a call: everything is held');
     // Said once, when the notch is free to say it. Then nothing more comes until the call is over.
     // Something the person is in the middle of on the notch is not taken from them for it: it waits.
-    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD); parked = -1; park(); } };
+    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD); parked = -1; park(); askAgain(); } };
     const say = (): void => {
       saying = null;
       if (!inCall || holding) return;
       if (deps.asleep?.()) { hold(); return; }
       const said = inbox.present('call', async (stage) => {
-        try { await stage.say(['On a call. I hold everything until you are done.'], 3000, { mood: 'focus' }); } finally { hold(); }
+        try {
+          // With the person's yes for this call, it is listened to and written down.
+          const machine = from;
+          const spoke = deps.listen && machine ? await deps.listen.offer(stage, machine) : false;
+          if (!spoke && inCall) await stage.say(['On a call. I hold everything until you are done.'], 3000, { mood: 'focus' });
+        } finally { hold(); }
       });
       if (!said) saying = clock.setTimeout(say, NOTCH_CALL_SAY_AGAIN_MS);
     };
@@ -119,9 +154,19 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     if (longest) { clock.clearTimeout(longest); longest = null; }
     if (parking) { clock.clearTimeout(parking); parking = null; }
     if (saying) { clock.clearTimeout(saying); saying = null; }
+    if (opener) { inbox.dropOpener(opener); opener = null; }
+    // A call that was listened to: what came out of it is said first, with everything else still held.
+    let notes: Promise<void> | null = null;
+    try { notes = deps.listen?.ended() ?? null; } catch (error) { log(`[notch] the end of a call that was listened to failed: ${error instanceof Error ? error.message : String(error)}`); }
     // It was never said, so nothing was held: the call came and went while the person was busy on the notch.
     if (!holding) { log('[notch] the call is over before it was said'); return; }
     holding = false;
+    if (notes) { void notes.catch(() => {}).then(() => { if (!stopped) over(); }); return; }
+    over();
+  }
+
+  /** The call is over and nothing more is said of it: what was held is offered. */
+  function over(): void {
     const many = held();
     const minutes = Math.round((now() - callSince) / 60_000);
     log(`[notch] the call is over after ${minutes} min: ${many} held`);

@@ -20,6 +20,8 @@ const REQUIRED = [
   'ui_interaction', 'ui_recording',
   'notch.message',
   'notch.talk',
+  // A piece of a call the owner asked to have listened to (src/notch/call.ts).
+  'notch.call',
 ];
 
 describe('sidecar event subscriptions', () => {

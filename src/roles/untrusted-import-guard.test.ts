@@ -95,6 +95,12 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
       'goals/rhythm.ts',
+      // The notch's call notes: what was heard in a call the owner asked to
+      // have listened to, each line cut and the whole capped
+      // (NOTCH_CALL_WORDS_MAX_CHARS) before it is framed into the prompt
+      // that asks what came out of it. The other side of a call is other
+      // people's speech: it reaches this prompt and nothing else.
+      'notch/call.ts',
       // The notch's look around, day one: the beginning of a file from the
       // owner's desktop, cut to a fixed length before it is framed into the
       // prompt that asks for one line about each file.
