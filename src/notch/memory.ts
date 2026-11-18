@@ -46,7 +46,8 @@ export interface NotchMemoryFact {
 export interface NotchMemoryDeps {
   inbox: NotchInbox;
   /** Every fact that is remembered now, newest first. */
-  list(): NotchMemoryFact[];
+  /** The facts, newest first. With `about`, those about that one: asked of the whole memory, not of its newest part. */
+  list(about?: string): NotchMemoryFact[];
   /** Forgets one, for good. False when it could not be forgotten: then it is still there. */
   forget(id: string): boolean | Promise<boolean>;
   log?: (line: string) => void;
@@ -83,8 +84,8 @@ export function memorySource(source: string): string {
 export function attachNotchMemory(deps: NotchMemoryDeps): NotchMemory {
   const log = deps.log ?? ((line: string) => console.log(line));
 
-  const facts = (): NotchMemoryFact[] => {
-    try { return deps.list(); } catch (error) {
+  const facts = (about?: string): NotchMemoryFact[] => {
+    try { return about ? deps.list(about) : deps.list(); } catch (error) {
       log(`[notch] memory could not be read: ${error instanceof Error ? error.message : String(error)}`);
       return [];
     }
@@ -94,7 +95,8 @@ export function attachNotchMemory(deps: NotchMemoryDeps): NotchMemory {
     const all = facts();
     const wanted = about?.trim().toLowerCase() ?? '';
     // Asked about someone nothing is known of: everything is shown, and that is said.
-    const known = wanted ? all.filter((fact) => fact.about.trim().toLowerCase() === wanted || fact.about.trim().toLowerCase().split(' ')[0] === wanted) : [];
+    // Asked of the whole memory: the list above is its newest part only.
+    const known = wanted ? facts(about ?? undefined).filter((fact) => fact.about.trim().toLowerCase() === wanted || fact.about.trim().toLowerCase().split(' ')[0] === wanted) : [];
     const shown = (known.length ? known : all).slice(0, NOTCH_MEMORY_ROWS);
     const more = (known.length ? known : all).length - shown.length;
     const gone = new Set<string>();

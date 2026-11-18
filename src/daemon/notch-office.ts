@@ -20,22 +20,40 @@ import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-a
 /** The most facts that are read for one sheet. The sheet shows fewer, and says how many more there are. */
 const MEMORY_MOST = 400;
 
-/** Every fact that is remembered now, newest first, each with who it is about and where it came from. */
-export function notchMemoryFacts(): NotchMemoryFact[] {
+/**
+ * The facts that are remembered now, newest first, each with who it is about
+ * and where it came from. With `about`, only the facts about that one: by
+ * their whole name or their first, as the sheet asks.
+ *
+ * The limit is laid on after the choosing. It used to be laid on first: of
+ * more than 400 facts only some 400 were ever looked at, in the store's
+ * order and not the newest, and asked about someone whose facts were not
+ * among them the sheet said "I know nothing about Sam yet".
+ */
+export function notchMemoryFacts(about?: string): NotchMemoryFact[] {
   const names = new Map<string, string>();
   const nameOf = (id: string): string => {
     if (!names.has(id)) names.set(id, getEntity(id)?.name ?? '');
     return names.get(id) ?? '';
   };
-  return findFacts({}).slice(0, MEMORY_MOST)
-    .sort((a, b) => b.created_at - a.created_at)
-    .map((fact) => ({
+  const wanted = about?.trim().toLowerCase() ?? '';
+  const listed: NotchMemoryFact[] = [];
+  for (const fact of findFacts({}).sort((a, b) => b.created_at - a.created_at)) {
+    const name = nameOf(fact.subject_id) || 'Something';
+    if (wanted) {
+      const low = name.trim().toLowerCase();
+      if (low !== wanted && low.split(' ')[0] !== wanted) continue;
+    }
+    listed.push({
       id: fact.id,
-      about: nameOf(fact.subject_id) || 'Something',
+      about: name,
       text: `${fact.predicate} ${fact.object}`.replace(/\s+/g, ' ').trim(),
       // What was read of a file says so: "llm extraction" would tell the owner nothing.
       source: fact.evidence.some((evidence) => evidence.source_ref?.startsWith('notch:files:')) ? 'a file I opened' : fact.evidence[0]?.source ?? fact.source ?? '',
-    }));
+    });
+    if (listed.length >= MEMORY_MOST) break;
+  }
+  return listed;
 }
 
 /**
@@ -136,7 +154,7 @@ export function notchOfficeDeps(options: NotchOfficeOptions): NonNullable<NotchR
     },
   };
   return {
-    memory: { list: () => notchMemoryFacts(), forget: (id) => notchForgetFact(options.db, id) },
+    memory: { list: (about) => notchMemoryFacts(about), forget: (id) => notchForgetFact(options.db, id) },
     keys,
     voice: () => notchVoice(options.config()),
     connections(): NotchConnection[] {
