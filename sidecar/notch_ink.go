@@ -17,6 +17,8 @@ import (
 	"image"
 	"image/png"
 	"math"
+
+	"golang.org/x/image/draw"
 )
 
 // The marker's colour (the notch's citron) and how strong it is at its middle.
@@ -198,8 +200,16 @@ type lookShot struct {
 func (s *lookShot) Cut(part lookRect) []byte { return s.CutSmall(part, 0) }
 
 // CutSmall is Cut with the picture made smaller when its longest side would
-// be more than most pixels: every pixel of the result is the mean of a square
-// of the copy, so small writing blurs and does not break up. most 0: as it is.
+// be more than most pixels: then its longest side is exactly most. most 0:
+// as it is.
+//
+// It is made smaller in two steps. First by a whole number, where every
+// pixel is the mean of a square of the copy: quick, and small writing blurs
+// and does not break up. Then the rest of the way, which is less than a
+// half, by weighing the pixels next to each other. It used to stop after the
+// first step, and a whole number is a coarse measure: a window 1920 wide was
+// halved to 960 where 1568 was asked for, and its menus were read at six
+// pixels a letter (the hardening audit, 17 November 2026).
 func (s *lookShot) CutSmall(part lookRect, most int) []byte {
 	if s == nil || len(s.pixels) < s.w*s.h*4 {
 		return nil
@@ -211,7 +221,8 @@ func (s *lookShot) CutSmall(part lookRect, most int) []byte {
 	}
 	by := 1
 	if most > 0 {
-		by = (max(x1-x0, y1-y0) + most - 1) / most
+		// The largest whole number that still leaves it at least as large as asked.
+		by = max(x1-x0, y1-y0) / most
 	}
 	by = max(by, 1)
 	width, height := (x1-x0)/by, (y1-y0)/by
@@ -234,6 +245,12 @@ func (s *lookShot) CutSmall(part lookRect, most int) []byte {
 			n := by * by
 			dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = uint8(r/n), uint8(g/n), uint8(b/n), 0xFF
 		}
+	}
+	if longest := max(width, height); most > 0 && longest > most {
+		w2, h2 := max(width*most/longest, 1), max(height*most/longest, 1)
+		small := image.NewNRGBA(image.Rect(0, 0, w2, h2))
+		draw.BiLinear.Scale(small, small.Bounds(), img, img.Bounds(), draw.Src, nil)
+		img = small
 	}
 	var out bytes.Buffer
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}

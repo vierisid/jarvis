@@ -1336,7 +1336,14 @@ func platformNotchWindowRead() (map[string]any, error) {
 	if hwnd == 0 || pid == 0 {
 		return nil, fmt.Errorf("no window of another program is open")
 	}
-	app, title := notchAppKey(processBaseName(pid)), win32WindowTitle(hwnd)
+	// A Store app (Settings, Calculator, Photos) lives inside a host program:
+	// it is named by its own name, and what it has open on top (a list that
+	// dropped down, a flyout) belongs to its own process, not the host's.
+	app, title := notchAppKey(whereAppOf(hwnd)), win32WindowTitle(hwnd)
+	hosted := uint32(0)
+	if strings.EqualFold(notchAppKey(processBaseName(pid)), "applicationframehost") {
+		hosted = whereHostedPid(hwnd, pid)
+	}
 	// Decided before anything is read (notch_where.go).
 	if away := notchLookAway(app, title); away != "" {
 		return map[string]any{"away": away}, nil
@@ -1348,7 +1355,11 @@ func platformNotchWindowRead() (map[string]any, error) {
 		}
 		// What is open on top of the window comes first in the list: it is
 		// what the person is looking at, and the list may be cut short.
-		if popups := notchPopupElements(state, int(pid), hwnd); len(popups) > 0 {
+		popups := notchPopupElements(state, int(pid), hwnd)
+		if hosted != 0 && hosted != pid {
+			popups = append(popups, notchPopupElements(state, int(hosted), hwnd)...)
+		}
+		if len(popups) > 0 {
 			rest, _ := result["elements"].([]map[string]any)
 			result["elements"] = append(popups, rest...)
 			result["element_count"] = len(popups) + len(rest)
@@ -1364,7 +1375,38 @@ func platformNotchWindowRead() (map[string]any, error) {
 		return nil, fmt.Errorf("the window could not be read")
 	}
 	result["app"] = app
+	// Where the window is and which display it is on, so that a thing the
+	// program lists far outside the display (a row thousands of pixels down
+	// a list) is not pointed at: the pointer flew off the screen after it.
+	var rc w32Rect
+	if ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rc))); ok != 0 {
+		result["window"] = map[string]any{"x": int(rc.Left), "y": int(rc.Top), "w": int(rc.Right - rc.Left), "h": int(rc.Bottom - rc.Top)}
+		if mon, ok := monitorRectFromPoint(int((rc.Left+rc.Right)/2), int((rc.Top+rc.Bottom)/2)); ok {
+			result["screen"] = map[string]any{"x": mon.Left, "y": mon.Top, "w": mon.Right - mon.Left, "h": mon.Bottom - mon.Top}
+		}
+	}
 	return result, nil
+}
+
+// notchShellWindow says whether a window is part of Windows' own desktop:
+// the taskbar, or the desktop with its icons. File Explorer's process owns
+// those too, and they have no title bar, so with a folder in front they were
+// read as "what is open on top of the window": Start, Search, the pinned
+// programs, the tray and the desktop's files filled the list before the
+// folder's own buttons.
+func notchShellWindow(class string) bool {
+	switch class {
+	case "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW", "NotifyIconOverflowWindow", "TopLevelWindowForOverflowXamlIsland":
+		return true
+	}
+	return false
+}
+
+// win32WindowClass is a window's class, as Windows names it.
+func win32WindowClass(hwnd uintptr) string {
+	var buf [128]uint16
+	procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return syscall.UTF16ToString(buf[:])
 }
 
 // The most that is read of what is open on top of a window.
@@ -1418,6 +1460,10 @@ func notchPopupElements(state *uiaState, pid int, front uintptr) []map[string]an
 			continue
 		}
 		if visible, _, _ := procIsWindowVisible.Call(hwnd); visible == 0 {
+			top.Release()
+			continue
+		}
+		if notchShellWindow(win32WindowClass(hwnd)) {
 			top.Release()
 			continue
 		}

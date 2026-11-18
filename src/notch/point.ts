@@ -194,6 +194,17 @@ const oneLine = (value: unknown, max: number): string =>
   (typeof value === 'string' ? value : '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 const whole = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null);
 
+/** A rectangle as the desktop app writes one, or null when it is none. */
+function pointRect(value: unknown): { x: number; y: number; w: number; h: number } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const rect = value as Record<string, unknown>;
+  const x = whole(rect.x), y = whole(rect.y), w = whole(rect.w), h = whole(rect.h);
+  return x === null || y === null || w === null || h === null || w <= 0 || h <= 0 ? null : { x, y, w, h };
+}
+
+const pointInside = (x: number, y: number, rect: { x: number; y: number; w: number; h: number }): boolean =>
+  x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+
 /**
  * What a read of a window (the desktop app's `get_window_tree`) holds that a
  * person can be pointed at: named, of a kind that is a thing by itself, with
@@ -201,8 +212,15 @@ const whole = (value: unknown): number | null => (typeof value === 'number' && N
  */
 export function pointWindow(tree: unknown): PointWindow | null {
   if (typeof tree !== 'object' || tree === null) return null;
-  const read = tree as { window_title?: unknown; app?: unknown; elements?: unknown };
+  const read = tree as { window_title?: unknown; app?: unknown; elements?: unknown; screen?: unknown };
   if (!Array.isArray(read.elements)) return null;
+  // The display the window is on, when the desktop app says it. A program
+  // lists things it does not show: a row four thousand pixels down a list is
+  // "on the screen" to it. Pointed at as given, the pointer flew off the
+  // display and the notch waited a minute for a click that could not come.
+  // What lies outside the display is left out, so the next thing chosen is
+  // one that can be seen, or a scroll.
+  const display = pointRect(read.screen);
   const elements: PointElement[] = [];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const entry of read.elements) {
@@ -211,6 +229,7 @@ export function pointWindow(tree: unknown): PointWindow | null {
     const rect = (typeof element.rect === 'object' && element.rect !== null ? element.rect : {}) as Record<string, unknown>;
     const x = whole(rect.x), y = whole(rect.y), w = whole(rect.w), h = whole(rect.h);
     if (x === null || y === null || w === null || h === null || w <= 0 || h <= 0 || element.offscreen === true) continue;
+    if (display && !pointInside(x + w / 2, y + h / 2, display)) continue;
     // Every element with a size tells where the window is, whether or not it can be pointed at.
     x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
     const id = whole(element.id);

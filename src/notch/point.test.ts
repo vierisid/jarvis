@@ -899,3 +899,29 @@ describe('a window that says nothing about what is in it is looked at', () => {
     expect(((h.shown[2]![1]!.content as Exclude<PointMessage['content'], string>)[0] as { text: string }).text).toContain('1. clicked thing "Create"');
   });
 });
+
+// The hardening audit, 17 November 2026: a thing the program lists far outside
+// the display was pointed at as given, and the pointer flew off the screen.
+describe('a thing that is not on the display is not pointed at', () => {
+  const element = (id: number, name: string, y: number) => ({ id, name, control_type: 'Button', rect: { x: 100, y, w: 120, h: 30 } });
+  const tree = (screen?: unknown) => ({
+    window_title: 'Settings', app: 'settings',
+    elements: [element(1, 'Display', 200), element(2, 'Advanced options', 5200), element(3, 'Above the top', -900)],
+    ...(screen ? { screen } : {}),
+  });
+
+  test('with the display known, what lies outside it is left out of the list', () => {
+    const window = pointWindow(tree({ x: 0, y: 0, w: 1920, h: 1080 }));
+    expect(window?.elements.map((entry) => entry.name)).toEqual(['Display']);
+  });
+
+  test('a second display to the left or above has places below zero, and they count', () => {
+    const window = pointWindow(tree({ x: 0, y: -1080, w: 1920, h: 1080 }));
+    expect(window?.elements.map((entry) => entry.name)).toEqual(['Above the top']);
+  });
+
+  test('a desktop app that does not say which display it is leaves the list as it was', () => {
+    expect(pointWindow(tree())?.elements).toHaveLength(3);
+    expect(pointWindow(tree({ x: 0, y: 0, w: 0, h: 0 }))?.elements).toHaveLength(3);
+  });
+});
