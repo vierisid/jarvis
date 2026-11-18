@@ -427,3 +427,15 @@ test("Today colors a failed task as failed, and Tasks due leaves finished ones o
   const rows = (text: string) => [...host.querySelectorAll(".rs-row")].filter(row => row.textContent?.startsWith(text)).length;
   expect([rows("Call the bank"), rows("Draft the brief"), rows("File receipts")]).toEqual([2, 1, 1]);
 });
+
+test("#957: an email entry shows its account, recipients, subject, approver and provider ids", async () => {
+  const entry = { id: "audit-2", agent_name: "Workflow Mailer", tool_name: "piece:gmail/send_email", action_category: "send_email", authority_decision: "approval_required",
+    created_at: Date.now(), decided_by: "dashboard:dev-1", decided_device: "Laptop", provider_message_id: "18c0ffee", provider_thread_id: "18c0aaaa",
+    email: { account: "owner@example.test", to: ["ana@example.test", "bo@example.test"], subject: "Q3 invoice" } };
+  mock(url => url === "/api/authority/audit?limit=100" ? NativeResponse.json([entry]) : NativeResponse.json(good(url)));
+  await mount(<AuthorityRoomBody mode="expanded" />);
+  await act(async () => button("Audit").click());
+  const details = [...host.querySelectorAll(".v2-auth__audit-email dt")].map(dt => [dt.textContent, dt.nextElementSibling?.textContent]);
+  expect(details).toEqual([["From", "owner@example.test"], ["To", "ana@example.test, bo@example.test"], ["Subject", "Q3 invoice"],
+    ["Approved by", "Laptop"], ["Provider ids", "message 18c0ffee, thread 18c0aaaa"]]);
+});

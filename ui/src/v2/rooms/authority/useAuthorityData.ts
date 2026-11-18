@@ -75,6 +75,21 @@ export interface AuditEntry {
   executed: number;
   execution_time_ms: number | null;
   created_at: number;
+  /** Who decided, as an enrolled device's name when it still is one. */
+  decided_by?: string | null;
+  decided_device?: string | null;
+  /** #957: a sent email's provider ids, from its receipt row. */
+  provider_message_id?: string | null;
+  provider_thread_id?: string | null;
+  /** #957: an email send's account, recipients and subject, joined from its workflow effect while it exists. */
+  email?: {
+    account?: string;
+    to?: string[];
+    cc?: string[];
+    bcc?: string[];
+    subject?: string;
+    answers?: string;
+  } | null;
 }
 
 export interface AuditStats {

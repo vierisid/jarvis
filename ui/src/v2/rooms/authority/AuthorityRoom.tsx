@@ -681,12 +681,45 @@ function AuditTab({
                 {e.execution_time_ms != null && (
                   <span className="v2-auth__audit-ms">{e.execution_time_ms}ms</span>
                 )}
+                <AuditEmail entry={e} />
               </li>
             ))}
           </ul>
         )}
       </RemoteSection>
     </div>
+  );
+}
+
+/**
+ * #957: an email send's entry says which account it went from, to whom, the
+ * subject, who approved it and the provider's ids. The ids are the audit
+ * row's own; the rest is read from the workflow effect while it exists.
+ */
+function AuditEmail({ entry }: { entry: AuditEntry }) {
+  const email = entry.email;
+  const ids = [entry.provider_message_id && `message ${entry.provider_message_id}`, entry.provider_thread_id && `thread ${entry.provider_thread_id}`].filter(Boolean);
+  if (!email && !ids.length) return null;
+  const approver = entry.decided_device ?? entry.decided_by;
+  const rows: Array<[string, string | undefined]> = [
+    ["From", email?.account],
+    ["To", email?.to?.join(", ")],
+    ["Cc", email?.cc?.join(", ")],
+    ["Bcc", email?.bcc?.join(", ")],
+    ["Subject", email?.subject],
+    ["Answers", email?.answers],
+    ["Approved by", entry.authority_decision === "approval_required" && approver ? approver : undefined],
+    ["Provider ids", ids.length ? ids.join(", ") : undefined],
+  ];
+  return (
+    <dl className="v2-auth__audit-email">
+      {rows.filter(([, value]) => value).map(([label, value]) => (
+        <React.Fragment key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </React.Fragment>
+      ))}
+    </dl>
   );
 }
 
