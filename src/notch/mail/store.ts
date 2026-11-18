@@ -269,6 +269,19 @@ export class MailStore {
     return (this.db.query(`SELECT * FROM notch_mail_proposals WHERE state = 'sent' AND sent_at >= ? ORDER BY sent_at DESC`).all(since) as StoredProposal[]).map(rowOf);
   }
 
+  /**
+   * The people who wrote to the owner and were waited on, by the name their
+   * mail gives, the ones who wrote last first. Each once. For telling
+   * whether a name that was heard is somebody's (../names.ts): nothing of
+   * what they wrote is read here.
+   */
+  people(most = 400): { name: string; address: string }[] {
+    return (this.db.query(
+      `SELECT who_name AS name, who_address AS address FROM notch_mail_proposals
+       WHERE who_name != '' AND who_address != '' GROUP BY who_address ORDER BY MAX(message_at) DESC LIMIT ?`,
+    ).all(most) as { name: string; address: string }[]);
+  }
+
   /** The manner this person is always written to in, or '' when none was ever said. */
   tone(address: string): string {
     const row = this.db.query('SELECT tone FROM notch_mail_tones WHERE address = ?').get(address.toLowerCase()) as { tone: string } | null;

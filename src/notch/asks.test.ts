@@ -272,6 +272,117 @@ describe('typing in Home', () => {
   });
 });
 
+// The prototype: 'I heard "send the notes to Ana". Is that Anna Rossi?'
+describe('a name that may have been misheard is read back before anything runs', () => {
+  const people = () => [{ name: 'Anna Rossi' }, { name: 'Leo Bianchi' }, { name: 'Leo Conti' }];
+  const part = (h: H): { word: { value: string; options: string[]; free?: boolean } } =>
+    (h.line()!.say.find((one) => typeof one !== 'string' && 'word' in one) as { word: { value: string; options: string[]; free?: boolean } });
+  const heard = (h: H): string => (h.line()?.say ?? []).map((one) => (typeof one === 'string' ? one : 'word' in one ? `[${one.word.value}]` : 'em' in one ? one.em : '')).join('');
+
+  test('it asks who was meant, with the likeliest as a word that can be changed, and nothing has run', async () => {
+    const h = harness({ deps: { people } });
+    await h.speak('t1', 'Send the notes to Ana.');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(heard(h)).toBe('I heard "Send the notes to Ana.". Is that [Anna Rossi]?');
+    expect(h.line()).toMatchObject({ kind: 'offer', yes: 'yes', mood: 'confused', fold: 0 });
+    expect(part(h).word).toMatchObject({ options: ['Anna Rossi'], free: true });
+    expect(h.door.texts()).toEqual([]);
+    // It shrugs.
+    expect(h.pushed.some((message) => message.type === 'act' && message.gesture === 'shrug')).toBe(true);
+    // And no name is in a log.
+    for (const entry of h.logs) { expect(entry).not.toContain('Anna'); expect(entry).not.toContain('Ana'); }
+  });
+
+  test('yes runs it with the name put right, and what was heard stays as it was heard', async () => {
+    const h = harness({ deps: { people } });
+    await h.speak('t1', 'Send the notes to Ana.');
+    await h.advance(NOTCH_HEARD_MS);
+    await h.answer('yes');
+    expect(h.door.texts()).toEqual(['Send the notes to Anna Rossi.']);
+    expect(h.said()).toBe('On it: Send the notes to Anna Rossi.');
+    expect(row(h)).toMatchObject({ source: 'spoken', heard: 'Send the notes to Ana.', understood: 'Send the notes to Anna Rossi.', state: 'running' });
+  });
+
+  test('another of them can be picked, or a name typed, and that is who it runs with', async () => {
+    const h = harness({ deps: { people } });
+    await h.speak('t1', 'Tell Lea I am late');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(heard(h)).toBe('I heard "Tell Lea I am late". Is that [Leo Bianchi]?');
+    expect(part(h).word.options).toEqual(['Leo Bianchi', 'Leo Conti']);
+    await h.answer('word', { word: 'who', value: 'Leo Conti' });
+    expect(heard(h)).toBe('I heard "Tell Lea I am late". Is that [Leo Conti]?');
+    await h.answer('yes');
+    expect(h.door.texts()).toEqual(['Tell Leo Conti I am late']);
+
+    const typed = harness({ deps: { people } });
+    await typed.speak('t1', 'Tell Lea I am late');
+    await typed.advance(NOTCH_HEARD_MS);
+    await typed.answer('word', { word: 'who', value: '  Lea  Moretti ' });
+    await typed.answer('yes');
+    expect(typed.door.texts()).toEqual(['Tell Lea Moretti I am late']);
+  });
+
+  test('Esc turns it away: nothing runs, then or later', async () => {
+    const h = harness({ deps: { people } });
+    await h.speak('t1', 'Send the notes to Ana.');
+    await h.advance(NOTCH_HEARD_MS);
+    await h.answer('no');
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'dismissed' });
+    await h.advance(60_000);
+    expect(h.door.texts()).toEqual([]);
+  });
+
+  test('a name that is sure, or is nobody\'s, is not asked about', async () => {
+    for (const words of ['Send the notes to Anna.', 'Send the notes to Giulia.', 'What is two plus two?']) {
+      const h = harness({ deps: { people } });
+      await h.speak('t1', words);
+      await h.advance(NOTCH_HEARD_MS);
+      expect(h.door.texts()).toEqual([words]);
+    }
+  });
+
+  test('typed words are the person\'s own letters, and are not asked about', async () => {
+    const h = harness({ deps: { people } });
+    await h.type('Send the notes to Ana.');
+    expect(h.door.texts()).toEqual(['Send the notes to Ana.']);
+  });
+
+  test('something urgent taking the notch while it asks is not a yes: it is asked again', async () => {
+    const h = harness({ deps: { people } });
+    await h.speak('t1', 'Send the notes to Ana.');
+    await h.advance(NOTCH_HEARD_MS);
+    h.inbox.add({ id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, title: () => ['Now'], play: async (stage) => { await stage.offer(['Now?'], 'ok'); return 'settled'; } });
+    await settle();
+    expect(h.said()).toBe('Now?');
+    expect(h.door.texts()).toEqual([]);
+    await h.answer('no');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(heard(h)).toBe('I heard "Send the notes to Ana.". Is that [Anna Rossi]?');
+    expect(h.door.texts()).toEqual([]);
+  });
+
+  test('words the notch acts on itself find who is meant in their own way, and a memory is read back whole', async () => {
+    const side = harness({ deps: { people, side: (text) => (text.startsWith('Tell me when') ? { did: 'Keep an eye.', run: () => {} } : null) } });
+    await side.speak('t1', 'Tell me when Ana replies');
+    await side.advance(NOTCH_HEARD_MS);
+    expect(row(side)).toMatchObject({ state: 'done', answer: 'Keep an eye.' });
+    const memory = harness({ deps: { people, remember: async (_what, _heard, _id, confirm) => { const yes = confirm ? await confirm('Ana prefers calls.') : true; return yes ? { ok: true, understood: 'Ana prefers calls.', said: 'Remembered.' } : { ok: false, why: 'Not saved.' }; } } });
+    await memory.speak('t1', 'Remember that Ana prefers calls');
+    await memory.advance(NOTCH_HEARD_MS);
+    expect(memory.said()).toBe('Remember: Ana prefers calls.?');
+  });
+
+  test('with nobody known, or no way to know, nothing is read back', async () => {
+    for (const deps of [{}, { people: () => [] }, { people: () => { throw new Error('the mail store is closed'); } }] as Partial<NotchAsksDeps>[]) {
+      const h = harness({ deps });
+      await h.speak('t1', 'Send the notes to Ana.');
+      await h.advance(NOTCH_HEARD_MS);
+      expect(h.door.texts()).toEqual(['Send the notes to Ana.']);
+    }
+  });
+});
+
 describe('Undo on a row of today, in Home', () => {
   const rows = [{ kind: 'row' as const, id: 'chase:c1', lead: '10:00', say: ["Getting Sam's answer by Friday"], buttons: [{ id: 'undo', label: 'Undo', quiet: true }] }];
 

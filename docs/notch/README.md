@@ -2739,6 +2739,56 @@ What is not done, or not proven:
   two people here.
 - **No real reply has gone through it.**
 
+## A name that may have been misheard
+
+The prototype: 'I heard "send the notes to Ana". Is that Anna Rossi?', with
+the name as a word that can be changed. Speech-to-text is at its worst
+with names, and an instruction that names the wrong person, or nobody,
+is the kind of mistake that is found out too late. In the product only a
+spoken "remember" was read back. The owner asked for the prototype's way
+on 18 November 2026, as the seventh of the things it has and the product
+did not.
+
+How it goes. A spoken instruction has been heard and shown. Before it
+runs, it is read for a name that is not sure (`src/notch/names.ts`),
+against the people the owner writes with (the names their mail gives,
+`MailStore.people`). When there is one, the notch asks, with a shrug, and
+who it may be as a word that can be picked or typed over. A yes runs the
+instruction with the name put right. Esc turns it away.
+
+227. **A name is in doubt in two cases, and in no other.** It is close to
+    the first name of somebody Jarvis knows without being it (one letter
+    off for a short name, two for a long one, or the same sounds), or it
+    is a first name two of them have and no surname was said that tells
+    them apart. A name that is exactly one person's is sure. A name that
+    is near nobody's is somebody Jarvis does not know, and the instruction
+    runs as it was said.
+228. **Only what speech-to-text wrote as a name is taken for one.** A word
+    with a capital letter, inside a sentence. Not the first word of a
+    sentence, not a day, a month or a program.
+229. **Nothing runs before the answer.** The question takes a yes or an
+    Esc and does not fold. Something urgent taking the notch while it is
+    up is not a yes: the instruction is asked about again when it is back.
+230. **What runs is the instruction with the name put right, and what was
+    heard stays as it was heard.** "What you asked" has both: "Heard" as
+    it was said, "Understood" as it ran.
+231. **Only spoken words, and only an instruction for the assistant.**
+    Typed words are the person's own letters. Words the notch acts on
+    itself ("tell me when Sam replies") find who is meant in their own
+    way, and a memory is read back whole.
+232. **No name is written to a log.** How many people it may have been is.
+
+What is not done, or not proven:
+
+- **Only people who wrote to the owner are known.** The names come from
+  the mail that was waited on in the last weeks. Somebody in the calendar,
+  in Slack or in a file is not known, so a name close to theirs is not
+  asked about.
+- **Only names.** A number, a date or an amount that may have been
+  misheard is not read back.
+- **A name the speech-to-text wrote without a capital is missed.**
+- **No real voice has gone through it.**
+
 ## The keys
 
 | What | Keys | How it is told |

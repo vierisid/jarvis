@@ -22,6 +22,7 @@
  */
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
+import { notchNameDoubt, notchNamed, type NotchNameDoubt } from './names.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
 import type { NotchBlock, NotchButton, NotchPart } from './protocol.ts';
 import type { NotchQuietHome } from './quiet.ts';
@@ -140,6 +141,13 @@ export interface NotchAsksDeps {
    * about the line that was up (./said.ts).
    */
   keys?: () => void;
+  /**
+   * The people Jarvis knows by name, the ones dealt with last first: who the
+   * owner writes with. A name in a spoken instruction that is close to one of
+   * theirs without being it, or that two of them have, is read back before
+   * anything runs (./names.ts). Not given: nothing is read back.
+   */
+  people?: () => { name: string }[];
   /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
   learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /**
@@ -290,6 +298,10 @@ interface Live {
   missed: NotchMissReason | null;
   /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
   cut?: boolean;
+  /** A name in what was heard has been read back and answered (./names.ts): it is not asked about again. */
+  named?: boolean;
+  /** What was heard with that name put right: this is what runs. What was heard stays as it was heard. */
+  meant?: string;
   /** When it began to be carried out. */
   began?: number;
   /** What goes with the words: what was circled on the screen, a file that was dropped. */
@@ -659,6 +671,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       return;
     }
     if (!ledger.claim(ask.id, 'turn', ref)) { sync(ask); return; }
+    // A name that was read back and put right: what runs is written beside what was heard.
+    if (ask.meant) ledger.understood(ask.id, ask.meant);
     ask.phase = 'running';
     ask.turn = ref;
     ask.activity = null;
@@ -666,7 +680,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     /** Starts the turn. From here on the store says how it goes. */
     const start = async (): Promise<void> => {
       try {
-        await turns.submit({ ...ref, text: ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
+        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
         // Kept with the turn now: not held here as well.
         ask.files = undefined;
       } catch (error) {
@@ -686,7 +700,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       const understand = deps.understand;
       if (understand) {
         // Beside the turn, never in its way: the turn does not wait for it.
-        void understand(ask.heard).then(
+        void understand(ask.meant ?? ask.heard).then(
           (understood) => { if (understood) ledger.understood(ask.id, understood); },
           () => {},
         );
@@ -836,7 +850,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   }
 
   const workSay = (ask: Live): NotchPart[] =>
-    ask.activity ? [ask.activity] : ['On it: ', em(shortened(ask.heard, 80))];
+    ask.activity ? [ask.activity] : ['On it: ', em(shortened(ask.meant ?? ask.heard, 80))];
 
   function title(ask: Live): NotchPart[] {
     const words = em(shortened(ask.heard || '…', 60));
@@ -924,6 +938,44 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
               // the words for a moment and run them, with no yes given.
               ask.cut = false;
               if (ask.phase !== 'heard') continue;
+            }
+            // A name that may have been misheard is read back before anything runs: the prototype's
+            // 'I heard "send the notes to Ana". Is that Anna Rossi?'. Not for words the notch acts on
+            // itself, which find who is meant in their own way, and not for a memory, which is read back whole.
+            if (!ask.named && deps.people && !ask.files?.length && !deps.paused?.()
+              && !deps.side?.(ask.heard, { source: ask.source, at: ask.at }) && !(deps.remember && rememberSentence(ask.heard))) {
+              let doubt: NotchNameDoubt | null = null;
+              try { doubt = notchNameDoubt(ask.heard, deps.people()); } catch { doubt = null; }
+              if (doubt) {
+                // How many it may be, never who: a name is not written to a log.
+                log(`[notch] a name that was heard is read back (${doubt.options.length} it may be)`);
+                let who = doubt.options[0]!;
+                const id = stage.id();
+                listenId = null;
+                const say = (): NotchPart[] => ['I heard "', shortened(ask.heard, 70), '". Is that ', { word: { name: 'who', value: who, options: doubt!.options, label: 'Who', free: true } }, '?'];
+                stage.put({ id, kind: 'offer', say: say(), yes: 'yes', mood: 'confused', fold: 0 });
+                stage.surface.act({ gesture: 'shrug' });
+                let answered: 'yes' | 'no' = 'no';
+                for (;;) {
+                  const answer = await stage.answer(id, ['yes', 'no', 'word']);
+                  if (answer.act === 'word') {
+                    const typed = (answer.value ?? '').replace(/\s+/g, ' ').trim();
+                    if (answer.word === 'who' && typed) { who = typed; stage.surface.update(id, { say: say() }); }
+                    continue;
+                  }
+                  answered = answer.act === 'yes' ? 'yes' : 'no';
+                  break;
+                }
+                if (answered !== 'yes') {
+                  turnAway(ask, 'You turned it away.');
+                  return 'settled';
+                }
+                // Only the yes settles it, as for words that were cut short: played again from the top, it is asked again.
+                ask.named = true;
+                const meant = notchNamed(ask.heard, doubt, who);
+                if (meant !== ask.heard) ask.meant = meant;
+                if (ask.phase !== 'heard') continue;
+              }
             }
             await run(ask, stage);
           }
