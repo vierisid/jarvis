@@ -482,8 +482,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
-      // On a call everything is held, what is said to the notch too (./around.ts).
-      onCall: () => around?.onCall() ?? false,
+      // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
+      callHeard: () => calls?.listening() ?? false,
       stillFor: () => presence?.stillFor() ?? 0,
       // The instruction is over: what it was still asking for is asked no more.
       withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },

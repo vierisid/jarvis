@@ -697,3 +697,71 @@ describe('what the hardening audit found', () => {
     expect(h.said()).toBe('Call ended.');
   });
 });
+
+// The owner, 18 November 2026: on a call that is not listened to, what he
+// says to the notch has to be taken. A call's hold keeps back what comes by
+// itself and lets through what the person starts or is waiting on.
+describe('a hold that lets the person\'s own things through', () => {
+  const news = (id: string): NotchItem => ({ id, subject: id, class: 'person', speaks: true, title: () => [id], play: async (stage) => { await stage.say([`${id}.`], 2000); return 'settled'; } });
+  const mine = (id: string): NotchItem => ({ ...news(id), asked: true, urgent: true });
+
+  test('what comes by itself waits; what the person asked for is shown', async () => {
+    const h = harness();
+    h.inbox.hold('call', { own: true });
+    h.inbox.add(news('mail'));
+    await settle();
+    expect(h.line()).toBeNull();
+    h.inbox.add(mine('asked'));
+    await settle();
+    expect(h.said()).toBe('asked.');
+    await h.answer('done');
+    // Nothing else speaks until the hold is over.
+    expect(h.line()).toBeNull();
+    h.inbox.release('call');
+    await settle();
+    expect(h.said()).toBe('mail.');
+  });
+
+  test('something the person is waiting on is let through as well', async () => {
+    const h = harness();
+    h.inbox.hold('call', { own: true });
+    h.inbox.add({ ...news('approval'), returns: true });
+    await settle();
+    expect(h.said()).toBe('approval.');
+  });
+
+  test('a plain hold keeps everything back, and with both holds on the plain one decides', async () => {
+    const h = harness();
+    h.inbox.hold('stopped');
+    h.inbox.add(mine('asked'));
+    await settle();
+    expect(h.line()).toBeNull();
+    h.inbox.release('stopped');
+    await settle();
+    expect(h.said()).toBe('asked.');
+    await h.answer('done');
+    h.inbox.hold('call', { own: true });
+    h.inbox.hold('stopped');
+    h.inbox.add(mine('again'));
+    await settle();
+    expect(h.line()).toBeNull();
+  });
+
+  test('what the person asked for stays on the notch when such a hold begins; what came by itself goes back to waiting', async () => {
+    const h = harness();
+    h.inbox.add(mine('asked'));
+    await settle();
+    h.inbox.hold('call', { own: true });
+    await settle();
+    expect(h.said()).toBe('asked.');
+    await h.answer('done');
+    h.inbox.release('call');
+    h.inbox.add(news('mail'));
+    await settle();
+    expect(h.said()).toBe('mail.');
+    h.inbox.hold('call', { own: true });
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(1);
+  });
+});

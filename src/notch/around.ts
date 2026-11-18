@@ -129,7 +129,7 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     log('[notch] on a call: everything is held');
     // Said once, when the notch is free to say it. Then nothing more comes until the call is over.
     // Something the person is in the middle of on the notch is not taken from them for it: it waits.
-    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD); parked = -1; park(); askAgain(); } };
+    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD, { own: true }); parked = -1; park(); askAgain(); } };
     const say = (): void => {
       saying = null;
       if (!inCall || holding) return;

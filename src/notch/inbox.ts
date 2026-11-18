@@ -137,6 +137,8 @@ export class NotchInbox {
   private playing: Playing | null = null;
   private shownCount = -1;
   private readonly holds = new Set<string>();
+  /** The holds that keep back what comes by itself, and let through what the person started or is waiting on (a call). */
+  private readonly soft = new Set<string>();
   private opener: (() => boolean) | null = null;
   private readonly clock: NotchClock;
   private readonly log: (line: string) => void;
@@ -176,13 +178,15 @@ export class NotchInbox {
       this.start(entry, { unasked: wasPlaying.round === null }, wasPlaying.round);
       return;
     }
-    if (item.speaks && this.free()) {
+    // Whether this one may be shown now: no hold keeps it back, nothing else has the notch for itself, a page is up.
+    const open = !this.heldBack(item) && !this.options.busy?.() && this.surface.listening() > 0;
+    if (item.speaks && open && !this.playing && this.surface.current().line === null) {
       // Not while they are typing, and not in their quiet hours: it waits in the count for a still moment.
       if (!this.quietEnough(item)) { entry.missed = true; this.pushCount(); return; }
       this.start(entry, { unasked: true }, null);
       return;
     }
-    if (item.speaks && item.urgent && this.playing && this.canShow()) {
+    if (item.speaks && item.urgent && this.playing && open) {
       // A yes that is burning its fuse is not interrupted: the urgent thing
       // speaks the moment that is over.
       if (this.playing.stage.burning()) { entry.missed = true; this.pushCount(); return; }
@@ -195,7 +199,7 @@ export class NotchInbox {
       return;
     }
     // No notch was up, or everything was held: it gets its say when that ends.
-    if (item.speaks && (this.surface.listening() === 0 || this.holds.size > 0)) entry.missed = true;
+    if (item.speaks && (this.surface.listening() === 0 || this.heldBack(item))) entry.missed = true;
     this.pushCount();
   }
 
@@ -259,7 +263,7 @@ export class NotchInbox {
       // ended by itself. Without this, a thing that was interrupted by
       // talking would stay in the count when the talking came to nothing.
       const then = was?.then;
-      if (then && this.entries.includes(then) && this.holds.size === 0) {
+      if (then && this.entries.includes(then) && !this.heldBack(then.item)) {
         this.start(then, { unasked: false }, null);
         return true;
       }
@@ -290,17 +294,35 @@ export class NotchInbox {
 
   /**
    * Keeps everything in the count for as long as `reason` holds: nothing
-   * speaks up, and what is on the notch goes back to waiting.
+   * speaks up, and what is on the notch goes back to waiting. With `own`,
+   * what the person asked for themselves is not kept back (`heldBack`).
    */
-  hold(reason: string): void {
+  hold(reason: string, how: { own?: boolean } = {}): void {
     this.holds.add(reason);
-    if (this.playing) {
+    if (how.own) this.soft.add(reason); else this.soft.delete(reason);
+    // What the person started or waits on stays on the notch under a hold that lets their own things through.
+    if (this.playing && !(this.playing.entry && !this.heldBack(this.playing.entry.item))) {
       this.halt();
       this.pushCount();
     }
   }
 
+  /**
+   * Whether a hold keeps an item back. Every hold keeps back what comes by
+   * itself. One made with `own` lets through what the person started
+   * themselves (`asked`) and what they are waiting on (`returns`): on a call
+   * nothing comes up unasked, and what they say to the notch is still
+   * taken, shown and answered.
+   */
+  private heldBack(item: NotchItem): boolean {
+    if (this.holds.size === 0) return false;
+    if (item.asked !== true && item.returns !== true) return true;
+    for (const reason of this.holds) if (!this.soft.has(reason)) return true;
+    return false;
+  }
+
   release(reason: string): void {
+    this.soft.delete(reason);
     if (!this.holds.delete(reason)) return;
     if (this.holds.size === 0) this.cameUp();
   }
@@ -430,7 +452,7 @@ export class NotchInbox {
     // What comes next takes the line's place directly. Going back to the eyes
     // in between would make the notch shrink and grow again for nothing.
     if (playing.round && this.next(playing.round)) return;
-    if (then && this.entries.includes(then) && this.holds.size === 0) {
+    if (then && this.entries.includes(then) && !this.heldBack(then.item)) {
       this.start(then, { unasked: false }, null);
       return;
     }
