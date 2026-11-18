@@ -87,6 +87,21 @@ describe('the same email across runs (#957)', () => {
     expect(emailSendKey('p', 'work', MAIL)).not.toBe(emailSendKey('p', 'personal', MAIL));
   });
 
+  test('a send that names no recipient, message, subject or body is not matched with every other such send', async () => {
+    expect(emailSendKey('p', 'work', { endpoint: 'http://127.0.0.1/send' })).toBeNull();
+    expect(emailSendKey('p', 'work', { draft_id: 'r-1' })).not.toBeNull();
+    const f = flow();
+    await f.run().send({});
+    expect(await f.run().authorize({})).toMatchObject({ dispatch: 'authorized' });
+  });
+
+  test('the same run asked again after a lost reply is not a new send: it gets the stored result, no card', async () => {
+    const f = flow();
+    const first = f.run();
+    await first.send();
+    expect(await first.authorize()).toMatchObject({ dispatch: 'completed' });
+  });
+
   test('a first send still waiting for approval is named on the second card', async () => {
     const f = flow(['send_email']);
     const first = f.run();
