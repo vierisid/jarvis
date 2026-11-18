@@ -14,7 +14,17 @@
  * starts (no-op-code-sandbox.ts) run under the same rules. It needs no
  * privilege and no extra container capability.
  *
- * WHAT IT ALLOWS (`landlockAllowList`):
+ * HOW (macOS). The engine starts under `sandbox-exec` (Seatbelt) with a
+ * profile generated from the same allow-list (`seatbeltProfile`): file reads
+ * and writes are denied except on the listed paths, and nothing written in the
+ * private directory can be executed. File metadata (stat) stays readable
+ * everywhere, since module resolution walks parent directories. Children
+ * inherit the profile. `sandbox-exec` is deprecated by Apple but ships with
+ * every macOS; a self-check at first use (`seatbeltSupport`) makes sure Bun
+ * starts under it and that it really denies, and otherwise the setting's
+ * fallback applies.
+ *
+ * WHAT IT ALLOWS (`engineAllowList`):
  *   read-only:  the Bun binary, the engine bundle and its empty bunfig, the
  *               vendored pieces tree (the engine's cwd), the piece search
  *               roots (installed and shared pieces), the run's CODE tree
@@ -99,6 +109,7 @@ export function describeSandbox(mode: SandboxMode, support: () => SandboxSupport
   if (mode === "off") return "workflow engine sandbox: off (workflows.sandbox). Engines run with the daemon's file access.";
   const s = support();
   if (s.kind === "landlock") return `workflow engine sandbox: Landlock ABI ${s.abi} (${mode}), launcher ${s.launcher}`;
+  if (s.kind === "seatbelt") return `workflow engine sandbox: macOS sandbox-exec (${mode})`;
   return mode === "require"
     ? `workflow engine sandbox: UNAVAILABLE and required, so no workflow engine will start: ${s.reason}`
     : `workflow engine sandbox: UNAVAILABLE, engines run unsandboxed (prefer): ${s.reason}`;
@@ -109,9 +120,14 @@ export function bundledLauncherPath(arch: string = process.arch): string {
   return resolve(ENGINE_BUILD_PATHS.REPO_ROOT, "sandbox-launcher", "dist", `jarvis-sandbox-linux-${arch}`);
 }
 
-export type SandboxSupport =
+export type ActiveSandbox =
   | { kind: "landlock"; launcher: string; abi: number }
-  | { kind: "none"; reason: string };
+  | { kind: "seatbelt"; launcher: string };
+
+export type SandboxSupport = ActiveSandbox | { kind: "none"; reason: string };
+
+/** Where macOS keeps sandbox-exec. */
+export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
 const SUPPORT_CACHE = new Map<string, SandboxSupport>();
 
@@ -127,6 +143,13 @@ export function detectSandboxSupport(opts: {
   arch?: string;
 } = {}): SandboxSupport {
   const platform = opts.platform ?? process.platform;
+  if (platform === "darwin") {
+    const cached = SUPPORT_CACHE.get(SANDBOX_EXEC);
+    if (cached) return cached;
+    const support = seatbeltSupport();
+    SUPPORT_CACHE.set(SANDBOX_EXEC, support);
+    return support;
+  }
   if (platform !== "linux") {
     return { kind: "none", reason: `no file sandbox for ${platform} yet` };
   }
@@ -194,10 +217,10 @@ export function decideSandbox(
   mode: SandboxMode,
   support: () => SandboxSupport,
   warn: (message: string) => void = (m) => console.warn(m),
-): { launcher: string; abi: number } | null {
+): ActiveSandbox | null {
   if (mode === "off") return null;
   const s = support();
-  if (s.kind === "landlock") return { launcher: s.launcher, abi: s.abi };
+  if (s.kind !== "none") return s;
   if (mode === "require") throw new EngineSandboxUnavailableError(s.reason);
   if (!WARNED.has(s.reason)) {
     WARNED.add(s.reason);
@@ -272,8 +295,28 @@ export const SYSTEM_READ_ONLY: readonly string[] = Object.freeze([
 
 export const SYSTEM_READ_WRITE: readonly string[] = Object.freeze(["/dev/null"]);
 
-export function landlockAllowList(p: EngineSandboxPaths): { readOnly: string[]; readWrite: string[] } {
-  const readOnly = new Set<string>(SYSTEM_READ_ONLY);
+/**
+ * The macOS system paths, as the kernel sees them: /etc, /var and /tmp are
+ * links into /private, and Seatbelt matches the resolved path. The dyld
+ * shared cache and the system frameworks live under /System.
+ */
+export const SYSTEM_READ_ONLY_DARWIN: readonly string[] = Object.freeze([
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/System",
+  "/Library/Apple",
+  "/private/etc",
+  "/private/var/db/timezone",
+  "/private/var/run/resolv.conf",
+  "/dev",
+]);
+
+export function engineAllowList(
+  p: EngineSandboxPaths,
+  platform: NodeJS.Platform = process.platform,
+): { readOnly: string[]; readWrite: string[] } {
+  const readOnly = new Set<string>(platform === "darwin" ? SYSTEM_READ_ONLY_DARWIN : SYSTEM_READ_ONLY);
   const add = (path: string | undefined): void => {
     if (path && isAbsolute(path)) readOnly.add(path);
   };
@@ -298,6 +341,72 @@ function realOrSelf(path: string): string {
   } catch {
     return path;
   }
+}
+
+/** A string literal in Seatbelt's profile language. */
+function sbplString(text: string): string {
+  return `"${text.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+}
+
+/** Every spelling of a path Seatbelt may see: as given, and resolved. */
+function spellings(paths: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const path of paths) {
+    out.add(path);
+    out.add(realOrSelf(path));
+  }
+  return [...out];
+}
+
+/**
+ * The sandbox-exec profile for an allow-list. Later rules win in Seatbelt,
+ * so: everything allowed (mach services, network, signals: the sandbox is
+ * about files), then every file read and write denied, then stat allowed
+ * everywhere, then the listed paths, then no exec from the writable ones.
+ */
+export function seatbeltProfile(allow: { readOnly: readonly string[]; readWrite: readonly string[] }): string {
+  const ro = spellings(allow.readOnly);
+  const rw = spellings(allow.readWrite);
+  const subpaths = (paths: string[]) => paths.map((path) => `(subpath ${sbplString(path)})`).join(" ");
+  const lines = [
+    "(version 1)",
+    "(allow default)",
+    "(deny file-read* file-write*)",
+    "(allow file-read-metadata)",
+    `(allow file-read* (literal "/") ${subpaths([...ro, ...rw])})`,
+    `(allow file-write* ${subpaths(rw)})`,
+  ];
+  const noExec = rw.filter((path) => !path.startsWith("/dev/"));
+  if (noExec.length > 0) lines.push(`(deny process-exec* ${subpaths(noExec)})`);
+  return lines.join("\n") + "\n";
+}
+
+/** argv for the launcher: the rules, then the command it execs. */
+export function sandboxArgv(sandbox: ActiveSandbox, allow: { readOnly: readonly string[]; readWrite: readonly string[] }, command: readonly string[]): string[] {
+  return sandbox.kind === "seatbelt" ? ["-p", seatbeltProfile(allow), ...command] : launcherArgs(allow, command);
+}
+
+/**
+ * Whether sandbox-exec works here: Bun must start under a profile built like
+ * an engine's and must NOT be able to list the home directory. Either failing
+ * means no sandbox, and the setting decides what happens instead.
+ */
+function seatbeltSupport(): SandboxSupport {
+  if (!existsSync(SANDBOX_EXEC)) return { kind: "none", reason: `${SANDBOX_EXEC} is missing` };
+  const allow = {
+    readOnly: [...SYSTEM_READ_ONLY_DARWIN, realOrSelf(process.execPath)],
+    readWrite: [...SYSTEM_READ_WRITE],
+  };
+  const check = "try { require('fs').readdirSync(require('os').homedir()); process.exit(3) } catch { process.exit(0) }";
+  const probe = spawnSync(SANDBOX_EXEC, ["-p", seatbeltProfile(allow), process.execPath, "--no-env-file", "-e", check], {
+    encoding: "utf8", timeout: 15_000, env: sanitizedEnv(), cwd: "/",
+  });
+  if (probe.error) return { kind: "none", reason: `sandbox-exec failed to start: ${probe.error.message}` };
+  if (probe.status === 3) return { kind: "none", reason: "sandbox-exec ran Bun but did not restrict its file access" };
+  if (probe.status !== 0) {
+    return { kind: "none", reason: `Bun did not start under sandbox-exec (exit ${probe.status}): ${probe.stderr.trim().slice(0, 300)}` };
+  }
+  return { kind: "seatbelt", launcher: SANDBOX_EXEC };
 }
 
 /** argv for the launcher: the rules, then the command it execs. */

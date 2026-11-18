@@ -943,7 +943,7 @@ runs.
 
 Workflow pieces and CODE steps run in the workflow engine, a Bun process the
 daemon starts as its own user. On Linux the engine starts inside a Landlock
-sandbox (#1154): it can read the engine and piece code, the CODE tree of the
+sandbox, and on macOS inside a `sandbox-exec` profile (#1154): it can read the engine and piece code, the CODE tree of the
 flow version it runs and the system files a process needs, and write only a
 private temporary directory. The rest of the data folder (the database, the
 keychain, `.secrets.*`, `google-tokens.json`, `workflow-encryption.key`,
@@ -961,7 +961,8 @@ workflow engine sandbox: Landlock ABI 6 (prefer), launcher /app/sandbox-launcher
 or, when it cannot sandbox, `workflow engine sandbox: UNAVAILABLE ...` with
 the reason, followed by a warning the first time an engine starts unsandboxed.
 
-What it needs:
+On macOS it needs nothing: `sandbox-exec` ships with the system, and the
+first engine start checks that it works. What it needs on Linux:
 
 - Linux 5.13 or later with `landlock` in the kernel's `lsm=` list (most
   distributions since 2022; check `cat /sys/kernel/security/lsm`). Linux 6.2
