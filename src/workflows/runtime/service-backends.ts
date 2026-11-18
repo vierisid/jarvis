@@ -1548,10 +1548,11 @@ export function buildSandboxServiceBackends(
     // run in the last 24 hours asks "send again?", whatever the policy would
     // have done. Looked up as the step is first recorded and kept on the
     // record, so every resume of it still asks.
-    const emailSend = describesEmailSender(req.piece, req.action) ? () => {
-      const key = emailSendKey(ctx.projectId, stepConnectionId(run.flowVersionId, ctx.stepName!) ?? '', input);
-      const earlier = findEarlierSend(ctx.projectId, key, ctx.runId);
-      return { key, ...(earlier ? { duplicateOf: earlier } : {}) };
+    const sendKey = describesEmailSender(req.piece, req.action)
+      ? emailSendKey(ctx.projectId, stepConnectionId(run.flowVersionId, ctx.stepName!) ?? '', input) : null;
+    const emailSend = sendKey ? () => {
+      const earlier = findEarlierSend(ctx.projectId, sendKey, ctx.runId);
+      return { key: sendKey, ...(earlier ? { duplicateOf: earlier } : {}) };
     } : undefined;
     const noteSend = (record: WorkflowEffect) => {
       if (!record.sendKey) return;

@@ -42,12 +42,19 @@ function textOf(value: unknown): string {
   return typeof value === 'string' ? value.trim() : value === undefined || value === null ? '' : JSON.stringify(value);
 }
 
-/** The key of an email send: account, recipients, subject and body. */
-export function emailSendKey(projectId: string, account: string, args: Record<string, unknown>): string {
+/**
+ * The key of an email send: account, recipients, subject and body. Null when
+ * the input names none of them (no recipient, no message it answers, no
+ * subject, no body): such a send cannot be told apart from any other from the
+ * same account, so it is not checked rather than matched with all of them.
+ */
+export function emailSendKey(projectId: string, account: string, args: Record<string, unknown>): string | null {
   const recipients = [...new Set(RECIPIENT_KEYS.flatMap(key => addresses(args[key])))].sort();
   const answers = ANSWER_KEYS.map(key => [key, textOf(args[key])] as const).filter(([, value]) => value);
   const body = BODY_KEYS.map(key => [key, textOf(args[key])] as const).filter(([, value]) => value);
-  return digest(['email-send-v1', projectId, account, recipients, answers, textOf(args.subject), body]);
+  const subject = textOf(args.subject);
+  if (!recipients.length && !answers.length && !body.length && !subject) return null;
+  return digest(['email-send-v1', projectId, account, recipients, answers, subject, body]);
 }
 
 export type EarlierSend = NonNullable<WorkflowEffect['duplicateOf']>;

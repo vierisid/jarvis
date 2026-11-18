@@ -43,7 +43,9 @@ waiting for approval, even where it would otherwise go without asking. It is
 never refused. The lookup is made as the effect is first recorded and kept on
 it (`sendKey`, `duplicateOf`), so each resume of that step still asks. A send
 denied or blocked before it went out does not count. The key is taken over the
-bounded projection the card shows.
+bounded projection the card shows. A send that names no recipient, answered
+message, subject or body has no key and is not checked, since it could not be
+told apart from any other send from that account.
 
 An existing legacy `piece` authorization for any of these send actions fails
 closed after upgrade. One that never dispatched (still waiting on its card, or
