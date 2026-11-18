@@ -140,22 +140,29 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		}
 		registry["notch.configure"] = makeNotchConfigureHandler(notch)
 		// "Where is...?": a ring round something on the screen (notch_looker.go).
-		registry["notch.point"] = makeNotchPointHandler(notchLooker)
-		registry["notch.window"] = makeNotchWindowHandler()
+		//
+		// What reads the screen or acts on it is answered only while the
+		// switch is on (notchOnly): with it off this program holds none of
+		// what says where it must not look.
+		registry["notch.point"] = notchOnly(notch, "notch.point", makeNotchPointHandler(notchLooker))
+		registry["notch.window"] = notchOnly(notch, "notch.window", makeNotchWindowHandler())
 		// The same window as a picture with a ruler, for a program that says
 		// nothing about itself (notch_shot.go).
-		registry["notch.shot"] = makeNotchShotHandler()
+		registry["notch.shot"] = notchOnly(notch, "notch.shot", makeNotchShotHandler())
 		// Pass 10: a thing held to be put somewhere, the notch watching what
 		// the hands do, and doing a step again where it can be seen.
-		registry["notch.hold"] = makeNotchHoldHandler(notchLooker)
+		registry["notch.hold"] = notchOnly(notch, "notch.hold", makeNotchHoldHandler(notchLooker))
+		// Watching is asked for as the desktop app connects, beside the
+		// switch and not after it, so it is not held to the switch here: the
+		// switch going off ends it (NotchService.Configure).
 		registry["notch.watch"] = makeNotchWatchHandler()
-		registry["notch.act"] = makeNotchActHandler()
+		registry["notch.act"] = notchOnly(notch, "notch.act", makeNotchActHandler())
 		// Pass 12, day one: what lies on the desktop and in the documents and
 		// downloads, by name and kind. Only on a desktop app that may read
 		// files at all, and nothing of what is in a file (notch_files.go).
 		if caps[CapFilesystem] {
-			registry["notch.files"] = makeNotchFilesHandler(cfg)
-			registry["notch.file"] = makeNotchFileHandler(cfg)
+			registry["notch.files"] = notchOnly(notch, "notch.files", makeNotchFilesHandler(cfg))
+			registry["notch.file"] = notchOnly(notch, "notch.file", makeNotchFileHandler(cfg))
 		}
 	}
 

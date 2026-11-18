@@ -337,7 +337,19 @@ func (w *NotchWhere) Refuses(app, title string) bool {
 	if seen.App == w.front.App {
 		seen.Site = w.front.Site
 	}
-	return notchLookFor(seen, w.never) != notchLooking
+	if notchLookFor(seen, w.never) != notchLooking {
+		return true
+	}
+	// Another window of that browser (its title is not the one heard of): the
+	// site heard of is not its site. Judged by the site of the window in
+	// front, a bank in a second window was looked at whenever the first one
+	// showed something harmless. Its own site is not known, so its title is
+	// all there is.
+	if seen.Site != "" && title != w.front.Title {
+		seen.Site = ""
+		return notchLookFor(seen, w.never) != notchLooking
+	}
+	return false
 }
 
 // oleBoolIsTrue reads a yes or no that Windows handed over in a VARIANT.

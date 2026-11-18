@@ -70,17 +70,18 @@ export const NOTCH_REOPEN_APART_MS = 60_000;
  * night): it could no longer take a dropped file, and said "Try dropping it
  * again" for ever. Not more often than once a minute for one desktop app.
  */
-export function createNotchReopen(port: Pick<NotchSidecarPort, 'dispatchRPC'>, options: { pageUrl: string; log?: (line: string) => void; wait?: (ms: number) => Promise<void>; now?: () => number }): (sidecarId: string) => Promise<boolean> {
+export function createNotchReopen(port: Pick<NotchSidecarPort, 'dispatchRPC'>, options: { pageUrl: string; log?: (line: string) => void; wait?: (ms: number) => Promise<void>; now?: () => number }): NotchReopen {
   const log = options.log ?? ((line: string) => console.log(line));
   const wait = options.wait ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
   const now = options.now ?? Date.now;
   const last = new Map<string, number>();
-  return async (sidecarId) => {
-    const before = last.get(sidecarId);
-    if (before !== undefined && now() - before < NOTCH_REOPEN_APART_MS) return false;
-    last.set(sidecarId, now());
-    log('[notch] a page\'s sign-in has ended: it is opened again');
-    try { await port.dispatchRPC(sidecarId, 'notch.close', {}); } catch { /* it was not up */ }
+  /** The desktop apps whose notch is being opened here right now: a window that closes meanwhile was closed by this. */
+  const opening = new Set<string>();
+  /** When a notch that went away by itself was put back, for each desktop app. */
+  const back = new Map<string, number[]>();
+
+  /** Asks for the window, up to three times. `stopAtRefusal`: a desktop app that cannot be reached is not asked again. */
+  const open = async (sidecarId: string, stopAtRefusal: boolean): Promise<boolean> => {
     for (let tried = 0; tried < 3; tried++) {
       await wait(NOTCH_REOPEN_AFTER_MS);
       try {
@@ -89,10 +90,69 @@ export function createNotchReopen(port: Pick<NotchSidecarPort, 'dispatchRPC'>, o
         if (got?.already !== true) return true;
       } catch (error) {
         log(`[notch] the page could not be opened again: ${error instanceof Error ? error.message : String(error)}`);
+        if (stopAtRefusal) return false;
       }
     }
     return false;
   };
+
+  const reopen = (async (sidecarId: string) => {
+    const before = last.get(sidecarId);
+    if (before !== undefined && now() - before < NOTCH_REOPEN_APART_MS) return false;
+    if (opening.has(sidecarId)) return false;
+    last.set(sidecarId, now());
+    opening.add(sidecarId);
+    try {
+      log('[notch] a page\'s sign-in has ended: it is opened again');
+      try { await port.dispatchRPC(sidecarId, 'notch.close', {}); } catch { /* it was not up */ }
+      return await open(sidecarId, false);
+    } finally {
+      opening.delete(sidecarId);
+    }
+  }) as NotchReopen;
+
+  reopen.closed = async (sidecarId) => {
+    // Closed by the re-opening above, or already being put back.
+    if (opening.has(sidecarId)) return false;
+    const times = (back.get(sidecarId) ?? []).filter((at) => now() - at < NOTCH_BACK_WITHIN_MS);
+    if (times.length >= NOTCH_BACK_MOST) {
+      back.set(sidecarId, times);
+      log(`[notch] the notch's window went away ${times.length + 1} times in a short while: it is left closed until that desktop app connects again`);
+      return false;
+    }
+    back.set(sidecarId, [...times, now()]);
+    opening.add(sidecarId);
+    try {
+      log('[notch] the notch\'s window went away by itself: it is opened again');
+      return await open(sidecarId, true);
+    } finally {
+      opening.delete(sidecarId);
+    }
+  };
+  return reopen;
+}
+
+/**
+ * How often a notch that went away by itself is put back: this many times in
+ * this long. A window that will not stay (its web view fails each time) is
+ * then left closed until its desktop app connects again.
+ */
+export const NOTCH_BACK_MOST = 3;
+export const NOTCH_BACK_WITHIN_MS = 10 * 60_000;
+
+/** The notch's window, as the desktop app names it in `panel.closed`. */
+export const NOTCH_PANEL_ID = 'notch';
+
+export interface NotchReopen {
+  /** A page whose sign-in has ended: closed and opened anew. */
+  (sidecarId: string): Promise<boolean>;
+  /**
+   * The notch's window went away and the brain had not asked for that: the
+   * person pressed Alt+F4 while the notch had the keyboard (they meant the
+   * app underneath), or the window was closed some other way. Without this
+   * that computer had no notch until its desktop app connected again.
+   */
+  closed(sidecarId: string): Promise<boolean>;
 }
 
 export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions): void {

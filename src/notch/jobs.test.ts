@@ -4,8 +4,7 @@ import { NotchInbox } from './inbox.ts';
 import {
   NOTCH_ROUND_FINISH_MS, NOTCH_SECRET_STEP, NotchJobStore, attachNotchJobs, newPlacedRun, newRoundsRun, roundsPlan, roundsWords, runPlaced, runRounds, sureRounds, undoPuts,
   type PlacedStep,
-  type NotchActResult, type NotchJobHands, type NotchPut, type RoundsRun,
-} from './jobs.ts';
+  type NotchActResult, type NotchJobHands, type NotchPut, type RoundsRun, actRefusal } from './jobs.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import { findRounds, roundsApps, type Rounds, type WatchStep, type WatchWin } from './rounds.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -714,5 +713,19 @@ describe('what was done today, and taking it back from there', () => {
   test('with nothing to take back, it says so', () => {
     const n = notch(FIVE);
     expect(n.jobs.undoLast()).toBe(false);
+  });
+});
+
+// The hardening audit, 17 November 2026: every reason the desktop app gives
+// for not doing a step has its own words. "A step did not work." is for a
+// reason nobody foresaw.
+describe('why a step was not done', () => {
+  test('each reason the desktop app gives is said in its own words', () => {
+    const reasons = ['gone', 'moved', 'outside', 'covered', 'own', 'elevated', 'front', 'pointer', 'off'];
+    const said = reasons.map((why) => actRefusal(why));
+    for (const line of said) expect(line).not.toBe('A step did not work.');
+    expect(new Set(said).size).toBe(reasons.length);
+    expect(actRefusal('pointer')).toContain('pointer was moved');
+    expect(actRefusal(undefined)).toBe('A step did not work.');
   });
 });

@@ -514,6 +514,55 @@ func lookHolds(hands lookHands, points []lookPoint, light bool) []lookThing {
 	return things
 }
 
+// notchLookStraySamples is at how many places along a line it is asked
+// whether this program may look there.
+const notchLookStraySamples = 12
+
+// lookStrays says why a line must not be read, by where it went: at up to
+// notchLookStraySamples places along it and at its middle, the window there
+// is asked about as the window under the press was. "" when it may be read.
+func lookStrays(hands lookHands, away func(app, title string) string, points []lookPoint) string {
+	if away == nil || len(points) == 0 {
+		return ""
+	}
+	bounds := lookBounds(points)
+	places := []lookPoint{{bounds.X + bounds.W/2, bounds.Y + bounds.H/2}, points[len(points)-1]}
+	step := len(points) / notchLookStraySamples
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < len(points); i += step {
+		places = append(places, points[i])
+	}
+	// One window is asked about once, however many places lie on it.
+	asked := map[[2]string]bool{}
+	for _, at := range places {
+		app, title := hands.Front(at)
+		if asked[[2]string{app, title}] {
+			continue
+		}
+		asked[[2]string{app, title}] = true
+		if why := away(app, title); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// lookCornersAway says whether a rectangle of the screen reaches into a
+// window this program looks away from: asked at its four corners.
+func lookCornersAway(hands lookHands, away func(app, title string) string, r lookRect) bool {
+	if away == nil || r.W <= 0 || r.H <= 0 {
+		return false
+	}
+	for _, at := range []lookPoint{{r.X + 1, r.Y + 1}, {r.X + r.W - 2, r.Y + 1}, {r.X + 1, r.Y + r.H - 2}, {r.X + r.W - 2, r.Y + r.H - 2}} {
+		if away(hands.Front(at)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // read is the goroutine that reads: for the tag while a line is drawn, and
 // once more when it is finished.
 func (l *NotchLook) read() {
@@ -574,6 +623,11 @@ func (l *NotchLook) read() {
 			if line.refused != "" {
 				continue
 			}
+			// Nor where the line has gone since: it began in one window and
+			// may be over another by now.
+			if lookStrays(hands, away, points) != "" {
+				continue
+			}
 			tag := lookTag(lookHolds(hands, points, true))
 			lastRead = time.Now()
 			l.mu.Lock()
@@ -625,9 +679,22 @@ func (l *NotchLook) tell(job lookTaken) {
 		how = lookHowClick
 	}
 	bounds := lookBounds(job.points)
-	if line.refused != "" {
+	refused := line.refused
+	if refused == "" {
+		// The press said where the line began. Where it went is asked now:
+		// begun on the desktop or in a document, it can go round a figure in
+		// a bank's window beside it, and that window was never asked about.
+		l.mu.Lock()
+		away := l.away
+		l.mu.Unlock()
+		refused = lookStrays(hands, away, job.points)
+	}
+	if refused != "" {
+		l.mu.Lock()
+		line.snapshot = nil
+		l.mu.Unlock()
 		ink("", notchLookInkDropped)
-		send(notchLookPayload("taken", line.id, how, line.refused, 0, bounds, lookRect{}), nil)
+		send(notchLookPayload("taken", line.id, how, refused, 0, bounds, lookRect{}), nil)
 		return
 	}
 	reading := time.Now()
@@ -651,6 +718,19 @@ func (l *NotchLook) tell(job lookTaken) {
 	part := lookRect{}
 	if line.snapshot != nil {
 		part = lookPictureRect(seen, line.screen)
+		// The picture has room round what was circled, and that room can
+		// reach into the window next to it. Where it would take in a window
+		// this program looks away from, no picture is made: the words are
+		// enough.
+		l.mu.Lock()
+		away := l.away
+		l.mu.Unlock()
+		if lookCornersAway(hands, away, part) {
+			line.snapshot = nil
+			part = lookRect{}
+		}
+	}
+	if line.snapshot != nil {
 		picture = line.snapshot.Cut(part)
 		if picture == nil {
 			part = lookRect{}

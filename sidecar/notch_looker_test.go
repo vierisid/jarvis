@@ -21,6 +21,8 @@ type fakeHands struct {
 	things  []lookThing
 	at      lookThing
 	watches int
+	// Which window is where, when a test has more than one.
+	front func(at lookPoint) (string, string)
 }
 
 func (h *fakeHands) note(format string, args ...any) {
@@ -51,6 +53,9 @@ func (h *fakeHands) Screen(at lookPoint) (lookRect, float64) {
 }
 func (h *fakeHands) Own(at lookPoint) bool { return h.own }
 func (h *fakeHands) Front(at lookPoint) (string, string) {
+	if h.front != nil {
+		return h.front(at)
+	}
 	return "excel", "Payouts  -  Excel"
 }
 func (h *fakeHands) WindowRect(at lookPoint) lookRect { return lookRect{0, 0, 1800, 1000} }
@@ -292,6 +297,105 @@ func TestLookWhereThisProgramLooksAwayNothingIsReadAndThePressIsStillKept(t *tes
 		if line == "snapshot" || strings.HasPrefix(line, "thing") {
 			t.Fatalf("something was read or copied: %v", hands.log())
 		}
+	}
+}
+
+// The hardening audit, 17 November 2026: only the window under the press was
+// asked about. A line begun in a document and drawn round a figure in the
+// bank's window beside it was read and pictured.
+func TestLookALineThatStraysOverAWindowThisProgramLooksAwayFromIsNotRead(t *testing.T) {
+	hands := &fakeHands{}
+	// A document on the left half of the screen, the bank on the right.
+	hands.front = func(at lookPoint) (string, string) {
+		if at.X >= 960 {
+			return "chrome", "Your accounts"
+		}
+		return "winword", "Letter - Word"
+	}
+	hands.things = []lookThing{{Kind: "row", Name: "Balance", Rect: lookRect{1000, 300, 200, 30}}}
+	var mu sync.Mutex
+	var all []lookSent
+	arrived := make(chan struct{}, 64)
+	look := newNotchLook()
+	look.Use(hands, func(app, title string) string {
+		if app == "chrome" {
+			return "bank"
+		}
+		return ""
+	}, func(payload map[string]any, body []byte) {
+		mu.Lock()
+		all = append(all, lookSent{payload, body})
+		mu.Unlock()
+		arrived <- struct{}{}
+	})
+	t.Cleanup(look.Forget)
+	look.Keys(true)
+	// The press is in the document.
+	if !look.Down(700, 300) {
+		t.Fatal("the press was not kept")
+	}
+	// And the line goes round something in the bank's window.
+	for _, p := range lookRing(1100, 320, 150, 60, 30) {
+		look.Move(p.X, p.Y)
+	}
+	time.Sleep(250 * time.Millisecond) // the tag would have been read by now
+	look.Up(700, 301)
+	deadline := time.After(3 * time.Second)
+	var taken *lookSent
+	for taken == nil {
+		mu.Lock()
+		for i := range all {
+			if all[i].payload["phase"] == "taken" {
+				taken = &all[i]
+			}
+		}
+		mu.Unlock()
+		if taken != nil {
+			break
+		}
+		select {
+		case <-arrived:
+		case <-deadline:
+			t.Fatalf("nothing was told; done: %v", hands.log())
+		}
+	}
+	if taken.payload["refused"] != "bank" || taken.body != nil {
+		t.Fatalf("a line over the bank's window: %v, %d bytes", taken.payload, len(taken.body))
+	}
+	for _, line := range hands.log() {
+		if strings.HasPrefix(line, "thing") {
+			t.Fatalf("something was read there: %v", hands.log())
+		}
+	}
+}
+
+// And the picture's room does not reach into such a window either.
+func TestLookThePictureIsLeftOutWhereItsRoomWouldTakeInAWindowLookedAwayFrom(t *testing.T) {
+	hands := &fakeHands{}
+	hands.front = func(at lookPoint) (string, string) {
+		if at.X >= 960 {
+			return "chrome", "Your accounts"
+		}
+		return "winword", "Letter - Word"
+	}
+	away := func(app, title string) string {
+		if app == "chrome" {
+			return "bank"
+		}
+		return ""
+	}
+	// A line wholly in the document, close to the edge the bank's window begins at.
+	line := lookRing(880, 300, 50, 40, 24)
+	if why := lookStrays(hands, away, line); why != "" {
+		t.Fatalf("the line itself is in the document: %q", why)
+	}
+	part := lookPictureRect(lookBounds(line), lookRect{0, 0, 1920, 1080})
+	if !lookCornersAway(hands, away, part) {
+		t.Fatalf("the picture's room %v reaches over the bank's window", part)
+	}
+	// Far from it, the picture is made.
+	if lookCornersAway(hands, away, lookPictureRect(lookBounds(lookRing(300, 300, 50, 40, 24)), lookRect{0, 0, 1920, 1080})) {
+		t.Fatal("a picture in the middle of the document is not near the bank")
 	}
 }
 

@@ -1224,8 +1224,12 @@ func pasteFlavours(act notchAct) (plain, html, shape string) {
 	tsv := pasteTSV(act.Rows)
 	switch act.As {
 	case "cells":
-		// Into a sheet: both ways of saying it are cells.
-		return tsv, pasteHTML(act.Rows, "table"), tsv
+		// Into a sheet: both ways of saying it are cells. What is pasted there
+		// is words and numbers that were read off a screen, never a formula:
+		// a sheet works out a cell that begins with "=", and "=IMPORTDATA(…)"
+		// read off a web page would send what is in the sheet somewhere else.
+		safe := pasteSafeRows(act.Rows)
+		return pasteTSV(safe), pasteHTML(safe, "table"), tsv
 	case "list":
 		return pasteBullets(act.Rows), pasteHTML(act.Rows, "list"), tsv
 	case "text":

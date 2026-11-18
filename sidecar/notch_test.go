@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,77 @@ func TestNotchPushHandlerNeedsTheSwitchOn(t *testing.T) {
 	res, err := push(map[string]any{"message": map[string]any{"type": "rest"}})
 	if err != nil || res.Result.(map[string]any)["pushed"] != true {
 		t.Fatalf("notch.push: %v %v", res, err)
+	}
+}
+
+// The hardening audit, 17 November 2026: with the switch off this program is
+// told nothing of where it must not look, and a request to read the screen or
+// to act on it was still answered.
+func TestWhatReadsOrActsIsRefusedWhileTheSwitchIsOff(t *testing.T) {
+	svc := &NotchService{}
+	ran := 0
+	gated := notchOnly(svc, "notch.shot", func(map[string]any) (*RPCResult, error) {
+		ran++
+		return &RPCResult{Result: map[string]any{"ok": true}}, nil
+	})
+	if _, err := gated(nil); !errors.Is(err, errNotchOff) || ran != 0 {
+		t.Fatalf("with the switch off: err=%v, ran=%d", err, ran)
+	}
+	svc.Configure(true)
+	if _, err := gated(nil); err != nil || ran != 1 {
+		t.Fatalf("with the switch on: err=%v, ran=%d", err, ran)
+	}
+	svc.Configure(false)
+	if _, err := gated(nil); !errors.Is(err, errNotchOff) || ran != 1 {
+		t.Fatalf("switched off again: err=%v, ran=%d", err, ran)
+	}
+}
+
+// And the watching of what the hands do ends with the switch.
+func TestTheSwitchGoingOffEndsTheWatching(t *testing.T) {
+	was := notchWatchSet
+	defer func() { notchWatchSet = was }()
+	var said []bool
+	notchWatchSet = func(on bool) error { said = append(said, on); return nil }
+	svc := &NotchService{}
+	svc.Configure(true)
+	if len(said) != 0 {
+		t.Fatalf("switching on says nothing about watching: %v", said)
+	}
+	svc.Configure(false)
+	if len(said) != 1 || said[0] {
+		t.Fatalf("switching off ends the watching: %v", said)
+	}
+}
+
+// The hardening audit, 17 November 2026: a notch hidden behind a fullscreen
+// video still took Esc from the film, and a yes opened Home where nobody saw.
+func TestAHiddenNotchWantsNoEsc(t *testing.T) {
+	svc := &NotchService{}
+	kb := newNotchKeyboard(notchDefaultPairs("windows"), func(notchKeyAction) {}, nil)
+	svc.keys = kb
+	wants := func() bool {
+		kb.mu.Lock()
+		defer kb.mu.Unlock()
+		return kb.engine.wantEsc
+	}
+	svc.wantEsc(true)
+	if !wants() {
+		t.Fatal("the page wants Esc and the notch is in sight: Esc is taken")
+	}
+	svc.setHidden(true)
+	if wants() {
+		t.Fatal("out of sight, Esc is the film's")
+	}
+	// What the page says while hidden is kept for when it is seen again.
+	svc.wantEsc(false)
+	svc.wantEsc(true)
+	if wants() {
+		t.Fatal("still out of sight")
+	}
+	svc.setHidden(false)
+	if !wants() {
+		t.Fatal("in sight again, and the page still wants Esc")
 	}
 }
 

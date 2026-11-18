@@ -88,6 +88,14 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	width := int(notchWindowW * dpi / 96)
 	height := int(notchWindowH * dpi / 96)
 	screenW, screenH := platformGetScreenSize()
+	// The middle of the main display. All displays together are one wide
+	// strip to Windows, and the middle of two monitors side by side is the
+	// seam between them: the notch sat across it, or half off the main one.
+	if platformPrimaryScreenSize != nil {
+		if mainW, mainH := platformPrimaryScreenSize(); mainW > 0 && mainH > 0 {
+			screenW, screenH = mainW, mainH
+		}
+	}
 	x := notchTopCentre(screenW, width)
 
 	w := &notchWindow{hwnd: hwnd, dpi: int(dpi)}
@@ -138,6 +146,8 @@ func platformNotchReveal(handle unsafe.Pointer) {
 	// A page that has just loaded is asking nothing yet. (A page that was
 	// asking when it went away never said it had stopped.)
 	w.asking.Store(false)
+	// A page loaded again while the window is out of sight is told so anew.
+	notch.setHidden(w.hidden.Load())
 	if !w.hidden.Load() {
 		w.show()
 	}
@@ -157,6 +167,7 @@ func platformNotchAsking(handle unsafe.Pointer, asking bool) {
 		return
 	}
 	if w.hidden.CompareAndSwap(true, false) {
+		notch.setHidden(false)
 		if w.loaded.Load() {
 			w.show()
 		}
@@ -275,6 +286,8 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 		hide := notchShouldHide(fullscreen, awake, playing, w.asking.Load())
 		if hide != w.hidden.Load() {
 			w.hidden.Store(hide)
+			// Out of sight, it takes no Esc and no yes (NotchService.setHidden).
+			notch.setHidden(hide)
 			if hide {
 				w.hide()
 				log.Printf("[notch] hidden: a video is playing in a fullscreen app (%s, window class %s)", program, class)
@@ -584,6 +597,10 @@ func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 		return false
 	}
 	ex := getWindowLong(w.hwnd, gwlExStyle)
+	if take && w.hidden.Load() {
+		// A window nobody can see does not take the keyboard from the film.
+		return false
+	}
 	if take {
 		if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 && fg != w.hwnd {
 			w.previousFg.Store(fg)

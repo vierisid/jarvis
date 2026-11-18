@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { NOTCH_CAPABILITY, NOTCH_REOPEN_AFTER_MS, NOTCH_REOPEN_APART_MS, NOTCH_SPAWN_AGAIN_MS, attachNotch, createNotchReopen, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
+import { NOTCH_BACK_MOST, NOTCH_BACK_WITHIN_MS, NOTCH_CAPABILITY, NOTCH_REOPEN_AFTER_MS, NOTCH_REOPEN_APART_MS, NOTCH_SPAWN_AGAIN_MS, attachNotch, createNotchReopen, type NotchSidecar, type NotchSidecarPort } from './attach.ts';
 
 /** A sidecar manager that records what it is asked to do. */
 function fakePort(answer: () => Promise<unknown> = async () => ({ configured: true, enabled: true, surface: 'none' })) {
@@ -212,5 +212,46 @@ describe('a page whose sign-in has ended is opened again', () => {
     expect(await h.reopen('s2')).toBe(true);
     h.pass(NOTCH_REOPEN_APART_MS + 1);
     expect(await h.reopen('s1')).toBe(true);
+  });
+
+  // The hardening audit, 17 November 2026: Alt+F4 while the notch had the
+  // keyboard closed its window, and it never came back until a reconnect.
+  test('a notch whose window went away by itself is opened again, without a close', async () => {
+    const h = reopener([{ spawned: true, already: false }]);
+    expect(await h.reopen.closed('s1')).toBe(true);
+    expect(h.calls).toEqual(['notch.spawn']);
+    expect(h.waits).toEqual([NOTCH_REOPEN_AFTER_MS]);
+  });
+
+  test('the close a re-opening asked for is not answered with a second window', async () => {
+    const calls: string[] = [];
+    let heard: Promise<boolean> | null = null;
+    const reopen = createNotchReopen({
+      async dispatchRPC(_sidecarId, method) {
+        calls.push(method);
+        // The desktop app says "closed" while the re-opening is still going.
+        if (method === 'notch.close') heard = reopen.closed('s1');
+        return method === 'notch.spawn' ? { spawned: true, already: false } : { closed: true };
+      },
+    }, { pageUrl: 'http://localhost:3143/notch.html', log: () => {}, wait: async () => {} });
+    expect(await reopen('s1')).toBe(true);
+    expect(await heard!).toBe(false);
+    expect(calls).toEqual(['notch.close', 'notch.spawn']);
+  });
+
+  test('a window that will not stay is left closed after a few times', async () => {
+    const h = reopener([{ spawned: true, already: false }]);
+    for (let i = 0; i < NOTCH_BACK_MOST; i++) expect(await h.reopen.closed('s1')).toBe(true);
+    expect(await h.reopen.closed('s1')).toBe(false);
+    expect(h.calls).toHaveLength(NOTCH_BACK_MOST);
+    // Later it is put back again.
+    h.pass(NOTCH_BACK_WITHIN_MS + 1);
+    expect(await h.reopen.closed('s1')).toBe(true);
+  });
+
+  test('a desktop app that cannot be reached is not asked three times', async () => {
+    const h = reopener([new Error('Sidecar not connected')]);
+    expect(await h.reopen.closed('s1')).toBe(false);
+    expect(h.calls).toEqual(['notch.spawn']);
   });
 });

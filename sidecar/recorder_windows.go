@@ -332,6 +332,153 @@ func setNotchWatching(on bool) error {
 	return nil
 }
 
+// The two hook procedures are made once, for the life of the program: Go can
+// hand Windows only a fixed number of them (about two thousand), and none is
+// ever given back. Made at every install, two were used up each time the
+// hooks went in, which the notch does at every connect: after about a
+// thousand reconnects the program stopped with "too many callback functions".
+var (
+	recorderProcsOnce sync.Once
+	recorderMouseProc uintptr
+	recorderKeyProc   uintptr
+	// The hook that is in, by the thread that put it in. Windows calls a
+	// low-level hook on the thread that installed it, so the thread says
+	// whose event this is, also for the moment an old pair of hooks is still
+	// coming out while a new pair is in.
+	recorderHooks sync.Map
+)
+
+func recorderProcs() (mouse, key uintptr) {
+	recorderProcsOnce.Do(func() {
+		recorderMouseProc = syscall.NewCallback(recorderMouseHook)
+		recorderKeyProc = syscall.NewCallback(recorderKeyHook)
+	})
+	return recorderMouseProc, recorderKeyProc
+}
+
+func recorderHookHere() *recorderHook {
+	tid, _, _ := procGetCurrentThread.Call()
+	if h, ok := recorderHooks.Load(uint32(tid)); ok {
+		return h.(*recorderHook)
+	}
+	return nil
+}
+
+// enqueue hands an event to the worker.
+func (h *recorderHook) enqueue(e recorderEvent) {
+	select {
+	case h.events <- e:
+	default:
+		// Never block Windows inside a hook; a dropped event is a
+		// missed step the person can re-record, a stall is not.
+	}
+}
+
+func recorderMouseHook(nCode int32, wParam uintptr, lParam uintptr) uintptr {
+	h := recorderHookHere()
+	if h == nil {
+		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
+		return ret
+	}
+	if nCode >= 0 && (wParam == wmLButtonDownRec || wParam == wmLButtonUp) {
+		// One conversion for both buttons: lParam is a real
+		// MSLLHOOKSTRUCT address Windows owns for the duration of the
+		// callback, which is the documented vet exception here.
+		ms := (*msllHookStruct)(unsafe.Pointer(lParam))
+		x, y := int(ms.Pt.X), int(ms.Pt.Y)
+		rec, watch := h.recording.Load(), h.watching.Load()
+		// A click a program made is not something the person did: above
+		// all Jarvis's own, when it does a job again where it can be
+		// seen. Recorded, it would be taken for the person's next round.
+		if ms.Flags&llmhfInjected != 0 {
+			rec, watch = false, false
+		}
+		switch {
+		case !rec && !watch:
+		case wParam == wmLButtonDownRec:
+			// Sample the target at the PRESS, not at the release.
+			// Activation and menu dismissal both happen on the press,
+			// so a site read at the release can already name the window
+			// that replaced the one clicked -- the window revealed
+			// behind a closing menu, or the app that just came up.
+			h.downSite = h.sampleClickSite(x, y)
+			if rec && h.typed.Swap(false) {
+				h.enqueue(recorderEvent{kind: "flush"})
+			}
+		default:
+			site := h.downSite
+			h.downSite = clickSite{}
+			if !pressSiteStillApplies(site.X, site.Y, site.Valid, x, y) {
+				// A drag, or a release whose press we never saw
+				// (recording armed mid-click). Sample here instead, so
+				// the window recorded and the point everything downstream
+				// resolves at describe the same place.
+				site = h.sampleClickSite(x, y)
+			}
+			h.watchTyped.Store(false)
+			h.enqueue(recorderEvent{kind: "click", site: site, keys: watchClickMods(hookMods()), rec: rec, watch: watch})
+		}
+	}
+	ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
+	return ret
+}
+
+func recorderKeyHook(nCode int32, wParam uintptr, lParam uintptr) uintptr {
+	h := recorderHookHere()
+	if h == nil {
+		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
+		return ret
+	}
+	if nCode >= 0 && (wParam == wmKeyUpRec || wParam == wmSysKeyUpRec) {
+		if ks := (*kbdllHookStruct)(unsafe.Pointer(lParam)); ks.VkCode == h.heldChord {
+			h.heldChord = 0
+		}
+	}
+	if nCode >= 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
+		ks := (*kbdllHookStruct)(unsafe.Pointer(lParam))
+		rec, watch := h.recording.Load(), h.watching.Load()
+		// Keys a program pressed are not the person's: Jarvis's own, above all.
+		if ks.Flags&llkhfInjected != 0 {
+			rec, watch = false, false
+		}
+		if rec || watch {
+			// Which key it is decides only what kind of thing happened: a
+			// named key or a shortcut is a step and is named; a key that
+			// types is "typing", and which key it was goes no further than
+			// this line (notch_watch.go).
+			mods := hookMods()
+			kind, spec := watchKey(ks.VkCode, mods)
+			if kind == watchKeyStep && (mods.Ctrl || mods.Alt || mods.Win) {
+				if ks.VkCode == h.heldChord {
+					// The same shortcut, still held: it was told when it went down.
+					kind = watchKeyNone
+				}
+				h.heldChord = ks.VkCode
+			}
+			switch kind {
+			case watchKeyStep:
+				if rec && (ks.VkCode == vkReturnRec || ks.VkCode == vkTabRec) && h.typed.Swap(false) {
+					h.enqueue(recorderEvent{kind: "commit"})
+				}
+				h.watchTyped.Store(false)
+				h.enqueue(recorderEvent{kind: "keys", keys: spec, front: win32GetForegroundWindow(), rec: rec, watch: watch})
+			case watchKeyTyped:
+				// Mark that the person is typing into the focused field. The
+				// character itself is not recorded; the committed value is
+				// read from UIA at flush time.
+				if rec && isPrintableVk(ks.VkCode) && !h.typed.Swap(true) {
+					h.enqueue(recorderEvent{kind: "typing_started", front: win32GetForegroundWindow()})
+				}
+				if watch && !rec && !h.watchTyped.Swap(true) {
+					h.enqueue(recorderEvent{kind: "typed", front: win32GetForegroundWindow(), watch: true})
+				}
+			}
+		}
+	}
+	ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
+	return ret
+}
+
 // installInputHooks installs the hooks if they are not in. With hookMu held.
 func installInputHooks() error {
 	if activeRecorderHook != nil {
@@ -347,109 +494,7 @@ func installInputHooks() error {
 
 	go recorderWorker(h, evCh)
 
-	enqueue := func(e recorderEvent) {
-		select {
-		case evCh <- e:
-		default:
-			// Never block Windows inside a hook; a dropped event is a
-			// missed step the person can re-record, a stall is not.
-		}
-	}
-
-	mouseProc := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam uintptr) uintptr {
-		if nCode >= 0 && (wParam == wmLButtonDownRec || wParam == wmLButtonUp) {
-			// One conversion for both buttons: lParam is a real
-			// MSLLHOOKSTRUCT address Windows owns for the duration of the
-			// callback, which is the documented vet exception here.
-			ms := (*msllHookStruct)(unsafe.Pointer(lParam))
-			x, y := int(ms.Pt.X), int(ms.Pt.Y)
-			rec, watch := h.recording.Load(), h.watching.Load()
-			// A click a program made is not something the person did: above
-			// all Jarvis's own, when it does a job again where it can be
-			// seen. Recorded, it would be taken for the person's next round.
-			if ms.Flags&llmhfInjected != 0 {
-				rec, watch = false, false
-			}
-			switch {
-			case !rec && !watch:
-			case wParam == wmLButtonDownRec:
-				// Sample the target at the PRESS, not at the release.
-				// Activation and menu dismissal both happen on the press,
-				// so a site read at the release can already name the window
-				// that replaced the one clicked -- the window revealed
-				// behind a closing menu, or the app that just came up.
-				h.downSite = h.sampleClickSite(x, y)
-				if rec && h.typed.Swap(false) {
-					enqueue(recorderEvent{kind: "flush"})
-				}
-			default:
-				site := h.downSite
-				h.downSite = clickSite{}
-				if !pressSiteStillApplies(site.X, site.Y, site.Valid, x, y) {
-					// A drag, or a release whose press we never saw
-					// (recording armed mid-click). Sample here instead, so
-					// the window recorded and the point everything downstream
-					// resolves at describe the same place.
-					site = h.sampleClickSite(x, y)
-				}
-				h.watchTyped.Store(false)
-				enqueue(recorderEvent{kind: "click", site: site, keys: watchClickMods(hookMods()), rec: rec, watch: watch})
-			}
-		}
-		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
-		return ret
-	})
-
-	keyboardProc := syscall.NewCallback(func(nCode int32, wParam uintptr, lParam uintptr) uintptr {
-		if nCode >= 0 && (wParam == wmKeyUpRec || wParam == wmSysKeyUpRec) {
-			if ks := (*kbdllHookStruct)(unsafe.Pointer(lParam)); ks.VkCode == h.heldChord {
-				h.heldChord = 0
-			}
-		}
-		if nCode >= 0 && (wParam == wmKeyDown || wParam == wmSysKeyDown) {
-			ks := (*kbdllHookStruct)(unsafe.Pointer(lParam))
-			rec, watch := h.recording.Load(), h.watching.Load()
-			// Keys a program pressed are not the person's: Jarvis's own, above all.
-			if ks.Flags&llkhfInjected != 0 {
-				rec, watch = false, false
-			}
-			if rec || watch {
-				// Which key it is decides only what kind of thing happened: a
-				// named key or a shortcut is a step and is named; a key that
-				// types is "typing", and which key it was goes no further than
-				// this line (notch_watch.go).
-				mods := hookMods()
-				kind, spec := watchKey(ks.VkCode, mods)
-				if kind == watchKeyStep && (mods.Ctrl || mods.Alt || mods.Win) {
-					if ks.VkCode == h.heldChord {
-						// The same shortcut, still held: it was told when it went down.
-						kind = watchKeyNone
-					}
-					h.heldChord = ks.VkCode
-				}
-				switch kind {
-				case watchKeyStep:
-					if rec && (ks.VkCode == vkReturnRec || ks.VkCode == vkTabRec) && h.typed.Swap(false) {
-						enqueue(recorderEvent{kind: "commit"})
-					}
-					h.watchTyped.Store(false)
-					enqueue(recorderEvent{kind: "keys", keys: spec, front: win32GetForegroundWindow(), rec: rec, watch: watch})
-				case watchKeyTyped:
-					// Mark that the person is typing into the focused field. The
-					// character itself is not recorded; the committed value is
-					// read from UIA at flush time.
-					if rec && isPrintableVk(ks.VkCode) && !h.typed.Swap(true) {
-						enqueue(recorderEvent{kind: "typing_started", front: win32GetForegroundWindow()})
-					}
-					if watch && !rec && !h.watchTyped.Swap(true) {
-						enqueue(recorderEvent{kind: "typed", front: win32GetForegroundWindow(), watch: true})
-					}
-				}
-			}
-		}
-		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
-		return ret
-	})
+	mouseProc, keyboardProc := recorderProcs()
 
 	installErr := make(chan error, 1)
 	tidCh := make(chan uint32, 1)
@@ -460,6 +505,9 @@ func installInputHooks() error {
 
 		tid, _, _ := procGetCurrentThread.Call()
 		tidCh <- uint32(tid)
+		// Whose events this thread's hooks carry (recorderHookHere).
+		recorderHooks.Store(uint32(tid), h)
+		defer recorderHooks.Delete(uint32(tid))
 
 		hMod, _, _ := procGetModuleHandleW.Call(0)
 		hMouse, _, eMouse := procSetWindowsHookExW.Call(uintptr(whMouseLL), mouseProc, hMod, 0)

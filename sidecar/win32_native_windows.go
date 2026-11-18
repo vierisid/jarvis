@@ -544,6 +544,15 @@ func pressKeysNative(keys string) error {
 		}
 	}
 
+	// Held with Ctrl, Alt or Win, a letter or a digit is a key and not a sign
+	// (keys_plain.go).
+	shortcut := false
+	for _, part := range parts {
+		if shortcutMods[strings.ToLower(strings.TrimSpace(part))] {
+			shortcut = true
+		}
+	}
+
 	for _, part := range parts {
 		raw := strings.TrimSpace(part)
 		if raw == "" {
@@ -552,6 +561,12 @@ func pressKeysNative(keys string) error {
 		if vk, ok := modifierKeys[strings.ToLower(raw)]; ok {
 			addMod(vk)
 			continue
+		}
+		if shortcut {
+			if vk, ok := plainKeyVk(raw); ok {
+				mains = append(mains, vk)
+				continue
+			}
 		}
 		vk, implied, err := resolveVk(raw)
 		if err != nil {
