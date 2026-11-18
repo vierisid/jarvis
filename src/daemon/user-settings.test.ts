@@ -208,6 +208,44 @@ describe('user-settings', () => {
     expect(config.stt?.provider).toBe('sarvam');
   });
 
+  // The dashboard's workflow settings, saved after an earlier file import.
+  const userWorkflows = {
+    enabled: true, maxConcurrentExecutions: 7, defaultRetries: 1,
+    defaultTimeoutMs: 1000, selfHealEnabled: false, autoSuggestEnabled: false,
+  };
+
+  test('import: adding or changing workflows.sandbox in the file leaves the saved workflow settings alone', () => {
+    expect(importLegacyUserSettings({ workflows: { maxConcurrentExecutions: 3 } })).toEqual(['workflows']);
+    saveUserSection('workflows', userWorkflows);
+
+    expect(importLegacyUserSettings({ workflows: { maxConcurrentExecutions: 3, sandbox: 'require' } })).toEqual([]);
+    expect(importLegacyUserSettings({ workflows: { maxConcurrentExecutions: 3, sandbox: 'off' } })).toEqual([]);
+    expect(loadUserSection('workflows')).toEqual(userWorkflows);
+  });
+
+  test('import: an old import record with artifact paths does not reset the row once the file drops them', () => {
+    // Recorded by a build that imported the whole section, paths included.
+    setSetting('cfg.__import_state', JSON.stringify({
+      workflows: JSON.stringify({ engine_dir: '/opt/engine', pieces_dir: '/srv/pieces', maxConcurrentExecutions: 3 }),
+    }));
+    saveUserSection('workflows', userWorkflows);
+
+    expect(importLegacyUserSettings({ workflows: { maxConcurrentExecutions: 3 } })).toEqual([]);
+    expect(loadUserSection('workflows')).toEqual(userWorkflows);
+    // The record is upgraded to the user-key-only form.
+    const state = JSON.parse(getSetting('cfg.__import_state')!);
+    expect(state.workflows).toBe(JSON.stringify({ maxConcurrentExecutions: 3 }));
+  });
+
+  test('import: a real workflow user-key edit in the file still applies, without the system keys', () => {
+    const file = { engine_dir: '/opt/engine', sandbox: 'require', maxConcurrentExecutions: 3 };
+    expect(importLegacyUserSettings({ workflows: file })).toEqual(['workflows']);
+    saveUserSection('workflows', userWorkflows);
+
+    expect(importLegacyUserSettings({ workflows: { ...file, maxConcurrentExecutions: 4 } })).toEqual(['workflows']);
+    expect(loadUserSection('workflows')).toEqual({ maxConcurrentExecutions: 4 });
+  });
+
   test('null rawYaml (no config file) imports nothing', () => {
     expect(importLegacyUserSettings(null)).toEqual([]);
   });
