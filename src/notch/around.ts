@@ -15,7 +15,7 @@
  * be known, and nothing is said about a connection that cannot be known.
  */
 import type { NotchInbox } from './inbox.ts';
-import type { NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchClock, NotchStage } from './stage.ts';
 import { realNotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
@@ -61,6 +61,12 @@ export interface NotchAroundDeps {
   listen?: {
     offer(stage: NotchStage, sidecarId: string): Promise<boolean>;
     ended(): Promise<void> | null;
+    /** Whether this call is being listened to now. */
+    listening?(): boolean;
+    /** Whether listening could begin now. */
+    can?(): boolean;
+    /** Listening begins on the person's own press, with no question: Home's row for the call. */
+    start?(stage: NotchStage, sidecarId: string): Promise<boolean>;
   };
   clock?: NotchClock;
   now?: () => number;
@@ -72,6 +78,14 @@ export interface NotchAround {
   onCall(): boolean;
   /** Whether the machine has a connection: false only when the desktop app said it has none. */
   online(): boolean;
+  /**
+   * Home's row about the call that is on, or null when none is. On a call
+   * that is not listened to, the row is the way to have it listened to after
+   * all: the question at its start is asked once, and not again at every tap.
+   */
+  callRow(): NotchBlock | null;
+  /** What that row opens: listening to this call begins, by the press. */
+  callOpen(stage: NotchStage): Promise<void>;
   stop(): void;
 }
 
@@ -108,25 +122,6 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     parking = clock.setTimeout(park, 2000);
   };
 
-  /**
-   * During a call that can be listened to, a yes or a tap on the resting
-   * notch asks once more whether to listen: the question at its start may
-   * have gone by unseen, and nothing else can be said to the notch during a
-   * call. Not while everything is stopped: then a yes wakes Jarvis.
-   */
-  let opener: (() => boolean) | null = null;
-  function askAgain(): void {
-    const listen = deps.listen;
-    const machine = from;
-    if (!listen || !machine || deps.asleep?.()) return;
-    const mine = (): boolean => {
-      if (!inCall || deps.asleep?.()) return false;
-      return inbox.present('call-ask', async (stage) => { await listen.offer(stage, machine); }, { held: true });
-    };
-    opener = mine;
-    inbox.setOpener(mine);
-  }
-
   function begin(): void {
     if (inCall || stopped) return;
     inCall = true;
@@ -135,7 +130,11 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     log('[notch] on a call: everything is held');
     // Said once, when the notch is free to say it. Then nothing more comes until the call is over.
     // Something the person is in the middle of on the notch is not taken from them for it: it waits.
-    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD, { own: true }); parked = -1; park(); askAgain(); } };
+    // The hold keeps back what comes by itself, and nothing else: a tap on the resting notch still opens
+    // Home, and what the person says or types is still taken. The question whether to listen is asked
+    // once, at the start. (It used to be asked again at every tap, for the whole call: on a call the
+    // owner had said no to, nothing else on the notch could be reached. 18 November 2026.)
+    const hold = (): void => { if (inCall && !holding) { holding = true; inbox.hold(HOLD, { own: true }); parked = -1; park(); } };
     const say = (): void => {
       saying = null;
       if (!inCall || holding) return;
@@ -160,7 +159,6 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     if (longest) { clock.clearTimeout(longest); longest = null; }
     if (parking) { clock.clearTimeout(parking); parking = null; }
     if (saying) { clock.clearTimeout(saying); saying = null; }
-    if (opener) { inbox.dropOpener(opener); opener = null; }
     // A call that was listened to: what came out of it is said first, with everything else still held.
     let notes: Promise<void> | null = null;
     try { notes = deps.listen?.ended() ?? null; } catch (error) { log(`[notch] the end of a call that was listened to failed: ${error instanceof Error ? error.message : String(error)}`); }
@@ -280,6 +278,18 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
 
   return {
     onCall: () => inCall,
+    callRow() {
+      // Before the call has been said there is nothing to say of it in Home either.
+      if (!inCall || !holding) return null;
+      if (deps.listen?.listening?.()) return { kind: 'row', lead: 'Call', say: ['I am listening to this call, and writing it down.'] };
+      if (deps.listen?.start && from && deps.listen.can?.() !== false) return { kind: 'row', id: 'call', lead: 'Call', say: ['You are on a call. Listen and write it down'], go: true };
+      return { kind: 'row', lead: 'Call', say: ['You are on a call. What comes by itself waits until it is over.'] };
+    },
+    async callOpen(stage) {
+      const machine = from;
+      if (!inCall || !machine || !deps.listen?.start) return;
+      await deps.listen.start(stage, machine);
+    },
     online: () => isOnline,
     stop: () => {
       stopped = true;

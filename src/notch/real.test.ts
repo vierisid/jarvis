@@ -661,6 +661,126 @@ function assembledNotch(think: () => string) {
     };
 }
 
+// The owner, 18 November 2026: "if I start a meeting and I do not accept the meeting feature ... I cannot use
+// Jarvis in anything else. If I try to open the Jarvis menu ... it just tells me you're in a meeting. Do you
+// want me to start transcribing?"
+describe('a call that was not listened to leaves the notch to its owner, put together', () => {
+  function onACall() {
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC(_sidecarId, _method, params) { const message = (params as { message?: NotchToPage }).message; if (message) pushed.push(message); return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const timers: { fn: () => void; at: number }[] = [];
+    let now = 0;
+    const clock = {
+      setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; },
+      clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+    };
+    let around: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const asked: { on: boolean; id: string; far: boolean }[] = [];
+    const submitted: string[] = [];
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: {
+        db: getDb(), modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null,
+        turns: () => ({ ready: () => true, conversation: () => 'conv-notch', submit(turn: { text: string }) { submitted.push(turn.text); }, cancel() {}, onEvent: () => () => {}, look: () => null, mark() {} }) as never,
+      },
+      day: { db: getDb(), noClock: true, around: { onEvent(listener) { around = listener; }, onSidecarDisconnected() {} } },
+      calls: {
+        db: getDb(), noClock: true,
+        port: { onEvent() {}, onSidecarDisconnected() {} },
+        async listen(_sidecarId, ask) { asked.push(ask); return ask.on ? { listening: true, far: ask.far, why: '' } : { listening: false }; },
+        stt: () => ({ transcribe: async () => '' }),
+        think: async () => '{}',
+      },
+      clock,
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    live = real;
+    const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    const pass = async (ms: number): Promise<void> => {
+      const until = now + ms;
+      for (;;) {
+        const next = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (!next) break;
+        now = next.at; timers.splice(timers.indexOf(next), 1); next.fn();
+        await wait();
+      }
+      now = until;
+      await wait();
+    };
+    const line = (): NotchLine | null => surface.current().line;
+    const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map((part) => (typeof part === 'string' ? part : part && typeof part === 'object' && 'em' in part ? String((part as { em: unknown }).em) : '')).join('');
+    return {
+      real, asked, submitted, line, wait, pass, fromPage,
+      said: (): string => text(line()?.say),
+      rows: (): string[] => { const shown = line(); return (shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks : []).filter((block) => block.kind === 'row').map((block) => text((block as { say: unknown }).say)); },
+      callBegins: async (): Promise<void> => { around('pc', { event_type: 'notch.around', payload: { call: true } }); await pass(60_000); },
+      tap: async (): Promise<void> => { fromPage({ type: 'open' }); await wait(); },
+      answer: async (act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await wait(); },
+    };
+  }
+
+  test('after a no to the question, a tap opens Home every time, and what is typed there runs', async () => {
+    const h = onACall();
+    await h.callBegins();
+    expect(h.said()).toBe('On a call. Listen and write it down?');
+    await h.answer('no');
+    expect(h.said()).toBe('On a call. I hold everything until you are done.');
+    await h.answer('done');
+    expect(h.asked).toEqual([]);
+    // Three taps: Home each time, with the call's row first, and never the question again.
+    for (let i = 0; i < 3; i++) {
+      await h.tap();
+      expect(h.line()).toMatchObject({ kind: 'ask', placeholder: 'Ask, or tell me what to do' });
+      expect(h.rows()[0]).toBe('You are on a call. Listen and write it down');
+      await h.answer('no');
+      expect(h.line()).toBeNull();
+    }
+    expect(h.asked).toEqual([]);
+    // An instruction typed in Home during the call runs like any other.
+    await h.tap();
+    await h.answer('ask', { text: 'what is on my calendar tomorrow' });
+    expect(h.submitted).toEqual(['what is on my calendar tomorrow']);
+  });
+
+  test('"settings" typed in Home during the call opens the settings', async () => {
+    const h = onACall();
+    await h.callBegins();
+    await h.answer('no');
+    await h.answer('done');
+    await h.tap();
+    await h.answer('ask', { text: 'settings' });
+    await h.wait();
+    expect(h.said()).toBe('Settings');
+  });
+
+  test('Home\'s row has the call listened to after all, by that one press', async () => {
+    const h = onACall();
+    await h.callBegins();
+    await h.answer('no');
+    await h.answer('done');
+    await h.tap();
+    await h.answer('go', { row: 'call' });
+    expect(h.asked).toHaveLength(1);
+    expect(h.asked[0]).toMatchObject({ on: true, far: false });
+    expect(h.said()).toBe('Listening. I hold everything else until you are done.');
+    await h.answer('done');
+    // Listened to now. Home still opens, and says so.
+    await h.tap();
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    expect(h.rows()[0]).toBe('I am listening to this call, and writing it down.');
+  });
+});
+
 describe('noticing, put together', () => {
   const assembled = assembledNotch;
   const SLACK = (): string => JSON.stringify({ offer: true, seen: 'Leo asked for the October revenue.', act: 'Reply to him here with the number', yes: 'reply', about: 'leo october revenue' });

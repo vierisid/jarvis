@@ -331,6 +331,14 @@ export interface NotchCalls {
   ended(): Promise<void> | null;
   /** Whether a call is being listened to now. */
   listening(): boolean;
+  /** Whether listening could begin now: something makes out speech, nothing is stopped, and none is listened to yet. */
+  can(): boolean;
+  /**
+   * Listening begins without a question: the person pressed Home's row for
+   * it during this call, and that press is the yes for this call. True when
+   * it has said its own words.
+   */
+  start(stage: NotchStage, sidecarId: string): Promise<boolean>;
   /** The row Home shows for the last call, if there is one. */
   rows(): NotchBlock[];
   /** Opens what a row leads to: the notes of the newest call, or the list of them. */
@@ -634,6 +642,35 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
     if (answer.act === 'yes') await show(stage, id);
   }
 
+  /**
+   * Listening begins: the person said yes to it for this call, on the
+   * question at its start or on Home's row. True when its own words were
+   * said, whether or not a device could be opened.
+   */
+  async function listenTo(stage: NotchStage, sidecarId: string, far: boolean): Promise<boolean> {
+    const call: Live = { id: `call-${now().toString(36)}-${++n}`, sidecarId, farAsked: far, far: false, leg: 0, open: false, deafSince: null, missedMs: 0, making: Promise.resolve(), legEnded: new Map() };
+    live = call;
+    store.open(call.id, now(), false);
+    const got = await begin(call);
+    if (!got.ok) {
+      live = null;
+      store.forget(call.id);
+      paint();
+      log(`[notch] a call could not be listened to: ${got.why}`);
+      await stage.say([
+        got.why === 'muted' ? 'My microphone is muted, so I cannot listen.' : got.why === 'none' ? 'This computer gives me no microphone, so I cannot listen.' : 'I could not open the microphone, so I am not listening.',
+        ' I hold everything until you are done.',
+      ], 4600, { mood: 'focus' });
+      return true;
+    }
+    log(`[notch] a call is listened to, by the owner's yes: the microphone${got.far ? ' and the other side' : ''}`);
+    await stage.say([
+      far && got.far ? 'Listening to both sides.' : far ? 'Listening to your side only: this computer does not let me hear the other.' : 'Listening.',
+      ' I hold everything else until you are done.',
+    ], far && !got.far ? 5200 : 3200, { mood: 'focus' });
+    return true;
+  }
+
   return {
     store,
     listening: () => live !== null && live.open,
@@ -660,27 +697,25 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         asking = null;
       }
       if (gone || !answer || answer.act !== 'yes') return false;
-      const call: Live = { id: `call-${now().toString(36)}-${++n}`, sidecarId, farAsked: far, far: false, leg: 0, open: false, deafSince: null, missedMs: 0, making: Promise.resolve(), legEnded: new Map() };
-      live = call;
-      store.open(call.id, now(), false);
-      const got = await begin(call);
-      if (!got.ok) {
-        live = null;
-        store.forget(call.id);
-        paint();
-        log(`[notch] a call could not be listened to: ${got.why}`);
-        await stage.say([
-          got.why === 'muted' ? 'My microphone is muted, so I cannot listen.' : got.why === 'none' ? 'This computer gives me no microphone, so I cannot listen.' : 'I could not open the microphone, so I am not listening.',
-          ' I hold everything until you are done.',
-        ], 4600, { mood: 'focus' });
+      return listenTo(stage, sidecarId, far);
+    },
+
+    can: () => !stopped && !live && !!deps.stt() && !deps.paused?.(),
+
+    async start(stage, sidecarId) {
+      // Asked for while it is listening already: it says that it is.
+      if (live && !stopped) {
+        await stage.say([live.open ? 'I am listening to this call.' : 'I am not hearing this call right now.', ' I hold everything else until you are done.'], 3200, { mood: 'focus' });
         return true;
       }
-      log(`[notch] a call is listened to, by the owner's yes: the microphone${got.far ? ' and the other side' : ''}`);
-      await stage.say([
-        far && got.far ? 'Listening to both sides.' : far ? 'Listening to your side only: this computer does not let me hear the other.' : 'Listening.',
-        ' I hold everything else until you are done.',
-      ], far && !got.far ? 5200 : 3200, { mood: 'focus' });
-      return true;
+      if (stopped || deps.paused?.()) return false;
+      if (!deps.stt()) {
+        await stage.say(['Nothing here makes out speech yet, so I cannot write a call down.'], 4200, { mood: 'sorry' });
+        return false;
+      }
+      // The press on Home's row is the yes for this call: nothing more is asked.
+      log('[notch] listening to a call was asked for from Home');
+      return listenTo(stage, sidecarId, hearsFar());
     },
 
     ended() {

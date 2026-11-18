@@ -527,6 +527,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
       undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
       undoRow,
+      // On a call: Home says so, and has the way to have it listened to when it is not.
+      call: { row: () => around?.callRow() ?? null, open: async (stage) => { await around?.callOpen(stage); } },
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       raiseApproval: (approvalId) => approvals.raise(approvalId),
       // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
@@ -658,7 +660,11 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       around = attachNotchAround(surface, inbox, deps.day.around, {
         meetingNow: () => soon?.meetingNow() ?? false,
         asleep,
-        listen: calls ? { offer: (stage, sidecarId) => calls!.offer(stage, sidecarId), ended: () => calls!.ended() } : undefined,
+        listen: calls ? {
+          offer: (stage, sidecarId) => calls!.offer(stage, sidecarId), ended: () => calls!.ended(),
+          // For Home's row on a call: whether it is listened to, and the way to have it listened to after all.
+          listening: () => calls!.listening(), can: () => calls!.can(), start: (stage, sidecarId) => calls!.start(stage, sidecarId),
+        } : undefined,
         // What could not be read while there was no connection is read now, and the follow-ups that were
         // held go out: how many went is what "Back online" says.
         backOnline: () => { void layer?.look('glance'); return standing?.released() ?? 0; },
