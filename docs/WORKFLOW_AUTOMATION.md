@@ -1519,7 +1519,9 @@ threshold); without one, including rows saved before #954, on first use.
   `CONNECTION_REFRESH_UNREACHABLE`, `CONNECTION_CHANGED`) and whether the run
   had already handed the credential out; the run's failure reads both, so a
   step that may have acted before (a retry, a loop round) never reads as
-  "nothing was done".
+  "nothing was done". For a step that names several connections, a hand-out
+  of any of them counts, and when the engine's error names the connection
+  that failed to load, only that connection's reason is read.
 - A token with neither an expiry nor refresh details is handed out as pasted;
   its provider's 401 is then the only sign it expired. The panel labels each
   row "Refreshed by Jarvis", "Not refreshed", "Not refreshed; expires ..." or
