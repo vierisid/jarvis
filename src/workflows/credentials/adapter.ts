@@ -80,6 +80,13 @@ export interface JarvisConnectionSource {
    * A source without it is one fixed identity.
    */
   identity?(externalId: string): string | null;
+  /**
+   * #957: why this connection cannot be used for `actionName` of `pieceName`
+   * right now, or null when it can. Read live, so a grant widened or narrowed
+   * since a workflow was saved is judged as it is now. Jarvis's Google
+   * connection refuses Gmail sends while it is read-only.
+   */
+  actionRefusal?(pieceName: string, actionName: string): string | null;
 }
 
 export interface ManagedPieceDetails {
@@ -186,6 +193,10 @@ export function managedConnectionMisuse(source: JarvisConnectionSource, pieceNam
   if (allowed && settings !== undefined && (!record(settings) || settings.triggerName !== undefined
     || typeof settings.actionName !== 'string' || !allowed.includes(settings.actionName))) {
     return `This ${source.pieceDetails?.[pieceName]?.displayName ?? pieceName} connection does not support this action or trigger yet`;
+  }
+  if (record(settings) && settings.triggerName === undefined && typeof settings.actionName === 'string') {
+    const refused = source.actionRefusal?.(pieceName, settings.actionName);
+    if (refused) return refused;
   }
   if (record(settings) && settings.actionName === 'custom_api_call') {
     const details = source.pieceDetails?.[pieceName];

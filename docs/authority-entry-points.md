@@ -83,6 +83,23 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
   Headers and credentials are never listed. The one-line sentence on chat and
   desktop cards names up to four target fields, primary target first, so a
   recipient is never cut for a sender name.
+- **Which account an email goes out from (#957).** An email send's card (every
+  Gmail send and the SMTP send) leads with "Sending account" and, for a reply
+  or forward, "Replying to" or "Forwarding". Jarvis's own Google connection is
+  named by its address (read from the Gmail profile with the read-only grant),
+  and the message answered by its subject when Jarvis can read it; a saved
+  connection by its name, an SMTP one with its login and server. Read once,
+  when the effect is recorded (`WorkflowEffect.sender`), and display only:
+  outside the request digest, never matched on.
+- **Sending from Jarvis's Google connection (#957).** Read-only by default.
+  Self-hosted, the owner allows sending in Settings > Integrations > Google,
+  which connects again asking Google for `gmail.send` as well; hosted, the
+  system config must also say `google.gmail_send: true`. What the grant holds
+  is read from the scopes Google returned (`scope` in the tokens file); a
+  grant saved without them reads as read-only. While the connection cannot
+  send, a Gmail send step that uses it is not ready and its run is refused the
+  connection, with a sentence saying how to allow sending. A send it is
+  allowed to make still asks on a card at the shipped defaults.
 - **Permissions.** Each request records whom it was asked for (role, level,
   profile). When it runs, the same checks are made again as that agent: a deny
   override, a context rule or a revoked permission added since the card was
