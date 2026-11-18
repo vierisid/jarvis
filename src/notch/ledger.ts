@@ -17,7 +17,8 @@
  */
 import type { Database } from 'bun:sqlite';
 
-export type NotchAskSource = 'typed' | 'spoken';
+/** How an instruction came: typed in Home, spoken with the talk keys, or offered by the notch and taken with a yes (./notice.ts). */
+export type NotchAskSource = 'typed' | 'spoken' | 'offered';
 
 /**
  *   listening     spoken: the keys are down
@@ -77,7 +78,7 @@ function parse(row: Stored): NotchAskRow {
     if (Array.isArray(value)) did = value.filter((item): item is string => typeof item === 'string');
   } catch { /* an unreadable list is an empty one */ }
   return {
-    id: row.id, createdAt: row.created_at, source: row.source === 'spoken' ? 'spoken' : 'typed',
+    id: row.id, createdAt: row.created_at, source: row.source === 'spoken' ? 'spoken' : row.source === 'offered' ? 'offered' : 'typed',
     state: row.state as NotchAskState, heard: row.heard, kind: row.kind === 'turn' || row.kind === 'remember' || row.kind === 'notch' ? row.kind : null,
     understood: row.understood, did, answer: row.answer, note: row.note,
     conversationId: row.conversation_id, turnId: row.turn_id, requestId: row.request_id,
@@ -112,7 +113,7 @@ export class NotchLedger {
   /** A new instruction. Typed ones begin as `heard`; spoken ones as `listening`. */
   open(id: string, source: NotchAskSource, heard = ''): NotchAskRow {
     this.db.run('INSERT INTO notch_asks (id, created_at, source, state, heard) VALUES (?, ?, ?, ?, ?)',
-      [id, this.now(), source, source === 'typed' ? 'heard' : 'listening', heard]);
+      [id, this.now(), source, source === 'spoken' ? 'listening' : 'heard', heard]);
     return this.get(id)!;
   }
 

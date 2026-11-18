@@ -154,7 +154,7 @@ export interface NotchMail {
    * are what the reply is to say, and it is written again. Null when no
    * draft is in hand, or the words are a question.
    */
-  route(text: string, how?: { source: 'spoken' | 'typed'; at: number }): { did: string; run(): void } | null;
+  route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null;
 }
 
 /** The one thing mail is in the inbox. */
@@ -555,7 +555,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * ago, is what that reply is to say: it is written again with it and comes
    * back up. Has no effect until `run`.
    */
-  function route(text: string, how?: { source: 'spoken' | 'typed'; at: number }): { did: string; run(): void } | null {
+  function route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null {
     const hand = inHand;
     if (!hand || !mailSteer(text)) return null;
     // A draft that has left the notch is still meant only by what was said

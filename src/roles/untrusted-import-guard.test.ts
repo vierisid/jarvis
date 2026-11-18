@@ -108,6 +108,11 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // The notch's mail proposer: a thread, a calendar and the owner's own
       // mails, each cut to its own limit before it is framed into the prompt.
       'notch/mail/proposer.ts',
+      // The notch's noticing: the names the window in front gives its things,
+      // each cut and capped in number where the read is parsed
+      // (pointWindow), framed into the prompt that asks whether one thing
+      // there is waiting for the owner.
+      'notch/notice.ts',
       // The notch's "where is": the names of the things in the window in
       // front, each cut and capped in number where the read is parsed,
       // framed into the prompt that asks which one answers.

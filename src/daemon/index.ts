@@ -173,7 +173,7 @@ import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { attachNotchReal } from "../notch/real.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
-import { notchAskDeps, notchCallDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
+import { notchAskDeps, notchCallDeps, notchNoticeDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
 import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
@@ -4821,6 +4821,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Listening to a call: asked for each call, no sound kept, the words
         // kept a week and the notes ninety days (src/notch/call.ts).
         calls: notchCallDeps({ db: getDb(), sidecars: sidecarManager, config: () => agentService.getConfig(), llm: () => agentService.getLLMManager() }),
+        // Noticing: in the window the person is in, one thing offered when
+        // their hands rest, never where Jarvis looks away (src/notch/notice.ts).
+        notice: notchNoticeDeps({ llm: () => agentService.getLLMManager() }),
         // Doing it in view (pass 10): a job done where it can be seen, one
         // caught by itself when it is done twice by hand, one shown with
         // "Watch me", and a thing put where the person points.

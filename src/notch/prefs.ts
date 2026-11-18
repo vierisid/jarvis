@@ -120,6 +120,8 @@ export interface NotchPrefsDeps {
   dayOne?: () => void;
   /** Listening to calls (./call.ts): its row here, and what a word of that row changes. */
   calls?: { row(): NotchBlock | null; set(name: string, value: string): boolean };
+  /** Noticing (./notice.ts): its row here, and what its word changes. */
+  notice?: { row(): NotchBlock | null; set(name: string, value: string): boolean };
   /** What Jarvis is connected to, as it stands now. */
   connections?: () => NotchConnection[] | Promise<NotchConnection[]>;
   /** Takes the person to where one is connected: a sign-in window, or its page in the dashboard. */
@@ -173,6 +175,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
             ...(deps.openDashboard ? { buttons: [{ id: 'voice', label: voice ? 'Change' : 'Set up', quiet: true }] } : {}),
           },
           ...(deps.see ? [{ kind: 'row' as const, id: 'see', go: true, lead: 'Watching', say: ['What I see, and what I never watch.'] satisfies NotchPart[] }] : []),
+          ...((): NotchBlock[] => { const row = deps.notice?.row(); return row ? [row] : []; })(),
           ...((): NotchBlock[] => { const row = deps.calls?.row(); return row ? [row] : []; })(),
           ...(links.length ? [{ kind: 'buttons' as const, buttons: links }] : []),
           { kind: 'note', say: ['The keys are for this computer. Nothing spoken is kept as sound.'] },
@@ -197,7 +200,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
         }
         if (answer.act !== 'word') continue;
         const value = (answer.value ?? '').trim();
-        if (answer.word && deps.calls?.set(answer.word, value)) {
+        if (answer.word && (deps.calls?.set(answer.word, value) || deps.notice?.set(answer.word, value))) {
           refused = null;
           stage.surface.update(id, { blocks: blocks() });
           continue;

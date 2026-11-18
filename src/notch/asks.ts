@@ -44,6 +44,8 @@ export const NOTCH_LAST_ANSWER_MS = 10 * 60_000;
 
 export const NOTCH_NOT_CAUGHT = 'I did not catch that.';
 const WAITING_FOR_YES = 'Waiting for your yes.';
+/** The heading of an instruction's own sheet: how it came. */
+const asWhat = (source: NotchAskSource): string => (source === 'spoken' ? 'You said' : source === 'offered' ? 'You said yes to' : 'You typed');
 const NOT_SAVED = 'Not saved.';
 /** A memory whose question was cut off by something else: the person never got to answer it. */
 const NOT_SAVED_CUT = 'I did not save that: something came up while I was asking. Say it again.';
@@ -218,6 +220,8 @@ export interface NotchAsks {
   handsOn(): void;
   /** Something was typed, or asked about files that go with it. Comes back with the instruction's id. */
   typed(text: string, files?: NotchAskFile[]): string;
+  /** Something the notch offered was taken with a yes: it runs as an instruction (./notice.ts). */
+  offered(text: string): string;
   /** The talk keys went down: a recording has begun. Comes back with the instruction's id. */
   listen(talkId: string): string;
   /**
@@ -413,7 +417,7 @@ export function ledgerWord(row: Pick<NotchAskRow, 'state' | 'kind'>): string {
 export function ledgerDetail(row: NotchAskRow): NotchBlock[] {
   const blocks: NotchBlock[] = [];
   const said = row.heard || 'Nothing was caught.';
-  blocks.push({ kind: 'row', lead: row.source === 'spoken' ? 'Heard' : 'Typed', say: [said], small: clock(row.createdAt) });
+  blocks.push({ kind: 'row', lead: row.source === 'spoken' ? 'Heard' : row.source === 'offered' ? 'Offered' : 'Typed', say: [said], small: clock(row.createdAt) });
   if (row.understood) blocks.push({ kind: 'row', lead: 'Understood', say: [row.understood] });
   if (row.did.length > 0) blocks.push({ kind: 'row', lead: 'Did', say: [row.did.join(' ')] });
   const end = row.state === 'running' ? 'Still running.'
@@ -854,7 +858,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     let listenEsc: Promise<'esc'> | null = null;
     let workId: string | null = null;
     for (;;) {
-      if (ask.source === 'typed' && ask.phase === 'heard') {
+      if (ask.source !== 'spoken' && ask.phase === 'heard') {
         // Words the notch acts on itself show what they set off, not a line of work.
         if (!ask.files?.length && !deps.paused?.() && deps.side?.(ask.heard, { source: ask.source, at: ask.at })) {
           await run(ask, stage);
@@ -1063,7 +1067,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (answer.act !== 'go' || !answer.row) return;
       const row = ledger.get(answer.row);
       if (!row) continue;
-      await stage.sheet([row.source === 'spoken' ? 'You said' : 'You typed'], ledgerDetail(row));
+      await stage.sheet([asWhat(row.source)], ledgerDetail(row));
     }
   }
 
@@ -1103,7 +1107,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       }
       if (answer.act === 'go' && answer.row === 'last' && recent) {
         const again = stage.id();
-        stage.put({ id: again, kind: 'sheet', say: [recent.source === 'spoken' ? 'You said' : 'You typed'], blocks: ledgerDetail(recent), stay: true });
+        stage.put({ id: again, kind: 'sheet', say: [asWhat(recent.source)], blocks: ledgerDetail(recent), stay: true });
         await stage.answer(again, ['no']);
         continue;
       }
@@ -1150,6 +1154,16 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     return id;
   }
 
+  /** The notch offered something and the person said yes: it runs as their instruction, and is kept as what it was. */
+  function offered(text: string): string {
+    endWalks();
+    replaceEarlier('An offer was taken in its place.');
+    const id = crypto.randomUUID();
+    ledger.open(id, 'offered', text);
+    begin(make(id, 'offered', 'heard', text));
+    return id;
+  }
+
   /**
    * The end of a turn is heard as an event. If that event is ever lost the
    * instruction would stand as running for good, and every later one would
@@ -1176,6 +1190,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
 
   return {
     typed,
+    offered,
     home,
     handsOn() {
       for (const ask of [...live.values()]) {

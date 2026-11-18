@@ -33,6 +33,7 @@ import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
 import { attachNotchCalls, type NotchCallDeps, type NotchCallPort, type NotchCalls } from './call.ts';
+import { attachNotchNotice, type NotchNotice, type NotchNoticeDeps } from './notice.ts';
 import { attachNotchDrop, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
@@ -193,6 +194,14 @@ export interface NotchRealDeps {
    */
   calls?: { db: Database; port: NotchCallPort; listen: NotchCallDeps['listen']; stt: NotchCallDeps['stt']; think: NotchCallDeps['think']; noClock?: boolean };
   /**
+   * Noticing (./notice.ts): in the window the person is in, Jarvis looks
+   * when their hands rest and offers one thing it could do there. `see` is a
+   * picture of that window, `read` what the program names in it, `think` one
+   * question to a model that sees pictures. Needs `asks` (a yes runs an
+   * instruction) and what `where` knows of the app in front.
+   */
+  notice?: { see: NotchNoticeDeps['see']; read?: NotchNoticeDeps['read']; think: NotchNoticeDeps['think']; noClock?: boolean };
+  /**
    * Doing it in view (pass 10): jobs done where they can be seen, with
    * Jarvis's own pointers; a job caught by itself when it is done twice by
    * hand; a job shown with "Watch me"; and a thing put where the person
@@ -249,6 +258,8 @@ export interface NotchReal {
   presence: NotchPresence | null;
   /** Calls and the connection, when a desktop app can tell. */
   around: NotchAround | null;
+  /** Noticing in the window in front (./notice.ts), when the brain was given what it needs. */
+  notice: NotchNotice | null;
   /** Meetings coming up, when the calendar can be reached. */
   soon: NotchSoon | null;
   talk: NotchTalk | null;
@@ -281,6 +292,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   // Made further down, once the mail and the day are: what is said and shown before then finds it when it is asked.
   let calls: NotchCalls | null = null;
   let callTimer: ReturnType<typeof setInterval> | null = null;
+  let notice: NotchNotice | null = null;
+  let noticeTimer: ReturnType<typeof setInterval> | null = null;
   // One of the notch's eyes is citron while something is watched for, or a call is listened to.
   let eyeKept = false, eyeCall = false;
   const paintEye = (): void => surface.setEye(eyeKept || eyeCall);
@@ -424,6 +437,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     dayOne: deps.dayOne ? () => dayOne?.again() : undefined,
     // Listening to calls: whether it is offered, and whether the other side is heard.
     calls: deps.calls ? { row: () => calls?.settingsRow() ?? null, set: (name, value) => calls?.setWord(name, value) ?? false } : undefined,
+    // Noticing: whether it offers one thing in the window the person is in.
+    notice: deps.notice ? { row: () => notice?.settingsRow() ?? null, set: (name, value) => notice?.setWord(name, value) ?? false } : undefined,
     connections: office?.connections,
     connect: office?.connect,
     // A page of the dashboard when it can be opened at one, the dashboard itself when not.
@@ -636,6 +651,27 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       dayTimers.push(every);
     }
   }
+  // Noticing: in the window the person is in, one thing offered, when their hands rest (./notice.ts).
+  if (deps.notice && settings && where && deps.asks) {
+    const emergency = deps.emergency;
+    const kept = attachNotchNotice({
+      inbox, settings, log,
+      // The bare desktop is no window of a program: there is nothing in it to do for them.
+      front: () => (where.onDesktop() === true ? null : where.front()),
+      still: () => where.still(),
+      // Where nothing could be said, nothing is looked at: asleep, away, the quiet hours, a call.
+      maySpeak: () => !(emergency && emergency.getState() !== 'normal') && !(presence?.isAway() ?? false) && !(quiet?.now() ?? false) && !(around?.onCall() ?? false),
+      busy: () => surface.current().line !== null,
+      see: deps.notice.see, read: deps.notice.read, think: deps.notice.think,
+      run: (text) => { asks?.offered(text); },
+      now: dayNow,
+    });
+    notice = kept;
+    if (!deps.notice.noClock) {
+      noticeTimer = setInterval(() => { void kept.tick().catch((error) => log(`[notch] noticing failed: ${error instanceof Error ? error.message : String(error)}`)); }, 2000);
+      noticeTimer.unref?.();
+    }
+  }
   const news = attachNotchNews(inbox, { openFailures: deps.openFailures, log });
   news.sync();
   const failureTimer = setInterval(() => news.sync(), NOTCH_FAILURE_LOOK_MS);
@@ -701,7 +737,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
 
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
-    jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents,
+    jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -724,6 +760,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       if (standingTimer) clearInterval(standingTimer);
       if (callTimer) clearInterval(callTimer);
       calls?.stop();
+      if (noticeTimer) clearInterval(noticeTimer);
+      notice?.stop();
       agents?.stop();
       if (agentsTimer) clearInterval(agentsTimer);
       for (const timer of jobTimers) clearInterval(timer);

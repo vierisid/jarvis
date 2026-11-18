@@ -272,6 +272,66 @@ describe('typing in Home', () => {
   });
 });
 
+describe('an offer of the notch that was taken with a yes', () => {
+  const SAID = 'Leo asked for the October revenue. Reply to him here with the number.';
+
+  test('runs as one turn with exactly the words that were on the notch, and is kept as what it was', async () => {
+    const h = harness();
+    const id = h.asks.offered(SAID);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    expect(h.door.texts()).toEqual([SAID]);
+    expect(row(h)).toMatchObject({ id, source: 'offered', state: 'running', kind: 'turn', heard: SAID, turnId: `notch-${id}`, requestId: `notch-offered-${id}` });
+    const turn = h.door.running();
+    h.door.say(turn, 'I replied to Leo.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('I replied to Leo.');
+    expect(row(h)).toMatchObject({ source: 'offered', state: 'done', answer: 'I replied to Leo.' });
+    // In the list of what was asked it is an offer, not something typed or said.
+    expect(ledgerDetail(row(h))[0]).toMatchObject({ lead: 'Offered', say: [SAID] });
+    await h.answer('done');
+    await h.open();
+    await h.answer('button', { button: 'asked' });
+    await h.answer('go', { row: id });
+    expect(h.said()).toBe('You said yes to');
+  });
+
+  test('it is not shown as heard first: the person read it a moment ago', async () => {
+    const h = harness();
+    h.asks.offered(SAID);
+    await settle();
+    expect(h.said()).toBe(`On it: ${SAID}`);
+  });
+
+  test('while one thing runs it is not started, and while everything is stopped neither', async () => {
+    const h = harness();
+    await h.type('first thing');
+    h.asks.offered(SAID);
+    await settle();
+    expect(h.said()).toBe('I am still on the last thing: first thing');
+    expect(h.door.texts()).toEqual(['first thing']);
+    expect(row(h)).toMatchObject({ source: 'offered', state: 'refused' });
+
+    const stopped = harness({ deps: { paused: () => true } });
+    stopped.asks.offered(SAID);
+    await settle();
+    expect(stopped.door.texts()).toEqual([]);
+    expect(row(stopped)).toMatchObject({ source: 'offered', state: 'refused', note: 'Everything is stopped. Wake me first.' });
+  });
+
+  test('after a restart it is still an offer in the list', async () => {
+    const db = new Database(':memory:');
+    const h = harness({ db });
+    h.asks.offered(SAID);
+    await settle();
+    h.door.end(h.door.running());
+    await settle();
+    const again = harness({ db });
+    expect(again.ledger.recent(1)[0]).toMatchObject({ source: 'offered', heard: SAID });
+  });
+});
+
 describe('speaking', () => {
   test('the words are shown as heard, stay a moment, and then run as the same kind of turn', async () => {
     const h = harness();

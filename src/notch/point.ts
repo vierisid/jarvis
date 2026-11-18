@@ -360,6 +360,15 @@ export const NOTCH_POINT_CLOSE_SYSTEM = [
 const pictureOf = (seen: PointSeen): PointPart =>
   ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from(seen.picture).toString('base64') } });
 
+/** A picture of a window, as a model that sees pictures takes one. For whoever else shows a window to a model (./notice.ts). */
+export const pointPicture = (seen: PointSeen): PointPart => pictureOf(seen);
+
+/** What a window names on the screen, one thing a line: its kind and what it is called. Without the numbers a walk goes by. */
+export function pointNames(window: PointWindow | null): string {
+  if (!window || window.elements.length === 0) return '(the program names nothing on the screen)';
+  return window.elements.map((element) => `${KIND_WORDS[element.type] ?? 'thing'} | ${element.name}${element.off ? ' (off)' : ''}`).join('\n');
+}
+
 /** The messages that ask a model that sees pictures which thing to go to next: the window's own list, when it has one, and the picture. */
 export function pointSeenMessages(question: string, window: PointWindow, steps: PointStep[], seen: PointSeen): PointMessage[] {
   const list = window.elements.length
