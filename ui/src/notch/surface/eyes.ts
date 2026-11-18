@@ -7,6 +7,19 @@ import type { NotchGesture, NotchMood } from '../../../../src/notch/protocol.ts'
 import type { Timers } from './dom.ts';
 import type { Shape } from './shape.ts';
 
+/**
+ * The gecko's blink: one eye closes and opens, and then the other. A gecko
+ * takes its time over it, so it is slower than a blink. The stylesheet has
+ * the two halves (`.eyes.gecko`); this is how long both take together.
+ */
+export const NOTCH_GECKO_MS = 1500;
+/**
+ * How often the resting notch blinks that way by itself: one time in this
+ * many of the moments in which it would blink. It has such a moment every
+ * four seconds or so, which makes it about once a minute.
+ */
+export const NOTCH_GECKO_ONE_IN = 14;
+
 /** The looks in which the eyes follow the pointer. */
 const FOLLOW: ReadonlySet<string> = new Set(['idle', 'look', 'listen', 'urgent', 'curious', 'careful', 'surprised']);
 
@@ -80,6 +93,8 @@ export function createEyes(deps: EyesDeps): Eyes {
     }
     // The shrug is the shoulders' alone.
     if (g === 'shrug') return;
+    // Both halves of it are to be seen, whatever time was given.
+    if (g === 'gecko') ms = NOTCH_GECKO_MS;
     eyes.classList.remove(g);
     void eyes.offsetWidth;
     eyes.classList.add(g);
@@ -103,7 +118,9 @@ export function createEyes(deps: EyesDeps): Eyes {
       const m = mood();
       if (!reduce && (m === 'idle' || m === 'look' || m === 'listen' || m === 'careful' || m === 'curious')) {
         const r = Math.random();
-        if (r < .6) gesture('blink', 120);
+        // Now and then, at rest, one eye and then the other.
+        if (m === 'idle' && Math.random() < 1 / NOTCH_GECKO_ONE_IN) gesture('gecko');
+        else if (r < .6) gesture('blink', 120);
         else if (r < .8) { gesture('blink', 120); timers.after(250, () => gesture('blink', 120)); }
         else if (m === 'idle' && performance.now() - lastMove > 1500) gesture(r < .9 ? 'peek-l' : 'peek-r', 640);
         else gesture('blink', 120);

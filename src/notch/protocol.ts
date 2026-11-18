@@ -57,6 +57,8 @@ export type NotchMood = (typeof NOTCH_MOODS)[number];
 
 export const NOTCH_GESTURES = [
   'blink', 'sq', 'wink', 'peek-l', 'peek-r', 'pop', 'nodg', 'shake', 'hop', 'wake', 'doze', 'shrug',
+  // One eye closes and opens, and then the other: the way a gecko blinks. Not in the prototype: asked for on 18 November 2026.
+  'gecko',
 ] as const;
 export type NotchGesture = (typeof NOTCH_GESTURES)[number];
 

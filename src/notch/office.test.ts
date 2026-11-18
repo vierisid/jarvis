@@ -342,9 +342,11 @@ describe('settings', () => {
 });
 
 describe('how I move', () => {
-  test('the library is the prototype\'s: 36 animations in four groups, 22 eye looks, 9 eye movements', () => {
+  test('the library is the prototype\'s: 36 animations in four groups, 22 eye looks, 9 eye movements, and one more', () => {
     const count = (group: string): number => NOTCH_MOVES.filter((move) => move.group === group).length;
-    expect(NOTCH_MOVE_GROUPS.map(count)).toEqual([14, 8, 8, 6, 22, 9]);
+    // The tenth eye movement is not the prototype's: the gecko's blink, asked for on 18 November 2026.
+    expect(NOTCH_MOVE_GROUPS.map(count)).toEqual([14, 8, 8, 6, 22, 10]);
+    expect(NOTCH_MOVES.find((move) => move.id === 'move-gecko')).toMatchObject({ group: 'Eye movements', label: 'Gecko blink' });
     expect(count('The lip') + count('The body') + count('Along the edge') + count('Being born')).toBe(36);
     // Every look the notch has is in it, but the one that only follows its own cursor.
     expect(NOTCH_MOVES.filter((move) => move.group === 'Eye looks').map((move) => move.id.slice(5)).sort()).toEqual(NOTCH_MOODS.filter((mood) => mood !== 'track').slice().sort());
@@ -372,9 +374,10 @@ describe('how I move', () => {
     await h.open();
     expect(h.said()).toBe('How I move');
     const notes = h.blocks().filter((b): b is Extract<NotchBlock, { kind: 'note' }> => b.kind === 'note').map((b) => text(b.say));
-    expect(notes.slice(0, 6)).toEqual(['The lip, 14', 'The body, 8', 'Along the edge, 8', 'Being born, 6', 'Eye looks, 22', 'Eye movements, 9']);
+    expect(notes.slice(0, 6)).toEqual(['The lip, 14', 'The body, 8', 'Along the edge, 8', 'Being born, 6', 'Eye looks, 22', 'Eye movements, 10']);
     const buttons = h.blocks().filter((b): b is Extract<NotchBlock, { kind: 'buttons' }> => b.kind === 'buttons').flatMap((b) => b.buttons);
-    expect(buttons.length).toBe(67);
+    // The prototype's 67, and the gecko's blink.
+    expect(buttons.length).toBe(68);
     expect(buttons.every((button) => !button.quiet)).toBe(true);
   });
 
