@@ -89,7 +89,7 @@ beforeAll(async () => {
       notifications.push(text); if (loseNotificationReply) throw Error('Fixture notification response lost'); return 1;
     } } as any });
   api = new SandboxApi({ services }); await api.start({ port: 0 });
-  runtime = new EngineRuntime({ api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
+  runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */, api, pool: true, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
   const handle = await runtime.acquire({ runId: 'email-fixture-metadata', projectId: DEFAULT_IDS.project });
   try {
     const entries = [];

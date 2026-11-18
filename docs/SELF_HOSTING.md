@@ -882,6 +882,35 @@ bun needs it, so anything readable under your home directory is still readable
 to the install; the sanitizing keeps secrets out of the environment, it is not
 a sandbox.
 
+### Workflow network egress
+
+Workflow steps reach the network under one rule: on a hosted install public
+addresses only, on a self-hosted one also private ranges, and never loopback,
+link-local, the cloud metadata addresses or the machine's own addresses
+(details in [WORKFLOW_AUTOMATION.md](WORKFLOW_AUTOMATION.md)). The HTTP,
+GraphQL, SMTP and SFTP steps check each connection themselves. Everything else
+the workflow engine runs (other pieces' HTTP clients, a CODE step's `fetch`)
+goes through an egress proxy the daemon runs on 127.0.0.1 for each engine,
+which applies the same rule; a refusal shows in the daemon log as
+`[egress-proxy] refused: ...`. Nothing needs configuring.
+
+The proxy only sees code that honours `HTTP_PROXY` and `HTTPS_PROXY`. Raw
+sockets, WebSockets and Bun's `node:http` without an agent do not, and a CODE
+step can open them. On a hosted or shared machine, block the metadata
+services at the network layer too, so no code the daemon's user runs can reach
+them whatever it uses:
+
+```bash
+# For the user the daemon runs as (here: jarvis), on the host:
+sudo iptables  -A OUTPUT -m owner --uid-owner jarvis -d 169.254.0.0/16 -j REJECT
+sudo ip6tables -A OUTPUT -m owner --uid-owner jarvis -d fe80::/10 -j REJECT
+```
+
+In a container, apply the same to the container's network (a Docker network
+policy, or the host firewall's `DOCKER-USER` chain for the container's
+addresses). With AWS IMDSv2, a hop limit of 1 also keeps the metadata service
+from answering inside containers.
+
 ### Commands, apps and the browser the assistant runs
 
 `run_command`, apps the assistant launches and the local Chrome it drives

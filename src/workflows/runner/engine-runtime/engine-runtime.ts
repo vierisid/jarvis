@@ -31,6 +31,7 @@ import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spaw
 import { ENGINE_BUILD_PATHS } from "./build";
 import { loadedCorePieceDirs } from "./build-pieces";
 import type { EgressPolicy } from "../../runtime/http-egress";
+import { startEgressProxy, type EgressProxy } from "../../runtime/egress-proxy";
 import { leaseCodeTreeOf, materializeCodeActions } from "./code-materialize";
 import { onCodeStepsRevoked } from "../../runtime/cancellation-signals";
 import {
@@ -97,6 +98,13 @@ export interface EngineRuntimeOptions {
   devPieces?: string[];
   /** Where the HTTP step may connect (#961). Unset: public addresses only. */
   egressPolicy?: EgressPolicy;
+  /**
+   * Start engines with HTTP_PROXY and HTTPS_PROXY pointing at an egress proxy
+   * this runtime runs (#1153, runtime/egress-proxy.ts), which holds every
+   * client that honours them to `egressPolicy`. Default true. Off for tests
+   * whose pieces call a fixture server on loopback.
+   */
+  egressProxy?: boolean;
   /**
    * Engine WS handshake deadline. Default 30s, overridable per-deployment
    * via `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS`.
@@ -723,6 +731,9 @@ export class EngineRuntime {
   private readonly cwd: string;
   private readonly devPieces: string[];
   private readonly egressPolicy: EgressPolicy | undefined;
+  private readonly egressProxyEnabled: boolean;
+  /** Started at the first spawn, closed by shutdown(). */
+  private egressProxy: Promise<EgressProxy> | null = null;
   private readonly poolEnabled: boolean;
   private readonly poolIdleTtlMs: number;
   /**
@@ -806,6 +817,7 @@ export class EngineRuntime {
     // still override via `opts.devPieces` for tests.
     this.devPieces = opts.devPieces ?? discoverJarvisDevPieces();
     this.egressPolicy = opts.egressPolicy;
+    this.egressProxyEnabled = opts.egressProxy ?? true;
     // A workflow whose CODE-step permission was taken back keeps no warm
     // engine (#1426): the process group a CODE step ran under, and anything
     // it left running there, goes now rather than at the idle timeout.
@@ -911,7 +923,28 @@ export class EngineRuntime {
     return this.spawnFresh(opts);
   }
 
+  /**
+   * This runtime's egress proxy (#1153), started once. The engine and its
+   * pieces call the sandbox API on loopback by design, so its ports are the
+   * one local destination the proxy forwards to.
+   */
+  private egressProxyUrl(): Promise<string> {
+    // shutdown() has closed it, and nothing would close a new one.
+    if (this.closed) return Promise.reject(new Error("EngineRuntime shut down"));
+    this.egressProxy ??= startEgressProxy({
+      policy: this.egressPolicy ?? "public-only",
+      allowLocal: [...new Set([this.api.port, this.api.sandboxWsPort])].map((port) => ({ host: "127.0.0.1", port })),
+    });
+    const started = this.egressProxy;
+    // A proxy that failed to start is tried again at the next spawn.
+    started.catch(() => { if (this.egressProxy === started) this.egressProxy = null; });
+    return started.then((p) => p.url);
+  }
+
   private async spawnFresh(opts: AcquireOptions): Promise<EngineHandle> {
+    // Before anything is registered, so a proxy that cannot start leaves
+    // nothing to undo.
+    const proxyUrl = this.egressProxyEnabled ? await this.egressProxyUrl() : undefined;
     const sandboxId = SandboxRegistry.newSandboxId();
     const { token, expiresAt } = await this.api.signer.mint(
       { sandboxId, runId: opts.runId, projectId: opts.projectId },
@@ -944,6 +977,7 @@ export class EngineRuntime {
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
     if (this.warmTranspilerCache) spawnOptions.warmTranspilerCache = true;
+    if (proxyUrl) spawnOptions.egressProxyUrl = proxyUrl;
     let proc: SpawnedEngine;
     try {
       proc = spawnEngine(spawnOptions);
@@ -1158,6 +1192,17 @@ export class EngineRuntime {
     this.clearIdleEvictionTimer();
     this.idleEngine = null;
 
+    const proxy = this.egressProxy;
+    this.egressProxy = null;
+    try {
+      await this.shutdownEngines();
+    } finally {
+      // Once no engine is left to use it.
+      if (proxy) await proxy.then((p) => p.close(), () => {});
+    }
+  }
+
+  private async shutdownEngines(): Promise<void> {
     const owned = [...this.spawned];
     // Revoke every sandbox this runtime ever registered, alive or not: a
     // record left un-terminated is one a zombie engine could still act
