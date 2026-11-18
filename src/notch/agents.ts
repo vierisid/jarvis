@@ -28,7 +28,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from './inbox.ts';
-import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
+import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -239,9 +239,37 @@ export class NotchAgentStore {
     this.db.run('UPDATE notch_agents SET told_run = ? WHERE flow_id = ?', [run, flowId]);
   }
 
+  /** The owner gave it another name. */
+  rename(flowId: string, name: string): void {
+    this.db.run('UPDATE notch_agents SET name = ? WHERE flow_id = ?', [name, flowId]);
+  }
+
   drop(flowId: string): void {
     this.db.run('DELETE FROM notch_agents WHERE flow_id = ?', [flowId]);
   }
+}
+
+/** The most an agent's name holds. */
+export const NOTCH_AGENT_NAME_MAX = 24;
+/** How many of an agent's last runs its card shows. */
+export const NOTCH_AGENT_BEADS = 6;
+
+/**
+ * A name the owner typed for an agent, as it is kept: letters, and what
+ * stands between them in a name. Null when it is no name: empty, too long,
+ * or made of anything else. A name is said on the notch and beside every
+ * step the agent asks about, so it is never markup or a sentence.
+ */
+export function agentName(typed: string): string | null {
+  const name = typed.replace(/\s+/g, ' ').trim();
+  if (name.length < 2 || [...name].length > NOTCH_AGENT_NAME_MAX) return null;
+  return /^\p{L}[\p{L}\p{N} '.-]*$/u.test(name) ? name : null;
+}
+
+/** When an agent runs, as its card says it: "Every Monday at 9:00". Null for one that waits for something to happen. */
+export function agentRuns(sentence: string): string | null {
+  const when = agentSentence(sentence)?.when ?? null;
+  return when ? `Every ${when}` : null;
 }
 
 /** What the agents need of the product's workflows (src/daemon/notch-agents.ts gives it). */
@@ -530,9 +558,10 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   async function open(stage: NotchStage): Promise<void> {
     for (;;) {
       const list = agents();
+      // The prototype's list: who, what it does, how free it is, and a way in. What can be done with one is on its card.
       const blocks: NotchBlock[] = list.map((agent): NotchBlock => ({
         kind: 'row', id: agent.flowId, lead: agent.name, say: rungLine(agent), ...(agent.enabled ? {} : { small: 'Paused' }),
-        buttons: [{ id: 'run', label: 'Run now' }, { id: 'pause', label: agent.enabled ? 'Pause' : 'Resume', quiet: true }, { id: 'go', label: 'Let go', quiet: true }],
+        buttons: [{ id: 'open', label: 'Open', quiet: true }],
       }));
       blocks.push({ kind: 'note', say: [list.length
         ? 'Here you see what each agent does and how free it is. Money always asks.'
@@ -572,22 +601,71 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         await saySwitched(stage, said);
         return;
       }
-      const agent = list.find((one) => one.flowId === answer.row);
-      if (!agent) continue;
-      if (answer.button === 'run') {
-        if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return; }
-        const ran = deps.workflows.run(agent.flowId);
-        await stage.say(ran.ok ? [em(agent.name), ' is running.'] : [em(agent.name), ' could not start: ', ran.why.replace(/[.\s]+$/, ''), '.'], ran.ok ? 2400 : 5000, ran.ok ? { mood: 'look' } : { mood: 'sorry', mark: 'fail' });
-        return;
+      if (answer.button !== 'open' || !list.some((one) => one.flowId === answer.row)) continue;
+      // Its card. It comes back when the card is closed; when the card ran it, or said something that ends it, this ends too.
+      if ((await card(stage, answer.row)) === 'left') return;
+    }
+  }
+
+  /**
+   * One agent's card, the prototype's: its name as a word the owner can
+   * change, what it does, how free it is, its last runs as dots, when it
+   * runs next, and what can be done with it. `back` when it was closed and
+   * the list is to come back, `left` when it ended in a line of its own.
+   */
+  async function card(stage: NotchStage, flowId: string): Promise<'back' | 'left'> {
+    for (;;) {
+      const agent = agents().find((one) => one.flowId === flowId);
+      if (!agent) return 'back';
+      // The last runs, the oldest first: a dot for each. One that is still open stopped to ask.
+      let runs: NotchBead[] = [];
+      try { runs = deps.workflows.runs(flowId, NOTCH_AGENT_BEADS).map((run): NotchBead => (run.end === 'ok' ? 'ok' : run.end === 'bad' ? 'bad' : 'ask')).reverse(); } catch { runs = []; }
+      const when = agentRuns(agent.sentence);
+      // Names that are free, for a click: its own first, then the ones no other agent has.
+      const taken = new Set(store.list().map((one) => one.name.toLowerCase()));
+      const names = [agent.name, ...NOTCH_AGENT_NAMES.filter((name) => !taken.has(name.toLowerCase()))].slice(0, 5);
+      const blocks: NotchBlock[] = [
+        { kind: 'note', say: [`${agent.job}${/[.!?]$/.test(agent.job) ? '' : '.'}`] },
+        { kind: 'row', say: ['How free ', word(`rung:${flowId}`, agent.rung, NOTCH_AGENT_RUNGS, { label: 'Freedom' })] },
+        runs.length > 0 ? { kind: 'row', say: ['Last runs'], beads: runs } : { kind: 'row', say: ['No runs yet'] },
+        agent.enabled
+          ? { kind: 'row', say: ['Next run'], small: when ?? 'When it happens' }
+          : { kind: 'row', say: ['Paused'], small: 'until you resume' },
+        { kind: 'buttons', buttons: [{ id: 'pause', label: agent.enabled ? 'Pause' : 'Resume' }, { id: 'go', label: 'Let go', quiet: true }] },
+      ];
+      const id = stage.id();
+      stage.put({ id, kind: 'sheet', say: [word('name', agent.name, names, { label: 'Name', free: true })], blocks, yes: 'run now', no: 'back', stay: true });
+      const answer = await stage.answer(id, ['yes', 'no', 'button', 'word']);
+      if (answer.act === 'no') return 'back';
+      if (answer.act === 'word') {
+        if (answer.word === 'name') {
+          // The owner's own hand on the name: another one, when it is a name and no other agent has it.
+          const name = agentName(answer.value ?? '');
+          if (name && name !== agent.name && !store.list().some((one) => one.flowId !== flowId && one.name.toLowerCase() === name.toLowerCase())) {
+            store.rename(flowId, name);
+            log('[notch] the owner gave an agent another name');
+          }
+        } else if (answer.word === `rung:${flowId}`) {
+          const rung = NOTCH_AGENT_RUNGS.find((one) => one === answer.value);
+          if (rung) { store.setRung(flowId, rung, now()); log('[notch] the owner set an agent\'s rung by hand'); }
+        }
+        continue;
       }
-      if (answer.button === 'pause') { deps.workflows.pause(agent.flowId, agent.enabled); continue; }
+      if (answer.act === 'yes') {
+        if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'left'; }
+        const ran = deps.workflows.run(flowId);
+        await stage.say(ran.ok ? [em(agent.name), ' is running.'] : [em(agent.name), ' could not start: ', ran.why.replace(/[.\s]+$/, ''), '.'], ran.ok ? 2400 : 5000, ran.ok ? { mood: 'look' } : { mood: 'sorry', mark: 'fail' });
+        return 'left';
+      }
+      if (answer.button === 'pause') { deps.workflows.pause(flowId, agent.enabled); continue; }
       if (answer.button === 'go') {
         const sure = await stage.offer(['Let ', em(agent.name), ' go? It is deleted for good.'], 'let go', { mood: 'careful', fold: 0 });
         if (sure.act !== 'yes') continue;
         let gone = false;
-        try { gone = await deps.workflows.remove(agent.flowId); } catch { gone = false; }
-        if (gone) { store.drop(agent.flowId); log('[notch] an agent was let go and deleted'); }
-        else { await stage.say([em(agent.name), ' is still finishing something. Try again in a moment.'], 4200, { mood: 'careful' }); return; }
+        try { gone = await deps.workflows.remove(flowId); } catch { gone = false; }
+        if (gone) { store.drop(flowId); log('[notch] an agent was let go and deleted'); return 'back'; }
+        await stage.say([em(agent.name), ' is still finishing something. Try again in a moment.'], 4200, { mood: 'careful' });
+        return 'left';
       }
     }
   }

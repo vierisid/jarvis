@@ -232,7 +232,13 @@ export type NotchBlock =
   /** A row: who or what on the left, a sentence, something small on the right. */
   | { kind: 'row'; id?: string; lead?: string; say: NotchPart[]; tail?: string; small?: string; buttons?: NotchButton[]; go?: boolean;
     /** No longer there: drawn struck through. A memory that was just forgotten, a habit that was turned down. */
-    gone?: boolean }
+    gone?: boolean;
+    /**
+     * A few small dots on the right, the oldest first: how each of the last
+     * runs of something ended. `ok` went well, `ask` stopped to ask, `bad`
+     * failed. The prototype's beads on an agent's card.
+     */
+    beads?: NotchBead[] }
   /** A white sheet of paper: a draft, an answer, a list. */
   | { kind: 'paper'; to?: NotchPart[]; lines: NotchPart[][]; numbered?: boolean; file?: { name: string; size: string } }
   /** A quiet line of explanation. */
@@ -249,6 +255,11 @@ export type NotchBlock =
    * is one stroke drawn once through the things named.
    */
   | { kind: 'map'; nodes: NotchMapNode[]; links: [string, string][]; sources: NotchMapSource[]; tour?: string[] };
+
+/** How one run ended, as a dot. */
+export type NotchBead = 'ok' | 'ask' | 'bad';
+/** The most dots a row carries. */
+export const NOTCH_BEADS_MAX = 8;
 
 /** One thing on the map. `x` and `y` are in a field 444 wide and 204 high. */
 export interface NotchMapNode { id: string; label: string; x: number; y: number; kind: 'me' | 'person' | 'tool' | 'co' | 'thing' }
