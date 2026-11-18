@@ -6,6 +6,7 @@ import { closeEffectApproval, workflowEffectId, type WorkflowAuthorityDependenci
 import { boundedReceiptText } from '../../roles/untrusted';
 import { RECEIPT_MAX_CHARS } from '../../authority/deferred-executor';
 import type { ActionCategory } from '../../roles/authority';
+import { emailReceiptIds } from './email-receipt';
 
 /** Accept an in-flight completion even after Kill. It is evidence, never permission to act. */
 export function recordPieceCompletion(ctx: WorkflowEffectContext, effectId: string, result: unknown, deps: WorkflowAuthorityDependencies = {}): void {
@@ -28,10 +29,13 @@ export function recordPieceCompletion(ctx: WorkflowEffectContext, effectId: stri
   try {
     if (effect.approvalId) deps.approvalManager?.markExecuted(effect.approvalId,
       boundedReceiptText(canonicalJson({ effectId, result }), RECEIPT_MAX_CHARS));
+    // #957: a sent email's provider ids, and nothing else of it, on the trail.
+    const ids = emailReceiptIds(String(effect.provenance?.piece ?? ''), String(effect.provenance?.action ?? ''), result);
     deps.auditTrail?.log({ agent_id: `workflow:${effect.runId}`, agent_name: `Workflow receipt ${effect.id}`,
       tool_name: effect.toolName, action_category: effect.actionCategory as ActionCategory,
       authority_decision: effect.approvalId ? 'approval_required' : 'allowed', approval_id: effect.approvalId, executed: true,
-      effect_id: effect.id, outcome: 'succeeded' });
+      effect_id: effect.id, outcome: 'succeeded',
+      ...(ids.messageId ? { provider_message_id: ids.messageId } : {}), ...(ids.threadId ? { provider_thread_id: ids.threadId } : {}) });
   } catch (error) { console.error('[Workflow receipt] secondary audit failed:', error); }
 }
 

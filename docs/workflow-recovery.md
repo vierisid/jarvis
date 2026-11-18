@@ -32,6 +32,15 @@ transport configuration/headers are removed before persistence and engine output
 because they can contain credentials. Slack returns its API result. Receipts are
 bounded to 256 KiB; an oversized/missing receipt leaves dispatch uncertain.
 
+An email send's receipt row in the audit trail (#957) carries the provider's
+ids only: Gmail's message and thread id, or the SMTP Message-ID
+(`provider_message_id`, `provider_thread_id`; `runtime/email-receipt.ts`). Its
+account, recipients and subject are never written to the audit rows, which
+outlive run history. The Authority audit view reads them from the workflow
+effect through `effect_id` (`authority/audit-email.ts`) while that effect
+exists, with who approved it. Once the run is removed, the entry keeps its
+decision, approver, outcome and the provider ids.
+
 Across runs (#957), every email send a workflow records (each Gmail send and
 the SMTP send) is noted for 24 hours by a key over its account (the step's
 connection), recipients (to, cc, bcc; or the message, thread or draft it

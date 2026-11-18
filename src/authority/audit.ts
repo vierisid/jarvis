@@ -4,6 +4,7 @@
 
 import { getDb, generateId } from '../vault/schema.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import { auditEmailDetail, type AuditEmailDetail } from './audit-email.ts';
 
 export type AuthorityDecisionType = 'allowed' | 'denied' | 'approval_required';
 
@@ -42,6 +43,9 @@ export type AuditEntry = {
   /** The device or session that decided: `dashboard:<device id>`, or the surface name. */
   decided_by?: string | null;
   entry_key?: string | null;
+  /** #957: a sent email's provider ids, on its receipt row. Never its recipients or subject. */
+  provider_message_id?: string | null;
+  provider_thread_id?: string | null;
 };
 
 /**
@@ -56,6 +60,12 @@ export type AuditLedgerEntry = AuditEntry & {
   updated_at: number;
   /** The name of the enrolled device named in `decided_by`, when it is still enrolled. */
   decided_device?: string | null;
+  /**
+   * #957: an email send's account, recipients and subject, read from its
+   * workflow effect through `effect_id` while that effect exists. Not stored
+   * in the audit rows.
+   */
+  email?: AuditEmailDetail | null;
 };
 
 /** The most entries or rows one ledger read returns. */
@@ -88,6 +98,9 @@ export class AuditTrail {
     outcome?: AuditOutcome | null;
     /** The device or session that decided, on a decision row. */
     decided_by?: string | null;
+    /** #957: a sent email's provider ids, on its receipt row. */
+    provider_message_id?: string | null;
+    provider_thread_id?: string | null;
   }): AuditEntry {
     const db = getDb();
     const id = generateId();
@@ -103,8 +116,8 @@ export class AuditTrail {
     const entryKey = effectId ?? entry.approval_id ?? id;
 
     db.run(
-      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at, channel, effect_id, outcome, decided_by, entry_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO audit_trail (id, agent_id, agent_name, tool_name, action_category, authority_decision, approval_id, executed, execution_time_ms, created_at, channel, effect_id, outcome, decided_by, entry_key, provider_message_id, provider_thread_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         entry.agent_id,
@@ -121,6 +134,8 @@ export class AuditTrail {
         entry.outcome ?? null,
         entry.decided_by ?? null,
         entryKey,
+        entry.provider_message_id ?? null,
+        entry.provider_thread_id ?? null,
       ]
     );
 
@@ -140,6 +155,8 @@ export class AuditTrail {
       outcome: entry.outcome ?? null,
       decided_by: entry.decided_by ?? null,
       entry_key: entryKey,
+      provider_message_id: entry.provider_message_id ?? null,
+      provider_thread_id: entry.provider_thread_id ?? null,
     };
   }
 
@@ -237,14 +254,17 @@ export class AuditTrail {
          ${latest('outcome')} AS final_outcome,
          ${latest('decided_by')} AS final_decided_by,
          ${latest('channel')} AS final_channel,
-         ${latest('execution_time_ms')} AS final_time
+         ${latest('execution_time_ms')} AS final_time,
+         ${latest('provider_message_id')} AS final_message_id,
+         ${latest('provider_thread_id')} AS final_thread_id
        FROM page JOIN audit_trail f ON f.rowid = page.first_rowid
        ORDER BY f.created_at DESC, f.rowid DESC`,
     ).all(...[...values, limit] as any[]) as Array<AuditEntry & {
       events: number; last_at: number | null; any_denied: number; any_executed: number;
       final_outcome: AuditOutcome | null; final_decided_by: string | null; final_channel: ResolutionChannel | null; final_time: number | null;
+      final_message_id: string | null; final_thread_id: string | null;
     }>;
-    return rows.map(({ events, last_at, any_denied, any_executed, final_outcome, final_decided_by, final_channel, final_time, ...row }) => {
+    return rows.map(({ events, last_at, any_denied, any_executed, final_outcome, final_decided_by, final_channel, final_time, final_message_id, final_thread_id, ...row }) => {
       const outcome = final_outcome ?? row.outcome ?? null;
       const decidedBy = final_decided_by ?? row.decided_by ?? null;
       return {
@@ -259,8 +279,18 @@ export class AuditTrail {
         // A row with no key (written outside `log`) is an entry of its own.
         events: events || 1,
         updated_at: last_at ?? row.created_at,
+        provider_message_id: final_message_id ?? row.provider_message_id ?? null,
+        provider_thread_id: final_thread_id ?? row.provider_thread_id ?? null,
+        ...(row.action_category === 'send_email' && row.effect_id ? { email: this.emailDetail(row.effect_id) } : {}),
       };
     });
+  }
+
+  /** #957: an email send's account, recipients and subject, from its workflow effect while it exists. */
+  private emailDetail(effectId: string): AuditEmailDetail | null {
+    try {
+      return auditEmailDetail((getDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(effectId) as { record: string } | null)?.record);
+    } catch { return null; }
   }
 
   /** The name of the enrolled device in `dashboard:<device id>`, or null. */

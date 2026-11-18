@@ -524,6 +524,18 @@
 .v2-auth__audit-cat,
 .v2-auth__audit-ms { color: var(--ink-3); font-family: var(--font-mono); }
 
+/* #957: an email send's account, recipients, subject, approver and ids, under its row. */
+.v2-auth__audit-email {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px var(--s-3);
+  margin: 0;
+  color: var(--ink-2);
+}
+.v2-auth__audit-email dt { color: var(--ink-3); }
+.v2-auth__audit-email dd { margin: 0; overflow-wrap: anywhere; }
+
 /* ── Grants tab ── */
 
 .v2-auth__grants {

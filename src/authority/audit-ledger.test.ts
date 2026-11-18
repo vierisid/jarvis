@@ -123,3 +123,16 @@ describe('the ledger reads one entry per side effect', () => {
       actionCategory: 'read_data', temporaryGrants: new Map(), profile: { label: 'background', denied_categories: ['read_data'] } }))).toBe('policy');
   });
 });
+
+describe('#957: an email entry', () => {
+  test('reads account, recipients, subject and the message answered from the effect record, bounded and cleaned', async () => {
+    const { auditEmailDetail } = await import('./audit-email.ts');
+    expect(auditEmailDetail(JSON.stringify({ arguments: { to: ['a@example.test', 'b‮@example.test'], bcc: 'c@example.test', subject: 'Hi​ there' },
+      sender: { account: 'Work mail (me@example.test via smtp.example.test)', replyTo: 'message 18c' } }))).toEqual({
+      account: 'Work mail (me@example.test via smtp.example.test)', to: ['a@example.test', 'b@example.test'], bcc: ['c@example.test'],
+      subject: 'Hi there', answers: 'message 18c' });
+    expect(auditEmailDetail('not json')).toBeNull();
+    expect(auditEmailDetail(JSON.stringify({ arguments: {} }))).toBeNull();
+    expect(auditEmailDetail(null)).toBeNull();
+  });
+});

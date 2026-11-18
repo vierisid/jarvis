@@ -557,6 +557,12 @@ function createTables(db: Database): void {
   for (const column of ['effect_id', 'outcome', 'decided_by', 'entry_key']) {
     try { db.run(`ALTER TABLE audit_trail ADD COLUMN ${column} TEXT`); } catch {}
   }
+  // #957: a sent email's provider ids (Gmail message and thread, an SMTP
+  // Message-ID), on its receipt row. Only ids: recipients and subject stay on
+  // the workflow effect, which the audit view joins through effect_id.
+  for (const column of ['provider_message_id', 'provider_thread_id']) {
+    try { db.run(`ALTER TABLE audit_trail ADD COLUMN ${column} TEXT`); } catch {}
+  }
   db.run(`UPDATE audit_trail SET entry_key = COALESCE(effect_id, approval_id, id) WHERE entry_key IS NULL`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_audit_entry ON audit_trail(entry_key)`);
 
