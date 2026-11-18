@@ -315,6 +315,35 @@ function importMarker(section: UserOwnedSection, fileJson: string): string {
   return `${DIGEST_PREFIX}${createHash('sha256').update(fileJson).digest('hex')}`;
 }
 
+/**
+ * A section's value with its SYSTEM-owned keys removed: only `workflows` has
+ * any (WORKFLOW_SYSTEM_KEYS, file-only artifact paths and the engine sandbox).
+ * Those never belong in a user row, so the legacy import compares and stores
+ * only the rest; otherwise a change that touches system keys alone (a host
+ * adding `sandbox`, or dropping the artifact paths) would read as a file edit
+ * and re-import the section over the user's saved workflow settings.
+ */
+function withoutSystemKeys(section: UserOwnedSection, value: unknown): unknown {
+  if (section !== 'workflows' || typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const rest = { ...(value as Record<string, unknown>) };
+  for (const key of WORKFLOW_SYSTEM_KEYS) delete rest[key];
+  return rest;
+}
+
+/**
+ * A recorded import marker as it would be written today. Markers recorded
+ * before system keys were stripped hold the whole `workflows` JSON; strip
+ * those the same way so the comparison sees only user-key changes.
+ */
+function currentMarker(section: UserOwnedSection, recorded: string): string {
+  if (section !== 'workflows' || recorded.startsWith(DIGEST_PREFIX)) return recorded;
+  try {
+    return JSON.stringify(withoutSystemKeys(section, JSON.parse(recorded)));
+  } catch {
+    return recorded;
+  }
+}
+
 function loadImportState(): Record<string, string> {
   const raw = getSetting(IMPORT_STATE_KEY);
   if (raw === null) return {};
@@ -338,6 +367,9 @@ function loadImportState(): Record<string, string> {
  * - DB value exists but no import record (pre-tracking upgrade) -> baseline
  *   the current file value WITHOUT importing, so a dashboard edit made under
  *   the old behavior is never clobbered; subsequent file edits then apply.
+ *
+ * "File value" means the user-owned part only: `workflows` system keys are
+ * stripped before comparing and importing (see withoutSystemKeys).
  *
  * Returns the imported section names (for boot logging).
  */
@@ -382,12 +414,22 @@ export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null
   }
 
   for (const section of USER_OWNED_SECTIONS) {
-    const fileValue = rawYaml[section];
-    if (fileValue === undefined || fileValue === null) continue;
+    const rawValue = rawYaml[section];
+    if (rawValue === undefined || rawValue === null) continue;
+    // Only the user-owned part of the file value is imported or compared:
+    // system keys stay file-authoritative through loadConfig and the merge.
+    const fileValue = withoutSystemKeys(section, rawValue);
     const fileJson = JSON.stringify(fileValue);
     const marker = importMarker(section, fileJson);
     const hasDbValue = getSetting(settingKey(section)) !== null;
-    const lastImported = state[section];
+    let lastImported = state[section];
+    if (typeof lastImported === 'string') {
+      const upgraded = currentMarker(section, lastImported);
+      if (upgraded !== lastImported) {
+        state[section] = lastImported = upgraded;
+        stateChanged = true;
+      }
+    }
 
     if (hasDbValue && lastImported === undefined) {
       state[section] = marker; // baseline only
@@ -471,9 +513,7 @@ export function mergeUserSettingsIntoConfig(config: JarvisConfig): void {
     if (section === 'workflows' && target[section] && typeof target[section] === 'object') {
       // A stored row never supplies a system key, even one the file leaves
       // unset: `sandbox` (#1154) must not be switched off by a settings save.
-      const merged = { ...(target[section] as Record<string, unknown>) };
-      for (const key of WORKFLOW_SYSTEM_KEYS) delete merged[key];
-      target[section] = { ...merged, ...(filePaths ?? {}) };
+      target[section] = { ...(withoutSystemKeys(section, target[section]) as object), ...(filePaths ?? {}) };
     }
   }
   // Inject stored credentials only into sections that actually have a settings
