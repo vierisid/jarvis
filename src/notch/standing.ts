@@ -279,6 +279,9 @@ function fromThem(message: MailThread['messages'][number], them: { address: stri
   return message.from.address.toLowerCase() === them.address.toLowerCase();
 }
 
+/** What a chase writes down when its second mail went. The time of it is when an automatic reply to it would come. */
+const STEP_FOLLOWED_UP = 'No answer yet. Sent a short follow-up.';
+
 /** How soon after a nudge a mail that reads like an automatic reply is taken for one. */
 export const NOTCH_AUTO_REPLY_MS = 5 * 60_000;
 
@@ -618,7 +621,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         if (!live(chase)) continue;
         // Their mailbox answering the nudge by itself is not their answer: the
         // chase goes on. It used to end on it: "Done. Sam answered."
-        const nudged = chase.steps.filter((entry) => entry.text.startsWith('Nudged')).map((entry) => entry.at);
+        const nudged = chase.steps.filter((entry) => entry.text.startsWith('Nudged') || entry.text === STEP_FOLLOWED_UP).map((entry) => entry.at);
         const answer = thread.messages.find((message) => fromThem(message, chase) && message.at >= chase.createdAt - NOTCH_STANDING_SLACK_MS
           && !chaseAutoReply(message, thread.subject, nudged));
         if (answer) chaseDone(chase);
@@ -654,7 +657,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         }
         fresh.nudges++;
         fresh.nextAt = now() + waitOf(fresh);
-        step(fresh, 'No answer yet. Sent a short follow-up.');
+        step(fresh, STEP_FOLLOWED_UP);
         store.putChase(fresh);
         log('[notch] a chase sent its follow-up');
       }

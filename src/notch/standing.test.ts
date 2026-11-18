@@ -414,6 +414,23 @@ describe('until it is done', () => {
     expect(h.said()).toBe('Done. Sam answered.');
   });
 
+  test('the same for the follow-up: its automatic reply does not end the chase either', async () => {
+    const h = harness({ waitMs: 10 * 60_000 });
+    await started(h);
+    await h.pass(9000);
+    // No answer: the follow-up goes, long after the first mail.
+    h.advance(10 * 60_000);
+    await h.standing.tick();
+    await settle();
+    expect(h.sent.length).toBe(2);
+    // A minute later the mailbox answers by itself.
+    h.advance(50_000);
+    h.arrives(thread(SAM.address, h.now(), 'Automatic reply: I am out of the office until Monday.'));
+    await settle();
+    expect(h.standing.counts().chases).toBe(1);
+    expect(h.said()).not.toContain('Done.');
+  });
+
   test('what reads like an automatic reply, and what does not', () => {
     for (const auto of [
       'I am out of the office until Monday.', 'Thank you for your message. I am currently away and will reply on my return.',
