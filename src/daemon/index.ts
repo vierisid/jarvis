@@ -85,7 +85,7 @@ import { initDatabase, closeDb } from "../vault/schema.ts";
 import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
-import { loadConfig } from "../config/loader.ts";
+import { absoluteDbPath, loadConfig, resolveDataPaths } from "../config/loader.ts";
 import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
 import { resolveEngineCacheRetention, resolveEngineIdleTtlMs, resolvePlanningPolicy } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
@@ -236,7 +236,6 @@ function pebbleSynthLimiter(sidecarId: string): ReturnType<typeof createLimiter>
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
-const DEFAULT_DATA_DIR = path.join(os.homedir(), '.jarvis');
 
 export interface DaemonConfig {
   port: number;
@@ -787,8 +786,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     drainDeadlineMs = 85_000;
   }
 
-  // Determine data directory: CLI args > config file > default
-  const dataDir = userConfig?.dataDir ?? jarvisConfig.daemon.data_dir ?? DEFAULT_DATA_DIR;
+  // Data dir and database: CLI args > config file (and JARVIS_HOME) > default.
+  // Shared with `jarvis start`'s first-run check (resolveDataPaths).
+  const { dataDir, dbPath } = resolveDataPaths(jarvisConfig.daemon, { dataDir: userConfig?.dataDir, dbPath: userConfig?.dbPath });
   // browser_upload_file never sends files from here, wherever it is (#521), and
   // sends them only from the allowed roots (#527).
   {
@@ -799,9 +799,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // exist. 0700: what is queued for upload is nobody else's business.
     uploadPolicy.ensureUploadStagingDir();
   }
-
-  // If user specified a custom data dir but no db path, use jarvis.db in that dir
-  const dbPath = userConfig?.dbPath ?? jarvisConfig.daemon.db_path ?? path.join(dataDir, 'jarvis.db');
 
   // Merge configuration
   const port = userConfig?.port ?? jarvisConfig.daemon.port ?? DEFAULT_PORT;
@@ -855,9 +852,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   }
 
   // If dbPath is relative, make it absolute within dataDir
-  if (!path.isAbsolute(config.dbPath)) {
-    config.dbPath = path.join(config.dataDir, config.dbPath);
-  }
+  config.dbPath = absoluteDbPath(config.dbPath, config.dataDir);
 
   printBanner(config);
 

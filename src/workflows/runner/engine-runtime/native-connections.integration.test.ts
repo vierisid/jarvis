@@ -127,7 +127,7 @@ describe("native credential engine integration", () => {
     api = new SandboxApi({ services: { credentialResolver: resolver } });
     await api.start({ port: 0 });
     const bundle = cached ?? await buildEngineBundle();
-    runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest,
+    runtime = new EngineRuntime({ egressProxy: false /* its pieces call a loopback fixture, which the egress proxy refuses (#1153) */, api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest,
       cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, "code") });
     provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
       const auth = req.headers.get("authorization") ?? "";

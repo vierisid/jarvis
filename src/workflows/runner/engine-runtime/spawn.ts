@@ -126,6 +126,11 @@ export interface SpawnEngineOptions {
    * HOME. `codeTree` is the run's CODE tree, `<workflow-codes>/<flowVersionId>`.
    */
   sandbox?: ActiveSandbox & { codeTree?: string };
+  /**
+   * The egress proxy (#1153, runtime/egress-proxy.ts) every proxy-aware
+   * client in the engine, and in the CODE steps it starts, connects through.
+   */
+  egressProxyUrl?: string;
 }
 
 /**
@@ -296,6 +301,13 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   // AFTER the override loop, because that loop can DELETE a name (an
   // `undefined` value) as well as set one, and these are not the caller's to
   // remove.
+  // #1153: set after the override loop, like the switches below, so nothing a
+  // caller passes can point the engine at another proxy or past this one.
+  // Both spellings: Bun's fetch reads either, axios's proxy-from-env the
+  // lower-case one first. A CODE step inherits them through sanitizedEnv().
+  if (opts.egressProxyUrl) {
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) env[name] = opts.egressProxyUrl;
+  }
   env["WS_NO_BUFFER_UTIL"] = "1";
   env["WS_NO_UTF_8_VALIDATE"] = "1";
   return env;
