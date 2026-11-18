@@ -7,6 +7,8 @@ import YAML from 'yaml';
 import { flockHeldBy, getPidPath, readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 import { readPortSetting, type PortSetting } from '../config/port.ts';
 import { win32SystemExe } from '../util/system-exe.ts';
+import { absoluteDbPath, defaultConfigPath, loadConfig, resolveDataPaths } from '../config/loader.ts';
+import { inspectDatabaseFile } from '../vault/db-guard.ts';
 
 export const DEFAULT_DAEMON_PORT = 3142;
 
@@ -1108,10 +1110,10 @@ export function resolveStopPort(options?: {
 }
 
 /**
- * The first-run hint `jarvis start` prints when the daemon's config.yaml does
- * not exist yet: the heading line, then the detail lines. `configPath` is the
- * file the daemon reads (defaultConfigPath), named in full so a Docker or
- * --data-dir install is not sent to a `~` it has to work out.
+ * The first-run hint `jarvis start` prints on a fresh install: the heading
+ * line, then the detail lines. `configPath` is the file the daemon reads
+ * (defaultConfigPath), named in full so a Docker or --data-dir install is not
+ * sent to a `~` it has to work out.
  */
 export function firstRunHint(configPath: string, openUrl: string | null): string[] {
   return [
@@ -1124,4 +1126,23 @@ export function firstRunHint(configPath: string, openUrl: string | null): string
       : `  in ${configPath}, reach the socket in daemon.listen through your proxy, and`,
     '  REMOVE the flag once your device is enrolled.',
   ];
+}
+
+/**
+ * The first-run hint for this start, or null when there is none to print.
+ * "Fresh" is the daemon's own test (inspectDatabaseFile): no database and no
+ * other install state, in the data dir and database the daemon is about to
+ * use (resolveDataPaths: --data-dir, then JARVIS_HOME / config, then
+ * ~/.jarvis). config.yaml is optional and most installs never write one, so
+ * its absence says nothing about a first run (#1451). A config that does not
+ * load gives no hint: the daemon reports it. Hosted mode (--system-config)
+ * gives none either.
+ */
+export async function firstRunHintFor(opts: { systemConfigPath?: string; dataDir?: string; openUrl: string | null }): Promise<string[] | null> {
+  if (opts.systemConfigPath) return null;
+  const cfg = await loadConfig(undefined, { quiet: true }).catch(() => null);
+  if (!cfg) return null;
+  const { dataDir, dbPath } = resolveDataPaths(cfg.daemon, { dataDir: opts.dataDir });
+  if (inspectDatabaseFile(absoluteDbPath(dbPath, dataDir), dataDir).state !== 'fresh') return null;
+  return firstRunHint(defaultConfigPath(), opts.openUrl);
 }

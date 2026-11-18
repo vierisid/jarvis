@@ -23,9 +23,9 @@ import { existsSync, openSync, readFileSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tryAcquireLock, releaseLock, releaseLockIfUnheld, isLocked, readLockedPort, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { clearLaunchRecord, daemonOwnsPort, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, firstRunHint, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
+import { clearLaunchRecord, daemonOwnsPort, describeDashboard, describeLeftAlone, detachedDaemonArgs, ensurePortReleased, firstRunHintFor, holdsJarvisLock, isPortFree, parsePortArg, readLaunchRecord, resolveDashboardTarget, resolveStopPort, restartStartArgs, writeLaunchRecord, type PortListener } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
-import { defaultConfigPath, loadConfig } from '../src/config/loader.ts';
+import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
@@ -104,26 +104,17 @@ ${c.bold('Examples:')}
 }
 
 /**
- * Friendly first-run hint - when no config exists yet, the daemon boots in
- * "setup mode" and the dashboard's onboarding gate handles LLM/TTS/profile/
- * tutorial. Print a few lines so the user knows where to go (the browser
- * auto-opens too unless --no-open is set). Called only once this start is
- * going ahead: a start refused because another instance holds the lock or the
- * port is taken has nothing to onboard.
- *
- * The file checked is the one the daemon reads (defaultConfigPath), which
- * follows HOME, not --data-dir or JARVIS_HOME.
- *
- * Skipped in hosted mode (--system-config set): the authoritative config lives
- * at a root-owned path the tenant cannot edit, the home config.yaml never
- * exists on these installs, and every hosted brain's journal would otherwise
- * carry an onboarding hint pointing at the wrong file.
+ * Friendly first-run hint - on a fresh install the daemon boots in "setup
+ * mode" and the dashboard's onboarding gate handles LLM/TTS/profile/tutorial.
+ * Print a few lines so the user knows where to go (the browser auto-opens too
+ * unless --no-open is set). Called only once this start is going ahead: a
+ * start refused because another instance holds the lock or the port is taken
+ * has nothing to onboard. firstRunHintFor decides whether this is a first run.
  */
-function printFirstRunHint(systemConfigPath: string | undefined, openUrl: string | null): void {
-  if (systemConfigPath) return;
-  const cfgPath = defaultConfigPath();
-  if (existsSync(cfgPath)) return;
-  const [heading, ...rest] = firstRunHint(cfgPath, openUrl);
+async function printFirstRunHint(systemConfigPath: string | undefined, dataDirArg: string | undefined, openUrl: string | null): Promise<void> {
+  const lines = await firstRunHintFor({ systemConfigPath, dataDir: dataDirArg, openUrl });
+  if (!lines) return;
+  const [heading, ...rest] = lines;
   console.log(c.cyan(heading!));
   for (const line of rest) console.log(c.dim(line));
   console.log('');
@@ -224,7 +215,7 @@ async function cmdStart(args: string[]): Promise<void> {
       writeLaunchRecord({ pid: process.pid, detached: false, noOpen, noLocalTools, port, dataDir, systemConfigPath });
     }
 
-    printFirstRunHint(systemConfigPath, dashboard.openUrl);
+    await printFirstRunHint(systemConfigPath, dataDir, dashboard.openUrl);
 
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools, systemConfigPath, allowNewDatabase });
@@ -251,7 +242,7 @@ async function cmdStart(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    printFirstRunHint(systemConfigPath, dashboard.openUrl);
+    await printFirstRunHint(systemConfigPath, dataDir, dashboard.openUrl);
 
     // Run in background — spawn a detached child process with log file
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));
