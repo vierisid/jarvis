@@ -61,6 +61,9 @@ export function notchDropHeaders(file: Pick<File, 'name' | 'type' | 'size'>, cou
   };
 }
 
+/** How long a file may take to reach the brain. Past it the page says it was lost, so the mouth does not stay open over a request that hangs. */
+export const NOTCH_UPLOAD_MS = 120_000;
+
 /** Sends a file to the brain the page came from. */
 export async function notchUpload(file: File, count: number, request: typeof fetch = fetch, signedOut?: () => void): Promise<boolean> {
   const reply = await request(NOTCH_DROP_PATH, {
@@ -69,6 +72,7 @@ export async function notchUpload(file: File, count: number, request: typeof fet
     headers: notchDropHeaders(file, count),
     // Too large to be read: only what it is goes, and the brain says so.
     body: file.size > NOTCH_DROP_MAX_BYTES ? '' : file,
+    ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(NOTCH_UPLOAD_MS) } : {}),
   });
   // Refused because this page is no longer signed in: said, so that the brain opens it again signed in.
   if (reply.status === 401) signedOut?.();
@@ -102,22 +106,43 @@ export function watchNotchSignIn(signedOut: () => void, options: { request?: typ
 
 const holdsFiles = (event: DragEvent): boolean => [...(event.dataTransfer?.types ?? [])].includes('Files');
 
+/**
+ * How long after the last sign of a drag the mouth closes by itself. A page
+ * stops hearing about a drag that leaves its window, and the leaving is not
+ * always told: the prototype closes the mouth 700 ms after the last sign, and
+ * so does this. Without it a missed leave left the mouth open until the next
+ * real drop.
+ */
+export const NOTCH_DRAG_QUIET_MS = 700;
+
 /** Watches for files dragged over the page. Comes back with what ends the watch. */
-export function watchNotchDrops(target: Pick<Document, 'addEventListener' | 'removeEventListener'>, port: NotchDropPort): () => void {
+export function watchNotchDrops(
+  target: Pick<Document, 'addEventListener' | 'removeEventListener'>,
+  port: NotchDropPort,
+  clock: { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void } = { set: (fn, ms) => setTimeout(fn, ms), clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) },
+): () => void {
   // Entering a child fires an enter before the leave of its parent: counted, so that "over" is said once.
   let depth = 0;
   let over = false;
+  let quiet: unknown = null;
   const leave = (): void => {
     depth = 0;
+    if (quiet !== null) { clock.clear(quiet); quiet = null; }
     if (!over) return;
     over = false;
     port.send({ type: 'drag', state: 'left' });
+  };
+  /** A sign of the drag: it is still here. With no further sign, it has gone. */
+  const sign = (): void => {
+    if (quiet !== null) clock.clear(quiet);
+    quiet = clock.set(() => { quiet = null; leave(); }, NOTCH_DRAG_QUIET_MS);
   };
   const onEnter = (event: Event): void => {
     const drag = event as DragEvent;
     drag.preventDefault();
     if (!holdsFiles(drag)) return;
     depth++;
+    sign();
     if (over) return;
     over = true;
     port.send({ type: 'drag', state: 'over' });
@@ -127,6 +152,11 @@ export function watchNotchDrops(target: Pick<Document, 'addEventListener' | 'rem
     // Always: without it the browser takes the drop for itself and leaves the page.
     drag.preventDefault();
     if (drag.dataTransfer) drag.dataTransfer.dropEffect = holdsFiles(drag) ? 'copy' : 'none';
+    if (!holdsFiles(drag)) return;
+    // As in the prototype: any sign of the drag opens the mouth again, also
+    // after it had closed for want of one.
+    if (!over) { over = true; depth = Math.max(depth, 1); port.send({ type: 'drag', state: 'over' }); }
+    sign();
   };
   const onLeave = (event: Event): void => {
     if (!over) return;
@@ -139,7 +169,16 @@ export function watchNotchDrops(target: Pick<Document, 'addEventListener' | 'rem
     drag.preventDefault();
     const files = [...(drag.dataTransfer?.files ?? [])];
     depth = 0;
-    if (files.length === 0) { leave(); return; }
+    if (quiet !== null) { clock.clear(quiet); quiet = null; }
+    if (files.length === 0) {
+      // Something was dropped on the mouth and no file came of it (a folder
+      // from some programs, an attachment dragged out of a mail): said, so
+      // that the mouth does not just shut without a word.
+      const was = over;
+      over = false;
+      if (was && holdsFiles(drag)) port.send({ type: 'drag', state: 'lost' }); else if (was) port.send({ type: 'drag', state: 'left' });
+      return;
+    }
     over = false;
     // One after another, in the order they were dropped: the brain holds them in that order.
     void (async () => {
@@ -155,6 +194,7 @@ export function watchNotchDrops(target: Pick<Document, 'addEventListener' | 'rem
   target.addEventListener('dragleave', onLeave);
   target.addEventListener('drop', onDrop);
   return () => {
+    if (quiet !== null) { clock.clear(quiet); quiet = null; }
     target.removeEventListener('dragenter', onEnter);
     target.removeEventListener('dragover', onOver);
     target.removeEventListener('dragleave', onLeave);

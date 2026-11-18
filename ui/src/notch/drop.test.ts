@@ -26,11 +26,16 @@ function drag(type: string, files: File[] | null): Event & { prevented: () => bo
 function page(upload: (file: File, count: number) => Promise<boolean> = async () => true) {
   const sent: NotchFromPage[] = [];
   const uploads: [string, number][] = [];
+  // A clock that is moved by hand: the mouth closes by itself when a drag goes quiet.
+  const timers: { fn: () => void; ms: number }[] = [];
   const stop = watchNotchDrops(document, {
     send: (message) => { sent.push(message); },
     upload: (file, count) => { uploads.push([file.name, count]); return upload(file, count); },
+  }, {
+    set: (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer; },
+    clear: (handle) => { const at = timers.indexOf(handle as { fn: () => void; ms: number }); if (at >= 0) timers.splice(at, 1); },
   });
-  return { sent, uploads, stop };
+  return { sent, uploads, stop, timers, quiet: (): void => { for (const timer of timers.splice(0)) timer.fn(); } };
 }
 
 const pdf = (): File => new File([new Uint8Array([1, 2, 3])], 'Deck.pdf', { type: 'application/pdf' });
@@ -213,5 +218,48 @@ describe('a page that is no longer signed in', () => {
     // Said once, and then it asks no more: the brain opens the page again.
     expect(asked.length).toBe(before);
     stop();
+  });
+});
+
+// The hardening audit, 17 November 2026: a leave that the page never hears of
+// left the mouth open until the next real drop. The prototype closes it a
+// moment after the last sign of the drag, and so does the page now.
+describe('a drag that goes quiet', () => {
+  test('the mouth closes by itself a moment after the last sign of the drag', () => {
+    const h = page();
+    document.dispatchEvent(drag('dragenter', [pdf()]));
+    expect(h.sent).toEqual([{ type: 'drag', state: 'over' }]);
+    // Still over it: each sign puts the moment off, and only one clock runs.
+    document.dispatchEvent(drag('dragover', [pdf()]));
+    document.dispatchEvent(drag('dragover', [pdf()]));
+    expect(h.timers).toHaveLength(1);
+    expect(h.timers[0]!.ms).toBe(700);
+    expect(h.sent).toHaveLength(1);
+    // No further sign, and no leave either.
+    h.quiet();
+    expect(h.sent).toEqual([{ type: 'drag', state: 'over' }, { type: 'drag', state: 'left' }]);
+    // The same drag coming back opens it again.
+    document.dispatchEvent(drag('dragenter', [pdf()]));
+    expect(h.sent.at(-1)).toEqual({ type: 'drag', state: 'over' });
+    h.stop();
+  });
+
+  test('a leave that is heard needs no clock, and leaves none running', () => {
+    const h = page();
+    document.dispatchEvent(drag('dragenter', [pdf()]));
+    document.dispatchEvent(drag('dragleave', [pdf()]));
+    expect(h.sent).toEqual([{ type: 'drag', state: 'over' }, { type: 'drag', state: 'left' }]);
+    expect(h.timers).toHaveLength(0);
+    h.stop();
+  });
+
+  test('something dropped that holds no file is said as lost, not passed over in silence', () => {
+    const h = page();
+    document.dispatchEvent(drag('dragenter', [pdf()]));
+    document.dispatchEvent(drag('drop', []));
+    expect(h.sent).toEqual([{ type: 'drag', state: 'over' }, { type: 'drag', state: 'lost' }]);
+    expect(h.uploads).toEqual([]);
+    expect(h.timers).toHaveLength(0);
+    h.stop();
   });
 });
