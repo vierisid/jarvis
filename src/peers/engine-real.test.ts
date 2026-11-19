@@ -31,11 +31,12 @@ describe.skipIf(!path)('the real engine under the brain', () => {
     const brain = mkdtempSync(join(homedir(), '.jarvis-peers-test-'));
     made.push(brain);
     const dialogs: EngineDialog[] = [];
+    let closeAtOnce = true;
     const engine = new PeerEngine({
       path: path!, brainDataDir: brain,
       // As if the brain had been started from a coding agent's shell, with a keychain it must not touch in a test.
       env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', AI_AGENT: 'claude-code/2.1', COLLAB_INTERACTIVE: '0', COLLAB_KEYSTORE: 'file' },
-      onDialog: async (dialog) => { dialogs.push(dialog); await new Promise((resolve) => setTimeout(resolve, 600)); return { action: 'cancel' }; },
+      onDialog: async (dialog) => { dialogs.push(dialog); if (!closeAtOnce) await new Promise((resolve) => setTimeout(resolve, 600)); return { action: 'cancel' }; },
     });
     engine.start();
     await until(() => engine.state() === 'up');
@@ -44,6 +45,14 @@ describe.skipIf(!path)('the real engine under the brain', () => {
     expect(status.failed).toBe(false);
     expect(status.text).toContain('Logged in: no');
     expect(status.text).toContain('Dialogs: available');
+
+    // The first dialog is closed the moment it comes, as it is when no notch is up to show it.
+    // The engine must not take that for proof that nobody can ever be asked.
+    expect((await engine.call('policy', { action: 'set', kind: 'task', effect: 'deny' })).text).toContain('nothing changed');
+    expect(dialogs.length).toBe(1);
+    expect((await engine.call('account', { action: 'status' })).text).toContain('Dialogs: available');
+    dialogs.length = 0;
+    closeAtOnce = false;
 
     const change = await engine.call('policy', { action: 'set', kind: 'message', effect: 'ask' });
     expect(dialogs.length).toBe(1);

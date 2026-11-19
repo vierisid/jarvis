@@ -20,6 +20,8 @@ import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
 import { NotchLedger } from './ledger.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { attachNotchReal, type NotchReal } from './real.ts';
+import { PeerLink } from '../peers/link.ts';
+import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import { NOTCH_TODAY_MAX, notchToday, notchTodayBlocks, startOfDay } from './today.ts';
@@ -575,6 +577,86 @@ describe('a call that is listened to, put together', () => {
     fromPage({ type: 'answer', id: line()!.id, act: 'word', word: 'callside', value: 'both sides' });
     await wait();
     expect(rows()).toContain('On a call I [offer to listen], and hear [both sides].');
+  });
+});
+
+describe("other people's Jarvises, put together", () => {
+  function assembled(given: boolean) {
+    const pushed: NotchToPage[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = {
+      dispatchRPC(_sidecarId, _method, params) { const message = (params as { message?: NotchToPage }).message; if (message) pushed.push(message); return Promise.resolve({}); },
+      onEvent(listener) { onEvent = listener; },
+      onSidecarDisconnected() {},
+    };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const server = new FakeServer();
+    const engine = new FakeEngine(server, 'Sam0000000000000000001', 'sam');
+    const leo = new FakeEngine(server, 'Leo0000000000000000002', 'leo');
+    engine.signedIn = true;
+    leo.signedIn = true;
+    engine.contacts.set(leo.id, { deviceId: leo.id, localName: 'Leo', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+    leo.contacts.set(engine.id, { deviceId: engine.id, localName: 'Sam', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+    const link = new PeerLink({ readMs: 0 });
+    link.attach(engine);
+    engine.dialog = link.dialog;
+    engine.notice = link.notice;
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      day: { db: getDb(), noClock: true },
+      ...(given ? { peers: { db: getDb(), link, openPage: async () => true, noClock: true } } : {}),
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    const wait = async (): Promise<void> => { for (let round = 0; round < 4; round++) { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); } };
+    const line = (): NotchLine | null => surface.current().line;
+    const said = (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
+    return { real, link, engine, leo, fromPage, wait, line, said };
+  }
+
+  test('Home has the row for the organisation, and it opens the sheet', async () => {
+    const h = assembled(true);
+    await h.link.refresh();
+    h.fromPage({ type: 'open' });
+    await h.wait();
+    const rows = (h.line() as { blocks: { kind: string; id?: string }[] }).blocks.filter((block) => block.kind === 'row');
+    expect(rows.find((row) => row.id === 'people')).toMatchObject({ go: true, say: [{ em: 'Your organisation' }, ': you and ', { em: 'Leo' }, '.'] });
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'go', row: 'people' });
+    await h.wait();
+    expect([h.line()?.kind, h.said()]).toEqual(['sheet', 'Your organisation']);
+    h.real.stop();
+  });
+
+  test('"tell Leo ..." typed into Home goes to Leo', async () => {
+    const h = assembled(true);
+    await h.link.refresh();
+    h.fromPage({ type: 'open' });
+    await h.wait();
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'ask', text: 'tell Leo the review moved to Friday' });
+    await h.wait();
+    expect([h.line()?.kind, h.said()]).toEqual(['send', 'Telling Leo: The review moved to Friday…']);
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'done' });
+    await h.wait();
+    expect(h.said()).toBe('Sent to Leo. I will tell you when it is seen.');
+    expect(h.leo.inbox.map((item) => item.payload.text)).toEqual(['The review moved to Friday']);
+    h.real.stop();
+  });
+
+  test('with the switch off there is no row, and the same words go nowhere near Leo', async () => {
+    const h = assembled(false);
+    expect(h.real.people).toBeNull();
+    h.fromPage({ type: 'open' });
+    await h.wait();
+    const rows = (h.line() as { blocks: { kind: string; id?: string }[] }).blocks.filter((block) => block.kind === 'row');
+    expect(rows.find((row) => row.id === 'people')).toBeUndefined();
+    h.fromPage({ type: 'answer', id: h.line()!.id, act: 'ask', text: 'tell Leo the review moved to Friday' });
+    await h.wait();
+    expect(h.leo.inbox).toEqual([]);
+    h.real.stop();
   });
 });
 
