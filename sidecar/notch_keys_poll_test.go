@@ -117,6 +117,16 @@ func TestPollEscIsToldAsEscAndNotAsAnotherKey(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
+	// With the pair held, Esc alone is Esc and nothing more: it is one of the
+	// keys the system counted, and must not be told a second time as "another".
+	got = pollRun(
+		notchKeyLook{Mods: pollTalk, Downs: 10},
+		notchKeyLook{Mods: pollTalk, Downs: 11, Esc: true},
+	)
+	want = []notchPolled{{notchKeyEscDown, pollTalk}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Esc alone with the pair: got %v, want %v", got, want)
+	}
 	// With the pair held, Esc is Esc, and a second key in the same instant is another key.
 	got = pollRun(
 		notchKeyLook{Mods: pollTalk, Downs: 10},
