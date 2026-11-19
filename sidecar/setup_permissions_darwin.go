@@ -148,6 +148,10 @@ func setupPermissionStatuses() (notif, mic, screen, ax string) {
 // instead of as "registered" (#563, hotkeyAccessibilityCaveat).
 func setupAXTrusted() bool { return C.setup_ax_status() == 1 }
 
+// setupScreenAllowed reports whether this process may take a picture of the
+// screen, without prompting for it.
+func setupScreenAllowed() bool { return C.setup_screen_status() == 1 }
+
 // setupRequestPermission triggers the OS prompt (or pane registration) for one
 // permission. All requests are async/fire-and-forget; the wizard's poll picks
 // up the outcome.

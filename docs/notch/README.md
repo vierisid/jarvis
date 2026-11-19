@@ -3059,10 +3059,16 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
   needs to pick pairs from keys that are not remapped.
 - A window that runs as administrator in front (Task Manager) does not let
   the hook see keys. Nothing can be done about that from here.
-- `notch.configure` answers `keys: "watch" | "blocked" | "none"`. On macOS
-  the tap needs the Accessibility permission, asked for in setup and never
-  from the watch itself; without it the answer is `blocked` and the notch
-  answers to the mouse only.
+- `notch.configure` answers `keys: "watch" | "pairs" | "blocked" | "none"`.
+  On macOS the tap needs the Accessibility permission, asked for in setup
+  and never from the watch itself. Without it the answer is `pairs`: the
+  two pairs still work, read by looking at the keyboard's state eight
+  milliseconds apart (which modifiers are down, a count of the keys that
+  have gone down, whether Esc is down), which needs no permission and never
+  says which key was typed (`sidecar/notch_keys_poll.go`). What that cannot
+  do: keep Esc from the app in front (Esc is acted on, and the app gets it
+  too), and see the pointer, so drawing round a thing still needs the
+  permission. `blocked` is kept for a system with no such way.
 
 ## What it does not protect, and what is missing
 
@@ -3238,7 +3244,7 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 
 | Direction | Message | Params | Answer |
 |---|---|---|---|
-| brain to desktop app | `notch.configure` | `{enabled: boolean}` | `{configured: true, enabled, surface: "none" \| "window", keys: "none" \| "watch" \| "blocked"}` |
+| brain to desktop app | `notch.configure` | `{enabled: boolean}` | `{configured: true, enabled, surface: "none" \| "window", keys: "none" \| "watch" \| "pairs" \| "blocked"}` |
 | brain to desktop app | `notch.spawn` | `{url: string}`, on the brain's origin | `{spawned: true, already: boolean}` |
 | brain to desktop app | `notch.close` | none | `{closed: boolean}` |
 | brain to desktop app | `notch.push` | `{message: any JSON}`, for the page | `{pushed: true}` |
@@ -3390,6 +3396,8 @@ scripts/notch/try.sh
   whoever started the program, and from a terminal the Accessibility
   permission the keys need would be the terminal's. Its log is `app.log`
   beside it. An installed Jarvis has to be quit from the menu bar first.
+  To macOS the test build is `com.jarvis.sidecar.notchdev`, not the
+  installed Jarvis: the two never share a switch in System Settings.
 - **The first run on a Mac was on 19 November 2026** (an M4 MacBook Air,
   macOS 27.2). The brain and the app built and the app enrolled. It then
   crashed the moment the notch's window was set up, three times out of
@@ -3415,8 +3423,34 @@ scripts/notch/try.sh
     build was signed only by the linker, under the name `a.out`, and the app
     round it not at all, so the entry "Jarvis" in the list did not match the
     program that ran. `try.sh` now signs the app for the Mac it is built on
-    (`codesign --sign -`, no certificate), as `com.jarvis.sidecar`. Whether
-    that is the whole cause is not known until the third run.
+    (`codesign --sign -`, no certificate). It was not the whole cause.
+- **The third run, the same day: no crash, the first day ran to step 8 of 13
+  with the mouse, and two things stopped the tester** ("it doesnt work the
+  hotkeys that are crucial and the mac os pop up keeps on opening").
+  - *The keys stayed blocked with the permission on, signed or not.* macOS
+    listed "Jarvis" as allowed, for Accessibility and for Screen Recording,
+    and honoured neither. Why is not known: nothing here can read what macOS
+    decided. Three things were done about it. The two pairs no longer need
+    the permission at all (`keys: "pairs"`, above). The test build is its own
+    program to macOS (`com.jarvis.sidecar.notchdev`), and `try.sh` clears
+    what an earlier build of it was given (`tccutil reset All` for that name
+    only), because a switch left by another build shows as on and does
+    nothing. And when the keys start, the desktop app's log says in one line
+    who macOS takes the program for, whether its signature holds as it runs,
+    and what each permission answers when asked without prompting.
+  - *The system's Screen Recording window came back every 15 seconds.* What
+    watches the screen takes a picture that often, with the system's own
+    tool, and on a recent macOS every refused try shows the window again.
+    Without the permission the picture is no longer tried
+    (`platformCaptureScreen`, `sidecar/platform_darwin.go`): macOS is asked
+    once in the life of the program, and the log says once that the screen
+    is not seen.
+  - `try.sh` builds the Mac app again only when the desktop app's code
+    changed, since every rebuild means giving every permission again, and
+    `start-sidecar.command` does not start a second one beside one that runs.
+  - Still open from that run: the Google sign-in of step 8 did not open (the
+    browser lost the page it had just gone to), and the first day asks for
+    none of the permissions itself.
 - The test build has its own profile folder. It cannot run beside an installed
   Jarvis on Windows (single-instance lock). Leave "start at login" off in it.
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.

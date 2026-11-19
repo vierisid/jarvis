@@ -133,35 +133,64 @@ fi
 if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
   need go "Install Go (brew install go)."
   need make "Install the Xcode command line tools (xcode-select --install)."
-  say "Building Jarvis.app"
-  make -C sidecar build
-  # What reads text off the screen is a small helper of its own. Without it the app runs, and reads nothing.
-  make -C sidecar build-ocr-helper || echo "The helper that reads text off the screen was not built. Everything else goes on without it."
-  [ -f sidecar/packaging/macos/AppIcon.icns ] || ( cd sidecar && packaging/macos/make-icns.sh ) || true
   mkdir -p "$APP_DIR"
-  make -C sidecar app-macos BIN=./jarvis APP_DIR="$APP_DIR/Jarvis.app"
-  # Signed for this Mac only, as the app it says it is. Left as the build makes
-  # it, the program inside is signed by the linker under the name "a.out",
-  # and the app round it is not signed at all. macOS then lists "Jarvis" under
-  # a permission, switched on, and does not find it behind the program that
-  # runs: the keys stayed blocked on the second run on a Mac (19 November
-  # 2026). No certificate is involved and nothing is sent anywhere: this is
-  # the signature a build made on the Mac itself gets. Inside first, then the
-  # app. A rebuilt app is still a new program to macOS, so the permission has
-  # to be given again after every build.
-  if command -v codesign >/dev/null 2>&1; then
-    SIGNED=1
-    if [ -f "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" ]; then
-      codesign --force --sign - "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" || SIGNED=0
-    fi
-    codesign --force --sign - "$APP_DIR/Jarvis.app" || SIGNED=0
-    if [ "$SIGNED" = 1 ]; then
-      echo "Signed for this Mac: $(codesign -dv "$APP_DIR/Jarvis.app" 2>&1 | grep -E '^Identifier=' || echo 'identifier not read')"
-    else
-      echo "The app could not be signed for this Mac. It runs, and the keys may stay blocked."
-    fi
+  # The test build is its own program to macOS, with a name of its own in the
+  # lists of permissions. With the installed Jarvis's name it shared that
+  # one's switches, and a switch belongs to the program it was made for: one
+  # left by another build shows as on and does nothing.
+  MAC_BUNDLE_ID="com.jarvis.sidecar.notchdev"
+  # It is built again only when its code changed. A rebuilt app is a new
+  # program to macOS, and every permission has to be given again; the page and
+  # the brain change far more often than the desktop app does.
+  BUILT_FROM="$APP_DIR/.built-from"
+  SIDECAR_NOW="$(git rev-parse HEAD:sidecar 2>/dev/null || true)"
+  [ -z "$(git status --porcelain -- sidecar 2>/dev/null)" ] || SIDECAR_NOW=""
+  if [ -n "$SIDECAR_NOW" ] && [ -x "$APP_DIR/Jarvis.app/Contents/MacOS/jarvis" ] && [ "$(cat "$BUILT_FROM" 2>/dev/null)" = "$MAC_BUNDLE_ID $SIDECAR_NOW" ]; then
+    say "Jarvis.app is already built from this code"
+    echo "Kept as it is, so the permissions it was given in System Settings still hold."
   else
-    echo "codesign is not on this Mac (Xcode command line tools): the app is not signed, and the keys may stay blocked."
+    say "Building Jarvis.app"
+    rm -f "$BUILT_FROM"
+    make -C sidecar build
+    # What reads text off the screen is a small helper of its own. Without it the app runs, and reads nothing.
+    make -C sidecar build-ocr-helper || echo "The helper that reads text off the screen was not built. Everything else goes on without it."
+    [ -f sidecar/packaging/macos/AppIcon.icns ] || ( cd sidecar && packaging/macos/make-icns.sh ) || true
+    make -C sidecar app-macos BIN=./jarvis APP_DIR="$APP_DIR/Jarvis.app"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $MAC_BUNDLE_ID" "$APP_DIR/Jarvis.app/Contents/Info.plist" || {
+      echo "The test build could not be given its own name for macOS. It keeps the installed Jarvis's."
+      MAC_BUNDLE_ID="com.jarvis.sidecar"
+    }
+    # Signed for this Mac only, as the app it says it is. Left as the build
+    # makes it, the program inside is signed by the linker under the name
+    # "a.out", and the app round it is not signed at all: macOS then lists
+    # "Jarvis" under a permission and does not find it behind the program that
+    # runs (the second run on a Mac, 19 November 2026). No certificate is
+    # involved and nothing is sent anywhere: this is the signature a build made
+    # on the Mac itself gets. Inside first, then the app.
+    if command -v codesign >/dev/null 2>&1; then
+      SIGNED=1
+      if [ -f "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" ]; then
+        codesign --force --sign - "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" || SIGNED=0
+      fi
+      codesign --force --sign - "$APP_DIR/Jarvis.app" || SIGNED=0
+      if [ "$SIGNED" = 1 ]; then
+        echo "Signed for this Mac: $(codesign -dv "$APP_DIR/Jarvis.app" 2>&1 | grep -E '^Identifier=' || echo 'identifier not read')"
+      else
+        echo "The app could not be signed for this Mac. It runs, and macOS may not honour a permission given to it."
+      fi
+    else
+      echo "codesign is not on this Mac (Xcode command line tools): the app is not signed, and macOS may not honour a permission given to it."
+    fi
+    # The switches of the build before this one are cleared: they are for a
+    # program that no longer exists, and they would show as on (the third run
+    # on a Mac: on in the list, refused by macOS). Only ever the test build's
+    # own; an installed Jarvis's are never touched from here.
+    if [ "$MAC_BUNDLE_ID" != "com.jarvis.sidecar" ] && command -v tccutil >/dev/null 2>&1; then
+      tccutil reset All "$MAC_BUNDLE_ID" >/dev/null 2>&1 || true
+      echo "New build: macOS has to be told again what it may do (System Settings, Privacy & Security)."
+      echo "What the build before it was given has been cleared, so nothing there shows as on that is not."
+    fi
+    [ -z "$SIDECAR_NOW" ] || echo "$MAC_BUNDLE_ID $SIDECAR_NOW" > "$BUILT_FROM"
   fi
   # The same idea as start-sidecar.cmd on Windows: a profile of its own, so the
   # test build never reads or writes an installed Jarvis's settings.
@@ -182,6 +211,12 @@ APP="$DIR/Jarvis.app"
 LOG="$DIR/app.log"
 OUT="$DIR/app.out.log"
 TOKEN="${1:-}"
+# One at a time: a second one would be a second notch, and the first keeps
+# running with whatever macOS allowed it when it started.
+if pgrep -f "$APP/Contents/MacOS/jarvis" >/dev/null 2>&1; then
+  echo "Jarvis from this folder is already running. Quit it first (its menu bar icon, Quit), then run this again."
+  exit 1
+fi
 if [ -f "$PROFILE/.jarvis/sidecar.yaml" ]; then
   open -n "$APP" --env HOME="$PROFILE" --stdout "$OUT" --stderr "$LOG"
   exit 0

@@ -155,7 +155,7 @@ describe('attachNotch', () => {
   // The desktop app says whether it can hear the notch's keys. A machine that
   // cannot yet must be visible in the log, not found out by pressing keys.
   test('says whether the desktop app can hear the keys', async () => {
-    for (const [keys, expected] of [['watch', 'keys: watch'], ['blocked', 'Accessibility'], [undefined, 'surface: window']] as const) {
+    for (const [keys, expected] of [['watch', 'keys: watch'], ['blocked', 'cannot hear the notch\'s keys'], ['pairs', 'hears the two pairs of keys without the Accessibility permission'], [undefined, 'surface: window']] as const) {
       const lines: string[] = [];
       const listeners: ((sidecar: { id: string; name: string; capabilities: string[] }) => void)[] = [];
       attachNotch({

@@ -53,8 +53,11 @@ export interface NotchConfigureResult {
   surface?: string;
   /**
    * Whether that machine can watch the keyboard for the notch's keys: "watch",
-   * "blocked" (the system has not allowed it yet) or "none". Absent from a
-   * desktop app older than the keys.
+   * "pairs" (a Mac without the Accessibility permission: the two pairs work,
+   * read from the keyboard's state; Esc is not kept from the app in front and
+   * nothing can be drawn round), "blocked" (the system has not allowed it and
+   * there is no other way) or "none". Absent from a desktop app older than
+   * the keys.
    */
   keys?: string;
 }
@@ -200,6 +203,8 @@ export function attachNotch(port: NotchSidecarPort, options: AttachNotchOptions)
         log(`[notch] "${sidecar.name}" ready, surface: ${surface}${answer.keys ? `, keys: ${answer.keys}` : ''}`);
         if (answer.keys === 'blocked') {
           log(`[notch] "${sidecar.name}" cannot hear the notch's keys until it is given the Accessibility permission; the mouse still works`);
+        } else if (answer.keys === 'pairs') {
+          log(`[notch] "${sidecar.name}" hears the two pairs of keys without the Accessibility permission; with it, Esc is kept from the app in front and a thing can be drawn round`);
         }
         // Only a desktop app that says it has a window is asked to open one.
         if (surface !== 'window' || !options.pageUrl) return;
