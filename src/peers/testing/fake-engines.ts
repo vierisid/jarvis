@@ -42,6 +42,8 @@ export class FakeServer {
   private readonly queued = new Map<string, Item[]>();
   private codes = 10;
   clock = 1_800_000_000_000;
+  /** The server cannot be reached: what the real engine answers then was seen by running it with no network. */
+  unreachable = false;
   readonly tasks = new Map<string, Task>();
   /** Requests whose answer is held back for now: the word that it ended is there, the answer not yet. */
   readonly answerLater = new Set<string>();
@@ -159,6 +161,7 @@ export class FakeEngine implements PeerEngineLike {
     const server = await this.ask('form', `collab: sign in at ${this.server.host}?\nServer: ${this.server.url} (the default server of this build)\nAccount, contacts and messages use this server. It cannot be changed after the first login.`,
       { choice: choice('Decision', [['yes', 'Use this server and sign in'], ['no', 'Cancel']]) }, { tool: 'account', args });
     if (server?.choice !== 'yes') return ok('The user did not confirm a server; nothing was saved and no login was started.');
+    if (this.server.unreachable) return refused('auth_discovery_failed', 'The server did not answer.');
     const url = `${this.server.url}/authorize?client_id=collab-mcp&state=${randomUUID()}`;
     const page = await this.ask('url', `Sign in to collab at ${this.server.host} in your browser. The page belongs to your collab server ${this.server.host}.`, {}, { url, elicitationId: randomUUID(), tool: 'account', args });
     if (!page) return ok('The user did not open the login page. Login cancelled.');

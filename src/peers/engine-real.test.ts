@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { EngineDialog } from './engine-client.ts';
 import { PeerEngine } from './engine.ts';
+import { PeerLink, engineErrorCode } from './link.ts';
+import type { PeerDecision } from './link.ts';
 
 const path = process.env.JARVIS_TEST_PEERS_ENGINE;
 const made: string[] = [];
@@ -69,4 +71,36 @@ describe.skipIf(!path)('the real engine under the brain', () => {
     expect((await engine.read('tasks')).tasks).toEqual([]);
     engine.stop();
   }, 30_000);
+
+  test('signing in with no way to reach the server asks about the server, opens no page, and ends by itself', async () => {
+    const brain = mkdtempSync(join(homedir(), '.jarvis-peers-test-'));
+    made.push(brain);
+    const link = new PeerLink();
+    const engine = new PeerEngine({
+      path: path!, brainDataDir: brain, env: { ...process.env, COLLAB_KEYSTORE: 'file' },
+      onDialog: link.dialog, onNotice: link.notice, onState: link.engineState,
+    });
+    link.attach(engine);
+    engine.start();
+    await until(() => engine.state() === 'up');
+    const seen: PeerDecision[] = [];
+    const pages: string[] = [];
+    const started = Date.now();
+    const result = await link.call('account', { action: 'login' }, {
+      // A person reads it first.
+      server: async (decision) => { seen.push(decision); await new Promise((resolve) => setTimeout(resolve, 500)); return { choice: 'yes' }; },
+      page: async (decision) => { pages.push(decision.url ?? ''); return null; },
+    }, 60_000);
+    // Shapes only: which server it is, is not printed here.
+    expect(seen.map((decision) => decision.kind)).toEqual(['server']);
+    expect(seen[0]!.host).toMatch(/^[a-z0-9.-]+(:\d+)?$/);
+    expect(pages).toEqual([]);
+    expect(result.failed || !!engineErrorCode(result.text) || /fail|could not|cannot|unreachable/i.test(result.text)).toBe(true);
+    expect(/^Logged in/.test(result.text)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(40_000);
+    await link.refresh();
+    expect(link.account().signedIn).toBe(false);
+    console.log('[real] the engine\'s word for an unreachable server:', engineErrorCode(result.text) ?? '(none, not marked as a refusal)', '| marked failed:', result.failed, '| ms:', Date.now() - started);
+    engine.stop();
+  }, 70_000);
 });

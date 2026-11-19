@@ -167,6 +167,19 @@ describe('making an organisation and signing in', () => {
     expect(sam.engine.signedIn).toBe(false);
   });
 
+  test('a server that does not answer is said to be out of reach', async () => {
+    const server = new FakeServer();
+    server.unreachable = true;
+    const sam = side(server, SAM, 'sam');
+    await sam.refresh();
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.yes();
+    expect(sam.said()).toBe('I could not reach the server. Try again in a moment.');
+    expect(sam.opened).toEqual([]);
+    expect(sam.engine.signedIn).toBe(false);
+  });
+
   test('a machine that cannot open the page is told so, and the engine is told nothing was opened', async () => {
     const sam = side(new FakeServer(), SAM, 'sam', { canOpen: false });
     await sam.refresh();
