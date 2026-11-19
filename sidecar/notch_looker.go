@@ -1060,6 +1060,25 @@ func makeNotchPointHandler(l *NotchLook) RPCHandler {
 // errNotchLookNotHere is the answer where the look has no platform under it.
 var errNotchLookNotHere = fmt.Errorf("looking at the screen is not built for this system yet")
 
+// platformNotchLookWhyNot is the platform's own reason for a look that
+// cannot be used, where it has one: on macOS the look is built, and what is
+// missing is a permission. Nil where there is no such reason to give.
+var platformNotchLookWhyNot func() error
+
+// notchLookMissing is the answer when the look cannot be used: the platform's
+// reason when it has one, else that it is not built here. The fourth run on
+// a real Mac (19 November 2026) was told "not built for this system yet" for
+// what was a missing permission, which sent the reader looking for code that
+// was there all along.
+func notchLookMissing() error {
+	if platformNotchLookWhyNot != nil {
+		if err := platformNotchLookWhyNot(); err != nil {
+			return err
+		}
+	}
+	return errNotchLookNotHere
+}
+
 // makeNotchWindowHandler serves notch.window: what the window the person is
 // in says about itself, for "where is...?". Where this program looks away the
 // answer says so and holds nothing else.

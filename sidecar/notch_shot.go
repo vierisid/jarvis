@@ -182,7 +182,7 @@ func makeNotchShotHandler() RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		hands := notchActHands()
 		if hands == nil || platformNotchFront == nil {
-			return nil, fmt.Errorf("notch.shot: %w", errNotchLookNotHere)
+			return nil, fmt.Errorf("notch.shot: %w", notchLookMissing())
 		}
 		window, app, title, err := platformNotchFront()
 		if err != nil {

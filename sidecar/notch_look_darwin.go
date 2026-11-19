@@ -1084,6 +1084,17 @@ func init() {
 		}
 		return win.Rect, win.App, win.Title, nil
 	}
+	// Why the look cannot be used here, when it cannot: a permission, never
+	// that it is not built.
+	platformNotchLookWhyNot = func() error {
+		if !macAXTrusted() {
+			return fmt.Errorf("the Accessibility permission is not given (System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access)")
+		}
+		if !macMayCapture() {
+			return fmt.Errorf("the Screen Recording permission is not given (System Settings, Privacy & Security, Screen & System Audio Recording)")
+		}
+		return nil
+	}
 }
 
 // platformNotchWindowRead reads the window the person is in: what it says of

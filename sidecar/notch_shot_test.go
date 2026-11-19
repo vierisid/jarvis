@@ -234,3 +234,36 @@ func TestNoPictureIsMadeWhereItLooksAway(t *testing.T) {
 		t.Fatal("the screen was copied all the same")
 	}
 }
+
+// The fourth run on a real Mac (19 November 2026): a "where is" was answered
+// with "looking at the screen is not built for this system yet", when the
+// look was built and a permission was missing.
+func TestAPictureThatCannotBeTakenSaysThePlatformsOwnReason(t *testing.T) {
+	prevHands, prevFront, prevWhy := notchLookHands, platformNotchFront, platformNotchLookWhyNot
+	defer func() { notchLookHands, platformNotchFront, platformNotchLookWhyNot = prevHands, prevFront, prevWhy }()
+	notchLookHands = nil
+	platformNotchFront = func() (lookRect, string, string, error) {
+		return lookRect{0, 0, 800, 600}, "chrome.exe", "A page", nil
+	}
+	handler := makeNotchShotHandler()
+
+	// No reason to give: it is not built here.
+	platformNotchLookWhyNot = nil
+	if _, err := handler(map[string]any{}); err == nil || !strings.Contains(err.Error(), "not built for this system yet") {
+		t.Fatalf("with no reason: %v", err)
+	}
+	// A platform that can look and may not says so.
+	platformNotchLookWhyNot = func() error { return errString("the permission is not given") }
+	if _, err := handler(map[string]any{}); err == nil || !strings.Contains(err.Error(), "the permission is not given") || strings.Contains(err.Error(), "not built") {
+		t.Fatalf("with a reason: %v", err)
+	}
+	// One that has nothing against it falls back to the plain answer.
+	platformNotchLookWhyNot = func() error { return nil }
+	if _, err := handler(map[string]any{}); err == nil || !strings.Contains(err.Error(), "not built for this system yet") {
+		t.Fatalf("with no objection: %v", err)
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
