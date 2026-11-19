@@ -66,6 +66,14 @@ const DESKTOP_SESSION =
   'DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR, and on Windows the full ' +
   'session block. The allowlist drops these on purpose.';
 
+/** The collab engine, started and read by the brain (docs/peers/README.md). */
+const PEER_ENGINE =
+  'The collab engine: one fixed program, named by the owner in JARVIS_PEERS_ENGINE and run with fixed words ' +
+  '(no model-authored command line). What it gets is not the daemon\'s environment: engineEnv() starts from ' +
+  'the same allowlist (filterEnv) and adds only the COLLAB_ settings it names, plus DBUS_SESSION_BUS_ADDRESS ' +
+  'and XDG_RUNTIME_DIR, which the allowlist drops on purpose and the engine needs to keep the key that locks ' +
+  'its keys in the desktop keychain. src/peers/engine.test.ts pins what reaches it and what does not.';
+
 type Exemption = { reason: string; calls: Record<string, number> };
 
 const EXEMPT: Record<string, Exemption> = {
@@ -102,6 +110,8 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'cli/version.ts': { reason: USER_CLI + ' Also reached from telemetry: a read-only `git -C <package root>` query.', calls: { runGit: 1 } },
   'scripts/google-setup.ts': { reason: 'Interactive setup script; opens a URL with the desktop opener. ' + DESKTOP_SESSION, calls: { main: 1 } },
+  'peers/engine-process.ts': { reason: PEER_ENGINE, calls: { startEngine: 1 } },
+  'peers/engine-read.ts': { reason: PEER_ENGINE + ' This one is a read of what the engine stored, printed as JSON.', calls: { readEngine: 1 } },
 
   'actions/tools/builtin.ts': {
     reason: 'Clipboard and screenshot tools (pbcopy/xclip/xsel/clip/powershell/scrot/import/screencapture); the only interpolation is the same generated temp path, in the screenshot commands. ' + DESKTOP_SESSION,

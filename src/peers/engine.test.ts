@@ -358,7 +358,7 @@ describe('the engine, kept up', () => {
     const engine = new PeerEngine({
       path: 'unused', brainDataDir: folder(), restartFirstMs: 1000, restartMaxMs: 3000, log: (line) => { if (line.includes('again in')) waits.push(line.replace(/.*again in /, '')); },
       // An engine that ends the moment it is started.
-      spawn: () => { starts++; return { transport: { send() {}, onLine() {}, onClose(listener) { queueMicrotask(listener); }, close() {} }, ended: Promise.resolve(1), stop() {} }; },
+      startChild: () => { starts++; return { transport: { send() {}, onLine() {}, onClose(listener) { queueMicrotask(listener); }, close() {} }, ended: Promise.resolve(1), stop() {} }; },
     });
     // Its own clock would make this test take seconds: the waits are read from what it says it will do.
     const real = globalThis.setTimeout;

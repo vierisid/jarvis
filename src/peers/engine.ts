@@ -32,8 +32,8 @@ export interface PeerEngineOptions {
   onState?: (state: EngineState) => void;
   log?: (line: string) => void;
   version?: string;
-  /** For tests: another way to start the program, and other clocks. */
-  spawn?: () => { transport: EngineTransport; ended: Promise<number | null>; stop(): void };
+  /** For tests: another way to get a running program, and other clocks. */
+  startChild?: () => { transport: EngineTransport; ended: Promise<number | null>; stop(): void };
   restartFirstMs?: number;
   restartMaxMs?: number;
   steadyMs?: number;
@@ -99,7 +99,7 @@ export class PeerEngine {
     this.set('starting');
     let child: { transport: EngineTransport; ended: Promise<number | null>; stop(): void };
     try {
-      child = this.options.spawn ? this.options.spawn() : startEngine({ path: this.options.path, brainDataDir: this.options.brainDataDir, env: this.options.env });
+      child = this.options.startChild ? this.options.startChild() : startEngine({ path: this.options.path, brainDataDir: this.options.brainDataDir, env: this.options.env });
     } catch {
       // The program is not there, or may not be run. Tried again, at the longest wait: it does not appear by itself often.
       this.options.log?.('[peers] the engine could not be started');
