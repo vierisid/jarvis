@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNotchOutlineAcceptsAPolygonInsideTheWindow(t *testing.T) {
@@ -311,5 +313,55 @@ func TestNotchCursorScriptCarriesTheButton(t *testing.T) {
 	}
 	if got := notchCursorScript(12, 40, false); got != "window.__notch_cursor&&window.__notch_cursor(12,40,0);" {
 		t.Fatalf("button up: %s", got)
+	}
+}
+
+// The second run on a real Mac, 19 November 2026: the notch came up behind the
+// display's camera housing. The page is told the housing's size and draws
+// itself round it, so a wrong size draws a wrong notch.
+func TestNotchHousingIsBothSizesOrNone(t *testing.T) {
+	for _, c := range []struct{ w, h, wantW, wantH int }{
+		{185, 32, 185, 32},
+		{200, 38, 200, 38},
+		{0, 0, 0, 0},
+		// One without the other is none.
+		{185, 0, 0, 0},
+		{0, 32, 0, 0},
+		{-185, 32, 0, 0},
+		// Larger than any housing is a wrong reading, not a housing.
+		{notchHousingMaxW + 1, 32, 0, 0},
+		{185, notchHousingMaxH + 1, 0, 0},
+	} {
+		if w, h := notchHousing(c.w, c.h); w != c.wantW || h != c.wantH {
+			t.Errorf("notchHousing(%d, %d) = %d, %d; want %d, %d", c.w, c.h, w, h, c.wantW, c.wantH)
+		}
+	}
+}
+
+func TestNotchHousingScriptIsOnlyTwoNumbers(t *testing.T) {
+	if got, want := notchHousingScript(185, 32), "window.__notch_cam&&window.__notch_cam(185,32);"; got != want {
+		t.Errorf("script = %q, want %q", got, want)
+	}
+	if got, want := notchHousingScript(0, 0), "window.__notch_cam&&window.__notch_cam(0,0);"; got != want {
+		t.Errorf("script = %q, want %q", got, want)
+	}
+}
+
+// A window on macOS is not made before the app's own loop is up: the second
+// run on a real Mac crashed there. Everywhere else there is nothing to wait
+// for, and a spawn must not be held up.
+func TestPanelLoopIsReadyAtOnceOffTheMac(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("on macOS it waits for the tray")
+	}
+	done := make(chan bool, 1)
+	go func() { done <- panelLoopReady() }()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("panelLoopReady() = false off the Mac")
+		}
+	case <-time.After(time.Second):
+		t.Error("panelLoopReady() waited off the Mac")
 	}
 }

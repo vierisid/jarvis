@@ -255,6 +255,14 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			"yes":  {notchModName(pairs.Yes[0]), notchModName(pairs.Yes[1])},
 		}
 	})
+	// __notch_housing(): the camera housing the notch has to draw itself
+	// round, as [wide, tall] in the page's own pixels. [0, 0] without one. A
+	// change later (another display becomes the main one) arrives by
+	// window.__notch_cam.
+	bind("__notch_housing", func() []int {
+		w, h := notchHousing(platformNotchHousing())
+		return []int{w, h}
+	})
 	notch.attachPage(inPage)
 	notch.watchKeys()
 
@@ -269,11 +277,22 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 		ticker := time.NewTicker(33 * time.Millisecond)
 		defer ticker.Stop()
 		lastX, lastY, lastDown, sent := 0, 0, false, false
+		// The housing is asked for by the page when it starts. From here it is
+		// looked at again every two seconds, and said only when it changed.
+		camW, camH := notchHousing(platformNotchHousing())
+		ticks := 0
 		for {
 			select {
 			case <-quit:
 				return
 			case <-ticker.C:
+			}
+			if ticks++; ticks%notchHousingEvery == 0 {
+				if w, h := notchHousing(platformNotchHousing()); w != camW || h != camH {
+					camW, camH = w, h
+					log.Printf("[notch] the camera housing is now %dx%d points", w, h)
+					inPage(notchHousingScript(w, h))
+				}
 			}
 			x, y, down, ok := platformNotchCursor(handle)
 			if !ok || (sent && x == lastX && y == lastY && down == lastDown) {
@@ -293,6 +312,32 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			platformNotchTearDown(handle)
 		})
 	}
+}
+
+// How many of the pointer's turns (33 ms each) pass between two looks at the
+// housing: about two seconds.
+const notchHousingEvery = 60
+
+// The largest housing the page is told of. A MacBook's is about 200 by 40
+// points; anything far from that is a wrong reading, and a notch drawn round
+// a wrong reading is worse than one that is partly hidden.
+const (
+	notchHousingMaxW = 400
+	notchHousingMaxH = 80
+)
+
+// notchHousing is what the page is told of a housing the system reported:
+// both numbers, or none. One without the other, or one out of range, is none.
+func notchHousing(w, h int) (int, int) {
+	if w <= 0 || h <= 0 || w > notchHousingMaxW || h > notchHousingMaxH {
+		return 0, 0
+	}
+	return w, h
+}
+
+// notchHousingScript tells the page the housing changed.
+func notchHousingScript(w, h int) string {
+	return fmt.Sprintf("window.__notch_cam&&window.__notch_cam(%d,%d);", w, h)
 }
 
 // notchCursorScript is what the page is told: the pointer's place in the

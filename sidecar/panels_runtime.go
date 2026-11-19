@@ -97,6 +97,12 @@ func NewPanelService() PanelService {
 // whether its first-run dashboard really opened.
 const spawnReadyWait = 10 * time.Second
 
+// panelLoopWait is how long a window's creation waits for the app's own loop
+// where it has to (macOS). The tray is up within a moment of the start; this
+// is for a start that is slow, not for one that never comes. Under
+// spawnReadyWait, so a caller hears "not made" from the creation itself.
+const panelLoopWait = 8 * time.Second
+
 // deleteIf removes id's entry only while it still belongs to handle, so a panel
 // tearing down late cannot remove a newer panel that has since taken its id.
 func (r *panelRegistry) deleteIf(id PanelID, handle any) {
@@ -223,6 +229,21 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 		}()
 
+		// The loop this window will live under has to be there first. On macOS
+		// it is not, for a moment at every start: the client connects before
+		// the tray is set up, and a brain that asks for a window as soon as it
+		// is connected (the notch) got one made on this goroutine with no app
+		// delegate set. The engine then starts an app loop of its own, off the
+		// main thread, and AppKit ends the process for it (the second run on a
+		// Mac, 19 November 2026). Waited out, bounded; without the loop the
+		// window is not made, and the caller is told so.
+		if !panelLoopReady() {
+			log.Printf("[panels] spawn(%s): the app's own loop is not up; the window was not made", spec.ID)
+			impl.createFailed = true
+			s.reg.deleteIf(spec.ID, impl)
+			close(impl.ready)
+			return
+		}
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
 		if platformBeforeWebview != nil {

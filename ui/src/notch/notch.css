@@ -43,7 +43,7 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 :where(.jarvis-notch) svg { display: block; }
 
 /* The notch */
-.wrap { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
+.wrap { position: absolute; top: var(--cam-h, 0px); left: 50%; transform: translateX(-50%); z-index: 2; }
 /* One liquid silhouette: shoulders and body are a single path moved by springs. Its edges lag and bow as it changes size. */
 .blob { position: absolute; left: -30px; top: 0; overflow: visible; pointer-events: none; }
 .blob .body { fill: var(--notch); stroke: var(--notch-edge); stroke-width: 1; }
@@ -456,3 +456,19 @@ html.notch-window #notch-root { position: absolute; inset: 0; overflow: hidden; 
 /* The small word on a row's right is a time or a state, and keeps its own width. When it is a sentence it is
    held to under half the row and wraps there. */
 .row .at { flex: 0 0 auto; max-width: 45%; overflow-wrap: anywhere; text-align: right; }
+
+/*
+ * A display with a camera housing (a MacBook's). Nothing behind the housing can be seen, so what the
+ * notch says starts below it: --cam-h is how tall the housing is, set by the surface when the desktop
+ * app tells it. The ink above is the shape's own (shape.ts). A sheet is that much shorter, so the
+ * whole still fits the window.
+ */
+.sheet { max-height: calc(560px - var(--cam-h, 0px)); }
+/*
+ * And its ink is plain black there, with no grain: the housing is a hole in the screen, as black as
+ * anything gets, and the notch has to read as one piece with it. The notch's own near-black, and the
+ * grain that only covers the part below the housing, both drew a line where the two meet.
+ */
+.jarvis-notch.housed { --notch: #000; }
+.jarvis-notch.housed .notch { background-image: none; }
+html.notch-window.notch-housed, html.notch-window.notch-housed body { background: #000; }

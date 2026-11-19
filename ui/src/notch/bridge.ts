@@ -3,8 +3,8 @@
  *
  * The desktop app puts a few functions on `window` (see docs/notch/README.md):
  * the page calls `__notch_set_outline`, `__notch_focus`, `__notch_send`,
- * `__notch_esc`, `__notch_asking`, `__notch_keys` and `__notch_log`, and defines `__notch_receive`,
- * `__notch_cursor`, `__notch_key` and `__notch_pairs` for the desktop app to
+ * `__notch_esc`, `__notch_asking`, `__notch_keys`, `__notch_housing` and `__notch_log`, and defines
+ * `__notch_receive`, `__notch_cursor`, `__notch_key`, `__notch_pairs` and `__notch_cam` for the desktop app to
  * call. Opened in a plain browser none of them is there, so
  * every call is guarded and the page simply shows nothing.
  */
@@ -22,6 +22,8 @@ interface NotchWindow {
   __notch_esc?: (want: boolean) => unknown;
   __notch_asking?: (asking: boolean) => unknown;
   __notch_keys?: () => unknown;
+  __notch_housing?: () => unknown;
+  __notch_cam?: (w: unknown, h: unknown) => void;
   __notch_receive?: (message: NotchToPage) => void;
   __notch_cursor?: (x: number, y: number, down?: number | boolean) => void;
   __notch_key?: (name: string) => void;
@@ -118,6 +120,20 @@ export function outlineMoved(a: Polygons, b: Polygons | null, by: number): boole
   return false;
 }
 
+/**
+ * The display's camera housing, where it has one (a MacBook's): asked once, like the keys, so the first
+ * thing drawn is already drawn round it. A change later (another display becomes the main one) arrives by
+ * `__notch_cam`. What the desktop app says is checked by the surface, not here.
+ */
+export function connectHousing(surface: Pick<NotchSurface, 'setHousing'>, host: NotchWindow): void {
+  host.__notch_cam = (w, h) => surface.setHousing(w, h);
+  try {
+    const asked = host.__notch_housing?.();
+    const take = (size: unknown): void => { if (Array.isArray(size)) surface.setHousing(size[0], size[1]); };
+    if (asked instanceof Promise) asked.then(take, () => {}); else take(asked);
+  } catch { /* no desktop app here: no housing */ }
+}
+
 /** Wires a surface to the desktop app, then says hello to the brain. */
 export function connectNotch(surface: NotchSurface, host: NotchWindow = window as unknown as NotchWindow): void {
   let sent: Polygons | null = null;
@@ -167,6 +183,7 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
     const asked = host.__notch_keys?.();
     if (asked instanceof Promise) asked.then((pairs) => surface.setPairs(pairs), () => {});
   } catch { /* no desktop app here: the hints keep this system's usual keys */ }
+  connectHousing(surface, host);
   // A new display scale changes every number of the outline.
   window.addEventListener('resize', () => { sent = null; report(); });
   quietly(() => host.__notch_log?.(`page ready: scale ${window.devicePixelRatio || 1}, window ${window.innerWidth}x${window.innerHeight} css px`));
