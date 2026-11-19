@@ -182,7 +182,10 @@ static void jarvis_notch_tap_stop(void) {
 import "C"
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -232,30 +235,111 @@ func platformNotchKeysAvailable() string {
 // permission.
 var notchAXAsked atomic.Bool
 
-// notchAskForAccessibility asks macOS for the Accessibility permission, once
-// in the life of the program, and only as the app it is.
+// notchPermWatchOnce starts the watch for the answer once in the life of the
+// program.
+var notchPermWatchOnce sync.Once
+
+// How often the answer is looked for. The screen's answer costs a small
+// program of its own each time (notchScreenAllowedFresh).
+const notchPermLookEvery = 3 * time.Second
+
+// notchAskForPermissions asks macOS for the two permissions the notch cannot
+// do without, once each in the life of the program and only as the app it
+// is, and then watches for the answer (notch_perms.go).
 //
-// Asking is how an app gets into the list where the permission is given.
-// The notch never asked: it left that to the first-launch screen
+// Asking is how an app gets into the list where a permission is given. The
+// notch never asked: it left that to the first-launch screen
 // (setup_onboarding.go), which an install by scripts/notch/try.sh never
 // shows. So on the fifth run on a real Mac (19 November 2026) the person
 // went to System Settings to give it by hand, chose Jarvis, and Jarvis did
-// not appear in the list at all. macOS shows its own window for this, with a
+// not appear in the list at all. macOS shows its own window for each, with a
 // button that opens the list; nothing of the notch's is added.
 //
 // A program that is not an app is not asked for: the permission would be
 // offered to whatever started it (permissions_rpc.go has the same rule).
-func notchAskForAccessibility() {
-	if setupAXTrusted() || !setupProcessBundled() {
+func notchAskForPermissions() {
+	if !setupProcessBundled() {
 		return
 	}
-	if !notchAXAsked.CompareAndSwap(false, true) {
+	if !setupAXTrusted() && notchAXAsked.CompareAndSwap(false, true) {
+		setupRequestPermission("accessibility")
+		log.Printf("[notch] macOS was asked for the Accessibility permission, so that Jarvis is in its list " +
+			"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access)")
+	}
+	if !setupScreenAllowed() && screenAsked.CompareAndSwap(false, true) {
+		setupRequestPermission("screen")
+		log.Printf("[notch] macOS was asked for the Screen Recording permission, so that Jarvis is in its list " +
+			"(System Settings, Privacy & Security, Screen & System Audio Recording)")
+	}
+	notchPermWatchOnce.Do(notchWatchPermissions)
+}
+
+// notchWatchPermissions watches for what macOS allows since the start, and
+// starts the app again when it is time (notch_perms.go says when). What was
+// given takes effect only in a program that starts with it.
+func notchWatchPermissions() {
+	w := newNotchPermWatcher(notchPermState{Accessibility: setupAXTrusted(), Screen: setupScreenAllowed()})
+	if !w.needed() {
 		return
 	}
-	setupRequestPermission("accessibility")
-	log.Printf("[notch] macOS was asked for the Accessibility permission, so that Jarvis is in its list " +
-		"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access). " +
-		"Switched on there, and Jarvis started again, Esc stays with the notch and a thing can be drawn round and pointed at")
+	go func() {
+		until := time.Now().Add(notchPermWatchFor)
+		for time.Now().Before(until) {
+			time.Sleep(notchPermLookEvery)
+			// The screen's answer is fixed for the life of a program, so it is
+			// asked of a new one each time, until it is yes.
+			now := notchPermState{Accessibility: setupAXTrusted(), Screen: w.last.Screen || notchScreenAllowedFresh()}
+			if !w.seen(now, time.Now()) {
+				continue
+			}
+			log.Printf("[notch] macOS now allows Jarvis more than when it started (Accessibility: %v, Screen Recording: %v): "+
+				"starting again, so that it takes effect", w.last.Accessibility, w.last.Screen)
+			client := trayClientDarwin
+			if client == nil {
+				log.Printf("[notch] could not start again by itself: quit Jarvis and start it again")
+				return
+			}
+			if err := client.Restart(); err != nil {
+				log.Printf("[notch] could not start again by itself (%v): quit Jarvis and start it again", err)
+			}
+			return
+		}
+	}()
+}
+
+// The name a program of this app is started under to answer one question
+// about a permission and end (platformPermissionProbe).
+const notchProbeEnv = "JARVIS_PERMISSION_PROBE"
+
+// notchScreenAllowedFresh asks whether macOS lets Jarvis see the screen, of a
+// program that has only just started: this one's answer does not change while
+// it runs. The program is this app's own, started for the one question, and
+// macOS counts it as Jarvis.
+func notchScreenAllowedFresh() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe)
+	cmd.Env = append(os.Environ(), notchProbeEnv+"=screen")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "yes"
+}
+
+// platformPermissionProbe answers the one question and says the program is
+// done, when it was started for that. Called first thing in main.
+func platformPermissionProbe() bool {
+	if os.Getenv(notchProbeEnv) != "screen" {
+		return false
+	}
+	if setupScreenAllowed() {
+		os.Stdout.WriteString("yes")
+	} else {
+		os.Stdout.WriteString("no")
+	}
+	return true
 }
 
 // How often the keyboard is looked at without the tap. A tap of a pair lasts
@@ -267,6 +351,7 @@ const notchKeysLookEvery = 8 * time.Millisecond
 func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
 	// On a goroutine: checking the signature reads the whole program from disk.
 	go notchLogMacPermissions()
+	notchAskForPermissions()
 	if setupAXTrusted() {
 		notchTapKeyboard.Store(kb)
 		if C.jarvis_notch_tap_start() != 0 {
@@ -281,7 +366,6 @@ func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
 		notchTapKeyboard.CompareAndSwap(kb, nil)
 		log.Printf("[notch] keys: the system refused the keyboard tap although the Accessibility permission is given")
 	}
-	notchAskForAccessibility()
 	log.Printf("[notch] keys: without the Accessibility permission the two pairs are read from the keyboard's state. " +
 		"Esc is heard and not kept from the app in front, and drawing round a thing needs the permission " +
 		"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access), then Jarvis started again")

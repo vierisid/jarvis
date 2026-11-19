@@ -3462,9 +3462,31 @@ scripts/notch/try.sh
   `try.sh` never shows. The notch now asks macOS once when its keys start
   without the permission (`notchAskForAccessibility`,
   `sidecar/notch_keys_darwin.go`). macOS shows its own window for it, with a
-  button that opens the list; nothing of the notch's is added. Whether the
-  switch is then honoured for a build with no Apple signature is still to
-  be seen.
+  button that opens the list; nothing of the notch's is added.
+- **The sixth run, the same day: the permissions took.** Asked for by the
+  app, switched on, and after a start the log read "Accessibility: yes ...
+  Screen recording: yes" and the keys were watched with the tap. So a build
+  with no Apple signature is honoured; what had been missing was the asking
+  (and, on the third run, a switch left by an earlier build). Three things
+  came out of it.
+  - *What is drawn on the screen was upside down.* The line under the
+    pointer ran the other way, and the pointer for a thing at the bottom of
+    the screen went to the top. The layer it is drawn on counts from the
+    bottom of the display, as a view's layer does; the file set
+    `geometryFlipped` on it and gave every place from the top, and the
+    setting did nothing there. Every place is now turned over where it is
+    used (`jarvis_look_local`, `sidecar/notch_look_darwin.go`), and the
+    layer is asked for nothing.
+  - *Each permission needed Jarvis quit and started by hand.* What macOS
+    gives takes effect in a program that starts with it. The app now asks
+    for both when it starts without them, watches for the answer, and starts
+    itself again: at once when both are given, after 40 seconds when only
+    one is (`sidecar/notch_perms.go`). Whether the screen may be seen is
+    asked of a small program of the app's own each time, because a running
+    program's answer to that does not change.
+  - *macOS starts the app too* ("Quit & Reopen"), and started so the test
+    build used the real home folder. `try.sh` writes the profile folder
+    into the app's `LSEnvironment` before it is signed.
 - The test build has its own profile folder. It cannot run beside an installed
   Jarvis on Windows (single-instance lock). Leave "start at login" off in it.
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.

@@ -20,6 +20,12 @@ import (
 )
 
 func main() {
+	// Started only to answer one question about a permission, by a Jarvis that
+	// is already running (notch_keys_darwin.go): answered, and done, before
+	// anything else of the app begins.
+	if platformPermissionProbe() {
+		return
+	}
 	// The OS launched us with a jarvis:// URI — forward it to the already-running
 	// sidecar and exit before any heavy init (so we never boot a second instance
 	// that would grab the mic / tray). Enroll links (the connect page's self-host
