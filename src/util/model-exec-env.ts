@@ -215,6 +215,9 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // How long a chase waits between its two mails, on the same kind of brain
   // and behind the same gate (pass 11). A number of minutes. Not a credential.
   'JARVIS_NOTCH_CHASE_WAIT_MINUTES',
+  // Where the program is that talks to other people's Jarvises, and with it
+  // the switch for that (src/peers/switch.ts). A path. Not a credential.
+  'JARVIS_PEERS_ENGINE',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's
