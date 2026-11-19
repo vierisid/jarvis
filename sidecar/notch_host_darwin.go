@@ -189,12 +189,37 @@ static void jarvis_notch_housing_of(NSScreen* screen, CGFloat* w, CGFloat* h) {
         if (top <= 0) return;
         NSRect left = screen.auxiliaryTopLeftArea;
         NSRect right = screen.auxiliaryTopRightArea;
-        if (NSIsEmptyRect(left) || NSIsEmptyRect(right)) return;
-        CGFloat wide = NSMinX(right) - NSMaxX(left);
-        if (wide <= 0 || wide >= screen.frame.size.width) return;
+        CGFloat across = screen.frame.size.width;
+        CGFloat wide = 0;
+        if (!NSIsEmptyRect(left) && !NSIsEmptyRect(right)) wide = NSMinX(right) - NSMaxX(left);
+        // The top is taken and the system does not say by how much across: a
+        // housing is there all the same. Taken as a little wider than any
+        // MacBook's is (they are an eighth of the display across, or less): a
+        // notch drawn round too wide a housing is whole, one drawn round none
+        // is hidden.
+        if (wide <= 0 || wide >= across) wide = round(across * 0.14);
         *w = wide;
         *h = top;
     }
+}
+
+// What the system says of the display the notch is on, for the log: how large
+// it is in points, how much of its top is taken, and how much is free to each
+// side of that. One line of this from a real machine says more than a guess.
+static void jarvis_notch_display(int* w, int* h, int* top, int* left, int* right) {
+    *w = *h = *top = *left = *right = 0;
+    dispatch_block_t read = ^{
+        NSScreen* screen = [NSScreen screens].firstObject;
+        if (screen == nil) return;
+        *w = (int)lround(screen.frame.size.width);
+        *h = (int)lround(screen.frame.size.height);
+        if (@available(macOS 12.0, *)) {
+            *top = (int)lround(screen.safeAreaInsets.top);
+            *left = (int)lround(screen.auxiliaryTopLeftArea.size.width);
+            *right = (int)lround(screen.auxiliaryTopRightArea.size.width);
+        }
+    };
+    if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
 }
 
 // Where the window belongs: the top centre of the display that has the menu
@@ -206,7 +231,10 @@ static NSRect jarvis_notch_frame_on(NSScreen* screen, CGFloat w, CGFloat h) {
     if (@available(macOS 12.0, *)) {
         CGFloat hw = 0, hh = 0;
         jarvis_notch_housing_of(screen, &hw, &hh);
-        if (hw > 0) mid = (NSMaxX(screen.auxiliaryTopLeftArea) + NSMinX(screen.auxiliaryTopRightArea)) / 2.0;
+        NSRect left = screen.auxiliaryTopLeftArea, right = screen.auxiliaryTopRightArea;
+        if (hw > 0 && !NSIsEmptyRect(left) && !NSIsEmptyRect(right) && NSMinX(right) > NSMaxX(left)) {
+            mid = (NSMaxX(left) + NSMinX(right)) / 2.0;
+        }
     }
     return NSMakeRect(round(mid - w / 2.0), NSMaxY(sf) - h, w, h);
 }
@@ -451,6 +479,9 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	}
 	C.jarvis_notch_set_up(handle, C.int(notchWindowW), C.int(notchWindowH))
 	log.Printf("[notch] window %dx%d at the top centre of the main display", notchWindowW, notchWindowH)
+	var dw, dh, top, left, right C.int
+	C.jarvis_notch_display(&dw, &dh, &top, &left, &right)
+	log.Printf("[notch] display %dx%d points, %d of its top taken, %d free to the left of that and %d to the right", int(dw), int(dh), int(top), int(left), int(right))
 	if w, h := platformNotchHousing(); w > 0 && h > 0 {
 		log.Printf("[notch] this display has a camera housing, %dx%d points: the notch is drawn round it", w, h)
 	} else {
