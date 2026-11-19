@@ -228,6 +228,36 @@ func platformNotchKeysAvailable() string {
 	return notchKeysWatch
 }
 
+// notchAXAsked is set once this process has asked macOS for the Accessibility
+// permission.
+var notchAXAsked atomic.Bool
+
+// notchAskForAccessibility asks macOS for the Accessibility permission, once
+// in the life of the program, and only as the app it is.
+//
+// Asking is how an app gets into the list where the permission is given.
+// The notch never asked: it left that to the first-launch screen
+// (setup_onboarding.go), which an install by scripts/notch/try.sh never
+// shows. So on the fifth run on a real Mac (19 November 2026) the person
+// went to System Settings to give it by hand, chose Jarvis, and Jarvis did
+// not appear in the list at all. macOS shows its own window for this, with a
+// button that opens the list; nothing of the notch's is added.
+//
+// A program that is not an app is not asked for: the permission would be
+// offered to whatever started it (permissions_rpc.go has the same rule).
+func notchAskForAccessibility() {
+	if setupAXTrusted() || !setupProcessBundled() {
+		return
+	}
+	if !notchAXAsked.CompareAndSwap(false, true) {
+		return
+	}
+	setupRequestPermission("accessibility")
+	log.Printf("[notch] macOS was asked for the Accessibility permission, so that Jarvis is in its list " +
+		"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access). " +
+		"Switched on there, and Jarvis started again, Esc stays with the notch and a thing can be drawn round and pointed at")
+}
+
 // How often the keyboard is looked at without the tap. A tap of a pair lasts
 // a tenth of a second or so; this sees each key of it go down and come up.
 const notchKeysLookEvery = 8 * time.Millisecond
@@ -251,6 +281,7 @@ func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
 		notchTapKeyboard.CompareAndSwap(kb, nil)
 		log.Printf("[notch] keys: the system refused the keyboard tap although the Accessibility permission is given")
 	}
+	notchAskForAccessibility()
 	log.Printf("[notch] keys: without the Accessibility permission the two pairs are read from the keyboard's state. " +
 		"Esc is heard and not kept from the app in front, and drawing round a thing needs the permission " +
 		"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access), then Jarvis started again")

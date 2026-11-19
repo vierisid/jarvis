@@ -3451,6 +3451,20 @@ scripts/notch/try.sh
   - Still open from that run: the Google sign-in of step 8 did not open (the
     browser lost the page it had just gone to), and the first day asks for
     none of the permissions itself.
+- **The fourth and fifth runs, the same day.** The two pairs of keys worked
+  with no permission (four tests of four), an install from nothing took 32
+  seconds to the shape, and the first day ran to its end. "Where is", "what
+  am I looking at" and drawing round a thing did not work, all for want of
+  the Accessibility permission. And it could not be given: chosen with the
+  plus button in System Settings, Jarvis did not appear in the list. An app
+  gets into that list by asking macOS for the permission, and the notch
+  never asked: it left that to the first-launch screen, which an install by
+  `try.sh` never shows. The notch now asks macOS once when its keys start
+  without the permission (`notchAskForAccessibility`,
+  `sidecar/notch_keys_darwin.go`). macOS shows its own window for it, with a
+  button that opens the list; nothing of the notch's is added. Whether the
+  switch is then honoured for a build with no Apple signature is still to
+  be seen.
 - The test build has its own profile folder. It cannot run beside an installed
   Jarvis on Windows (single-instance lock). Leave "start at login" off in it.
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.
