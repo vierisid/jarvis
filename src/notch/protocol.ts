@@ -159,6 +159,13 @@ export interface NotchSheetLine extends NotchLineBase {
    * what the sheet asks: "back", "close". The answer it sends is the same.
    */
   no?: string;
+  /**
+   * What the sheet shows must have been seen to its end before its yes is a
+   * yes: something that is about to leave the machine, or a request that is
+   * about to be done. While its end has not been on screen, the yes key
+   * moves the sheet down a page, and answers nothing.
+   */
+  whole?: boolean;
 }
 
 /** A text field in place of the sentence, with a panel under it. */
@@ -174,6 +181,12 @@ export interface NotchAskLine extends NotchLineBase {
    * click on the field still does.
    */
   focus?: boolean;
+  /**
+   * What is typed here answers something that must not be answered by
+   * accident (a name for a device that is being joined): a press somewhere
+   * else on the screen is not Esc. Only Esc itself closes it.
+   */
+  stay?: boolean;
 }
 
 /**

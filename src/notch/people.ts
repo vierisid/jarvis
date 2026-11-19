@@ -58,8 +58,14 @@ const cap = (text: string): string => (text ? text.charAt(0).toUpperCase() + tex
 export const NOTCH_PEOPLE_FUSE_MS = 3000;
 /** The longest name a person is given here. */
 export const NOTCH_PEOPLE_NAME_MAX = 40;
-/** The most of a message that is said on one line. A longer one is opened to be read. */
+/**
+ * The most of a message that is said on one line. A longer one is opened to
+ * be read: the notch shows about three lines of a sentence and fades the rest,
+ * so anything that must be read whole and is longer than this goes on a sheet.
+ */
 export const NOTCH_PEOPLE_LINE_MAX = 140;
+/** The most of the person's own words that the line shows while they go out. All of them go; the line has three lines. */
+export const NOTCH_PEOPLE_GOING_MAX = 110;
 /** The most of a message that is taken in at all. */
 export const NOTCH_PEOPLE_TEXT_MAX = 2000;
 /** The most that is sent as one message from the notch. */
@@ -71,6 +77,8 @@ export const NOTCH_PEOPLE_TICK_MS = 30_000;
 /** How long signing in, and waiting for a code to be used, may take: a little more than the engine gives each. */
 export const NOTCH_PEOPLE_SIGN_IN_MS = 6 * 60_000;
 export const NOTCH_PEOPLE_CODE_MS = 12 * 60_000;
+/** How long the engine has to come back with its first question before the notch stops waiting on it. */
+export const NOTCH_PEOPLE_ENGINE_WAIT_MS = 20_000;
 /** The most of a request that can be read here. A longer one cannot be said yes to on the notch. */
 export const NOTCH_PEOPLE_REQUEST_MAX = 2000;
 /** The most of an answer that is shown before it goes, and so the most that goes. */
@@ -93,6 +101,8 @@ export interface NotchPeopleDeps {
   work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
   log?: (line: string) => void;
   now?: () => number;
+  /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
+  engineWaitMs?: number;
   /** For tests: no timer of its own. `tick` is then called by hand. */
   noClock?: boolean;
 }
@@ -112,6 +122,9 @@ export interface NotchPeople {
   tick(): Promise<void>;
   stop(): void;
 }
+
+/** The beginning of a text, with a mark that it goes on, for a line that has no room for all of it. */
+const beginning = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 const escaped = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -170,6 +183,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const { inbox, link, store } = deps;
   const now = deps.now ?? Date.now;
   const log = deps.log ?? (() => { /* quiet */ });
+  const engineWait = deps.engineWaitMs ?? NOTCH_PEOPLE_ENGINE_WAIT_MS;
   let looking: Promise<void> | null = null;
   let again = false;
   let refreshedAt = 0;
@@ -181,59 +195,118 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const orgName = (): string | null => store.org();
   const others = (): PeerPerson[] => link.people();
 
+  /**
+   * Something that is on its way to the engine and usually takes no time.
+   * When it takes longer than a moment, the notch says so, so that it is not
+   * blank while a script still has it.
+   */
+  async function meanwhile<T>(stage: NotchStage, say: NotchPart[], going: Promise<T>): Promise<T> {
+    let done = false;
+    void stage.wait(400).then(() => { if (!done) stage.put({ id: stage.id(), kind: 'say', say, ms: 60_000, mood: 'work' }); }, () => { /* the stage ended */ });
+    try { return await going; } finally { done = true; }
+  }
+
   function sorry(sent: Extract<PeerSent, { ok: false }>): NotchPart[] {
     if (sent.why === 'signed_out') return ['You are signed out. Open your organisation in Home and sign in. It was not sent.'];
     if (sent.why === 'offline') return ['I have no line to the others now. It was not sent.'];
-    if (sent.why === 'withheld') return ['Not sent.'];
+    // Handed to the line, and the line broke: it is not known, and is not called "not sent".
+    if (sent.why === 'unknown') return ['The line broke while it went. I do not know whether it arrived.'];
+    // The engine checks everything that goes to somebody whose request is open here, and this was not let through.
+    if (sent.why === 'withheld') return ['Not sent: something they asked of me is still open here.'];
     if (sent.why === 'down') return ['I cannot reach the others now. It was not sent.'];
     return ['That could not be sent.'];
   }
 
   // --- signing in and connecting ---
 
+  /**
+   * Waiting on the engine, in view.
+   *
+   * A script that waits on the engine with nothing on the notch would leave
+   * the notch blank and deaf: a tap goes to the script, which shows nothing.
+   * So while the engine is waited on there is a line that says what for; Esc
+   * on that line stops the waiting; and the engine has a fixed time to come
+   * back with its first question. After a stop or that time the flow is
+   * over: whatever the engine asks later is closed, unanswered.
+   */
+  function watch(stage: NotchStage) {
+    let reached = false;
+    let over = false;
+    let wake: (why: 'stop' | 'late') => void = () => { /* nobody waits yet */ };
+    const gone = new Promise<'stop' | 'late'>((resolve) => { wake = resolve; });
+    return {
+      gone,
+      over: (): boolean => over || stage.ended(),
+      /** The engine came back with something for the person. */
+      reached(): void { reached = true; },
+      /** A line that says what is waited for. Esc on it stops the waiting. */
+      line(say: NotchPart[], mood: 'work' | 'look' = 'work'): void {
+        const id = stage.id();
+        stage.put({ id, kind: 'work', say, steps: 0, done: 0, mood });
+        // Something else took the notch: the flow is over too, and what the engine asks later is closed.
+        void stage.answer(id, ['stop', 'no']).then(() => { over = true; wake('stop'); }, () => { if (stage.ended()) over = true; });
+      },
+      /** Gives the engine this long to come back with its first question. */
+      within(ms: number): void {
+        void stage.wait(ms).then(() => { if (!reached && !over) { over = true; wake('late'); } }, () => { over = true; });
+      },
+    };
+  }
+
   /** Signs in at the engine's server. True when signed in at the end. */
   async function signIn(stage: NotchStage): Promise<boolean> {
     if (link.account().signedIn) return true;
     let opened: boolean | null = null;
     let agreed = false;
-    let waitId: string | null = null;
+    const waiting = watch(stage);
+    waiting.line(['Reaching the server…']);
+    waiting.within(engineWait);
     const call = link.call('account', { action: 'login' }, {
       server: async (decision) => {
+        waiting.reached();
+        if (waiting.over()) return null;
         const answer = await stage.offer(['Sign in at ', em(decision.host ?? 'the server'), '? What you send the others goes through it, sealed. It cannot be changed later.'], 'sign in');
         agreed = answer.act === 'yes';
+        if (agreed) waiting.line(['Opening the sign-in page…']);
         return agreed ? { choice: 'yes' } : null;
       },
       page: async (decision) => {
+        waiting.reached();
+        if (waiting.over()) return null;
         opened = decision.url ? await deps.openPage(stage.from(), decision.url) : false;
         if (!opened) return null;
-        waitId = stage.id();
-        stage.put({ id: waitId, kind: 'work', say: ['Sign in on the page I opened. I wait here.'], steps: 0, done: 0, mood: 'work' });
+        waiting.line(['Sign in on the page I opened. I wait here.']);
         return {};
       },
-    }, NOTCH_PEOPLE_SIGN_IN_MS);
-    let text = '';
-    try { text = (await call).text; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
+    }, NOTCH_PEOPLE_SIGN_IN_MS).then((result) => result.text, () => '');
+    const text = await Promise.race([call, waiting.gone]);
     await link.refresh();
-    if (link.account().signedIn || /^(Logged in:|Already logged in)/.test(text)) {
+    if (link.account().signedIn || (text !== 'stop' && text !== 'late' && /^(Logged in:|Already logged in)/.test(text))) {
       await stage.say(['Signed in.'], 1600, { mark: 'check' });
       return true;
     }
-    if (opened === false) await stage.say(['I could not open the sign-in page on this machine.'], 3200, { mood: 'sorry' });
+    if (text === 'stop') await stage.say(opened ? ['I stopped waiting. If you finish on the page, you are signed in all the same.'] : ['Stopped. Nothing was signed in.'], 3400);
+    else if (text === 'late') await stage.say(['I could not reach the server. Try again in a moment.'], 3200, { mood: 'sorry' });
+    else if (opened === false) await stage.say(['I could not open the sign-in page on this machine.'], 3200, { mood: 'sorry' });
     else if (opened) await stage.say(['That did not sign in. Try again from Home.'], 3200, { mood: 'sorry' });
     // Said yes, and no page ever came: the server did not answer.
     else if (agreed) await stage.say(['I could not reach the server. Try again in a moment.'], 3200, { mood: 'sorry' });
     return false;
   }
 
+  type Waiting = ReturnType<typeof watch>;
+
   /** "Connect with this device? Name them." The name the person types is the only name the device ever has here. */
-  function nameThem(stage: NotchStage, named: { name: string; reached?: boolean }) {
+  function nameThem(stage: NotchStage, named: { name: string; reached?: boolean }, waiting: Waiting) {
     return async (decision: PeerDecision): Promise<Record<string, unknown> | null> => {
+      waiting.reached();
+      if (waiting.over()) return null;
       named.reached = true;
       let say: NotchPart[] = ['The code matched. Name them.'];
       for (;;) {
         const id = stage.id();
         stage.put({
-          id, kind: 'ask', say, placeholder: 'Their name, for example Leo', yes: 'connect', focus: true, mood: 'look',
+          id, kind: 'ask', say, placeholder: 'Their name, for example Leo', yes: 'connect', focus: true, stay: true, mood: 'look',
           blocks: [{ kind: 'note', say: decision.device ? ['The keys of that laptop were checked with the code. Its number begins ', em(decision.device.slice(0, 8)), '.'] : ['The keys of that laptop were checked with the code.'] }],
         });
         const answer = await stage.answer(id, ['ask', 'no']);
@@ -242,17 +315,19 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         if (!name) { say = ['A name first. What do you call them?']; continue; }
         if (others().some((one) => one.name.toLowerCase() === name.toLowerCase() && one.id !== decision.device)) { say = ['You already call someone ', em(name), '. Another name.']; continue; }
         named.name = name;
-        const waitId = stage.id();
-        stage.put({ id: waitId, kind: 'work', say: ['Connecting with ', em(name), '…'], steps: 0, done: 0, mood: 'work' });
+        // The other side names this machine too, in its own time: said, and Esc stops the waiting.
+        waiting.line(['Connecting with ', em(name), '…']);
         return { choice: 'accept', localName: name };
       }
     };
   }
 
-  function ownDevice(stage: NotchStage, named: { name: string }) {
+  function ownDevice(stage: NotchStage, named: { name: string }, waiting: Waiting) {
     return async (): Promise<Record<string, unknown> | null> => {
+      if (waiting.over()) return null;
       const answer = await stage.choose(['Is that another laptop of your own?'], ['Yes, mine', 'No']);
       if (answer.act !== 'pick') return null;
+      waiting.line(['Connecting with ', em(named.name || 'it'), '…']);
       return answer.index === 0 ? { choice: 'own_device', label: named.name || 'My laptop' } : { choice: 'not_own_device' };
     };
   }
@@ -280,30 +355,42 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   async function invite(stage: NotchStage): Promise<void> {
     if (!(await signIn(stage))) return;
     let code: string | null = null;
-    let text = '';
-    try {
-      text = (await link.call('connect', { action: 'open' }, { code_shown: async (decision) => { code = decision.code ?? null; return { choice: 'done' }; } }, 60_000)).text;
-    } catch (error) { if (error instanceof NotchStageEnded) throw error; }
+    const making = watch(stage);
+    making.line(['Making a code…']);
+    making.within(engineWait);
+    const made = await Promise.race([
+      link.call('connect', { action: 'open' }, { code_shown: async (decision) => { making.reached(); if (making.over()) return null; code = decision.code ?? null; return { choice: 'done' }; } }, 60_000).then((result) => result.text, () => ''),
+      making.gone,
+    ]);
+    if (made === 'stop') { try { await link.call('connect', { action: 'cancel' }, {}, 15_000); } catch { /* it closes by itself */ } await stage.say(['Stopped. No code is open.'], 2400); return; }
     if (!code) {
-      const why = engineErrorCode(text);
+      const why = made === 'late' ? 'not_connected' : engineErrorCode(made);
       await stage.say(why === 'not_connected' || why === 'not_logged_in' ? ['I have no line to the server now. Try again in a moment.'] : ['I could not make a code now.'], 3200, { mood: 'sorry' });
       return;
     }
     const named: { name: string; reached?: boolean } = { name: '' };
-    const waitId = stage.id();
-    stage.put({ id: waitId, kind: 'work', say: ['Read them this code: ', em(code), '. They open their organisation and choose "Join with a code".'], steps: 0, done: 0, mood: 'look' });
-    let stopped = false;
-    const stop = stage.answer(waitId, ['stop', 'no']).then(async () => {
-      stopped = true;
+    const waiting = watch(stage);
+    // Reached from the start: a code may be read out for as long as its window is open.
+    waiting.reached();
+    waiting.line(['Read them this code: ', em(code), '. They open their organisation and choose "Join with a code".'], 'look');
+    const wait = link.call('connect', { action: 'wait' }, { connect: nameThem(stage, named, waiting), own_device: ownDevice(stage, named, waiting) }, NOTCH_PEOPLE_CODE_MS).then((result) => result.text, () => '');
+    // Something else took the notch while the code was open: the window is closed with it. A code nobody can
+    // be asked about must not stay usable.
+    let ended = false;
+    void stage.wait(NOTCH_PEOPLE_CODE_MS).then(() => { /* the window ran out by itself */ }, () => {
+      if (ended) return;
+      void link.call('connect', { action: 'cancel' }, {}, 15_000).catch(() => { /* it closes by itself */ });
+      // Said when the notch is free again: somebody may be about to read that code out.
+      news('people:code-closed', ['The code I showed is closed.'], ['Something else came up, so the code I showed is closed. Invite again when you are ready.'], { ms: 4200 });
+    });
+    const outcome = await Promise.race([wait, waiting.gone]);
+    ended = true;
+    if (outcome === 'stop' || outcome === 'late') {
       // The window is closed: nobody can use the code any more.
       try { await link.call('connect', { action: 'cancel' }, {}, 15_000); } catch { /* it closes by itself in ten minutes */ }
-    }, () => { /* the stage ended, or another line took its place */ });
-    let outcome = '';
-    try {
-      outcome = (await link.call('connect', { action: 'wait' }, { connect: nameThem(stage, named), own_device: ownDevice(stage, named) }, NOTCH_PEOPLE_CODE_MS)).text;
-    } catch (error) { if (error instanceof NotchStageEnded) throw error; }
-    void stop;
-    if (stopped) { await stage.say(['The code is closed. Nobody can use it now.'], 2600); return; }
+      await stage.say(named.reached ? ['I stopped waiting. Nothing was connected.'] : ['The code is closed. Nobody can use it now.'], 2600);
+      return;
+    }
     if (!named.reached && !/^Connected with\b/.test(outcome)) { await stage.say(['Nobody used the code. It is closed now.'], 3000); return; }
     await connected(stage, outcome, named, true);
   }
@@ -312,23 +399,29 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   async function join(stage: NotchStage): Promise<void> {
     if (!(await signIn(stage))) return;
     const named = { name: '' };
-    let text = '';
-    try {
-      text = (await link.call('connect', { action: 'code' }, {
+    const waiting = watch(stage);
+    waiting.line(['One moment…']);
+    waiting.within(engineWait);
+    const text = await Promise.race([
+      link.call('connect', { action: 'code' }, {
         code_wanted: async () => {
+          waiting.reached();
+          if (waiting.over()) return null;
           const id = stage.id();
-          stage.put({ id, kind: 'ask', say: ['Type the code they read to you.'], placeholder: 'like sam#12-3456', yes: 'join', focus: true, mood: 'listen', blocks: [] });
+          stage.put({ id, kind: 'ask', say: ['Type the code they read to you.'], placeholder: 'like sam#12-3456', yes: 'join', focus: true, stay: true, mood: 'listen', blocks: [] });
           const answer = await stage.answer(id, ['ask', 'no']);
           const typed = answer.act === 'ask' ? (answer.text ?? '').trim() : '';
           if (!typed) return null;
-          const waitId = stage.id();
-          stage.put({ id: waitId, kind: 'work', say: ['Checking the code with their laptop…'], steps: 0, done: 0, mood: 'work' });
+          waiting.line(['Checking the code with their laptop…']);
           return { code: typed };
         },
-        connect: nameThem(stage, named),
-        own_device: ownDevice(stage, named),
-      }, NOTCH_PEOPLE_CODE_MS)).text;
-    } catch (error) { if (error instanceof NotchStageEnded) throw error; }
+        connect: nameThem(stage, named, waiting),
+        own_device: ownDevice(stage, named, waiting),
+      }, NOTCH_PEOPLE_CODE_MS).then((result) => result.text, () => ''),
+      waiting.gone,
+    ]);
+    if (text === 'stop') { await stage.say(['I stopped waiting. Nothing was connected.'], 2600); return; }
+    if (text === 'late') { await stage.say(['I have no line to the server now. Try again in a moment.'], 3200, { mood: 'sorry' }); return; }
     await connected(stage, text, named, false);
   }
 
@@ -401,8 +494,16 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const first = one.name.split(' ')[0]!;
       const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
       for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
-        const found = new RegExp(`^(?:(?:please|ok|okay|hey|jarvis|can you|could you|would you)[,\\s]+)*(tell|message|ping|ask)\\s+${escaped(name)}(?![\\p{L}\\p{N}'])[\\s,:]*(.*)$`, 'iu').exec(said);
-        if (found) return { person: one, verb: found[1]!.toLowerCase(), words: found[2]!.replace(/^that\s+/i, '').trim() };
+        const found = new RegExp(`^(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you|would you)[,\\s]+)*(tell|message|ping|ask)\\s+${escaped(name)}(?![\\p{L}\\p{N}'\u2019])([\\s,:]*)(.*)$`, 'iu').exec(said);
+        if (!found) continue;
+        const words = found[3]!.replace(/^that\s+/i, '').trim();
+        // "Tell Leo and Anna ...", "tell Leo, Anna and Sam ...": more than one person is meant, and it is not
+        // sent to the first of them with the others' names in it.
+        if (/^(?:and|or|&|\+)(?:\s|$)/i.test(words)) return null;
+        if (found[2]!.includes(',') && /^\p{Lu}[\p{L}'\u2019-]*\s*(?:,|(?:and|or)\b|&)/u.test(words)) return null;
+        // "Message Leo on Slack ...", "ask Leo by email ...": another way to reach them was named. Not this one.
+        if (/^(?:on|by|via|in|over|through|per)\s+(?:slack|e-?mail|mail|whatsapp|telegram|teams|discord|sms|text|phone|linkedin|signal|imessage|messenger|a call)\b/i.test(words)) return null;
+        return { person: one, verb: found[1]!.toLowerCase(), words };
       }
     }
     return null;
@@ -410,11 +511,12 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
 
   function tell(to: PeerPerson, words: string): void {
     inbox.present('people-tell', async (stage) => {
-      const went = await stage.fuse(['Telling ', em(to.name), ': ', words, '…'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      // Their own words: all of them go, and the line shows where they begin.
+      const went = await stage.fuse(['Telling ', em(to.name), ': ', beginning(words, NOTCH_PEOPLE_GOING_MAX), ...(words.length > NOTCH_PEOPLE_GOING_MAX ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
       // Nobody saw the line burn: what nobody may have seen does not go out.
       if (went === 'lost') return;
-      const sent = await link.tell(to.id, words);
+      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, words));
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words });
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -425,10 +527,10 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const question = /[?]$/.test(asked) ? asked : `${asked.replace(/[.!\s]+$/, '')}?`;
     const options = peopleOptions(question).slice(0, PEER_OPTIONS_MAX);
     inbox.present('people-ask', async (stage) => {
-      const went = await stage.fuse(['Asking ', em(to.name), ': ', question, ' One key answers: ', em(options.join(', ')), '.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      const went = await stage.fuse(['Asking ', em(to.name), ': ', beginning(question, NOTCH_PEOPLE_GOING_MAX), ' Answers: ', em(options.join(', ')), '.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
-      const sent = await link.tell(to.id, peerNoteText(question, { kind: 'ask', options }));
+      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(question, { kind: 'ask', options })));
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'ask', words: question, options, ...(firstId ? { again: firstId } : {}) });
       await stage.say(firstId ? ['Asked again.'] : sent.delivered ? ['Asked ', em(to.name), '. I will tell you the answer.'] : ['Asked. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -460,10 +562,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   function request(to: PeerPerson, words: string): void {
     const theirs = `${to.name}'s ${NOTCH_NAME}`;
     inbox.present('people-request', async (stage) => {
-      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!]$/.test(words) ? words : `${words}.`, ' ', em(to.name), ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      const shown = beginning(words, NOTCH_PEOPLE_GOING_MAX);
+      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!…]$/.test(shown) ? shown : `${shown}.`, ' ', em(to.name), ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
-      const sent = await link.ask(to.id, words.slice(0, 120), words);
+      const sent = await meanwhile(stage, ['Sending…'], link.ask(to.id, words.slice(0, 120), words));
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.request({ id: sent.id, dir: 'out', peer: to.id, words });
       following();
@@ -485,7 +588,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     }
     const to = addressed(text);
     if (!to) return null;
-    if (/^'s\b/i.test(to.words)) return null;
+    if (/^['\u2019]s\b/i.test(to.words)) return null;
     const words = cap(peerPlain(to.words, NOTCH_PEOPLE_SAY_MAX));
     if (!words) {
       return { did: `Tell ${to.person.name} something.`, run: () => { inbox.present('people-what', (stage) => stage.say([cap(to.verb), ' ', em(to.person.name), ' what? Say it after the name.'], 3200, { mood: 'confused' })); } };
@@ -531,16 +634,36 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   }
 
   function question(item: PeerItem, from: PeerPerson, words: string, options: string[]): void {
-    const shown = peerPlain(words, NOTCH_PEOPLE_LINE_MAX * 2);
+    const shown = peerPlain(words, NOTCH_PEOPLE_TEXT_MAX);
     inbox.add({
       id: `people:${item.id}`, subject: `people:${item.id}`, class: 'person', speaks: true,
       title: () => [em(from.name), ' asks: ', shown.length > 60 ? `${shown.slice(0, 59)}…` : shown],
       check: () => store.got(item.id)?.done !== true,
       play: async (stage) => {
-        const answer = await stage.choose([em(from.name), ' asks: ', shown], options, { who: from.name, mood: 'look' });
-        const pick = answer.act === 'pick' && typeof answer.index === 'number' ? options[answer.index] : undefined;
+        let pick: string | undefined;
+        if (shown.length > NOTCH_PEOPLE_LINE_MAX) {
+          // Too long for a line, which would fade its end away: a question is answered only when all of it can be read.
+          const first = await stage.offer([em(from.name), ' asks you something. Read it?'], 'read', { who: from.name, mood: 'look' });
+          if (first.act !== 'yes') return 'waits';
+          const id = stage.id();
+          stage.put({
+            id, kind: 'sheet', say: [em(from.name), ' asks'], who: from.name, mood: 'look', stay: true, no: 'not now',
+            blocks: [{ kind: 'paper', lines: [[shown]] }, { kind: 'buttons', buttons: options.map((label, at) => ({ id: `pick${at}`, label })) }],
+          });
+          const answer = await stage.answer(id, ['button', 'no']);
+          const at = answer.act === 'button' ? /^pick(\d)$/.exec(answer.button ?? '')?.[1] : undefined;
+          pick = at !== undefined ? options[Number(at)] : undefined;
+        } else {
+          const answer = await stage.choose([em(from.name), ' asks: ', shown], options, { who: from.name, mood: 'look' });
+          pick = answer.act === 'pick' && typeof answer.index === 'number' ? options[answer.index] : undefined;
+        }
         if (!pick) return 'waits';
-        const sent = await link.tell(item.from, peerNoteText(pick, { kind: 'answer', pick }), { replyTo: item.id });
+        // It goes to another person, so it has the window to take it back, like anything that does: a pick
+        // can be a slip of the hand, and one said aloud can be a word that was never said.
+        const went = await stage.fuse(['Telling ', em(from.name), ': ', em(pick), '…'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work', who: from.name });
+        if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return 'waits'; }
+        if (went === 'lost') return 'waits';
+        const sent = await meanwhile(stage, ['Sending…'], link.tell(item.from, peerNoteText(pick, { kind: 'answer', pick }), { replyTo: item.id }));
         if (!sent.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
         store.done(item.id);
         void link.seen(item.id);
@@ -567,10 +690,12 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       return;
     }
     if (note.kind === 'back') {
-      // Their question is taken back: it leaves, whether it was on the notch or in the count.
-      if (!item.replyTo || store.got(item.replyTo)?.done) return;
-      store.done(item.replyTo);
-      if (inbox.remove(`people:${item.replyTo}`)) news(`people:back:${item.replyTo}`, [em(from.name), ' took it back.'], [em(from.name), ' took it back.'], { who: from.name, ms: 2400 });
+      // Their question is taken back: it leaves, whether it was on the notch or in the count. Only the one
+      // who asked it can take it back: the id must be of something that came from them.
+      if (store.gotFrom(note.of) !== item.from || store.got(note.of)?.done) return;
+      store.done(note.of);
+      void link.seen(note.of);
+      if (inbox.remove(`people:${note.of}`)) news(`people:back:${note.of}`, [em(from.name), ' took it back.'], [em(from.name), ' took it back.'], { who: from.name, ms: 2400 });
       return;
     }
     // The name of the organisation they were joined into. Taken when this machine has none; said by nothing:
@@ -586,13 +711,16 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const onNotch = new Set<string>();
 
   /** "Sam asks me: ... Do it here?" The answer to the engine's own question about the request. */
-  function approve(stage: NotchStage, from: PeerPerson, row: PeerRequestRow) {
+  function approve(stage: NotchStage, from: PeerPerson, row: PeerRequestRow, waiting: Waiting) {
     return async (): Promise<Record<string, unknown> | null> => {
+      waiting.reached();
+      if (waiting.over()) return null;
       const whole = row.words.length <= NOTCH_PEOPLE_REQUEST_MAX;
       const words = peerPlain(row.words, NOTCH_PEOPLE_REQUEST_MAX);
       if (words.length <= NOTCH_PEOPLE_LINE_MAX && whole) {
         const answer = await stage.choose([em(from.name), ' asks me: ', /[.?!]$/.test(words) ? words : `${words}.`, ' Do it here?'], ['Do it', 'No'], { who: from.name, mood: 'look' });
         if (answer.act !== 'pick') return null;
+        waiting.line(['One moment…']);
         return answer.index === 0 ? { choice: 'allow_once', resultCheck: true } : { choice: 'decline' };
       }
       const first = await stage.offer([em(from.name), ' asks me for something. Read it?'], 'read', { who: from.name, mood: 'look' });
@@ -600,7 +728,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const id = stage.id();
       // What cannot be read whole is not offered for a yes: only the no is there.
       stage.put({
-        id, kind: 'sheet', say: [em(from.name), ' asks me'], who: from.name, mood: 'look', stay: true, no: 'not now', ...(whole ? { yes: 'do it' } : {}),
+        id, kind: 'sheet', say: [em(from.name), ' asks me'], who: from.name, mood: 'look', stay: true, no: 'not now', ...(whole ? { yes: 'do it', whole: true } : {}),
         blocks: [
           { kind: 'paper', lines: peopleLines(row.words, NOTCH_PEOPLE_REQUEST_MAX).map((line) => [line]) },
           ...(whole ? [] : [{ kind: 'note' as const, say: ['It goes on, and I cannot show the rest here. So I cannot do it from here.'] }]),
@@ -608,32 +736,35 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         ],
       });
       const answer = await stage.answer(id, ['yes', 'no', 'button']);
-      if (answer.act === 'yes' && whole) return { choice: 'allow_once', resultCheck: true };
-      if (answer.act === 'button' && answer.button === 'no') return { choice: 'decline' };
-      return null;
+      const said = answer.act === 'yes' && whole ? { choice: 'allow_once', resultCheck: true } : answer.act === 'button' && answer.button === 'no' ? { choice: 'decline' } : null;
+      if (said) waiting.line(['One moment…']);
+      return said;
     };
   }
 
   /** "For Sam: ... Send only that?" The answer to the engine's own question about what is about to leave. */
-  function sendOnly(stage: NotchStage, from: PeerPerson, answer: string) {
+  function sendOnly(stage: NotchStage, from: PeerPerson, answer: string, waiting: Waiting) {
     return async (): Promise<Record<string, unknown> | null> => {
+      waiting.reached();
+      if (waiting.over()) return null;
       const lines = answer.split('\n');
       if (lines.length === 1 && answer.length <= NOTCH_PEOPLE_LINE_MAX) {
         const said = await stage.choose(['For ', em(from.name), ': ', answer, ' Send only that?'], ['Send it', 'No'], { who: from.name, mood: 'look' });
         if (said.act !== 'pick') return null;
+        waiting.line(['One moment…']);
         return said.index === 0 ? { choice: 'send' } : { choice: 'cancel' };
       }
       const first = await stage.offer(['I have the answer for ', em(from.name), '. Read it before it goes?'], 'read', { who: from.name, mood: 'look' });
       if (first.act !== 'yes') return null;
       const id = stage.id();
       stage.put({
-        id, kind: 'sheet', say: ['For ', em(from.name), '. Send only that?'], who: from.name, mood: 'look', stay: true, no: 'not now', yes: 'send',
+        id, kind: 'sheet', say: ['For ', em(from.name), '. Send only that?'], who: from.name, mood: 'look', stay: true, no: 'not now', yes: 'send', whole: true,
         blocks: [{ kind: 'paper', lines: lines.map((line) => [line]) }, { kind: 'buttons', buttons: [{ id: 'no', label: 'Do not send' }] }],
       });
       const said = await stage.answer(id, ['yes', 'no', 'button']);
-      if (said.act === 'yes') return { choice: 'send' };
-      if (said.act === 'button' && said.button === 'no') return { choice: 'cancel' };
-      return null;
+      const chosen = said.act === 'yes' ? { choice: 'send' } : said.act === 'button' && said.button === 'no' ? { choice: 'cancel' } : null;
+      if (chosen) waiting.line(['One moment…']);
+      return chosen;
     };
   }
 
@@ -644,8 +775,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       try { if (deps.work) done = await deps.work({ from: from.name, words: row.words }); } catch { done = { ok: false }; }
       // What goes is what is shown, so it is made into what can be shown here and now: readable lines, cut to size.
       const answer = done.ok ? peopleLines(done.answer, NOTCH_PEOPLE_ANSWER_MAX).join('\n') : '';
-      if (answer) store.requestState(row.id, 'ready', answer);
-      else if (store.requestState(row.id, 'no')) {
+      // It was stopped, or taken back, while it was being found: it has ended, and what was found goes nowhere.
+      if (answer && !store.requestState(row.id, 'ready', answer)) return;
+      if (!answer && store.requestState(row.id, 'no')) {
         void link.refuse(row.id);
         if (!onNotch.has(row.id)) news(`people:could-not:${row.id}`, ['I could not find what ', em(from.name), ' asked for.'], ['I could not find what ', em(from.name), ' asked for. ', em(from.name), ' gets nothing back.'], { who: from.name });
       }
@@ -675,9 +807,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           let row = store.requestOf(taskId);
           if (!row) return 'settled';
           if (row.state === 'new') {
-            const opened = await link.open(taskId, { request: approve(stage, from, row) });
-            if (opened === 'closed') return 'waits';
-            if (opened === 'failed') { await stage.say(['I cannot take that up right now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+            const waiting = watch(stage);
+            waiting.line(['Opening what ', em(from.name), ' asks…']);
+            waiting.within(engineWait);
+            const opened = await Promise.race([link.open(taskId, { request: approve(stage, from, row, waiting) }), waiting.gone]);
+            // Esc while it opens is not now. What the engine asks later is closed, and the request stays to be opened again.
+            if (opened === 'closed' || opened === 'stop') return 'waits';
+            if (opened === 'failed' || opened === 'late') { await stage.say(['I cannot take that up right now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
             if (opened === 'gone') { store.requestState(taskId, 'no'); ended(); await stage.say([em(from.name), ' took it back.'], 2400, { who: from.name }); return 'settled'; }
             if (opened === 'declined') { store.requestState(taskId, 'no'); ended(); await stage.say(['Told ', em(from.name), ' no. Nothing was touched.'], 3000, { who: from.name }); return 'settled'; }
             store.requestState(taskId, 'working');
@@ -688,8 +824,10 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
             const job = working.get(taskId);
             if (!job) {
               // The brain was started anew in the middle of it: nothing is being done, and its hold on the request went with it.
-              store.requestState(taskId, 'no'); ended(); void link.refuse(taskId);
-              await stage.say(['I was stopped in the middle of what ', em(from.name), ' asked. I told ', em(from.name), ' no.'], 3600, { mood: 'sorry' });
+              store.requestState(taskId, 'no'); ended();
+              // Whether the other side could be told depends on whether the engine was started anew too.
+              const told = await link.refuse(taskId);
+              await stage.say(told ? ['I was stopped in the middle of what ', em(from.name), ' asked. I told ', em(from.name), ' no.'] : ['I was stopped in the middle of what ', em(from.name), ' asked. Nothing was sent.'], 3600, { mood: 'sorry' });
               return 'settled';
             }
             const waitId = stage.id();
@@ -707,13 +845,18 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           row = store.requestOf(taskId);
           if (row?.state === 'no') { ended(); await stage.say(['I could not find that. ', em(from.name), ' gets nothing back.'], 3200, { mood: 'sorry', who: from.name }); return 'settled'; }
           if (row?.state !== 'ready' || !row.answer) return 'settled';
-          const finished = await link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer) });
-          if (finished === 'closed') return 'waits';
-          if (finished === 'failed') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+          const sending = watch(stage);
+          sending.line(['Getting it ready for ', em(from.name), '…']);
+          sending.within(engineWait);
+          const finished = await Promise.race([link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer, sending) }), sending.gone]);
+          if (finished === 'closed' || finished === 'stop') return 'waits';
+          if (finished === 'failed' || finished === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
           if (finished === 'sent') { store.requestState(taskId, 'done'); ended(); await stage.say(['Sent. Only that left this laptop.'], 3200, { mark: 'check', who: from.name }); return 'settled'; }
           store.requestState(taskId, 'no');
           ended();
           if (finished === 'gone') { await stage.say([em(from.name), ' took it back. Nothing was sent.'], 2800, { who: from.name }); return 'settled'; }
+          // The engine was started anew since the yes: it does not hold the request any more, and nothing can be sent for it.
+          if (finished === 'lost') { await stage.say(['I lost hold of what ', em(from.name), ' asked when I was started anew. Nothing was sent.'], 3600, { mood: 'sorry', who: from.name }); return 'settled'; }
           // Kept back, or closed too often to be asked again: the other side is told no, with nothing of this machine's.
           void link.refuse(taskId);
           await stage.say(['Told ', em(from.name), ' no. Nothing left this laptop.'], 3000, { who: from.name });
@@ -842,7 +985,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       }
       if (item.kind === 'task_request') {
         if (!item.task) { store.done(item.id); continue; }
-        store.request({ id: item.task, dir: 'in', peer: item.from, words: item.text, item: item.id });
+        // Kept as what can be read, line by line: the words that are shown are the words that are worked on.
+        // One longer than can be read here is kept a little past the limit, so that it is known to be too long.
+        store.request({ id: item.task, dir: 'in', peer: item.from, words: peopleLines(item.text, NOTCH_PEOPLE_REQUEST_MAX + 200).join('\n'), item: item.id });
         asked(item.task);
         continue;
       }
@@ -880,7 +1025,12 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         if (answer.act !== 'pick') return 'waits';
         if (answer.index === 0) { inbox.after(() => ask(to, sent.words, sent.id)); return 'settled'; }
         if (answer.index === 1) { await stage.say(['It waits. I will tell you when ', em(to.name), ' answers.'], 3000); return 'settled'; }
-        const back = await link.tell(to.id, peerNoteText('Taken back.', { kind: 'back' }), { replyTo: sent.id });
+        // Every sending of the question is taken back: it may have been asked again.
+        let back: PeerSent = { ok: false, why: 'refused' };
+        for (const id of store.sendings(sent.id)) {
+          const one = await link.tell(to.id, peerNoteText('Taken back.', { kind: 'back', of: id }));
+          if (one.ok || !back.ok) back = one;
+        }
         if (!back.ok) { await stage.say(sorry(back), 3200, { mood: 'sorry' }); return 'waits'; }
         store.mark(sent.id, 'back');
         await stage.say(['Taken back. ', em(to.name), ' will not be asked.'], 2800);

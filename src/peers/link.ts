@@ -186,10 +186,12 @@ export type PeerSent =
   | { ok: true; id: string; thread: string | null; delivered: boolean }
   /**
    * down: the engine is not up. signed_out: nobody is signed in. offline: no
-   * line to the server now. withheld: the person chose not to send it.
-   * refused: the engine said no, with its word for why.
+   * line to the server now, and nothing went. unknown: it was handed to the
+   * line and the line broke before the server answered, so it may have gone
+   * and may not. withheld: the person chose not to send it. refused: the
+   * engine said no, with its word for why.
    */
-  | { ok: false; why: 'down' | 'signed_out' | 'offline' | 'withheld' | 'refused'; code?: string };
+  | { ok: false; why: 'down' | 'signed_out' | 'offline' | 'unknown' | 'withheld' | 'refused'; code?: string };
 
 /** A request: something asked of another person's Jarvis, or of this one. */
 export interface PeerRequest {
@@ -246,8 +248,23 @@ export function peerRequest(raw: unknown): PeerRequest | null {
  *   failed    the engine could not open it now.
  */
 export type PeerOpened = 'running' | 'declined' | 'closed' | 'gone' | 'failed';
-/** sent: the answer went. kept: the person chose not to send it. closed: nothing decided. over: no more chances to send. gone: the request ended meanwhile. */
-export type PeerFinished = 'sent' | 'kept' | 'closed' | 'over' | 'gone' | 'failed';
+/** sent: the answer went. kept: the person chose not to send it. closed: nothing decided. over: no more chances to send. gone: the request ended meanwhile. lost: the engine no longer holds it. */
+export type PeerFinished = 'sent' | 'kept' | 'closed' | 'over' | 'gone' | 'lost' | 'failed';
+
+/**
+ * The engine's words for "it was handed to the line and the line broke": the
+ * message may have gone. Tried once more under the same key, and said to be
+ * not known when that fails too. Never said to be "not sent".
+ */
+const UNSURE: ReadonlySet<string> = new Set(['net_send_timeout', 'net_connection_lost', 'task_timeout']);
+/** Its words for "there is no line, nothing went". */
+const OFFLINE: ReadonlySet<string> = new Set(['not_connected', 'net_not_connected', 'task_not_connected', 'task_recipient_offline']);
+/**
+ * Its words for "this request is no longer held here": it ended, or the
+ * engine was started anew and lost its hold on it. Read with and without the
+ * `task_` the engine puts before the codes of its request layer.
+ */
+const HELD_NO_MORE: ReadonlySet<string> = new Set(['no_task', 'task_no_task', 'task_final', 'task_task_final', 'lease_lost', 'task_lease_lost', 'no_handle', 'task_no_handle', 'handle_closed', 'task_handle_closed']);
 
 const KINDS: ReadonlySet<string> = new Set(['message', 'task_request', 'task_progress', 'task_input_request', 'task_input_answer', 'task_result', 'task_declined', 'task_cancel']);
 
@@ -325,7 +342,9 @@ export class PeerLink {
   /** The engine's `onDialog`. */
   readonly dialog = async (dialog: EngineDialog): Promise<EngineDialogAnswer> => {
     const decision = peerDecision(dialog, this.now());
-    const handler = this.calling.map((call) => call.decide[decision.kind]).find((one) => !!one);
+    // The newest call that names its kind: an older one may have outlived the script that made it (a sign-in
+    // waits for the browser for minutes), and what it would answer with is gone.
+    const handler = this.calling.map((call) => call.decide[decision.kind]).reverse().find((one) => !!one);
     if (!handler) return { action: 'cancel' };
     for (let tries = 0; tries < PEER_ASK_AGAIN; tries++) {
       const answer = await handler(decision);
@@ -409,16 +428,24 @@ export class PeerLink {
   /** Sends a message to a person. `replyTo` makes it an answer to something that arrived. */
   async tell(to: string, words: string, more: { replyTo?: string; decide?: PeerDecide } = {}): Promise<PeerSent> {
     if (!this.engine || this.engine.state() !== 'up') return { ok: false, why: 'down' };
+    // The same key on both tries: the engine then sends the same message once, however often it is asked.
+    const args = { to, text: words, ...(more.replyTo ? { replyTo: more.replyTo } : {}), idempotencyKey: crypto.randomUUID() };
     let result: EngineToolResult;
-    try {
-      result = await this.call('send_message', { to, text: words, ...(more.replyTo ? { replyTo: more.replyTo } : {}) }, more.decide ?? {}, 60_000);
-    } catch {
-      return { ok: false, why: 'down' };
+    let code: string | null = null;
+    for (let tries = 0; ; tries++) {
+      try {
+        result = await this.call('send_message', args, more.decide ?? {}, 60_000);
+      } catch {
+        return tries === 0 ? { ok: false, why: 'down' } : { ok: false, why: 'unknown' };
+      }
+      code = engineErrorCode(result.text);
+      if (tries === 0 && code !== null && UNSURE.has(code)) continue;
+      break;
     }
-    const code = engineErrorCode(result.text);
     if (result.failed || code) {
       if (code === 'not_logged_in') return { ok: false, why: 'signed_out' };
-      if (code === 'not_connected' || code === 'net_send_timeout' || code === 'net_connection_lost') return { ok: false, why: 'offline', ...(code ? { code } : {}) };
+      if (code !== null && UNSURE.has(code)) return { ok: false, why: 'unknown', code };
+      if (code !== null && OFFLINE.has(code)) return { ok: false, why: 'offline', code };
       return { ok: false, why: 'refused', ...(code ? { code } : {}) };
     }
     if (/^Not sent\b/.test(result.text)) return { ok: false, why: 'withheld' };
@@ -430,16 +457,23 @@ export class PeerLink {
   /** Asks another person's Jarvis for something. The person there says yes or no to it. */
   async ask(to: string, title: string, words: string): Promise<PeerSent> {
     if (!this.engine || this.engine.state() !== 'up') return { ok: false, why: 'down' };
+    const args = { to, title, instructions: words, idempotencyKey: crypto.randomUUID() };
     let result: EngineToolResult;
-    try {
-      result = await this.call('send_task', { to, title, instructions: words }, {}, 60_000);
-    } catch {
-      return { ok: false, why: 'down' };
+    let code: string | null = null;
+    for (let tries = 0; ; tries++) {
+      try {
+        result = await this.call('send_task', args, {}, 60_000);
+      } catch {
+        return tries === 0 ? { ok: false, why: 'down' } : { ok: false, why: 'unknown' };
+      }
+      code = engineErrorCode(result.text);
+      if (tries === 0 && code !== null && UNSURE.has(code)) continue;
+      break;
     }
-    const code = engineErrorCode(result.text);
     if (result.failed || code) {
       if (code === 'not_logged_in') return { ok: false, why: 'signed_out' };
-      if (code === 'task_not_connected' || code === 'not_connected' || code === 'task_timeout' || code === 'task_recipient_offline') return { ok: false, why: 'offline', ...(code ? { code } : {}) };
+      if (code !== null && UNSURE.has(code)) return { ok: false, why: 'unknown', code };
+      if (code !== null && OFFLINE.has(code)) return { ok: false, why: 'offline', code };
       return { ok: false, why: 'refused', ...(code ? { code } : {}) };
     }
     if (/^Not sent\b/.test(result.text)) return { ok: false, why: 'withheld' };
@@ -466,11 +500,13 @@ export class PeerLink {
     try { result = await this.call('open_task', { task: id }, decide); } catch { return 'failed'; }
     const code = engineErrorCode(result.text);
     if (code === 'task_approval_dismissed') return 'closed';
-    if (code === 'no_task' || code === 'task_final') return 'gone';
+    if (code !== null && HELD_NO_MORE.has(code)) return 'gone';
     if (result.failed || code) return 'failed';
-    if (/\bis running\b/.test(result.text) && /^Task\b/.test(result.text)) return 'running';
-    if (/\b(declined task|was declined by this device's policy)\b/.test(result.text)) return 'declined';
-    if (/already ended\b/.test(result.text)) return 'gone';
+    // Read from the engine's first line only: what follows it quotes the request, which the other side wrote.
+    const first = result.text.split('\n', 1)[0] ?? '';
+    if (/^Task \S+ from .* is running\b/.test(first)) return 'running';
+    if (/^The user declined task\b/.test(first) || /^Task \S+ from .* was declined by this device's policy\b/.test(first)) return 'declined';
+    if (/^That task request already ended\b/.test(first)) return 'gone';
     return 'failed';
   }
 
@@ -488,7 +524,9 @@ export class PeerLink {
       if (/refused too many checks/.test(result.text)) return 'over';
       return /chose not to send/.test(result.text) ? 'kept' : 'closed';
     }
-    if (code === 'no_task' || code === 'task_final' || code === 'lease_lost' || /\b(cancelled|expired)\b/.test(result.text)) return 'gone';
+    // The engine was started anew since the request was opened: it is not held any more, and cannot be answered.
+    if (code === 'no_handle' || code === 'task_no_handle' || code === 'handle_closed' || code === 'task_handle_closed') return 'lost';
+    if ((code !== null && HELD_NO_MORE.has(code)) || /\b(cancelled|expired)\b/.test(result.text)) return 'gone';
     return 'failed';
   }
 

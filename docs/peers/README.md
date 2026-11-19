@@ -87,9 +87,12 @@ What a person does, and what happens:
 - **"Tell Leo the review moved to Friday"** goes with a three-second window to take it back.
   Leo's notch says "Sam: The review moved to Friday"; ok on it sends "seen" back, and Sam's notch
   says "Leo saw it."
-- **"Ask Leo: the review on Thursday or Friday?"** reaches Leo with one key for each answer. The
+- **"Ask Leo: the review on Thursday or Friday?"** reaches Leo with its answers to pick from
+  (a click, or said aloud: the notch has no number keys while it does not have the keyboard). The
   pick comes back: "Leo says Friday." With no answer after ten minutes the asker is told once:
   ask again, wait, or take it back.
+- **Long words.** What the person says goes whole. The line that shows it going has three lines,
+  so it shows where the words begin (110 characters) and a mark that they go on.
 
 ### Rules
 
@@ -118,7 +121,9 @@ What a person does, and what happens:
     by field: what does not check is no note.
 13. **An answer is one of the answers that were offered, from the one who was asked.** A pick
     that is not among the question's options, or that comes from another device than the
-    question went to, is not an answer.
+    question went to, is not an answer. A question is answered only where all of it can be read:
+    the notch shows about three lines of a sentence and fades the rest, so one longer than 140
+    characters is opened on a sheet, with its answers as buttons.
 14. **Not now is never no, and a no is an answer.** A message or question left alone waits in
     the count. One the person answered is never shown again, whatever the engine still lists.
 15. **A pairing code is on the notch and nowhere else.** It is in no log, not in what was asked,
@@ -162,7 +167,9 @@ Leo's computer". Only the name of somebody this machine is joined with makes it 
 18. **What is found is shown before it goes, and what goes is what was shown.** The answer is
     made into lines that can be read (control characters and hiding marks out, at most 4,000
     characters) before it is shown, and that same text is what is sent. On a sheet, closing it
-    decides nothing; "Do not send" is the no.
+    decides nothing; "Do not send" is the no. And the sheet must have been seen to its end: while
+    its end has not been on screen, the yes key moves it down a page and answers nothing
+    (`whole` on the sheet's line, `src/notch/protocol.ts`). The same holds for a long request.
 19. **What cannot be read whole cannot be said yes to here.** A request longer than 2,000
     characters is shown as far as it goes, says that it goes on, and has only its no.
 20. **A request is done by reading.** It runs as one turn of the background agent. The request
@@ -180,6 +187,48 @@ Leo's computer". Only the name of somebody this machine is joined with makes it 
 23. **An answer counts from the one who was asked.** It is read from the engine's record of the
     request this machine made to that device, and only once the answer itself is there, not
     when the word that it ended is. What they wrote is shown as text and nothing else.
+
+## Hardened on 19 November
+
+Found by a heavy test pass the same day, before any of it had run against the engine's server.
+Each has a test that fails without it.
+
+24. **The notch is never blank while it waits on the engine.** A script that waits on the engine
+    says what for ("Reaching the server…", "Making a code…", "Opening what Sam asks…"). Esc on
+    that line stops the waiting. The engine has 20 seconds to come back with its first question;
+    after a stop, after that time, or when something else took the notch, the flow is over and
+    whatever the engine asks later is closed, unanswered. Before, a script could hold the notch
+    with nothing on it for as long as the engine was silent, and a tap opened nothing.
+25. **A decision goes to the newest call that names its kind.** A call can outlive the script that
+    made it (a sign-in waits minutes for the browser). The next try is answered, not the dead one.
+26. **A code window does not outlive its script.** When something takes the notch while a code is
+    open, the window is closed and the notch says so when it is free again.
+27. **What cannot be seen is not there.** Every format character (the marks that hide, join or
+    reorder text, the soft hyphen), the tag characters that spell words invisibly, the variation
+    selectors and the letters that draw nothing are taken out of what another person wrote and of
+    what is about to be sent. A request is kept as what can be read, and that is what the agent is
+    handed. Text nobody sees on the notch could otherwise be read by the model, or leave with an
+    answer.
+28. **A pick goes with the window to take it back,** like anything that goes to another person. A
+    pick can be a slip, and one said aloud can be a word that was never said.
+29. **A message is sent once.** Every send carries a key of its own. When the line breaks while it
+    goes, it is tried once more under the same key, and if that fails too the notch says that it
+    does not know whether it arrived. It never says "not sent" for that.
+30. **A taking back names what it takes back, and counts only from the one who asked.** It is a
+    note with the id of the question (the engine lets a message reply only to something that
+    arrived, and a taking back is about something that was sent). A third person naming somebody
+    else's question takes nothing off the notch.
+31. **More than one person, or another way to reach them, is not a word to the first name.** "Tell
+    Leo and Anna ...", "tell Leo, Anna and Sam ...", "message Leo on Slack ...", "ask Leo's
+    brother ..." are not taken here. They are instructions like any other.
+32. **After the engine or the brain was started anew, what is said is what is true.** The engine
+    holds an open request in its own process. Once that is gone the request cannot be answered or
+    declined from here: the notch says that nothing was sent, ends it, and does not say "I told
+    Sam no" unless Sam was told.
+33. **A request that ended does not come back.** Stopped, or taken back, while the answer was
+    being found: what is found afterwards goes nowhere and puts nothing in the count.
+34. **The people are read from what is stored.** Like the inbox and the requests: the engine under
+    the brain is the one line to the server.
 
 ## Limits
 

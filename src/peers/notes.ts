@@ -24,8 +24,12 @@ export type PeerNote =
   | { kind: 'answer'; pick: string }
   /** The person saw the message this replies to. */
   | { kind: 'seen' }
-  /** The question this replies to is taken back. */
-  | { kind: 'back' }
+  /**
+   * A question is taken back. `of` is the id it was sent under: a message
+   * can only be sent as a reply to something that arrived, and a taking back
+   * is about something that was sent.
+   */
+  | { kind: 'back'; of: string }
   /** The name of the organisation the two are now in. */
   | { kind: 'org'; name: string };
 
@@ -36,16 +40,28 @@ export const PEER_ORG_MAX = 60;
 
 const LINE = /(?:^|\n)\[\[jarvis:(\d+) (\{[^\n]{0,2000}\})\]\][ \t]*$/;
 
-/** Only what a person can read: no control characters, no line breaks, no runs of spaces. */
+/**
+ * Only what a person can read: no control characters, no line breaks, no runs
+ * of spaces, and nothing that is there without being drawn. The last matters
+ * most: text that cannot be seen on the notch can still be read by a model
+ * and can still be sent. So every format character goes (the marks that hide,
+ * join or reorder text, the soft hyphen), the tag characters that spell words
+ * invisibly, the variation selectors, and the letters that draw nothing.
+ */
+/** Characters that break a line or stand for a gap: each becomes a blank. */
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f]/g;
+/** Characters that are there without being drawn: each is taken out, so that the letters round it stay one word. */
+const UNSEEN = /[\u115f\u1160\u3164\uffa0\ufe00-\ufe0f]|\p{Cf}|[\u{e0000}-\u{e0fff}]/gu;
+
 export function peerPlain(text: string, max: number): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\u2066-\u2069\ufeff]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+  return text.replace(UNSEEN, '').replace(CONTROLS, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 function checked(raw: unknown): PeerNote | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const note = raw as Record<string, unknown>;
-  if (note.kind === 'seen' || note.kind === 'back') return { kind: note.kind };
+  if (note.kind === 'seen') return { kind: 'seen' };
+  if (note.kind === 'back') return typeof note.of === 'string' && /^[0-9a-f-]{36}$/i.test(note.of) ? { kind: 'back', of: note.of.toLowerCase() } : null;
   if (note.kind === 'ask') {
     if (!Array.isArray(note.options) || note.options.length < 2 || note.options.length > PEER_OPTIONS_MAX) return null;
     const options = note.options.map((one) => (typeof one === 'string' ? peerPlain(one, PEER_OPTION_MAX) : ''));

@@ -339,3 +339,27 @@ func TestAFileKeptOnlineIsKnownByWhatWindowsSaysOfIt(t *testing.T) {
 		}
 	}
 }
+
+// A name is read as a person reads it: an underscore, a digit and a capital
+// inside it end a word. Found by the heavy pass of 19 November 2026: every one
+// of the first list was listed as not private, and handed over when asked for.
+func TestNotchFilePrivateReadsANameAsAPersonDoes(t *testing.T) {
+	private := []string{
+		"passwords_2026.xlsx", "password_list.txt", "Passwords2026.docx", "PasswordsBackup.docx", "tax_return_2025.pdf", "Taxes2025.pdf",
+		"my_bank_details.pdf", "login_details.txt", "api_keys.txt", "ssh_key_backup.txt", "aws_tokens.txt", "2fa_backup.txt",
+		"iban_and_swift.txt", "ssn_card.pdf", "pwd_list.txt", "crypto_wallet.txt", "my_id_card.pdf", "BankStatement_March.pdf", "myPasswords.txt",
+		// And the ones that were held private before.
+		"passwords.txt", "bank statement.pdf", "id_rsa.pem", "secrets.env",
+	}
+	for _, name := range private {
+		if !notchFilePrivate(name) {
+			t.Errorf("%q is not held private", name)
+		}
+	}
+	open := []string{"Budget Q4.xlsx", "Deck_November_v3.pdf", "meeting notes 2026.docx", "monkey_business.txt", "Roadmap2027.pptx", "holiday photos.zip", "turkeys.jpg"}
+	for _, name := range open {
+		if notchFilePrivate(name) {
+			t.Errorf("%q is held private, and need not be", name)
+		}
+	}
+}

@@ -43,6 +43,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -76,9 +77,34 @@ var notchFilePrivateEnding = map[string]bool{
 	".pem": true, ".key": true, ".p12": true, ".pfx": true, ".kdbx": true, ".kdb": true, ".env": true, ".ppk": true, ".asc": true, ".gpg": true, ".keychain": true, ".ovpn": true, ".wallet": true,
 }
 
+// notchFileNameWords: a file's name as the words a person reads in it. An
+// underscore, a number after a word and the step from a small letter to a
+// capital each end a word for a reader. For the pattern above they do not: to
+// it "passwords_2026.xlsx", "Taxes2025.pdf" and "PasswordsBackup.docx" are one
+// long word in which no private word ends, and such files were opened. So a
+// blank is put at each of those before the name is matched. A number that a
+// word begins with stays with it ("2fa").
+func notchFileNameWords(name string) string {
+	var out strings.Builder
+	var before rune
+	for _, r := range name {
+		switch {
+		case r == '_':
+			out.WriteRune(' ')
+		case unicode.IsDigit(r) && unicode.IsLetter(before), unicode.IsUpper(r) && unicode.IsLower(before):
+			out.WriteRune(' ')
+			out.WriteRune(r)
+		default:
+			out.WriteRune(r)
+		}
+		before = r
+	}
+	return out.String()
+}
+
 // notchFilePrivate: whether a file is one that is never opened.
 func notchFilePrivate(name string) bool {
-	return notchFilePrivateEnding[strings.ToLower(filepath.Ext(name))] || notchFilePrivateName.MatchString(name)
+	return notchFilePrivateEnding[strings.ToLower(filepath.Ext(name))] || notchFilePrivateName.MatchString(name) || notchFilePrivateName.MatchString(notchFileNameWords(name))
 }
 
 // notchFileNameOdd: whether a name is one of the forms under which Windows

@@ -97,6 +97,8 @@ export class FakeEngine implements PeerEngineLike {
   notice: (method: string, params: Record<string, unknown>) => void = () => {};
   /** The person in their browser: resolves true when they signed in on the page. */
   browser: (url: string) => Promise<boolean> = async () => true;
+  /** While set, every tool call waits for it first: an engine, or a server behind it, that does not answer. */
+  stall: Promise<void> | null = null;
   /** The account, which several devices may share. */
   account: string;
 
@@ -143,6 +145,7 @@ export class FakeEngine implements PeerEngineLike {
   async call(tool: string, args: Record<string, unknown> = {}): Promise<EngineToolResult> {
     if (this.up !== 'up') throw new Error('the engine is not up');
     this.calls.push({ tool, args });
+    if (this.stall) await this.stall;
     if (tool === 'account') return this.accountTool(args);
     if (tool === 'connect') return this.connectTool(args);
     if (tool === 'send_message') return this.sendMessage(args);
