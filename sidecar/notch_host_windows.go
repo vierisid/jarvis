@@ -135,6 +135,9 @@ func platformNotchTearDown(handle unsafe.Pointer) {
 	}
 }
 
+// No display here has a camera housing the system tells of.
+func platformNotchHousing() (int, int) { return 0, 0 }
+
 // platformNotchReveal is called once the page has loaded. The window is shown
 // without taking the keyboard, unless the fullscreen rule is hiding it.
 func platformNotchReveal(handle unsafe.Pointer) {

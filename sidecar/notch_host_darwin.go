@@ -6,13 +6,19 @@ package main
 //
 // First run on a Mac: 19 November 2026 (an M4 MacBook Air, macOS 27.2). It
 // built, and crashed three times out of three the moment the window was set
-// up. The cause is written down at jarvis_notch_adopt. Everything after the
-// set-up had still not run when that was fixed: it follows panels_darwin.go's
-// rules (everything that touches AppKit runs on the main thread).
+// up. The cause is written down at jarvis_notch_adopt. The second run, the
+// same day: the window opened and the page loaded, with most of the notch
+// behind the display's camera housing (jarvis_notch_housing_of). What a
+// person does on it had still not been tried when this was written. It
+// follows panels_darwin.go's rules (everything that touches AppKit runs on
+// the main thread).
 //
 // How each of the four differences is done here:
 //   - Place: a borderless window at the top centre of the display that has the
-//     menu bar, above the menu bar's level, on every Space.
+//     menu bar, above the menu bar's level, on every Space. A MacBook's own
+//     camera housing sits in exactly that place, and nothing drawn behind it
+//     can be seen: the page is told how wide and how tall the housing is
+//     (jarvis_notch_housing), and draws itself round it.
 //   - Shape: a shape-layer mask on the content view, so only the outline the
 //     page reports is drawn. Clicks: the window ignores the mouse except while
 //     the pointer is inside the outline, checked 30 times a second.
@@ -165,6 +171,59 @@ static pid_t jarvis_notch_fullscreen_app_in_front(void) {
     return 0;
 }
 
+// The camera housing of the display the notch is on: how wide and how tall,
+// in points. Both 0 where there is none (an external display, an older Mac, a
+// display mode that keeps everything below the housing).
+//
+// The second run on a Mac (19 November 2026) is why this exists: the shape
+// came up where it belongs, at the top centre, and most of it lay behind the
+// housing. The system says how much of the top is taken (the safe area) and
+// what is left free to each side of it (the two auxiliary areas); what lies
+// between those two is the housing.
+static void jarvis_notch_housing_of(NSScreen* screen, CGFloat* w, CGFloat* h) {
+    *w = 0;
+    *h = 0;
+    if (screen == nil) return;
+    if (@available(macOS 12.0, *)) {
+        CGFloat top = screen.safeAreaInsets.top;
+        if (top <= 0) return;
+        NSRect left = screen.auxiliaryTopLeftArea;
+        NSRect right = screen.auxiliaryTopRightArea;
+        if (NSIsEmptyRect(left) || NSIsEmptyRect(right)) return;
+        CGFloat wide = NSMinX(right) - NSMaxX(left);
+        if (wide <= 0 || wide >= screen.frame.size.width) return;
+        *w = wide;
+        *h = top;
+    }
+}
+
+// Where the window belongs: the top centre of the display that has the menu
+// bar. Under a housing, centred on the housing, which is where the system
+// puts it but not something to take for granted.
+static NSRect jarvis_notch_frame_on(NSScreen* screen, CGFloat w, CGFloat h) {
+    NSRect sf = screen.frame;
+    CGFloat mid = NSMidX(sf);
+    if (@available(macOS 12.0, *)) {
+        CGFloat hw = 0, hh = 0;
+        jarvis_notch_housing_of(screen, &hw, &hh);
+        if (hw > 0) mid = (NSMaxX(screen.auxiliaryTopLeftArea) + NSMinX(screen.auxiliaryTopRightArea)) / 2.0;
+    }
+    return NSMakeRect(round(mid - w / 2.0), NSMaxY(sf) - h, w, h);
+}
+
+// The housing in whole points, for the page. May be called from any thread.
+static void jarvis_notch_housing(int* w, int* h) {
+    *w = 0;
+    *h = 0;
+    dispatch_block_t read = ^{
+        CGFloat hw = 0, hh = 0;
+        jarvis_notch_housing_of([NSScreen screens].firstObject, &hw, &hh);
+        *w = (int)lround(hw);
+        *h = (int)lround(hh);
+    };
+    if ([NSThread isMainThread]) read(); else dispatch_sync(dispatch_get_main_queue(), read);
+}
+
 static void jarvis_notch_tick(BOOL checkFullscreen) {
     NSWindow* win = jarvis_notch_win;
     if (win == nil) return;
@@ -175,6 +234,15 @@ static void jarvis_notch_tick(BOOL checkFullscreen) {
     // Told only when it changes: thirty times a second is how often it is asked, not how often it differs.
     if (win.ignoresMouseEvents == inside) [win setIgnoresMouseEvents:!inside];
     if (!checkFullscreen) return;
+    // The display it hangs from can change under it: another one plugged in
+    // and made the main one, the lid closed, a new resolution.
+    NSScreen* screen = [NSScreen screens].firstObject;
+    if (screen != nil) {
+        NSRect want = jarvis_notch_frame_on(screen, f.size.width, f.size.height);
+        if (fabs(want.origin.x - f.origin.x) > 0.5 || fabs(want.origin.y - f.origin.y) > 0.5) {
+            [win setFrame:want display:YES];
+        }
+    }
     pid_t front = jarvis_notch_fullscreen_app_in_front();
     BOOL hide = front > 0 && jarvis_notch_app_keeps_display_awake(front);
     if (hide == jarvis_notch_hidden) return;
@@ -213,10 +281,7 @@ static void jarvis_notch_set_up(void* nswindow_ptr, int w, int h) {
         [win setIgnoresMouseEvents:YES];
 
         NSScreen* screen = [NSScreen screens].firstObject;
-        if (screen != nil) {
-            NSRect sf = screen.frame;
-            [win setFrame:NSMakeRect(NSMidX(sf) - w / 2.0, NSMaxY(sf) - h, w, h) display:NO];
-        }
+        if (screen != nil) [win setFrame:jarvis_notch_frame_on(screen, w, h) display:NO];
 
         // Nothing shows until the page says what shape it is.
         NSView* content = win.contentView;
@@ -386,10 +451,23 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	}
 	C.jarvis_notch_set_up(handle, C.int(notchWindowW), C.int(notchWindowH))
 	log.Printf("[notch] window %dx%d at the top centre of the main display", notchWindowW, notchWindowH)
+	if w, h := platformNotchHousing(); w > 0 && h > 0 {
+		log.Printf("[notch] this display has a camera housing, %dx%d points: the notch is drawn round it", w, h)
+	} else {
+		log.Printf("[notch] this display has no camera housing")
+	}
 }
 
 func platformNotchTearDown(handle unsafe.Pointer) {
 	C.jarvis_notch_tear_down()
+}
+
+// platformNotchHousing is the camera housing of the display the notch is on,
+// in the page's own pixels (points): how wide, how tall. Both 0 without one.
+func platformNotchHousing() (int, int) {
+	var w, h C.int
+	C.jarvis_notch_housing(&w, &h)
+	return int(w), int(h)
 }
 
 // platformNotchCursor is where the pointer is, in the page's own pixels (points

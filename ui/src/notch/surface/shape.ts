@@ -57,6 +57,32 @@ export interface BodyShape {
 export const OX = 30;
 
 /**
+ * A MacBook's camera housing, as the path sees it: its two sides in the svg's
+ * own x, and how far down from the screen's top edge it reaches. The path's
+ * y = 0 is the housing's lower edge, so the screen's top edge is at -h.
+ */
+export interface Housing { left: number; right: number; h: number }
+
+/** How much of each end of the housing's lower edge is its rounded corner: nothing hangs from there. */
+export const CAM_CORNER = 10;
+/** How far past each side of the housing the notch reaches at the least, once it is not narrower than it. */
+export const CAM_PAST = 6;
+/** The widest the notch may be and still hang under the housing with a whole shoulder each side. */
+export const camNarrowMost = (camW: number): number => camW - 2 * (CAM_CORNER + 12);
+
+/**
+ * The width a notch of this content gets on a display with a housing `camW`
+ * wide. Clearly narrower than the housing, it hangs under it as it is.
+ * Anything else is at least a little wider than the housing: a side that came
+ * down just inside the housing's rounded corner would leave a sliver of the
+ * desktop between the two.
+ */
+export function housedWidth(w: number, camW: number): number {
+  if (camW <= 0 || w <= camNarrowMost(camW)) return w;
+  return Math.max(w, 2 * Math.ceil((camW + 2 * CAM_PAST) / 2));
+}
+
+/**
  * The silhouette. `body` is the whole closed shape with its flared shoulders,
  * `lip` the bottom part only, `edge` the open line from the left shoulder
  * round to the right one. With `inset` the same three are drawn that many px
@@ -66,7 +92,8 @@ export const OX = 30;
  * outline, so a stroke drawn on the edge itself, as the prototype drew its
  * fuse, would be cut away. What has to be seen is drawn just inside.
  */
-export function bodyPaths(s: BodyShape, inset = 0): { body: string; lip: string; edge: string } {
+export function bodyPaths(s: BodyShape, inset = 0, cam: Housing | null = null): { body: string; lip: string; edge: string } {
+  if (cam && cam.h > 0) return housedPaths(s, inset, cam);
   const { w, h } = s;
   const sh = Math.max(4, Math.min(h * .8, w * .4, 12 + clamp((w - 88) / 420, 0, 1) * 5) + s.shr);
   const r0 = Math.min(s.big ? 22 : 16, h / 2, w / 2);
@@ -90,6 +117,53 @@ export function bodyPaths(s: BodyShape, inset = 0): { body: string; lip: string;
   };
 }
 
+/**
+ * The same silhouette on a display with a camera housing. Nothing behind the
+ * housing can be seen, so the notch is drawn round it: its ink starts at the
+ * screen's top edge as it always does, takes the housing in, and what it says
+ * sits below the housing (y = 0 here is the housing's lower edge).
+ *
+ * Two shoulders each side. One at the screen's top edge, which shows once the
+ * notch is wider than the housing. One under the housing's lower edge, which
+ * shows while the notch is narrower: it is what makes the notch hang from the
+ * housing as a drop, and it shrinks to nothing as the side nears the housing's
+ * corner. The straight piece between the two runs behind the housing.
+ */
+function housedPaths(s: BodyShape, inset: number, cam: Housing): { body: string; lip: string; edge: string } {
+  const { w, h } = s;
+  const wide = 12 + clamp((w - 88) / 420, 0, 1) * 5;
+  const sh = Math.max(4, Math.min(h * .8, w * .4, wide) + s.shr);
+  const st = Math.min(cam.h, Math.max(4, Math.min((h + cam.h) * .8, w * .4, wide) + s.shr));
+  const r0 = Math.min(s.big ? 22 : 16, h / 2, w / 2);
+  if (inset && (w - 2 * inset < 6 || h - inset < 6)) return { body: '', lip: '', edge: '' };
+  const r = inset ? Math.max(1, r0 - inset) : r0, hh = h - inset, T = -cam.h;
+  const L = OX + inset, R = OX + w - inset, span = R - L - 2 * r, curve = (s.sag + s.lip) * 2;
+  // How much shoulder fits under the flat of the housing's lower edge, each side.
+  const fl = clamp(L - (cam.left + CAM_CORNER), 0, sh), fr = clamp(cam.right - CAM_CORNER - R, 0, sh);
+  let bot = `Q${L + r + span * (.5 + s.lean * .38)} ${hh + curve} ${R - r} ${hh}`;
+  if (s.wave) {
+    let px = L + r, py = hh; bot = '';
+    for (let i = 0; i < WK; i++) {
+      const u = (i + 1) / (WK + 1), x = L + r + span * u, y = hh + (s.wave[i] ?? 0) + curve * 2 * u * (1 - u);
+      bot += `Q${px} ${py} ${(px + x) / 2} ${(py + y) / 2} `; px = x; py = y;
+    }
+    bot += `Q${px} ${py} ${R - r} ${hh}`;
+  }
+  // From where the left side leaves the housing, round the bottom, to where the right side goes back under it.
+  const yl = Math.max(fl, inset), yr = Math.max(fr, inset);
+  const round = `Q${L - s.bow} ${(yl + hh - r) / 2} ${L} ${hh - r} Q${L} ${hh} ${L + r} ${hh} ${bot} Q${R} ${hh} ${R} ${hh - r} Q${R + s.bow} ${(yr + hh - r) / 2} ${R} ${yr}`;
+  const downL = fl > 0 ? `L${L - fl} ${inset} Q${L} ${inset} ${L} ${yl}` : `L${L} ${yl}`;
+  const upR = fr > 0 ? `Q${R} ${inset} ${R + fr} ${inset} L${R} ${T + st}` : `L${R} ${T + st}`;
+  // What can be seen of the edge: from the shoulder under the housing while there is one, else from the top.
+  const seenL = fl > 0 ? `M${L - fl} ${inset} Q${L} ${inset} ${L} ${yl}` : `M${L} ${T + st} L${L} ${yl}`;
+  const seenR = fr > 0 ? `Q${R} ${inset} ${R + fr} ${inset}` : `L${R} ${T + st}`;
+  return {
+    body: `M${L - st} ${T} Q${L} ${T} ${L} ${T + st} ${downL} ${round} ${upR} Q${R} ${T} ${R + st} ${T}Z`,
+    lip: `M${L} ${hh - r} Q${L} ${hh} ${L + r} ${hh} ${bot} Q${R} ${hh} ${R} ${hh - r}`,
+    edge: `${seenL} ${round} ${seenR}`,
+  };
+}
+
 /** How far inside the real edge the fuse and the birth line are drawn: the cut (1.5) plus half the fuse's width. */
 export const FUSE_IN = 2.7;
 /** The same for the lit lip of the mouth, which is thinner. */
@@ -101,6 +175,8 @@ export interface ShapeDeps {
   reduce: boolean;
   /** The width of the window, in px: the notch hangs from the middle of it. */
   width(): number;
+  /** The display's camera housing, in px: how wide and how tall. Null without one. */
+  housing?(): { w: number; h: number } | null;
   /** Told whenever the silhouette was redrawn. */
   changed(): void;
 }
@@ -123,10 +199,14 @@ export interface Shape {
   traceLength(): number;
   /** True while the springs or the lip are still moving. */
   running(): boolean;
-  /** Where the notch's box is, in the window's px. */
+  /**
+   * Where the notch's box is, in the window's px. Under a camera housing it is
+   * the two together: what comes along the top edge meets the housing's side
+   * when the notch itself is narrower.
+   */
   box(): { left: number; right: number; bottom: number; width: number };
-  /** The path as drawn, and the window x of its own x = 0. */
-  current(): { d: string; x: number; w: number; h: number };
+  /** The path as drawn, the window x of its own x = 0 and the window y of its own y = 0. */
+  current(): { d: string; x: number; y: number; w: number; h: number };
 }
 
 export function createShape(deps: ShapeDeps): Shape {
@@ -144,16 +224,26 @@ export function createShape(deps: ShapeDeps): Shape {
   let ticking = false, feeding = false, lastD = '', lastH = 30;
 
   const isBig = () => wrap.dataset.body === 'sheet' || wrap.dataset.body === 'ask';
+  const housing = (): { w: number; h: number } | null => {
+    const c = deps.housing?.();
+    return c && c.w > 0 && c.h > 0 ? c : null;
+  };
+  /** The housing as a notch `w` wide and shaken `ox` to the side sees it. It stays where it is; the notch moves. */
+  const camFor = (w: number, ox: number): Housing | null => {
+    const c = housing();
+    return c ? { left: OX + w / 2 - c.w / 2 - ox, right: OX + w / 2 + c.w / 2 - ox, h: c.h } : null;
+  };
 
   function draw(now = 0): void {
     const w = N.w, hh = Math.max(8, N.h), h = hh + (N.breath ? Math.sin(now / 950) * .9 : 0);
     const s: BodyShape = { w, h, big: isBig(), shr: N.shr, sag: clamp(N.vh * .013, 0, 7), bow: clamp(N.vw * .006, 0, 4), lip: N.lip, lean: N.lean, wave: N.wave };
-    const p = bodyPaths(s);
+    const cam = camFor(w, Math.abs(N.ox) > .05 ? N.ox : 0);
+    const p = bodyPaths(s, 0, cam);
     pBody.setAttribute('d', p.body);
     // The lit lip of the open mouth has to be seen, so it moves inside the cut. The plain one is the prototype's rim.
-    pLip.setAttribute('d', wrap.classList.contains('over') ? bodyPaths(s, LIP_IN).lip : p.lip);
+    pLip.setAttribute('d', wrap.classList.contains('over') ? bodyPaths(s, LIP_IN, cam).lip : p.lip);
     if (wrap.classList.contains('fusing') || blob.classList.contains('tracing')) {
-      const inner = bodyPaths(s, FUSE_IN).edge;
+      const inner = bodyPaths(s, FUSE_IN, cam).edge;
       pBurn.setAttribute('d', inner); pTrace.setAttribute('d', inner);
     }
     blob.setAttribute('width', String(w + 60)); blob.setAttribute('height', String(h + 48));
@@ -222,7 +312,12 @@ export function createShape(deps: ShapeDeps): Shape {
     const r = c.getBoundingClientRect();
     c.remove();
     N.fast = !!fast;
-    morph(2 * Math.ceil(r.width / 2) + (feeding ? 54 : 0), Math.ceil(r.height) + (feeding ? 8 : 0), instant);
+    const said = 2 * Math.ceil(r.width / 2), cam = housing();
+    // Under a housing a notch that is not clearly narrower than it is made a little wider than it, and
+    // what it says stays in the middle.
+    const held = cam ? housedWidth(said, cam.w) : said;
+    nin.style.left = held > said ? (held - said) / 2 + 'px' : '';
+    morph(held + (feeding ? 54 : 0), Math.ceil(r.height) + (feeding ? 8 : 0), instant);
   }
 
   function morphPlay(mode: LipMode, o?: { aim?: number }): void {
@@ -268,7 +363,7 @@ export function createShape(deps: ShapeDeps): Shape {
 
   /** a true timer: the dash is exactly as long as the edge it burns along, measured at the size the notch is settling to */
   function burn(ms: number): void {
-    const inner = bodyPaths(settled(), FUSE_IN).edge;
+    const inner = bodyPaths(settled(), FUSE_IN, camFor(N.tw, 0)).edge;
     pMeas.setAttribute('d', inner);
     const len = Math.ceil(lengthOf(pMeas, 2 * N.th + N.tw)) + 2;
     pBurn.style.strokeDasharray = String(len);
@@ -279,7 +374,7 @@ export function createShape(deps: ShapeDeps): Shape {
   }
 
   function traceLength(): number {
-    const inner = bodyPaths({ ...settled(), big: isBig() }, FUSE_IN).edge;
+    const inner = bodyPaths({ ...settled(), big: isBig() }, FUSE_IN, camFor(N.tw, 0)).edge;
     pTrace.setAttribute('d', inner);
     return Math.ceil(lengthOf(pTrace, 2 * N.th + N.tw)) + 4;
   }
@@ -290,7 +385,10 @@ export function createShape(deps: ShapeDeps): Shape {
     N, draw, wake, morph, kick, fit, morphPlay, morphStop, shapeFor, shapeGesture, burn, traceLength,
     setFeeding(on) { feeding = on; },
     running: () => ticking,
-    box() { const left = centre() - N.w / 2; return { left, right: left + N.w, bottom: Math.max(8, N.h), width: N.w }; },
-    current() { return { d: lastD, x: centre() - N.w / 2 + (Math.abs(N.ox) > .05 ? N.ox : 0) - OX, w: N.w, h: lastH }; },
+    box() {
+      const cam = housing(), half = Math.max(N.w, cam ? cam.w : 0) / 2, left = centre() - half;
+      return { left, right: left + 2 * half, bottom: (cam ? cam.h : 0) + Math.max(8, N.h), width: 2 * half };
+    },
+    current() { return { d: lastD, x: centre() - N.w / 2 + (Math.abs(N.ox) > .05 ? N.ox : 0) - OX, y: housing()?.h ?? 0, w: N.w, h: lastH }; },
   };
 }

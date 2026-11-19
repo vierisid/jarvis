@@ -140,6 +140,29 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
   [ -f sidecar/packaging/macos/AppIcon.icns ] || ( cd sidecar && packaging/macos/make-icns.sh ) || true
   mkdir -p "$APP_DIR"
   make -C sidecar app-macos BIN=./jarvis APP_DIR="$APP_DIR/Jarvis.app"
+  # Signed for this Mac only, as the app it says it is. Left as the build makes
+  # it, the program inside is signed by the linker under the name "a.out",
+  # and the app round it is not signed at all. macOS then lists "Jarvis" under
+  # a permission, switched on, and does not find it behind the program that
+  # runs: the keys stayed blocked on the second run on a Mac (19 November
+  # 2026). No certificate is involved and nothing is sent anywhere: this is
+  # the signature a build made on the Mac itself gets. Inside first, then the
+  # app. A rebuilt app is still a new program to macOS, so the permission has
+  # to be given again after every build.
+  if command -v codesign >/dev/null 2>&1; then
+    SIGNED=1
+    if [ -f "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" ]; then
+      codesign --force --sign - "$APP_DIR/Jarvis.app/Contents/MacOS/ocr-helper" || SIGNED=0
+    fi
+    codesign --force --sign - "$APP_DIR/Jarvis.app" || SIGNED=0
+    if [ "$SIGNED" = 1 ]; then
+      echo "Signed for this Mac: $(codesign -dv "$APP_DIR/Jarvis.app" 2>&1 | grep -E '^Identifier=' || echo 'identifier not read')"
+    else
+      echo "The app could not be signed for this Mac. It runs, and the keys may stay blocked."
+    fi
+  else
+    echo "codesign is not on this Mac (Xcode command line tools): the app is not signed, and the keys may stay blocked."
+  fi
   # The same idea as start-sidecar.cmd on Windows: a profile of its own, so the
   # test build never reads or writes an installed Jarvis's settings.
   #

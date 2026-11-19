@@ -38,6 +38,9 @@ func platformNotchCursor(handle unsafe.Pointer) (int, int, bool, bool) { return 
 
 func platformNotchTearDown(handle unsafe.Pointer) {}
 
+// No display here has a camera housing the system tells of.
+func platformNotchHousing() (int, int) { return 0, 0 }
+
 // The fullscreen rule is not applied on this platform, so there is nothing to
 // come back from.
 func platformNotchAsking(handle unsafe.Pointer, asking bool) {}

@@ -2250,9 +2250,10 @@ What is not done, or not proven, in pass 13:
   page back, and the system's font is used until they are there.
 - **The picture for "where is" is of a part of the screen**, not of the
   window: what lies over the window is in it.
-- **The Mac is pass 14.** What the audit found there (the camera housing,
-  permissions that are never asked for, the menu bar) is listed in the
-  audit and not touched.
+- **The Mac is pass 14.** What the audit found there (permissions that are
+  never asked for, the menu bar) is listed in the audit and not touched. The
+  camera housing was met for real on 19 November 2026 and is handled since
+  ("A display with a camera housing", under the window's platforms).
 
 ## Listening to a call
 
@@ -3204,9 +3205,25 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
   awake, and while a fullscreen app is in front writes what it saw every two
   seconds for the first twenty (`looking at chrome: hands off ..., pointer
   hidden ..., app sound ..., picture change ..., video ...`).
-- **macOS (`sidecar/notch_host_darwin.go`) has been started once on a Mac and
-  crashed at the window's set-up; that is fixed, and nothing after it has
-  run** ("Trying a build" has the account).
+- **macOS (`sidecar/notch_host_darwin.go`) has been started twice on a Mac.**
+  The first time it crashed at the window's set-up. The second time the
+  window opened, the page loaded and day one began, with most of the notch
+  behind the display's camera housing, and the next start crashed before the
+  window was made. All three are fixed; what a person does on it has still
+  not been tried there ("Trying a build" has the account).
+- **A display with a camera housing (a MacBook's).** The notch hangs where
+  the housing is, and nothing drawn behind the housing can be seen. So the
+  desktop app tells the page how wide and how tall the housing is, and the
+  page draws the notch round it: its ink still starts at the screen's top
+  edge and takes the housing in, plain black so the two read as one piece,
+  and everything it says sits below the housing. Narrower than the housing,
+  it hangs under it as a drop. About as wide, it is made a little wider than
+  it. Wider, it covers the menu bar to both sides of the housing for as long
+  as it is that wide. A sheet is the housing's height shorter. The window
+  itself does not move. An external display, an older Mac, and a display
+  mode that keeps everything below the housing have none, and are drawn as
+  before. The rules are in `housedPaths` and `housedWidth`
+  (`ui/src/notch/surface/shape.ts`).
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
   focus rule, no fullscreen rule.
 - There is no per-machine opt-out: every desktop app that advertises the
@@ -3252,15 +3269,17 @@ The page talks to the desktop app through seven functions on `window`:
 | `__notch_esc(true \| false)` | Whether Esc would do anything on the notch right now. Only then is it taken from the app in front |
 | `__notch_asking(true \| false)` | Whether a question that needs a yes or a no is on the notch. While one is, the window does not stay hidden behind a fullscreen video |
 | `__notch_keys()` | Answers the machine's two pairs, `{talk: [a, b], yes: [a, b]}`, each key one of `ctrl`, `alt`, `meta`, `shift` |
+| `__notch_housing()` | Answers the camera housing of the display the notch is on, `[wide, tall]` in the page's own pixels. `[0, 0]` without one. Asked once, when the page starts |
 | `__notch_log(text)` | One line in the desktop app's log, for test runs |
 
-and the desktop app calls four functions the page defines:
+and the desktop app calls five functions the page defines:
 
 | Function | Meaning |
 |---|---|
 | `window.__notch_receive(message)` | One message from the brain |
 | `window.__notch_key(name)` | What the keys said: `talk-start`, `talk-end` (let go), `talk-cancel` (ended by a slip), `yes`, `esc`, `esc-twice` |
 | `window.__notch_pairs(pairs)` | The pairs changed in the settings: same shape as `__notch_keys()` answers |
+| `window.__notch_cam(wide, tall)` | The camera housing changed (another display became the main one, the lid was closed): the same two numbers as `__notch_housing()` answers. Looked at every two seconds, said only on a change. A size no housing has (not two whole numbers, or larger than 400 by 80) is taken as none, by both sides |
 | `window.__notch_cursor(x, y, down)` | Where the pointer is, in the page's own pixels from the window's top left corner, and whether the main mouse button is down (1 or 0). Sent about 30 times a second, and only when something changed. The page hears the mouse only inside its outline, so this is how the eyes follow the pointer across the screen, and how a click in the app underneath closes a sheet |
 
 ## What the brain and the page say to each other
@@ -3372,10 +3391,27 @@ scripts/notch/try.sh
   three: the window was given a class of its own, and AppKit keeps its own
   bookkeeping in the class of a window it watches
   (`jarvis_notch_adopt` in `sidecar/notch_host_darwin.go` says the rest).
-  Fixed the same day. Everything after the set-up had not run on a Mac when
-  this was written. Two things that run showed: macOS 27 lists the
+  Fixed the same day. Two things that run showed: macOS 27 lists the
   Accessibility permission as "Device Control and Data Access", and a
   rebuilt app has to be switched on there again.
+- **The second run, the same day, got further and found three things.**
+  - *The notch was behind the camera housing.* The window opened, the page
+    loaded and day one began, and most of what it showed could not be seen.
+    The page now draws itself round the housing (above).
+  - *The next start crashed before the window was made.* The desktop app
+    connects to the brain before its tray is set up, and a brain that asks
+    for a window the moment it is connected had one made with no app loop
+    to live under: the page engine then starts a loop of its own, off the
+    main thread, and macOS ends the process. A start with a token is slower
+    and did not meet it; a start without one did. A window's creation now
+    waits for the tray, bounded (`panelLoopReady`, `sidecar/panels_darwin.go`).
+    It holds for every panel, not only the notch.
+  - *The keys stayed blocked with the permission switched on.* The test
+    build was signed only by the linker, under the name `a.out`, and the app
+    round it not at all, so the entry "Jarvis" in the list did not match the
+    program that ran. `try.sh` now signs the app for the Mac it is built on
+    (`codesign --sign -`, no certificate), as `com.jarvis.sidecar`. Whether
+    that is the whole cause is not known until the third run.
 - The test build has its own profile folder. It cannot run beside an installed
   Jarvis on Windows (single-instance lock). Leave "start at login" off in it.
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.

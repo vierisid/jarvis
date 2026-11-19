@@ -57,3 +57,31 @@ describe('how often, and how large, an outline is sent', () => {
     expect(large[0]![0]).toEqual([300, 0]);
   });
 });
+
+// The second run on a real Mac, 19 November 2026.
+describe('the display\'s camera housing', () => {
+  test('is asked for once at the start, and a change is heard afterwards', async () => {
+    const { connectHousing } = await import('./bridge.ts');
+    const told: [unknown, unknown][] = [];
+    const surface = { setHousing: (w: unknown, h: unknown) => { told.push([w, h]); } };
+    const host: Parameters<typeof connectHousing>[1] = { __notch_housing: () => Promise.resolve([185, 32]) };
+    connectHousing(surface, host);
+    await Promise.resolve();
+    expect(told).toEqual([[185, 32]]);
+    host.__notch_cam?.(0, 0);
+    expect(told).toEqual([[185, 32], [0, 0]]);
+  });
+
+  test('a desktop app that does not answer, answers with something else, or fails, changes nothing', async () => {
+    const { connectHousing } = await import('./bridge.ts');
+    const told: unknown[] = [];
+    const surface = { setHousing: (w: unknown, h: unknown) => { told.push([w, h]); } };
+    connectHousing(surface, {});
+    connectHousing(surface, { __notch_housing: () => 'no' });
+    connectHousing(surface, { __notch_housing: () => Promise.reject(new Error('gone')) });
+    connectHousing(surface, { __notch_housing: () => { throw new Error('refused'); } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(told).toEqual([]);
+  });
+});

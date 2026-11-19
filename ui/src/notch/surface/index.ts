@@ -55,6 +55,12 @@ export interface NotchSurface {
   key(name: string): void;
   /** Which keys the hints show (they are set per machine). */
   setPairs(pairs: unknown): void;
+  /**
+   * The camera housing of the display, in this page's px: how wide and how
+   * tall. The notch draws itself round it. Anything that is not two sizes a
+   * housing can have means there is none.
+   */
+  setHousing(w: unknown, h: unknown): void;
   /** Told whenever the notch starts or stops having something Esc would close. */
   onWantEsc(listener: (want: boolean) => void): void;
   /** Told whenever the notch starts or stops showing a question that waits for a yes or a no. */
@@ -99,6 +105,16 @@ const DEFAULT_MOOD: Record<Exclude<Body, 'rest'>, NotchMood> = { line: 'look', c
 /** How long a look that was asked for at rest is worn before the notch goes back to the face it rests with. */
 export const NOTCH_PASSING_MOOD_MS = 4000;
 
+/** The largest housing the notch draws itself round, in px. A MacBook's is about 200 by 40. */
+export const NOTCH_HOUSING_MAX = { w: 400, h: 80 };
+
+/** A housing as the desktop app told it, or null: both sizes, whole, and ones a housing can have. */
+export function notchHousing(w: unknown, h: unknown): { w: number; h: number } | null {
+  if (typeof w !== 'number' || typeof h !== 'number' || !Number.isFinite(w) || !Number.isFinite(h)) return null;
+  if (w < 1 || h < 1 || w > NOTCH_HOUSING_MAX.w || h > NOTCH_HOUSING_MAX.h) return null;
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
 export function createNotchSurface(
   root: HTMLElement,
   send: (message: NotchFromPage) => void,
@@ -142,7 +158,9 @@ export function createNotchSurface(
   const timers = createTimers();
   const frames = createFrames(flush);
   const sounds = createSounds();
-  const shape = createShape({ wrap, notch, nin, measure, blob, frames, reduce, width, changed });
+  // The display's camera housing, when it has one (a MacBook's). Told by the desktop app.
+  let cam: { w: number; h: number } | null = null;
+  const shape = createShape({ wrap, notch, nin, measure, blob, frames, reduce, width, changed, housing: () => cam });
   const eyes = createEyes({ nin, eyes: eyesEl, shape, timers, reduce, busy: () => cur !== null, rest: () => restMood });
   const edge = createEdge({ line: lineSvg, blob, nin, frames, timers, shape, eyes, reduce, width, changed });
 
@@ -1043,17 +1061,18 @@ export function createNotchSurface(
     const c = shape.current();
     if (!c.d) return [];
     const scale = window.devicePixelRatio || 1;
-    const points = flattenPath(c.d, scale).map(([x, y]): Point => [x + c.x, y]);
+    // Under a camera housing the path's own y = 0 is the housing's lower edge, c.y down the window.
+    const points = flattenPath(c.d, scale).map(([x, y]): Point => [x + c.x, y + c.y]);
     if (!settled()) return points;
     // At rest the straight sides and the bottom sit on whole screen pixels,
     // or they are drawn as a grey line half as dark. The whole outline is
     // stretched by the fraction of a pixel that takes.
     const left = c.x + OX, right = left + c.w, bottom = c.h;
     const snap = (v: number): number => Math.round(v * scale) / scale;
-    const l2 = snap(left), r2 = snap(right), b2 = snap(bottom);
-    if (right - left < 1 || bottom < 1) return points;
+    const l2 = snap(left), r2 = snap(right), b2 = snap(c.y + bottom) - c.y;
+    if (right - left < 1 || bottom < 1 || b2 < 1) return points;
     const kx = (r2 - l2) / (right - left), ky = b2 / bottom;
-    return points.map(([x, y]): Point => [l2 + (x - left) * kx, y > 0 ? y * ky : y]);
+    return points.map(([x, y]): Point => [l2 + (x - left) * kx, y > c.y ? c.y + (y - c.y) * ky : y]);
   }
 
   function outlines(inset: number): Point[][] {
@@ -1163,6 +1182,18 @@ export function createNotchSurface(
       // The hints on screen were drawn with the old keys: draw the line again.
       if (line && cur && !cur.done) showLine(structuredClone(line), true);
     },
+    setHousing(w, h) {
+      const next = notchHousing(w, h);
+      if ((next?.w ?? 0) === (cam?.w ?? 0) && (next?.h ?? 0) === (cam?.h ?? 0)) return;
+      cam = next;
+      // Everything the notch is made of starts below the housing; the ink above it is the shape's own.
+      root.style.setProperty('--cam-h', (cam?.h ?? 0) + 'px');
+      root.classList.toggle('housed', !!cam);
+      root.ownerDocument.documentElement.classList.toggle('notch-housed', !!cam);
+      if (!alive) return;
+      // Its size may change with it (a notch about as wide as the housing is made a little wider).
+      if (born) shape.fit(true); else shape.draw();
+    },
     destroy() {
       alive = false;
       syncEsc();
@@ -1184,6 +1215,7 @@ export function createNotchSurface(
       sheetEl.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
       document.fonts?.removeEventListener?.('loadingdone', onFonts);
+      root.ownerDocument.documentElement.classList.remove('notch-housed');
       root.replaceChildren();
     },
   };

@@ -1235,3 +1235,57 @@ test('a row can carry a few dots for how the last runs ended, the oldest first, 
   expect(all('.sheet .row .beads i').every((dot) => dot.className === 'bad')).toBe(true);
 });
 
+
+// The second run on a real Mac, 19 November 2026: the notch came up at the top centre, where a MacBook
+// has its camera housing, and most of it lay behind that.
+describe('a display with a camera housing', () => {
+  const lowest = (): number => Math.max(...surface.outlines(0).flat().map(([, y]) => y));
+  const highest = (): number => Math.min(...surface.outlines(0).flat().map(([, y]) => y));
+
+  test('the notch starts below the housing, and its ink still starts at the screen\'s top edge', () => {
+    const before = lowest();
+    surface.setHousing(185, 32);
+    expect(root.style.getPropertyValue('--cam-h')).toBe('32px');
+    expect(root.classList.contains('housed')).toBe(true);
+    expect(document.documentElement.classList.contains('notch-housed')).toBe(true);
+    // The whole of it is the housing's height further down, and nothing of it starts below the top edge.
+    expect(lowest() - before).toBeCloseTo(32, 5);
+    expect(highest()).toBeLessThanOrEqual(0);
+  });
+
+  test('a click on the ink beside the housing is a click on the notch, and one below it is not', () => {
+    surface.setHousing(185, 32);
+    show({ id: 'h1', kind: 'sheet', say: ['Settings'], blocks: [{ kind: 'note', say: ['A note.'] }] });
+    const body = surface.outlines(0)[0]!;
+    const xs = body.map(([x]) => x), left = Math.min(...xs), right = Math.max(...xs);
+    // Up in the strip the housing leaves free, inside the notch's own width: part of the notch.
+    const hit = (x: number, y: number): boolean => { let on = false; for (let i = 0, j = body.length - 1; i < body.length; j = i++) { const a = body[i]!, b = body[j]!; if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) on = !on; } return on; };
+    expect(hit((left + right) / 2, 10)).toBe(true);
+    expect(hit((left + right) / 2, lowest() + 20)).toBe(false);
+  });
+
+  test('when the housing goes (another display is the main one), everything is as it was', () => {
+    const before = lowest();
+    surface.setHousing(185, 32);
+    surface.setHousing(0, 0);
+    expect(root.style.getPropertyValue('--cam-h')).toBe('0px');
+    expect(root.classList.contains('housed')).toBe(false);
+    expect(document.documentElement.classList.contains('notch-housed')).toBe(false);
+    expect(lowest()).toBeCloseTo(before, 5);
+  });
+
+  test('a size no housing has is no housing: the notch is not drawn round a wrong reading', () => {
+    const before = lowest();
+    for (const [w, h] of [['185', 32], [185, null], [Number.NaN, 32], [185, 0], [-185, 32], [5000, 32], [185, 500], [undefined, undefined]] as [unknown, unknown][]) {
+      surface.setHousing(w, h);
+      expect(root.classList.contains('housed')).toBe(false);
+      expect(lowest()).toBeCloseTo(before, 5);
+    }
+  });
+
+  test('a page that is gone does not leave the mark on the document', () => {
+    surface.setHousing(185, 32);
+    surface.destroy();
+    expect(document.documentElement.classList.contains('notch-housed')).toBe(false);
+  });
+});

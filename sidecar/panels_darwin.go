@@ -246,6 +246,12 @@ func watchWindowClose(handle unsafe.Pointer, onClose func()) {
 	C.jarvis_panel_watch_close(handle, C.ulonglong(token))
 }
 
+// panelLoopReady waits, bounded, until a panel's window can be made: the tray
+// has set itself as the app's delegate and is about to run the app's loop
+// (tray_darwin.go). Before that the engine would start a loop of its own on
+// the calling goroutine, which is not the main thread.
+func panelLoopReady() bool { return waitTrayReady(panelLoopWait) }
+
 func boolToCInt(b bool) C.int {
 	if b {
 		return 1
