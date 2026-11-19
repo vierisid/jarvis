@@ -3223,7 +3223,12 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
   itself does not move. An external display, an older Mac, and a display
   mode that keeps everything below the housing have none, and are drawn as
   before. The rules are in `housedPaths` and `housedWidth`
-  (`ui/src/notch/surface/shape.ts`).
+  (`ui/src/notch/surface/shape.ts`). The size is read from the system
+  (`jarvis_notch_housing_of`): the safe area says how much of the top is
+  taken, the two free areas beside it say how wide. Where the top is taken
+  and the system gives no width, 14 % of the display's width is used, which
+  is a little more than any MacBook's housing. The desktop app's log has one
+  line of what the display reported.
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
   focus rule, no fullscreen rule.
 - There is no per-machine opt-out: every desktop app that advertises the
