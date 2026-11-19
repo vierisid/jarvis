@@ -148,8 +148,9 @@ static void jarvis_look_rest(void) {
 	[gLookWin orderOut:nil];
 }
 
-// Puts the window over a display. Everything on it is placed from that
-// display's top left corner, y going down.
+// Puts the window over a display. Everything on it is given from that
+// display's top left corner, y going down, and turned over on its way to the
+// layer (jarvis_look_local): the layer counts from the bottom.
 static void jarvis_look_ensure(CGRect screen) {
 	NSScreen *first = [NSScreen screens].firstObject;
 	CGFloat top = first != nil ? first.frame.size.height : screen.origin.y + screen.size.height;
@@ -167,13 +168,23 @@ static void jarvis_look_ensure(CGRect screen) {
 			| NSWindowCollectionBehaviorIgnoresCycle | NSWindowCollectionBehaviorFullScreenAuxiliary];
 		NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
 		CALayer *root = [CALayer layer];
-		// Counted from the top, like everything else here.
-		root.geometryFlipped = YES;
+		// The layer counts from the bottom left, as a view's layer does: which
+		// way up it counts is the view's to say, not ours. This file used to
+		// set geometryFlipped here and then give every place from the top. On
+		// the first Mac it ran with its permissions (19 November 2026) the
+		// setting did nothing, and all that was drawn came out upside down:
+		// the line under the pointer ran the other way, and the pointer for a
+		// thing at the bottom of the screen went to the top. So nothing is
+		// asked of the layer, and every place is turned over where it is used.
 		view.layer = root;
 		view.wantsLayer = YES;
 		[win setContentView:view];
 		gLookWin = win;
 		gLookRoot = root;
+		NSPoint zero = [view convertPointFromLayer:NSMakePoint(0, 0)];
+		NSPoint one = [view convertPointFromLayer:NSMakePoint(0, 1)];
+		fprintf(stderr, "[notch] look: the drawing layer is taken to count from the bottom; the system says it counts from the %s\n",
+			one.y > zero.y ? "bottom" : "top");
 	} else if (!CGRectEqualToRect(screen, gLookScreen)) {
 		[gLookWin setFrame:frame display:NO];
 	}
@@ -181,8 +192,15 @@ static void jarvis_look_ensure(CGRect screen) {
 	[gLookWin orderFrontRegardless];
 }
 
+// A place on the screen, given from the top, as the layer counts it: from the
+// bottom of the display the window is over.
 static CGPoint jarvis_look_local(double x, double y) {
-	return CGPointMake(x - gLookScreen.origin.x, y - gLookScreen.origin.y);
+	return CGPointMake(x - gLookScreen.origin.x, gLookScreen.size.height - (y - gLookScreen.origin.y));
+}
+
+// The same for a rectangle of the screen, given by its top left corner.
+static CGRect jarvis_look_local_rect(double x, double y, double w, double h) {
+	return CGRectMake(x - gLookScreen.origin.x, gLookScreen.size.height - (y - gLookScreen.origin.y) - h, w, h);
 }
 
 static void jarvis_look_drop(CALayer *layer) {
@@ -296,7 +314,7 @@ static CALayer *jarvis_look_plate(NSString *text, CGRect about) {
 	CGFloat y = CGRectGetMinY(about) - 10 - h;
 	if (y < gLookScreen.origin.y + 4) y = CGRectGetMaxY(about) + 10;
 	CALayer *plate = [CALayer layer];
-	plate.frame = CGRectMake(x - gLookScreen.origin.x, y - gLookScreen.origin.y, w, h);
+	plate.frame = jarvis_look_local_rect(x, y, w, h);
 	plate.backgroundColor = jarvis_look_dark(0.94);
 	plate.cornerRadius = 9;
 	plate.zPosition = 5;
@@ -348,16 +366,18 @@ static void jarvis_look_hover(const char *utf8, double x, double y, double sx, d
 static CAShapeLayer *jarvis_look_hand_make(void) {
 	CAShapeLayer *hand = [CAShapeLayer layer];
 	CGFloat k = 28.0 / 24.0;
+	// The prototype's arrow is drawn from the top (its tip at 4, 2.5 of 24).
+	// The layer counts from the bottom, so each height is taken from 24.
 	CGMutablePathRef path = CGPathCreateMutable();
-	CGPathMoveToPoint(path, NULL, 4 * k, 2.5 * k);
-	CGPathAddLineToPoint(path, NULL, 11.2 * k, 21 * k);
-	CGPathAddLineToPoint(path, NULL, 13.7 * k, 13.7 * k);
-	CGPathAddLineToPoint(path, NULL, 21 * k, 11.2 * k);
+	CGPathMoveToPoint(path, NULL, 4 * k, (24 - 2.5) * k);
+	CGPathAddLineToPoint(path, NULL, 11.2 * k, (24 - 21) * k);
+	CGPathAddLineToPoint(path, NULL, 13.7 * k, (24 - 13.7) * k);
+	CGPathAddLineToPoint(path, NULL, 21 * k, (24 - 11.2) * k);
 	CGPathCloseSubpath(path);
 	hand.path = path;
 	CGPathRelease(path);
 	hand.bounds = CGRectMake(0, 0, 28, 28);
-	hand.anchorPoint = CGPointMake(4.0 / 24.0, 2.5 / 24.0);
+	hand.anchorPoint = CGPointMake(4.0 / 24.0, 1.0 - 2.5 / 24.0);
 	hand.fillColor = jarvis_look_citron(1.0);
 	hand.strokeColor = jarvis_look_dark(1.0);
 	hand.lineWidth = 1.3 * k;
@@ -365,7 +385,8 @@ static CAShapeLayer *jarvis_look_hand_make(void) {
 	hand.shadowColor = jarvis_look_rgb(0, 0, 0, 1.0);
 	hand.shadowOpacity = 0.28;
 	hand.shadowRadius = 3;
-	hand.shadowOffset = CGSizeMake(0, 2);
+	// Down the screen, which is towards the bottom the layer counts from.
+	hand.shadowOffset = CGSizeMake(0, -2);
 	hand.zPosition = 10;
 	return hand;
 }
@@ -442,8 +463,7 @@ static void jarvis_look_ring(double x, double y, double w, double h, double afte
 		jarvis_look_ring_clear_impl();
 		jarvis_look_ensure(CGRectMake(sx, sy, sw, sh));
 		int gen = gLookRingGen;
-		CGPoint origin = jarvis_look_local(x, y);
-		CGRect about = CGRectInset(CGRectMake(origin.x, origin.y, w, h), -6, -6);
+		CGRect about = CGRectInset(jarvis_look_local_rect(x, y, w, h), -6, -6);
 		CGPathRef path = CGPathCreateWithRoundedRect(about, MIN(10, about.size.width / 2), MIN(10, about.size.height / 2), NULL);
 		CAShapeLayer *ring = jarvis_look_stroke(jarvis_look_citron(0.62), 9.6);
 		ring.path = path;
@@ -699,10 +719,13 @@ func (m *lookMac) InkEnd(stay time.Duration) {
 	})
 }
 
-// home is where the pointers live: at the notch, top centre of the first display.
+// home is where the pointers live: at the notch, top centre of the first
+// display. Under a camera housing the notch hangs below it, and a pointer that
+// came out of the housing itself would come out of nothing.
 func (m *lookMac) home() lookPoint {
 	first, _ := macScreenAt(lookPoint{0, 0})
-	return lookPoint{first.X + first.W/2, first.Y + 20}
+	_, housing := notchHousing(platformNotchHousing())
+	return lookPoint{first.X + first.W/2, first.Y + housing + 20}
 }
 
 // fly sends a pointer to a place and says how long its way takes. With the lock held.

@@ -160,6 +160,15 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
       echo "The test build could not be given its own name for macOS. It keeps the installed Jarvis's."
       MAC_BUNDLE_ID="com.jarvis.sidecar"
     }
+    # Its own profile folder, however it is started. The start file says so
+    # when it starts the app, but macOS starts it too: "Quit & Reopen" after
+    # a permission is switched on, a double click in the Finder. Started so,
+    # it would use the real home folder and be a Jarvis that was never set
+    # up. Written into the app before it is signed, so the signature covers it.
+    /usr/libexec/PlistBuddy -c "Delete :LSEnvironment" "$APP_DIR/Jarvis.app/Contents/Info.plist" >/dev/null 2>&1 || true
+    /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" -c "Add :LSEnvironment:HOME string $APP_DIR/profile" "$APP_DIR/Jarvis.app/Contents/Info.plist" \
+      || echo "The app could not be told its own profile folder. If macOS starts it again by itself, start it with $APP_DIR/start-sidecar.command instead."
+    mkdir -p "$APP_DIR/profile"
     # Signed for this Mac only, as the app it says it is. Left as the build
     # makes it, the program inside is signed by the linker under the name
     # "a.out", and the app round it is not signed at all: macOS then lists
