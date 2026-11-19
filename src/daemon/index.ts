@@ -176,6 +176,7 @@ import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchCallDeps, notchNoticeDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
+import { notchPeerWork } from "./notch-peers.ts";
 import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
 import type { NotchSettingsPage } from "../notch/prefs.ts";
@@ -4743,7 +4744,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       };
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
-        ...(peerLink ? { peers: { db: getDb(), link: peerLink, openPage: notchOpenUrl } } : {}),
+        // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
+        ...(peerLink ? { peers: { db: getDb(), link: peerLink, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent) } } : {}),
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.

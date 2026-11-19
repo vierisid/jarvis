@@ -191,6 +191,64 @@ export type PeerSent =
    */
   | { ok: false; why: 'down' | 'signed_out' | 'offline' | 'withheld' | 'refused'; code?: string };
 
+/** A request: something asked of another person's Jarvis, or of this one. */
+export interface PeerRequest {
+  /** The engine's id for it. */
+  id: string;
+  /** out: this machine asked. in: this machine was asked. */
+  dir: 'in' | 'out';
+  /** The device on the other side. */
+  peer: string;
+  /** The engine's word for where it stands. */
+  status: string;
+  /**
+   * How it ended, once it has.
+   *
+   *   answered   with an answer, which was written on the other side.
+   *   declined   the other person said no before anything was done.
+   *   failed     nothing came back. `said` when the other side gave a reason
+   *              or a word for it: it tried and could not. Without, the
+   *              person there chose not to send what was found.
+   *   expired    nobody took it, or nobody answered, in its time.
+   *   cancelled  it was taken back.
+   */
+  end: null | { how: 'answered'; text: string } | { how: 'declined' } | { how: 'failed'; said: boolean } | { how: 'expired' } | { how: 'cancelled' };
+}
+
+/** One request of the engine's document of them. Null when it is not one this file can use. */
+export function peerRequest(raw: unknown): PeerRequest | null {
+  const task = record(raw);
+  const id = text(task.taskId);
+  const peer = text(record(task.peer).deviceId);
+  const status = text(task.status);
+  if (!id || !peer || (task.direction !== 'in' && task.direction !== 'out')) return null;
+  const outcome = record(record(task.untrusted).outcome);
+  let end: PeerRequest['end'] = null;
+  if (outcome.kind === 'task_result' && outcome.status === 'completed') end = { how: 'answered', text: text(outcome.output) };
+  else if (outcome.kind === 'task_result') end = { how: 'failed', said: !!(text(outcome.output).trim() || text(outcome.errorCode)) };
+  else if (outcome.kind === 'task_declined' || status === 'declined') end = { how: 'declined' };
+  else if (status === 'expired' || status === 'rejected') end = { how: 'expired' };
+  else if (status === 'cancelled') end = { how: 'cancelled' };
+  // The other side went away in the middle of it: no result will follow.
+  else if (status === 'failed' && record(task.state).reason === 'lost') end = { how: 'failed', said: true };
+  // "completed" or "failed" with nothing yet: the word and the answer come separately. Not ended until the answer is here.
+  return { id, dir: task.direction, peer, status, end };
+}
+
+/**
+ * What became of opening a request that arrived.
+ *
+ *   running   the person said yes: it may be done now. `checked`: what it
+ *             gives back is shown to the person before it goes.
+ *   declined  the person said no, and the other side was told.
+ *   closed    nothing was decided: it can be opened again.
+ *   gone      it ended before it was opened (taken back, ran out).
+ *   failed    the engine could not open it now.
+ */
+export type PeerOpened = 'running' | 'declined' | 'closed' | 'gone' | 'failed';
+/** sent: the answer went. kept: the person chose not to send it. closed: nothing decided. over: no more chances to send. gone: the request ended meanwhile. */
+export type PeerFinished = 'sent' | 'kept' | 'closed' | 'over' | 'gone' | 'failed';
+
 const KINDS: ReadonlySet<string> = new Set(['message', 'task_request', 'task_progress', 'task_input_request', 'task_input_answer', 'task_result', 'task_declined', 'task_cancel']);
 
 function record(value: unknown): Record<string, unknown> {
@@ -367,6 +425,89 @@ export class PeerLink {
     const [id, thread] = engineIds(result.text);
     if (!id || !/^Message\b/.test(result.text)) return { ok: false, why: 'refused' };
     return { ok: true, id, thread: thread ?? null, delivered: /^Message (already )?delivered\b/.test(result.text) };
+  }
+
+  /** Asks another person's Jarvis for something. The person there says yes or no to it. */
+  async ask(to: string, title: string, words: string): Promise<PeerSent> {
+    if (!this.engine || this.engine.state() !== 'up') return { ok: false, why: 'down' };
+    let result: EngineToolResult;
+    try {
+      result = await this.call('send_task', { to, title, instructions: words }, {}, 60_000);
+    } catch {
+      return { ok: false, why: 'down' };
+    }
+    const code = engineErrorCode(result.text);
+    if (result.failed || code) {
+      if (code === 'not_logged_in') return { ok: false, why: 'signed_out' };
+      if (code === 'task_not_connected' || code === 'not_connected' || code === 'task_timeout' || code === 'task_recipient_offline') return { ok: false, why: 'offline', ...(code ? { code } : {}) };
+      return { ok: false, why: 'refused', ...(code ? { code } : {}) };
+    }
+    if (/^Not sent\b/.test(result.text)) return { ok: false, why: 'withheld' };
+    const [id, thread] = engineIds(result.text);
+    if (!id || !/^Task\b/.test(result.text)) return { ok: false, why: 'refused' };
+    return { ok: true, id, thread: thread ?? null, delivered: /\(delivered\)/.test(result.text) };
+  }
+
+  /** The requests the engine knows of, both ways. */
+  async requests(): Promise<PeerRequest[]> {
+    if (!this.engine) return [];
+    const document = await this.engine.read('tasks', { limit: 50 });
+    return (Array.isArray(document.tasks) ? document.tasks : []).map(peerRequest).filter((one): one is PeerRequest => !!one);
+  }
+
+  /**
+   * Opens a request that arrived. The engine then asks the person whether it
+   * may be done: `decide.request` is that question, and only its answer lets
+   * the request run.
+   */
+  async open(id: string, decide: PeerDecide): Promise<PeerOpened> {
+    if (!this.engine || this.engine.state() !== 'up') return 'failed';
+    let result: EngineToolResult;
+    try { result = await this.call('open_task', { task: id }, decide); } catch { return 'failed'; }
+    const code = engineErrorCode(result.text);
+    if (code === 'task_approval_dismissed') return 'closed';
+    if (code === 'no_task' || code === 'task_final') return 'gone';
+    if (result.failed || code) return 'failed';
+    if (/\bis running\b/.test(result.text) && /^Task\b/.test(result.text)) return 'running';
+    if (/\b(declined task|was declined by this device's policy)\b/.test(result.text)) return 'declined';
+    if (/already ended\b/.test(result.text)) return 'gone';
+    return 'failed';
+  }
+
+  /**
+   * Gives a request its answer. The engine shows the person what is about
+   * to leave: `decide.result` is that question, and only a yes sends it.
+   */
+  async finish(id: string, answer: string, decide: PeerDecide): Promise<PeerFinished> {
+    if (!this.engine || this.engine.state() !== 'up') return 'failed';
+    let result: EngineToolResult;
+    try { result = await this.call('task_update', { task: id, action: 'complete', text: answer }, decide); } catch { return 'failed'; }
+    const code = engineErrorCode(result.text);
+    if (/^Task \S+ completed: result sent\b/.test(result.text)) return 'sent';
+    if (/^Nothing was sent\b/.test(result.text)) {
+      if (/refused too many checks/.test(result.text)) return 'over';
+      return /chose not to send/.test(result.text) ? 'kept' : 'closed';
+    }
+    if (code === 'no_task' || code === 'task_final' || code === 'lease_lost' || /\b(cancelled|expired)\b/.test(result.text)) return 'gone';
+    return 'failed';
+  }
+
+  /** Ends a request that arrived without an answer: nothing of this machine's goes back. */
+  async refuse(id: string): Promise<boolean> {
+    if (!this.engine || this.engine.state() !== 'up') return false;
+    try {
+      const result = await this.call('task_update', { task: id, action: 'fail' }, {}, 30_000);
+      return !result.failed && !engineErrorCode(result.text);
+    } catch { return false; }
+  }
+
+  /** Takes back a request this machine made. */
+  async takeBack(id: string): Promise<boolean> {
+    if (!this.engine || this.engine.state() !== 'up') return false;
+    try {
+      const result = await this.call('task_control', { action: 'cancel', task: id }, {}, 30_000);
+      return !result.failed && !engineErrorCode(result.text);
+    } catch { return false; }
   }
 
   private changed(): void {

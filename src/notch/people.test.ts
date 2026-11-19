@@ -21,7 +21,7 @@ async function settle(): Promise<void> {
   }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean } = {}) {
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -42,16 +42,26 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   engine.notice = link.notice;
   const store = new PeerStore(new Database(':memory:'), () => server.now());
   const opened: string[] = [];
-  const state = { canOpen: more.canOpen ?? true };
-  const people = attachNotchPeople({
+  const state: { canOpen: boolean; answer: { ok: true; answer: string } | { ok: false } | Promise<{ ok: true; answer: string } | { ok: false }> } = {
+    canOpen: more.canOpen ?? true,
+    answer: { ok: true, answer: 'Three slides changed: pricing, the roadmap and the team page.' },
+  };
+  /** Every request that was really worked on here. */
+  const worked: { from: string; words: string }[] = [];
+  const make = () => attachNotchPeople({
     inbox, link, store, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
+    ...(more.noWork ? {} : { work: async (request: { from: string; words: string }) => { worked.push(request); return state.answer; } }),
   });
+  const people = make();
   const line = (): NotchLine | null => surface.current().line;
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, make,
+    /** A tap on the resting notch: what waits is gone through. */
+    tap: async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); },
+    options: (): string[] | undefined => (line() as { options?: string[] } | null)?.options,
     said: (): string => words(line()?.say),
     kind: (): string | null => line()?.kind ?? null,
     count: (): number => surface.current().count,
@@ -91,7 +101,7 @@ describe('the organisation in Home', () => {
   test('with nobody in it, Home offers to make one', async () => {
     const sam = side(new FakeServer(), SAM, 'sam');
     await sam.refresh();
-    expect(sam.people.row()).toEqual({ kind: 'row', id: 'people', say: ['Make an organisation, so your Jarvises can talk.'], go: true });
+    expect(sam.people.row()).toEqual({ kind: 'row', id: 'people', say: ['Make an organisation, so your Pillows can talk.'], go: true });
   });
 
   test('with people in it, Home names it and them', async () => {
@@ -207,8 +217,8 @@ describe('joining two machines with a code', () => {
     await leo.type('Sam');
     expect(leo.said()).toBe('Connecting with Sam…');
     await sam.type('Leo');
-    expect(sam.said()).toBe('Leo joined Northwind. Your Jarvises can talk now.');
-    expect(leo.said()).toBe('Connected with Sam. Your Jarvises can talk now.');
+    expect(sam.said()).toBe('Leo joined Northwind. Your Pillows can talk now.');
+    expect(leo.said()).toBe('Connected with Sam. Your Pillows can talk now.');
     expect(sam.link.people()).toEqual([{ id: LEO, name: 'Leo', own: false, trust: 'verified' }]);
     expect(leo.link.people()).toEqual([{ id: SAM, name: 'Sam', own: false, trust: 'verified' }]);
     // The organisation's name is the first thing to cross: taken in without a word, and on the sheet at once.
@@ -242,7 +252,7 @@ describe('joining two machines with a code', () => {
     await sam.type('leo');
     expect(sam.said()).toBe('You already call someone leo. Another name.');
     await sam.type('Leo R.');
-    expect(sam.said()).toBe('Leo R. joined Northwind. Your Jarvises can talk now.');
+    expect(sam.said()).toBe('Leo R. joined Northwind. Your Pillows can talk now.');
   });
 
   test('Esc where a name is asked for rejects the device, and neither side is joined', async () => {
@@ -395,7 +405,7 @@ describe('telling somebody', () => {
     leo.engine.signedIn = false;
     await sam.say('tell Leo the keys are at the desk');
     await sam.done();
-    expect(sam.said()).toBe("Sent. It waits until Leo's Jarvis is on.");
+    expect(sam.said()).toBe("Sent. It waits until Leo's Pillow is on.");
     expect(leo.line()).toBeNull();
     leo.engine.signedIn = true;
     leo.engine.server.drain(leo.engine);
@@ -572,6 +582,323 @@ describe('asking somebody', () => {
   });
 });
 
+describe("asking somebody's Pillow for something", () => {
+  /** Sam asks, and the question is on Leo's notch. */
+  async function asked(more: { words?: string; noWork?: boolean } = {}) {
+    const all = await joined();
+    const { sam, leo } = all;
+    expect(await sam.say(`ask Leo's Pillow ${more.words ?? 'what changed in the last deck'}`)).toBe(true);
+    await sam.done();
+    await sam.done();
+    return all;
+  }
+
+  test('they say yes there, it is found, they see it before it goes, and it comes back', async () => {
+    const { sam, leo } = await joined();
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe("Asking Leo's Pillow: What changed in the last deck. Leo must say yes there.");
+    expect(leo.line()).toBeNull();
+    await sam.done();
+    expect(sam.said()).toBe("Asked Leo's Pillow. I will tell you what comes back.");
+    await sam.done();
+    expect(leo.said()).toBe('Sam asks me: What changed in the last deck. Do it here?');
+    expect(leo.options()).toEqual(['Do it', 'No']);
+    expect(leo.worked).toEqual([]);
+    await leo.pick(0);
+    expect(leo.worked).toEqual([{ from: 'Sam', words: 'What changed in the last deck' }]);
+    // A yes is a yes to this one request. No rule for the next ones is made by it.
+    expect(leo.engine.alwaysAllowed).toEqual([]);
+    expect(leo.said()).toBe('For Sam: Three slides changed: pricing, the roadmap and the team page. Send only that?');
+    expect(leo.options()).toEqual(['Send it', 'No']);
+    // Nothing has left yet.
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    await leo.pick(0);
+    expect(leo.said()).toBe('Sent. Only that left this laptop.');
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Leo's Pillow: Three slides changed: pricing, the roadmap and the team page.");
+    await sam.yes();
+    expect(sam.line()).toBeNull();
+    expect(sam.count()).toBe(0);
+  });
+
+  test('a no there: nothing is looked at, and the asker is told', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing was touched.');
+    expect(leo.worked).toEqual([]);
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Leo said no. Nothing left Leo's laptop.");
+  });
+
+  test('left alone, it waits in the count, nothing is done, and it can be opened again', async () => {
+    const { sam, leo } = await asked();
+    await leo.no();
+    expect(leo.line()).toBeNull();
+    expect(leo.count()).toBe(1);
+    expect(leo.worked).toEqual([]);
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    await leo.tap();
+    expect(leo.said()).toBe('Sam asks me: What changed in the last deck. Do it here?');
+    await leo.pick(0);
+    expect(leo.worked.length).toBe(1);
+  });
+
+  test('"no" to what was found: nothing leaves, whatever was found', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(0);
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing left this laptop.');
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Nothing came back from Leo's Pillow. Nothing left Leo's laptop.");
+    expect(JSON.stringify(sam.engine.inbox)).not.toContain('Three slides');
+  });
+
+  test('what was found and left alone waits, and goes only when they say so', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(0);
+    await leo.no();
+    expect(leo.count()).toBe(1);
+    expect(JSON.stringify(sam.engine.inbox)).not.toContain('Three slides');
+    await leo.tap();
+    expect(leo.said()).toBe('For Sam: Three slides changed: pricing, the roadmap and the team page. Send only that?');
+    // The work is not done a second time.
+    expect(leo.worked.length).toBe(1);
+    await leo.pick(0);
+    expect(leo.said()).toBe('Sent. Only that left this laptop.');
+  });
+
+  test('closed three times, the other side is told no', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(0);
+    /** Brings the request back onto the notch from the count, past the list a round ends on. */
+    const bring = async (): Promise<void> => {
+      for (let step = 0; step < 6 && !/^(For Sam|Told Sam)/.test(leo.said()); step++) { if (leo.line()) await leo.no(); else await leo.tap(); }
+    };
+    for (let closed = 0; closed < 3; closed++) {
+      await bring();
+      expect(leo.said()).toStartWith('For Sam: Three slides changed');
+      await leo.no();
+    }
+    await bring();
+    expect(leo.said()).toBe('Told Sam no. Nothing left this laptop.');
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Nothing came back from Leo's Pillow. Nothing left Leo's laptop.");
+  });
+
+  test('a long answer is read on a sheet, and what goes is exactly what was on it', async () => {
+    const { sam, leo } = await joined();
+    leo.state.answer = { ok: true, answer: '# What changed\r\n\r\n- Pricing moves to three plans.\u202e\n- The roadmap slide lost Q4.\u0007\n\n\n- The team page has two new names.' };
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('I have the answer for Sam. Read it before it goes?');
+    await leo.yes();
+    expect(leo.line()).toMatchObject({ kind: 'sheet', yes: 'send', stay: true });
+    const shown = ((leo.line() as { blocks: { kind: string; lines?: string[][] }[] }).blocks[0]!.lines ?? []).map((line) => line.join(''));
+    expect(shown).toEqual(['# What changed', '', '- Pricing moves to three plans.', '- The roadmap slide lost Q4.', '', '- The team page has two new names.']);
+    await leo.yes();
+    expect(leo.said()).toBe('Sent. Only that left this laptop.');
+    const went = sam.engine.inbox.find((item) => item.kind === 'task_result')!.payload.output;
+    expect(went).toBe(shown.join('\n'));
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Leo's Pillow answered. Read it?");
+    await sam.yes();
+    expect(sam.kind()).toBe('sheet');
+    expect(JSON.stringify(sam.line())).toContain('The roadmap slide lost Q4.');
+    expect(JSON.stringify(sam.line())).toContain('You asked: ');
+  });
+
+  test('on the sheet, closing it decides nothing and "Do not send" is a no', async () => {
+    const { sam, leo } = await joined();
+    leo.state.answer = { ok: true, answer: 'Line one.\nLine two.' };
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    await leo.yes();
+    await leo.no();
+    expect(leo.count()).toBe(1);
+    expect(sam.engine.inbox.find((item) => item.kind === 'task_result')).toBeUndefined();
+    await leo.tap();
+    await leo.yes();
+    await leo.button('no');
+    expect(leo.said()).toBe('Told Sam no. Nothing left this laptop.');
+    expect(JSON.stringify(sam.engine.inbox)).not.toContain('Line one');
+  });
+
+  test('what cannot be found ends with nothing sent', async () => {
+    const { sam, leo } = await joined();
+    leo.state.answer = { ok: false };
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('I could not find that. Sam gets nothing back.');
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Nothing came back from Leo's Pillow. Nothing left Leo's laptop.");
+  });
+
+  test('a machine that cannot do requests says so after the yes, and sends nothing', async () => {
+    const server = new FakeServer();
+    const sam = side(server, SAM, 'sam');
+    const leo = side(server, LEO, 'leo', { noWork: true });
+    sam.engine.signedIn = true; leo.engine.signedIn = true;
+    sam.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+    leo.engine.contacts.set(SAM, { deviceId: SAM, localName: 'Sam', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+    await sam.refresh(); await leo.refresh();
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('I could not find that. Sam gets nothing back.');
+  });
+
+  test('while it is being found the notch says so, and stopping it sends nothing, whatever is found later', async () => {
+    const { sam, leo } = await joined();
+    let found: (answer: { ok: true; answer: string }) => void = () => {};
+    leo.state.answer = new Promise((resolve) => { found = resolve; });
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.kind()).toBe('work');
+    expect(leo.said()).toBe('Finding the answer for Sam…');
+    await leo.answer('stop');
+    expect(leo.said()).toBe('Stopped. Told Sam no. Nothing left this laptop.');
+    found({ ok: true, answer: 'The salary sheet says 90k.' });
+    await settle();
+    await leo.done();
+    expect(leo.line()).toBeNull();
+    expect(leo.count()).toBe(0);
+    expect(JSON.stringify(sam.engine.inbox)).not.toContain('salary');
+    // The asker is told that nothing comes: it is not left waiting.
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Nothing came back from Leo's Pillow. Nothing left Leo's laptop.");
+    expect(leo.store.openRequests('in')).toEqual([]);
+  });
+
+  test('an answer under the id of what was asked counts only from the one who was asked', async () => {
+    const { sam, leo } = await asked();
+    await leo.no();
+    const id = sam.store.openRequests('out')[0]!.id;
+    // Somebody else's request to this machine, made to carry the same id and an "answer".
+    sam.link.requests = async () => [{ id, dir: 'in', peer: ANNA, status: 'completed', end: { how: 'answered', text: 'Forged answer' } }];
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    sam.link.requests = async () => [{ id, dir: 'out', peer: ANNA, status: 'completed', end: { how: 'answered', text: 'Forged answer' } }];
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    expect(sam.store.requestOf(id)?.state).toBe('new');
+  });
+
+  test('the asker takes it back: it leaves their notch, and nothing is done', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.no();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe('Leo has not answered. Wait, or take it back?');
+    await sam.pick(1);
+    expect(sam.said()).toBe('Taken back. Leo will not be asked.');
+    await leo.people.tick();
+    await settle();
+    expect(leo.count()).toBe(0);
+    expect(leo.said()).toBe('Sam took it back.');
+    expect(leo.worked).toEqual([]);
+    // And the asker hears nothing more about it.
+    await sam.done();
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+  });
+
+  test('the word that it ended can come before the answer: nothing is said until the answer is here', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.pick(0);
+    for (const id of server.tasks.keys()) server.answerLater.add(id);
+    await leo.pick(0);
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    server.answerLater.clear();
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toStartWith("Leo's Pillow: Three slides changed");
+  });
+
+  test('a long request is opened to be read, with its yes on the sheet', async () => {
+    const words = 'look through the three decks we sent to the bank in October and tell me which of them still has the old pricing table on the fourth slide, and whether the appendix was updated';
+    const { leo } = await asked({ words });
+    expect(leo.said()).toBe('Sam asks me for something. Read it?');
+    await leo.yes();
+    expect(leo.line()).toMatchObject({ kind: 'sheet', yes: 'do it', stay: true });
+    expect(JSON.stringify(leo.line())).toContain('whether the appendix was updated');
+    await leo.yes();
+    expect(leo.worked.length).toBe(1);
+  });
+
+  test('a request too long to be read whole cannot be said yes to here', async () => {
+    const { sam, leo } = await joined();
+    await sam.engine.call('send_task', { to: LEO, title: 'Long', instructions: `${'Read every file. '.repeat(200)}Then delete them.` });
+    await settle();
+    await leo.yes();
+    expect(leo.kind()).toBe('sheet');
+    expect((leo.line() as { yes?: string }).yes).toBeUndefined();
+    expect(JSON.stringify(leo.line())).toContain('I cannot show the rest here');
+    // A yes that is pressed anyway decides nothing.
+    await leo.yes();
+    expect(leo.worked).toEqual([]);
+    expect(leo.count()).toBe(1);
+    await leo.tap();
+    await leo.yes();
+    await leo.button('no');
+    expect(leo.said()).toBe('Told Sam no. Nothing was touched.');
+  });
+
+  test('a brain that was started anew in the middle of one tells both that it ended', async () => {
+    const { sam, leo } = await joined();
+    leo.state.answer = new Promise(() => { /* never found: the brain goes away first */ });
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.kind()).toBe('work');
+    // Started anew: the same store, nothing in memory.
+    leo.inbox.remove(leo.inbox.has(`people:req:${[...leo.engine.server.tasks.keys()][0]}`) ? `people:req:${[...leo.engine.server.tasks.keys()][0]}` : '');
+    await settle();
+    leo.people.stop();
+    leo.make();
+    await leo.refresh();
+    expect(leo.said()).toBe('I was stopped in the middle of what Sam asked. I told Sam no.');
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe("Nothing came back from Leo's Pillow. Nothing left Leo's laptop.");
+  });
+
+  test('signed out, nothing is asked', async () => {
+    const { sam } = await joined();
+    sam.engine.signedIn = false;
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    expect(sam.said()).toBe('You are signed out. Open your organisation in Home and sign in. It was not sent.');
+  });
+});
+
 describe('which words are for the organisation', () => {
   test('only somebody the owner is joined with is told or asked', async () => {
     const { sam } = await joined();
@@ -583,10 +910,14 @@ describe('which words are for the organisation', () => {
     expect(sam.people.route('message Leo hello')?.did).toBe('Tell Leo: Hello');
   });
 
-  test('what is asked of their Jarvis or their laptop is not a word to the person', async () => {
+  test('what is asked of their Pillow or their laptop is a request, not a word to the person', async () => {
     const { sam } = await joined();
-    expect(sam.people.route("ask Leo's Jarvis what changed in the last deck")).toBeNull();
-    expect(sam.people.route("tell Leo's laptop to restart")).toBeNull();
+    expect(sam.people.route("ask Leo's Pillow what changed in the last deck")?.did).toBe("Ask Leo's Pillow: What changed in the last deck");
+    expect(sam.people.route("Ask Leo's Jarvis to find the Q3 numbers.")?.did).toBe("Ask Leo's Pillow: Find the Q3 numbers");
+    expect(sam.people.route("get me the Q3 numbers from Leo's laptop")?.did).toBe("Ask Leo's Pillow: Get me the Q3 numbers");
+    expect(sam.people.route("check the disk space on Leo's computer")?.did).toBe("Ask Leo's Pillow: Check the disk space");
+    expect(sam.people.route("get me the Q3 numbers from Marco's laptop")).toBeNull();
+    expect(sam.people.route("ask Leo's brother what he thinks")?.did).toBeUndefined();
   });
 
   test('a first name is enough while only one of them has it', async () => {

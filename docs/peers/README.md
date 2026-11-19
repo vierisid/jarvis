@@ -75,7 +75,8 @@ server is a test server. So the switch is the place of the program:
 
 What a person does, and what happens:
 
-- **Home** has a row: "Make an organisation, so your Jarvises can talk." With people in it:
+- **Home** has a row: "Make an organisation, so your Pillows can talk." (the notch calls itself
+  Pillow, `src/notch/name.ts`). With people in it:
   "Northwind: you and Leo."
 - **Make one:** a name, then signing in. The engine asks "sign in at this server?"; the notch puts
   that as one line; yes opens the server's page in the browser, and the person signs in there.
@@ -124,6 +125,62 @@ What a person does, and what happens:
     and no model sees it: it goes from the engine's dialog to the line, and from the field
     somebody typed it into to the engine.
 
+## Pass I4: a request, and its yes
+
+"Ask Leo's Pillow what changed in the last deck." A request is asked of the other person's
+Jarvis, not of the person. The person there says yes or no to it, their Jarvis finds the answer,
+and they see the answer before it goes.
+
+| File | What it does |
+|---|---|
+| `src/notch/people.ts` | Both sides on the notch: asking, the question there, the work line, "Send only that?", the answer coming back. |
+| `src/daemon/notch-peers.ts` | Does a request that was said yes to: one turn of the background agent, made for it. |
+| `src/daemon/background-agent-service.ts` | The option `outside`: a turn that quotes what somebody outside wrote starts tainted and runs on a thread of its own. |
+
+On the asker's notch: "Asking Leo's Pillow: What changed in the last deck. Leo must say yes
+there." with the window to take it back, then "Asked Leo's Pillow. I will tell you what comes
+back." Later one of: the answer ("Leo's Pillow: ..." or, when it is long, "Leo's Pillow answered.
+Read it?"), "Leo said no. Nothing left Leo's laptop.", "Nothing came back from Leo's Pillow.
+Nothing left Leo's laptop.", "Leo's Pillow could not do it.", or after ten minutes with nothing,
+once: "Leo has not answered. Wait, or take it back?"
+
+On the asked notch: "Sam asks me: What changed in the last deck. Do it here?" with Do it and No.
+Then "Finding the answer for Sam…", then "For Sam: ... Send only that?" with Send it and No, then
+"Sent. Only that left this laptop."
+
+Also taken as a request: "get me the Q3 numbers from Leo's laptop", "check the disk space on
+Leo's computer". Only the name of somebody this machine is joined with makes it one.
+
+### Rules
+
+16. **Nothing is done before the yes.** The request is opened in the engine only when its line is
+    about to be shown, so the engine's own question about it is the line on the notch, and its
+    answer is the key pressed there. The work begins after that answer and not before. Esc is
+    not a no: the request stays available and waits in the count.
+17. **A yes is a yes to one request.** The answer given to the engine is "allow once", with the
+    check of the result on. No standing rule is made by it.
+18. **What is found is shown before it goes, and what goes is what was shown.** The answer is
+    made into lines that can be read (control characters and hiding marks out, at most 4,000
+    characters) before it is shown, and that same text is what is sent. On a sheet, closing it
+    decides nothing; "Do not send" is the no.
+19. **What cannot be read whole cannot be said yes to here.** A request longer than 2,000
+    characters is shown as far as it goes, says that it goes on, and has only its no.
+20. **A request is done by reading.** It runs as one turn of the background agent. The request
+    itself is quoted inside the product's marks for outside content; the sentences around it
+    are the owner's. The turn starts tainted, so everything that changes the machine, sends,
+    pays or starts another agent stops for an approval of its own, from the first step: the yes
+    on the notch was a yes to an answer, not to an action. It runs on a thread of its own, so
+    nothing of it is in the conversation with the owner or in what later turns are sent, and
+    nothing is learned from it.
+21. **A failure is not an answer.** When the agent fails, returns nothing, or is held, nothing is
+    sent but the end of the request.
+22. **Stopped means nothing goes.** Stop on the work line, a no on what was found, three times
+    closing it, the asker taking it back, the brain being started anew in the middle: each ends
+    the request with nothing of this machine's sent, whatever is found afterwards.
+23. **An answer counts from the one who was asked.** It is read from the engine's record of the
+    request this machine made to that device, and only once the answer itself is there, not
+    when the word that it ended is. What they wrote is shown as text and nothing else.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of
@@ -141,8 +198,16 @@ What a person does, and what happens:
   anywhere else, no admin, no invitation by mail, and joining is two machines at a time.
 - Signing in needs the browser on the machine the brain runs on (the engine waits for the
   browser on its own machine's loopback address). A hosted brain cannot be signed in this way.
+- No files cross: a request's answer is text. "Get the deck from Leo's laptop" gives what Leo's
+  Jarvis can say about it, not the file.
+- The asker cannot tell "they kept it back" from "it was not found": both end with nothing sent.
+- A request that is being done when the brain stops is ended with a no. It is not picked up again.
+- While somebody's request is open here with its check on, the engine checks everything else
+  that goes to that person too. "Seen" and a pick for them are then not sent.
+- An answer is looked for every 5 seconds while a request is out, and a taking back is noticed
+  within 30 seconds: the engine announces neither.
 - The other side is not told that a message waits because its owner is on a call, and "saw it"
   comes only from a Jarvis: a contact on another client sends none.
-- The notch says "their Jarvis is on" from whether the server could hand a message over at once.
+- The notch says "their Pillow is on" from whether the server could hand a message over at once.
   It knows nothing else about the other side.
 - On a Mac the page opener is compiled and has not been run.

@@ -213,7 +213,12 @@ export interface NotchRealDeps {
    * words, and how a page is opened in the person's own browser, for the
    * sign-in. Given only when the engine's switch is on.
    */
-  peers?: { db: Database; link: PeerLink; openPage(sidecarId: string | null, url: string): Promise<boolean>; noClock?: boolean };
+  peers?: {
+    db: Database; link: PeerLink; openPage(sidecarId: string | null, url: string): Promise<boolean>;
+    /** Does a request the person said yes to (src/daemon/notch-peers.ts). */
+    work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+    noClock?: boolean;
+  };
   /**
    * Noticing (./notice.ts): in the window the person is in, Jarvis looks
    * when their hands rest and offers one thing it could do there. `see` is a
@@ -466,6 +471,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   if (deps.peers) {
     people = attachNotchPeople({
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
+      ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
     });
   }
