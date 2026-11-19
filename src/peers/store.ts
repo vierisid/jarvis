@@ -119,6 +119,12 @@ export class PeerStore {
     return done.changes > 0;
   }
 
+  /** Every id one question was sent under: the first sending, and each time it was asked again. */
+  sendings(id: string): string[] {
+    const first = (this.db.query('SELECT first_id FROM notch_peer_sent WHERE id = ?').get(id) as { first_id: string | null } | null)?.first_id ?? id;
+    return (this.db.query('SELECT id FROM notch_peer_sent WHERE id = ? OR first_id = ? ORDER BY sent_at').all(first, first) as { id: string }[]).map((row) => row.id);
+  }
+
   /** Questions that are out since before `before`, were not answered, and the person was not yet told so. */
   unanswered(before: number): PeerSentRow[] {
     return (this.db.query("SELECT * FROM notch_peer_sent WHERE kind = 'ask' AND state IN ('sent', 'seen') AND nudged_at IS NULL AND sent_at <= ? ORDER BY sent_at").all(before) as Record<string, unknown>[])
@@ -169,6 +175,11 @@ export class PeerStore {
   got(id: string): { done: boolean } | null {
     const row = this.db.query('SELECT done FROM notch_peer_got WHERE id = ?').get(id) as { done: number } | null;
     return row ? { done: row.done === 1 } : null;
+  }
+
+  /** The device an arrival came from. Null for one that was never taken in. */
+  gotFrom(id: string): string | null {
+    return (this.db.query('SELECT from_id FROM notch_peer_got WHERE id = ?').get(id) as { from_id: string } | null)?.from_id ?? null;
   }
 
   take(id: string, from: string): void {

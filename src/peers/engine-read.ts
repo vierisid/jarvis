@@ -21,7 +21,7 @@ import { engineDataDir, engineEnv, readPipe } from './engine-process.ts';
 /** The commands that may be run from here, each with what makes it a read of what is stored. */
 export const ENGINE_READS = {
   status: ['status'],
-  contacts: ['contacts', 'list'],
+  contacts: ['contacts', 'list', '--offline'],
   inbox: ['inbox', '--offline'],
   tasks: ['tasks', 'list', '--offline'],
 } as const;

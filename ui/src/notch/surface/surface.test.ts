@@ -152,6 +152,137 @@ describe('a sheet', () => {
     ],
   };
 
+  describe('that must be seen whole', () => {
+    const whole: NotchLine = { id: 'w1', kind: 'sheet', say: ['For Sam. Send only that?'], yes: 'send', no: 'not now', stay: true, whole: true, blocks: [{ kind: 'paper', lines: [['One.'], ['Two.']] }] };
+    /** There is no layout here: the sheet is given a height and a length of its own. */
+    const sized = (visible: number, total: number): HTMLElement => {
+      const el = $('.sheet')!;
+      Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => visible });
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => total });
+      return el;
+    };
+    const answers = (): string[] => sent.filter((m) => m.type === 'answer').map((m) => (m as { act: string }).act);
+
+    test('a yes with its end out of sight moves it down a page, and answers nothing', async () => {
+      show(whole);
+      const el = sized(500, 1700);
+      await wait(400);
+      surface.key('yes');
+      expect(answers()).toEqual([]);
+      expect(el.scrollTop).toBe(436);
+      surface.key('yes');
+      surface.key('yes');
+      expect(answers()).toEqual([]);
+      expect(el.scrollTop).toBeGreaterThanOrEqual(1200);
+      // Its end has only just come up: a press straight behind the one that brought it is not a yes.
+      surface.key('yes');
+      expect(answers()).toEqual([]);
+      await wait(650);
+      surface.key('yes');
+      expect(answers()).toEqual(['yes']);
+    });
+
+    test('once its end was seen, scrolling back up does not take the yes away', async () => {
+      show(whole);
+      const el = sized(500, 1700);
+      await wait(400);
+      el.scrollTop = 1200;
+      el.dispatchEvent(new Event('scroll'));
+      await wait(700);
+      el.scrollTop = 0;
+      surface.key('yes');
+      expect(answers()).toEqual(['yes']);
+    });
+
+    test('one that fits is answered by a yes once it has been up for a moment, and Esc is never held back', async () => {
+      show(whole);
+      sized(500, 300);
+      await wait(1000);
+      surface.key('yes');
+      expect(answers()).toEqual(['yes']);
+      show({ ...whole, id: 'w2' });
+      sized(500, 1700);
+      await wait(400);
+      surface.key('esc');
+      expect(answers()).toEqual(['yes', 'no']);
+    });
+
+    test('the next sheet starts unseen again', async () => {
+      show(whole);
+      sized(500, 300);
+      await wait(1000);
+      surface.key('yes');
+      show({ ...whole, id: 'w3' });
+      sized(500, 1700);
+      await wait(400);
+      surface.key('yes');
+      expect(answers()).toEqual(['yes']);
+    });
+
+    test('a sheet that grew after its end was seen is unseen again', async () => {
+      show(whole);
+      const el = sized(500, 300);
+      await wait(1000);
+      surface.receive({ type: 'update', id: 'w1', blocks: [{ kind: 'paper', lines: [['One.'], ['Two.'], ['Three.']] }] });
+      Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 1700 });
+      await wait(60);
+      surface.key('yes');
+      expect(answers()).toEqual([]);
+    });
+
+    test('a sheet that does not ask for it is answered as before', async () => {
+      show({ ...whole, id: 'w4', whole: false });
+      sized(500, 1700);
+      await wait(400);
+      surface.key('yes');
+      expect(answers()).toEqual(['yes']);
+    });
+  });
+
+  describe('a click that cannot have been meant for the line', () => {
+    const answers = (): string[] => sent.filter((m) => m.type === 'answer').map((m) => `${(m as { id: string }).id}:${(m as { act: string }).act}`);
+    const yesOf = (): HTMLElement => all('.hint .key').find((el) => /read|do it|send|ok/.test(el.textContent ?? ''))!;
+
+    test('a line that came by itself takes no click on its yes or on a choice for its first moment, as it takes no key', async () => {
+      show({ id: 'u1', kind: 'offer', say: ['Approve?'], yes: 'ok', unasked: true });
+      yesOf().click();
+      expect(answers()).toEqual([]);
+      await wait(750);
+      yesOf().click();
+      expect(answers()).toEqual(['u1:yes']);
+      show({ id: 'u2', kind: 'offer', say: ['Sam asks me: the deck. Do it here?'], options: ['Do it', 'No'], unasked: true });
+      all('.opts > *')[0]!.click();
+      expect(answers()).toEqual(['u1:yes']);
+    });
+
+    test('the second half of a double click does not answer the line the first half brought up', async () => {
+      show({ id: 'r1', kind: 'offer', say: ['Sam asks me for something. Read it?'], yes: 'read' });
+      await wait(400);
+      yesOf().click();
+      expect(answers()).toEqual(['r1:yes']);
+      // The brain puts the request up within milliseconds. The second click of the double click is already on its way.
+      show({ id: 'r2', kind: 'sheet', say: ['Sam asks me'], yes: 'do it', no: 'not now', stay: true, blocks: [{ kind: 'paper', lines: [['Short.']] }] });
+      await wait(120);
+      yesOf().click();
+      expect(answers()).toEqual(['r1:yes']);
+      // A click made on purpose, later, is an answer.
+      await wait(700);
+      yesOf().click();
+      expect(answers()).toEqual(['r1:yes', 'r2:yes']);
+    });
+  });
+
+  test('a field that stays is not closed by a press somewhere else, and Esc still closes it', async () => {
+    show({ id: 'n1', kind: 'ask', say: ['The code matched. Name them.'], placeholder: 'Their name', yes: 'connect', stay: true, blocks: [] });
+    await wait(400);
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    document.body.click();
+    expect(sent.filter((m) => m.type === 'answer')).toEqual([]);
+    expect(body()).toBe('ask');
+    surface.key('esc');
+    expect(sent.filter((m) => m.type === 'answer').map((m) => (m as { act: string }).act)).toEqual(['no']);
+  });
+
   test('draws every kind of block', () => {
     show(sheet);
     expect(body()).toBe('sheet');

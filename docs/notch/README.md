@@ -3225,7 +3225,7 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 | desktop app to brain | event `notch.where` | `{app, name, title, site, icon, look: "" \| "password" \| "bank" \| "never", still: boolean, never: string[]}`. `app` is the program's name in small letters; `site` is the site in a browser (`github.com`), or empty; `icon` a key, of the site's icon when there is one, else the program's; the icon itself comes once per connection as a PNG. `title` is empty while it looks away, and `site` too for a password or a bank. `never` holds program names and sites (`site:github.com`). Sent on every change | none |
 | brain to desktop app | `notch.never_watch` | `{app: string, watch: boolean}`, where `app` is a program's name or `site:` and a site | `{never: string[]}`, the list as it now is |
 | brain to desktop app | `notch.files` | none. Only on a desktop app that may read files | `{places: [{place: "desktop" \| "documents" \| "downloads", reached, files, folders, shortcuts, kinds: {kind: count}, recent: [{name, kind, changed}], more}]}`: names, kinds and counts at the top of each place, and nothing of what is in any file |
-| brain to desktop app | `notch.file` | `{place: "desktop" \| "documents" \| "downloads", name}`. Only on a desktop app that may read files | `{opened: true, kind, size}` with the file's bytes beside it, or `{opened: false, why}`. Never a file whose name says it is private, never a path, never more than 16 MB |
+| brain to desktop app | `notch.file` | `{place: "desktop" \| "documents" \| "downloads", name}`. Only on a desktop app that may read files | `{opened: true, kind, size}` with the file's bytes beside it, or `{opened: false, why}`. Never a file whose name says it is private, never a path, never more than 16 MB. A name is read as a person reads it when it is decided whether it says the file is private: an underscore, a number after a word and a capital inside it end a word (`passwords_2026.xlsx`, `Taxes2025.pdf`, `PasswordsBackup.docx` are private) |
 | brain to desktop app | `notch.keys` | `{}` to ask, or `{talk?: string, yes?: string}` with a pair written as `ctrl+meta` to change one or both | `{talk: [key, key], yes: [key, key], mac: boolean}`, the pairs as they now are. Refused when a pair is not two different modifier keys, or both would be the same two keys |
 | desktop app to brain | event `notch.look` | `{phase: "begun", look_id}`; `{phase: "taken", look_id, how: "click" \| "loop", things: number, rect, picture}` with the words and the pictures beside it (four bytes of length, `{app, title, around: [names], things: [{kind, name, value, parts}], picture_bytes}` as JSON, then the close picture as a PNG of `picture_bytes` bytes, then the window's picture as a PNG), or `{phase: "taken", look_id, how, refused: "password" \| "bank" \| "never" \| "private"}` with nothing beside it; `{phase: "dropped", look_id}` | none |
 | brain to desktop app | `notch.shot` | none, or `{x, y, w, h}` for a part of the window, in the screen's pixels | `{x, y, w, h, app, close}`: which part of the screen the picture shows, and the picture beside it (PNG) with a ruler from 0 to 100 along its top and down its left side. A whole window is made smaller to at most 1568 pixels a side; a part is as it is on the screen, twice that when narrower than 720. Where this program looks away: `{away}` and no picture. Only the window the person is in is ever shown |
@@ -3287,6 +3287,25 @@ A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 (yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`
 (steps), `send` (a window to take it back) and `listen`. A sentence is made
 of plain words, `em` words, keycaps and lit words the person can change.
+
+A sheet marked `whole` must have been seen to its end before its yes is a
+yes: while its end has not been on screen, the yes key moves the sheet down a
+page and answers nothing, and the end must have been up for 0.6 s (the press
+that brought it up, and a quick one behind it, are not the yes). A sheet whose
+content is changed is unseen again. It is for what is about to leave the machine or
+about to be done on somebody's word (the answer to another person's Pillow,
+and a long request from one). Esc is never held back by it.
+
+An `ask` line marked `stay` is not closed by a press somewhere else on the
+screen: only Esc closes it. It is for a field whose answer must not be given
+by accident (the name for a device that is being joined, while the other
+person waits).
+
+A click on a line's own yes, or on one of its choices, is not an answer when
+it cannot have been meant for that line: on a line that came by itself, for
+the same 0.7 s as a key; and when it is the second half of a double click
+whose first half was made before the line was shown (the yes of a request,
+straight after the yes of "Read it?").
 
 A line marked `unasked` came by itself: the page takes no yes on it for
 0.7 s. A line with `arrive` comes in along the top edge before it is shown:

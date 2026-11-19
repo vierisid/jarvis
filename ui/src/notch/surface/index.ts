@@ -285,10 +285,24 @@ export function createNotchSurface(
     timers.after(170, () => g.remove());
   }
 
+  /** Two clicks closer together than this are one double click. */
+  const DOUBLE_CLICK_MS = 500;
+  /** How long the end of a sheet that must be seen whole has to have been on screen before a yes is one. */
+  const WHOLE_READ_MS = 600;
+  /** Whether the end of the sheet is on screen now. */
+  const sheetAtEnd = (): boolean => sheetEl.scrollTop + sheetEl.clientHeight >= sheetEl.scrollHeight - 6;
+  /** Whether the end of the sheet that is up has been on screen at some moment, and since when. */
+  let sheetSeen = false;
+  let sheetSeenAt = 0;
+  const sawSheetEnd = (): void => { if (!sheetSeen) { sheetSeen = true; sheetSeenAt = performance.now(); } };
+
   /** A sheet with more below fades at its lower edge. */
   function more(): void {
     requestAnimationFrame(() => {
-      if (alive) sheetEl.classList.toggle('more', sheetEl.scrollTop + sheetEl.clientHeight < sheetEl.scrollHeight - 6);
+      if (!alive) return;
+      const end = sheetAtEnd();
+      if (end) sawSheetEnd();
+      sheetEl.classList.toggle('more', !end);
     });
   }
 
@@ -299,6 +313,22 @@ export function createNotchSurface(
    * else, or of a shortcut that ends like one.
    */
   const tooSoon = (): boolean => performance.now() - shownAt < (line?.unasked ? YES_DEAD_UNASKED_MS : YES_DEAD_MS);
+
+  /** When the last two clicks on the notch came. */
+  let clickAt = 0;
+  let clickBefore = 0;
+  const noteClick = (): void => { clickBefore = clickAt; clickAt = performance.now(); };
+  /**
+   * Whether a click on a yes or on a choice cannot have been meant for the
+   * line that is up. Two cases. The line came by itself a moment ago: the
+   * pointer was already on its way to what was there before, as a key would
+   * have been (the same 0.7 s). Or the click is the second of two quick ones
+   * and the first was made before this line was shown: a double click, whose
+   * second half lands on whatever the first half brought up (the yes of a
+   * request, straight after the yes of "Read it?").
+   */
+  const clickTooSoon = (): boolean =>
+    (line?.unasked === true && tooSoon()) || (clickBefore > 0 && clickBefore < shownAt && clickAt - clickBefore < DOUBLE_CLICK_MS);
 
   function paintCount(body: Body): void {
     const n = body === 'rest' ? count : 0;
@@ -341,7 +371,10 @@ export function createNotchSurface(
         : yes && !('beads' in yes) ? `Yes means ${yes.act}.` : '';
       if (spoken) sayEl.append(el('span', 'sr', ' ' + spoken));
     }
-    const ctx = { body: v.pairYes ? 'line' : v.body, onYes: () => { if (cur && !cur.done) cur.onYes?.(); }, onEsc: () => { if (cur && !cur.done) cur.onEsc?.(); } };
+    // A click on the line's own yes or Esc takes the same moment as the keys do: a click that was on its way
+    // to what was there before (a second click of a double click, a press meant for the app behind) is not an answer.
+    // A click on the line's own yes is not an answer when it cannot have been meant for this line (`clickTooSoon`).
+    const ctx = { body: v.pairYes ? 'line' : v.body, onYes: () => { if (cur && !cur.done && !clickTooSoon()) cur.onYes?.(); }, onEsc: () => { if (cur && !cur.done) cur.onEsc?.(); } };
     hintEl.replaceChildren(...hints.map((h) => mkHint(h, ctx)));
     optsEl.replaceChildren(...(v.opts ?? []).map((o, i) => {
       const b = btn('btn', null, o.pick);
@@ -514,7 +547,7 @@ export function createNotchSurface(
         const options = l.options;
         show({
           body: 'choices', say: l.say, hint: { cap: 'esc', act: 'not now', touch: true }, ...common,
-          opts: options.map((label, index) => ({ label, pick: () => { if (me.done) return; nod(); answer('pick', { option: label, index }); settle(); } })),
+          opts: options.map((label, index) => ({ label, pick: () => { if (me.done || clickTooSoon()) return; nod(); answer('pick', { option: label, index }); settle(); } })),
         }, instant);
         startFold(l.fold ?? 14000);
       } else if (l.keys === 'esc') {
@@ -535,13 +568,24 @@ export function createNotchSurface(
       return;
     }
     if (l.kind === 'sheet') {
-      if (l.yes) me.onYes = yes;
+      sheetSeen = false;
+      // A sheet that must be seen whole: until its end has been on screen, the yes goes down a page
+      // and answers nothing. What is about to leave is not sent on a yes to the part that was read.
+      if (l.yes) me.onYes = l.whole ? () => {
+        if (sheetAtEnd()) sawSheetEnd();
+        // The end must have been there for a moment: the press that brought it up is not the yes, and a
+        // second quick press behind it is not one either. Reading takes longer than that.
+        if (sheetSeen && performance.now() - sheetSeenAt >= WHOLE_READ_MS) { yes(); return; }
+        if (sheetSeen) return;
+        sheetEl.scrollTop = Math.min(sheetEl.scrollHeight, sheetEl.scrollTop + Math.max(80, sheetEl.clientHeight - 64));
+        more();
+      } : yes;
       me.onEsc = () => { answer('no'); rest(); };
       show({
         body: 'sheet', say: l.say, sheet: blocksOf(l.blocks), stag: true, ...common,
         // A sheet that asks for a decision says what each key means: the pair is yes, Esc is no.
         ...(l.stay ? { pairYes: true } : {}),
-        hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: l.no ?? 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: 'close' },
+        hint: l.yes ? [{ act: l.yes }, l.stay ? { cap: 'esc', act: l.no ?? 'no' } : { cap: 'esc', label: 'close' }] : { cap: 'esc', act: l.stay && l.no ? l.no : 'close' },
       }, instant);
       stepNote(l, instant);
       return;
@@ -713,6 +757,8 @@ export function createNotchSurface(
       sheetEl.classList.remove('stag');
       sheetEl.replaceChildren(blocksOf(m.blocks));
       sheetEl.scrollTop = top;
+      // What it shows changed: its end has not been seen until it is on screen again.
+      sheetSeen = false;
       shape.fit(false, true);
       more();
     }
@@ -970,6 +1016,8 @@ export function createNotchSurface(
   notch.addEventListener('pointerdown', onPointerDown);
   root.addEventListener('pointermove', onPointerMove, { passive: true });
   root.addEventListener('pointerup', onPointerUp);
+  // Before any handler of the click itself: they ask when the click before this one came.
+  root.addEventListener('click', noteClick, true);
   notch.addEventListener('click', onClick);
   notch.addEventListener('wheel', onWheel, { passive: false });
   root.addEventListener('keydown', onKey);
@@ -1038,6 +1086,9 @@ export function createNotchSurface(
     // Nor is a question about a file that was dropped: the press that picks up a second file to drop
     // beside it is a click away, and the first file was forgotten.
     if (line?.kind === 'ask' && line.blocks.some((block) => block.kind === 'file')) return;
+    // Nor a field that says it stays: what is typed there answers something that a press on another window
+    // must not turn down (the name for a device that is being joined, with the other person waiting).
+    if (line?.kind === 'ask' && line.stay) return;
     // And nothing is, in its first moment: the press was on its way before the line was there.
     if (tooSoon()) return;
     if (cur && !cur.done && (body === 'sheet' || body === 'ask')) cur.onEsc?.();
@@ -1127,6 +1178,7 @@ export function createNotchSurface(
       notch.removeEventListener('click', onClick);
       notch.removeEventListener('wheel', onWheel);
       root.removeEventListener('keydown', onKey);
+      root.removeEventListener('click', noteClick, true);
       window.removeEventListener('focus', syncKeyboard);
       window.removeEventListener('blur', syncKeyboard);
       sheetEl.removeEventListener('scroll', onScroll);
