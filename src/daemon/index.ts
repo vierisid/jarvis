@@ -187,6 +187,8 @@ import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
+import { PeerEngine } from "../peers/engine.ts";
+import { peersEnginePath } from "../peers/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker, WORKFLOW_WORKER_CONCURRENCY } from "../workflows/queue/worker.ts";
@@ -298,6 +300,8 @@ let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
+/** The program that talks to other people's Jarvises, kept up (src/peers/). Null with its switch off. */
+let peerEngine: PeerEngine | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
 // Starts the awareness service when screen awareness is turned on after a boot
 // with it off (owner decision 2026-11-11); a no-op until post-setup is wired.
@@ -518,6 +522,9 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   }
   briefOpportunityActivation?.stop();
   briefOpportunityActivation = null;
+  // Told to leave, so that it closes its line to the server in order. It would end with the brain anyway.
+  peerEngine?.stop();
+  peerEngine = null;
   await briefPreparedOpportunities?.close();
   briefPreparedOpportunities = null;
   suggestionComposer?.stop();
@@ -4947,6 +4954,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           openPage: notchOpenPage,
         }),
       });
+      // Other people's Jarvises (src/peers/). Dark unless the place of the engine is given.
+      const peersEngine = peersEnginePath();
+      if (peersEngine) {
+        peerEngine = new PeerEngine({ path: peersEngine, brainDataDir: dataDir, log: (line) => console.log(line) });
+        peerEngine.start();
+      }
     }
 
     // Restore emergency state from config
