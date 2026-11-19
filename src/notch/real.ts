@@ -51,6 +51,10 @@ import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatch
 import { attachNotchJobs, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
 import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from './standing.ts';
+import { attachNotchPeople } from './people.ts';
+import type { NotchPeople } from './people.ts';
+import type { PeerLink } from '../peers/link.ts';
+import { PeerStore } from '../peers/store.ts';
 import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
@@ -205,6 +209,12 @@ export interface NotchRealDeps {
    */
   calls?: { db: Database; port: NotchCallPort; listen: NotchCallDeps['listen']; stt: NotchCallDeps['stt']; think: NotchCallDeps['think']; noClock?: boolean };
   /**
+   * Other people's Jarvises (src/peers/, ./people.ts): what carries the
+   * words, and how a page is opened in the person's own browser, for the
+   * sign-in. Given only when the engine's switch is on.
+   */
+  peers?: { db: Database; link: PeerLink; openPage(sidecarId: string | null, url: string): Promise<boolean>; noClock?: boolean };
+  /**
    * Noticing (./notice.ts): in the window the person is in, Jarvis looks
    * when their hands rest and offers one thing it could do there. `see` is a
    * picture of that window, `read` what the program names in it, `think` one
@@ -273,6 +283,8 @@ export interface NotchReal {
   notice: NotchNotice | null;
   /** Meetings coming up, when the calendar can be reached. */
   soon: NotchSoon | null;
+  /** The organisation: the people whose Jarvises this one may talk to (./people.ts), when the engine's switch is on. */
+  people: NotchPeople | null;
   talk: NotchTalk | null;
   /** Looking at a thing on the screen, when a desktop app can. */
   look: NotchLook | null;
@@ -302,6 +314,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   let standingTimer: ReturnType<typeof setInterval> | null = null;
   // Made further down, once the mail and the day are: what is said and shown before then finds it when it is asked.
   let calls: NotchCalls | null = null;
+  let people: NotchPeople | null = null;
   let callTimer: ReturnType<typeof setInterval> | null = null;
   let notice: NotchNotice | null = null;
   let noticeTimer: ReturnType<typeof setInterval> | null = null;
@@ -449,6 +462,13 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
   // Everything it does, on one sheet: day one ends on it, the settings lead to it, "what can you do" opens it.
   const canDo: NotchCanDo = attachNotchCanDo({ inbox });
+  // The organisation: the people whose Jarvises this one may talk to. Only with the engine's switch on.
+  if (deps.peers) {
+    people = attachNotchPeople({
+      inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
+      ...(deps.peers.noClock ? { noClock: true } : {}),
+    });
+  }
   // What is said with a line up is tried as an answer to that line (./said.ts). An instruction's own lines are read by ./asks.ts.
   const saidLine = attachNotchSaid({ inbox, line: () => surface.current().line, skip: (item) => item.startsWith('ask:'), log });
   const openPage = office?.openPage;
@@ -489,13 +509,14 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // First of all: with a draft of a reply open, what is said is what that reply is to say.
       // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
-      side: (text, how) => dayOne?.route(text) ?? mail?.mail.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? standing?.route(text) ?? agents?.route(text)
+      // Before an eye and a chase: "tell Leo ..." is a word to Leo when Leo's Jarvis is one this one talks to (./people.ts).
+      side: (text, how) => dayOne?.route(text) ?? mail?.mail.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? people?.route(text) ?? standing?.route(text) ?? agents?.route(text)
         ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text)
         // After everything that has words of its own: what was said over a line that is up answers that line.
         ?? saidLine.route(text, how) ?? null,
       keys: () => saidLine.keys(),
       // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
-      people: () => mail?.store.people() ?? [],
+      people: () => [...(people?.names() ?? []), ...(mail?.store.people() ?? [])],
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
@@ -517,9 +538,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // What the assistant built in a turn is an agent like any other: switched on and named here.
       afterTurn: (since) => agents?.adopt(since),
       standing: {
-        rows: () => { const row = agents?.row(); return [...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
+        rows: () => { const row = agents?.row(); const org = people?.row(); return [...(org ? [org] : []), ...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
         open: async (stage, row) => {
-          if (row === 'agents') await agents?.open(stage);
+          if (row === 'people') await people?.open(stage);
+          else if (row === 'agents') await agents?.open(stage);
           else if (row === 'eyes' || row === 'chases') await standing?.open(stage, row);
           else if (row === 'calls') await calls?.open(stage, row);
         },
@@ -813,7 +835,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
 
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
-    jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice,
+    jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
     showing: () => surface.listening() > 0,
     stop: () => {
       clearInterval(timer); clearInterval(failureTimer);
@@ -821,6 +843,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       if (questionTimer) clearInterval(questionTimer);
       stopPromises(); stopPause();
       asks?.stop();
+      people?.stop();
       dayOne?.stop();
       lookAt?.stop();
       drop?.stop();

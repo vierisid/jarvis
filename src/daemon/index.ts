@@ -188,6 +188,7 @@ import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { PeerEngine } from "../peers/engine.ts";
+import { PeerLink } from "../peers/link.ts";
 import { peersEnginePath } from "../peers/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -4721,8 +4722,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onSidecarConnected((sidecar) => {
         void sidecarManager.dispatchRPC(sidecar.id, 'panel.close', { id: NOTCH_INSTALLED_CARD }).catch(() => { /* none was up, or an older desktop app */ });
       });
+      // Other people's Jarvises (src/peers/). Dark unless the place of the engine is given.
+      // The link is made before the notch, which shows what it asks of the person; the engine is started after it.
+      const peersEngine = peersEnginePath();
+      const peerLink = peersEngine ? new PeerLink({ log: (line) => console.log(line) }) : null;
+      // A page in the person's own browser: where they sign in. Only a page that is reached safely, and
+      // on the machine the answer came from. A desktop app that cannot do it opens nothing.
+      const notchOpenUrl = async (sidecarId: string | null, url: string): Promise<boolean> => {
+        if (!/^https:\/\//i.test(url)) return false;
+        const target = sidecarId ?? sidecarManager.getConnectedSidecars()[0]?.id ?? null;
+        if (!target) return false;
+        try {
+          await sidecarManager.dispatchRPC(target, 'notch.open_url', { url });
+          return true;
+        } catch {
+          return false;
+        }
+      };
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
+        ...(peerLink ? { peers: { db: getDb(), link: peerLink, openPage: notchOpenUrl } } : {}),
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.
@@ -4954,10 +4973,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           openPage: notchOpenPage,
         }),
       });
-      // Other people's Jarvises (src/peers/). Dark unless the place of the engine is given.
-      const peersEngine = peersEnginePath();
-      if (peersEngine) {
-        peerEngine = new PeerEngine({ path: peersEngine, brainDataDir: dataDir, log: (line) => console.log(line) });
+      if (peersEngine && peerLink) {
+        // What the engine asks of the person goes to the link, and from there to the notch. Nothing else answers it.
+        peerEngine = new PeerEngine({
+          path: peersEngine, brainDataDir: dataDir, log: (line) => console.log(line),
+          onDialog: peerLink.dialog, onNotice: peerLink.notice, onState: peerLink.engineState,
+        });
+        peerLink.attach(peerEngine);
         peerEngine.start();
       }
     }

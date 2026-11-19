@@ -204,7 +204,7 @@ describe('the environment the engine runs in', () => {
 
   test('nothing of a coding agent reaches it: the engine would take itself for a session nobody watches', () => {
     const env = engineEnv(base, '/data/peers');
-    for (const name of ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDECODE', 'AI_AGENT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PROJECT_DIR', 'COLLAB_INTERACTIVE']) expect(env[name]).toBeUndefined();
+    for (const name of ['CLAUDE_CODE_ENTRYPOINT', 'CLAUDECODE', 'AI_AGENT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PROJECT_DIR']) expect(env[name]).toBeUndefined();
   });
 
   test('nothing of the brain reaches it', () => {
@@ -218,6 +218,7 @@ describe('the environment the engine runs in', () => {
     expect(env.COLLAB_CHANNELS).toBe('1');
     expect(env.COLLAB_DESKTOP_NOTIFY).toBe('0');
     expect(env.COLLAB_UNATTENDED_TASKS).toBe('0');
+    expect(env.COLLAB_INTERACTIVE).toBe('1');
   });
 
   test('the server and the place of its key are the person\'s to set, and what it needs to run is there', () => {

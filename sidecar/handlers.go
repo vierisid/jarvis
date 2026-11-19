@@ -139,6 +139,8 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 			notch.usePanels(nil)
 		}
 		registry["notch.configure"] = makeNotchConfigureHandler(notch)
+		// A page in the person's own browser: where they sign in so that their Jarvis can talk to another's.
+		registry["notch.open_url"] = notchOnly(notch, "notch.open_url", makeNotchOpenURLHandler(openInDefaultBrowser))
 		// "Where is...?": a ring round something on the screen (notch_looker.go).
 		//
 		// What reads the screen or acts on it is answered only while the

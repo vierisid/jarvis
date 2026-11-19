@@ -22,7 +22,7 @@ import { filterEnv } from '../util/subprocess-env.ts';
 import type { EngineTransport } from './engine-client.ts';
 
 /** Where the engine keeps its keys, its contacts and its mail, inside the brain's data folder. */
-export const ENGINE_DATA_FOLDER = 'peers';
+export const ENGINE_DATA_FOLDER = join('peers', 'engine');
 
 /** What the person may set for the engine from outside. Passed on as they are. */
 const PASSED_ON = ['COLLAB_SERVER_URL', 'COLLAB_KEYSTORE'] as const;
@@ -47,6 +47,11 @@ export function engineEnv(base: Record<string, string | undefined>, dataDir: str
   env.COLLAB_DESKTOP_NOTIFY = '0';
   // Nothing may take a request without the person: no unattended work, ever.
   env.COLLAB_UNATTENDED_TASKS = '0';
+  // The brain can put a dialog to the person, and says so. Left to find out by itself, the engine
+  // takes one dialog that was closed at once (no notch was up to show it) for proof that nobody
+  // can ever be asked, and sends no dialog again until it is started anew. A dialog with nobody
+  // to show it to is still closed, and a closed dialog still changes nothing.
+  env.COLLAB_INTERACTIVE = '1';
   return env;
 }
 
@@ -89,6 +94,8 @@ export function startEngine(start: EngineStart): EngineChild {
   // Its own, and nobody else's: the engine refuses a folder others can read.
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const child = Bun.spawn([start.path, 'mcp'], {
+    // In its own folder: the engine notes the folder it was started in as the place it works, and the brain's is not that.
+    cwd: dataDir,
     env: engineEnv(start.env ?? process.env, dataDir),
     stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
   });
