@@ -4,10 +4,11 @@ package main
 
 // The notch's window on macOS.
 //
-// NOT YET COMPILED OR RUN. This file was written alongside the Windows host on
-// a machine that cannot build for macOS. It follows panels_darwin.go's rules
-// (everything that touches AppKit runs on the main thread) and is the first
-// thing to check when the branch meets a Mac.
+// First run on a Mac: 19 November 2026 (an M4 MacBook Air, macOS 27.2). It
+// built, and crashed three times out of three the moment the window was set
+// up. The cause is written down at jarvis_notch_adopt. Everything after the
+// set-up had still not run when that was fixed: it follows panels_darwin.go's
+// rules (everything that touches AppKit runs on the main thread).
 //
 // How each of the four differences is done here:
 //   - Place: a borderless window at the top centre of the display that has the
@@ -50,26 +51,47 @@ static void jarvis_notch_on_main(dispatch_block_t block) {
     }
 }
 
-static BOOL jarvis_notch_can_become_key(id self, SEL _cmd) { return YES; }
-static NSRect jarvis_notch_constrain(id self, SEL _cmd, NSRect frame, NSScreen* screen) { return frame; }
+// The window the notch lives in must be able to take the keyboard although it
+// is borderless, and must not be pushed below the menu bar. Both are answers a
+// window gives about itself: canBecomeKeyWindow and constrainFrameRect:toScreen:.
+//
+// They are NOT changed by giving the window a class of its own, which is what
+// this file did at first. AppKit watches a window's properties, and it does so
+// by putting the window into a class it makes for the purpose, with its own
+// bookkeeping stored in that class. A subclass of that class made here has
+// none of it, so the first watched setter after the change (setOpaque:) read
+// whatever lay behind the class: "-[__NSCFConstantString objectForKey:]:
+// unrecognized selector", a trap, "os_unfair_lock is corrupt". Three crashes,
+// three messages, one cause.
+//
+// So the two answers are changed where the window's real class gives them,
+// and only for the one window that is the notch. Every other window of the
+// app gets the answer it always got.
+static IMP jarvis_notch_plain_can_key = NULL;
+static IMP jarvis_notch_plain_constrain = NULL;
 
-// Re-class the window so it may take the keyboard although it is borderless,
-// and so AppKit does not move it below the menu bar.
+static BOOL jarvis_notch_can_become_key(id self, SEL _cmd) {
+    if (self == (id)jarvis_notch_win) return YES;
+    if (jarvis_notch_plain_can_key == NULL) return NO;
+    return ((BOOL (*)(id, SEL))jarvis_notch_plain_can_key)(self, _cmd);
+}
+
+static NSRect jarvis_notch_constrain(id self, SEL _cmd, NSRect frame, NSScreen* screen) {
+    if (self == (id)jarvis_notch_win || jarvis_notch_plain_constrain == NULL) return frame;
+    return ((NSRect (*)(id, SEL, NSRect, NSScreen*))jarvis_notch_plain_constrain)(self, _cmd, frame, screen);
+}
+
+// Once for the process. `[win class]` is the class the window was made as:
+// AppKit's watching class answers with the class it stands in for.
 static void jarvis_notch_adopt(NSWindow* win) {
-    Class base = object_getClass(win);
-    const char* name = "JarvisNotchWindow";
-    Class sub = objc_getClass(name);
-    if (sub == Nil) {
-        sub = objc_allocateClassPair(base, name, 0);
-        if (sub == Nil) return;
-        class_addMethod(sub, @selector(canBecomeKeyWindow), (IMP)jarvis_notch_can_become_key, "c@:");
-        class_addMethod(sub, @selector(constrainFrameRect:toScreen:), (IMP)jarvis_notch_constrain,
-            "{CGRect={CGPoint=dd}{CGSize=dd}}@:{CGRect={CGPoint=dd}{CGSize=dd}}@");
-        objc_registerClassPair(sub);
-    }
-    if (class_getSuperclass(sub) == base) {
-        object_setClass(win, sub);
-    }
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class made = [win class];
+        Method key = class_getInstanceMethod(made, @selector(canBecomeKeyWindow));
+        if (key != NULL) jarvis_notch_plain_can_key = method_setImplementation(key, (IMP)jarvis_notch_can_become_key);
+        Method constrain = class_getInstanceMethod(made, @selector(constrainFrameRect:toScreen:));
+        if (constrain != NULL) jarvis_notch_plain_constrain = method_setImplementation(constrain, (IMP)jarvis_notch_constrain);
+    });
 }
 
 // Is the app in front the one keeping the display awake? That is what a
@@ -150,7 +172,8 @@ static void jarvis_notch_tick(BOOL checkFullscreen) {
     NSRect f = win.frame;
     NSPoint local = NSMakePoint(p.x - f.origin.x, NSMaxY(f) - p.y);
     BOOL inside = jarvis_notch_path != nil && [jarvis_notch_path containsPoint:local];
-    [win setIgnoresMouseEvents:!inside];
+    // Told only when it changes: thirty times a second is how often it is asked, not how often it differs.
+    if (win.ignoresMouseEvents == inside) [win setIgnoresMouseEvents:!inside];
     if (!checkFullscreen) return;
     pid_t front = jarvis_notch_fullscreen_app_in_front();
     BOOL hide = front > 0 && jarvis_notch_app_keeps_display_awake(front);

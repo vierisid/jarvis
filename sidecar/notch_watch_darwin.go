@@ -225,7 +225,7 @@ func macHooksWanted() error {
 		return nil
 	}
 	if !macAXTrusted() {
-		return fmt.Errorf("watching needs the Accessibility permission (System Settings, Privacy & Security, Accessibility); grant it and start Jarvis again")
+		return fmt.Errorf("watching needs the Accessibility permission (System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access); grant it and start Jarvis again")
 	}
 	macHookWorker.Do(func() { go macWatchWorker(macHookEvents) })
 	if C.jarvis_watch_tap_start() == 0 {

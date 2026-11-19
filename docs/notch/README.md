@@ -3204,8 +3204,9 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
   awake, and while a fullscreen app is in front writes what it saw every two
   seconds for the first twenty (`looking at chrome: hands off ..., pointer
   hidden ..., app sound ..., picture change ..., video ...`).
-- **macOS (`sidecar/notch_host_darwin.go`) compiles in CI and has never been
-  run.**
+- **macOS (`sidecar/notch_host_darwin.go`) has been started once on a Mac and
+  crashed at the window's set-up; that is fixed, and nothing after it has
+  run** ("Trying a build" has the account).
 - On Linux the window opens as an ordinary always-on-top panel: no shape, no
   focus rule, no fullscreen rule.
 - There is no per-machine opt-out: every desktop app that advertises the
@@ -3357,9 +3358,24 @@ scripts/notch/try.sh
 - **Closing the brain's terminal stops the brain.** The launcher tells it to
   stop on a hang-up as on Ctrl-C. Before, the brain outlived a closed
   terminal, kept the port, and had nothing left to press Ctrl-C in.
-- **On a Mac** it builds `~/JarvisNotchDev/Jarvis.app` and writes
-  `start-sidecar.command` beside it. Quit Jarvis from the menu bar, then run
-  that file and paste the token. The Mac path has not been run yet.
+- **On a Mac** it builds `~/JarvisNotchDev/Jarvis.app` (with the helper that
+  reads text off the screen, when Swift is there), writes
+  `start-sidecar.command` beside it, and starts the app once the brain
+  answers, with the token that was just made. The app is started as an app
+  (`open`), not as a program from the terminal: macOS gives a permission to
+  whoever started the program, and from a terminal the Accessibility
+  permission the keys need would be the terminal's. Its log is `app.log`
+  beside it. An installed Jarvis has to be quit from the menu bar first.
+- **The first run on a Mac was on 19 November 2026** (an M4 MacBook Air,
+  macOS 27.2). The brain and the app built and the app enrolled. It then
+  crashed the moment the notch's window was set up, three times out of
+  three: the window was given a class of its own, and AppKit keeps its own
+  bookkeeping in the class of a window it watches
+  (`jarvis_notch_adopt` in `sidecar/notch_host_darwin.go` says the rest).
+  Fixed the same day. Everything after the set-up had not run on a Mac when
+  this was written. Two things that run showed: macOS 27 lists the
+  Accessibility permission as "Device Control and Data Access", and a
+  rebuilt app has to be switched on there again.
 - The test build has its own profile folder. It cannot run beside an installed
   Jarvis on Windows (single-instance lock). Leave "start at login" off in it.
 - `--token` prints a fresh token, `--no-build` skips the desktop app build.
