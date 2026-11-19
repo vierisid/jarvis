@@ -31,6 +31,32 @@ export interface PeerSentRow {
   nudgedAt: number | null;
 }
 
+/**
+ * Where a request stands here.
+ *
+ *   new      asked, nothing decided (in), or out and nothing back (out).
+ *   working  the person said yes and it is being done (in).
+ *   ready    its answer is found and waits to be shown before it goes (in).
+ *   done     ended with an answer.
+ *   no       ended without one.
+ */
+export const PEER_REQUEST_STATES = ['new', 'working', 'ready', 'done', 'no'] as const;
+export type PeerRequestState = (typeof PEER_REQUEST_STATES)[number];
+
+export interface PeerRequestRow {
+  id: string;
+  dir: 'in' | 'out';
+  peer: string;
+  words: string;
+  at: number;
+  state: PeerRequestState;
+  /** The answer that was found and not yet sent (in), or that came back (out). */
+  answer: string | null;
+  /** The arrival it came as (in). */
+  item: string | null;
+  nudgedAt: number | null;
+}
+
 export class PeerStore {
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -38,7 +64,11 @@ export class PeerStore {
       id TEXT PRIMARY KEY, to_id TEXT NOT NULL, kind TEXT NOT NULL, words TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '[]',
       sent_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'sent', answer TEXT, nudged_at INTEGER, first_id TEXT)`);
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_got (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0)');
+    db.run(`CREATE TABLE IF NOT EXISTS notch_peer_requests (
+      id TEXT PRIMARY KEY, dir TEXT NOT NULL, peer_id TEXT NOT NULL, words TEXT NOT NULL, at INTEGER NOT NULL,
+      state TEXT NOT NULL DEFAULT 'new', answer TEXT, item_id TEXT, nudged_at INTEGER)`);
     const before = this.now() - PEER_KEEP_MS;
+    db.run('DELETE FROM notch_peer_requests WHERE at < ?', [before]);
     db.run('DELETE FROM notch_peer_sent WHERE sent_at < ?', [before]);
     db.run('DELETE FROM notch_peer_got WHERE at < ?', [before]);
   }
@@ -97,6 +127,42 @@ export class PeerStore {
 
   nudged(id: string): void {
     this.db.run('UPDATE notch_peer_sent SET nudged_at = ? WHERE id = ?', [this.now(), id]);
+  }
+
+  // Requests: what this machine asked of another's Jarvis (out), and what was asked of this one (in).
+
+  /** Notes a request. One that is known already is left as it is. */
+  request(row: { id: string; dir: 'in' | 'out'; peer: string; words: string; item?: string }): void {
+    this.db.run('INSERT OR IGNORE INTO notch_peer_requests (id, dir, peer_id, words, at, item_id) VALUES (?, ?, ?, ?, ?, ?)', [row.id, row.dir, row.peer, row.words, this.now(), row.item ?? null]);
+  }
+
+  private readRequest(raw: Record<string, unknown> | null): PeerRequestRow | null {
+    if (!raw) return null;
+    return {
+      id: String(raw.id), dir: raw.dir === 'in' ? 'in' : 'out', peer: String(raw.peer_id), words: String(raw.words), at: Number(raw.at),
+      state: (PEER_REQUEST_STATES as readonly string[]).includes(String(raw.state)) ? raw.state as PeerRequestState : 'new',
+      answer: typeof raw.answer === 'string' ? raw.answer : null, item: typeof raw.item_id === 'string' ? raw.item_id : null,
+      nudgedAt: typeof raw.nudged_at === 'number' ? raw.nudged_at : null,
+    };
+  }
+
+  requestOf(id: string): PeerRequestRow | null {
+    return this.readRequest(this.db.query('SELECT * FROM notch_peer_requests WHERE id = ?').get(id) as Record<string, unknown> | null);
+  }
+
+  /** Requests of one direction that have not ended, the oldest first. */
+  openRequests(dir: 'in' | 'out'): PeerRequestRow[] {
+    return (this.db.query("SELECT * FROM notch_peer_requests WHERE dir = ? AND state NOT IN ('done', 'no') ORDER BY at").all(dir) as Record<string, unknown>[])
+      .map((raw) => this.readRequest(raw)).filter((row): row is PeerRequestRow => !!row);
+  }
+
+  /** Moves a request on. One that has ended stays ended. */
+  requestState(id: string, state: PeerRequestState, answer?: string | null): boolean {
+    return this.db.run("UPDATE notch_peer_requests SET state = ?, answer = CASE WHEN ? THEN ? ELSE answer END WHERE id = ? AND state NOT IN ('done', 'no')", [state, answer !== undefined ? 1 : 0, answer ?? null, id]).changes > 0;
+  }
+
+  requestNudged(id: string): void {
+    this.db.run('UPDATE notch_peer_requests SET nudged_at = ? WHERE id = ?', [this.now(), id]);
   }
 
   /** Whether an arrival was already taken in, and whether the person is done with it. */

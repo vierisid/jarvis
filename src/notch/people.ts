@@ -27,16 +27,29 @@
  *     list of what was asked, and no model sees it.
  *   - Not now is never no: a message or a question that was left alone waits
  *     in the count. One that was answered is never shown again.
+ *
+ * A REQUEST is the other thing that crosses: "Ask Leo's Pillow what changed
+ * in the last deck." It is asked of the other person's Jarvis, not of the
+ * person, and three things hold for it on the side that is asked:
+ *
+ *   - Nothing is done before the person there said yes. Their line is the
+ *     engine's own question, and the request is opened only when that line
+ *     is about to be shown, so that the yes is given to what is on the notch.
+ *   - What is found is shown before it goes: "Send only that?". Only a yes
+ *     sends it, and it sends exactly what was shown.
+ *   - The work is reading and looking. Whatever would change the machine or
+ *     reach somebody stops for an approval of its own (src/daemon/notch-peers.ts).
  */
 import type { NotchInbox } from './inbox.ts';
+import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 import { NotchStageEnded } from './stage.ts';
 import { engineErrorCode } from '../peers/link.ts';
-import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerSent } from '../peers/link.ts';
+import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerRequest, PeerSent } from '../peers/link.ts';
 import { PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
 import type { PeerNote } from '../peers/notes.ts';
-import type { PeerStore, PeerSentRow } from '../peers/store.ts';
+import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const cap = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
@@ -58,6 +71,12 @@ export const NOTCH_PEOPLE_TICK_MS = 30_000;
 /** How long signing in, and waiting for a code to be used, may take: a little more than the engine gives each. */
 export const NOTCH_PEOPLE_SIGN_IN_MS = 6 * 60_000;
 export const NOTCH_PEOPLE_CODE_MS = 12 * 60_000;
+/** The most of a request that can be read here. A longer one cannot be said yes to on the notch. */
+export const NOTCH_PEOPLE_REQUEST_MAX = 2000;
+/** The most of an answer that is shown before it goes, and so the most that goes. */
+export const NOTCH_PEOPLE_ANSWER_MAX = 4000;
+/** How often an answer is looked for while a request is out. */
+export const NOTCH_PEOPLE_FOLLOW_MS = 5000;
 
 export interface NotchPeopleDeps {
   inbox: NotchInbox;
@@ -65,6 +84,13 @@ export interface NotchPeopleDeps {
   store: PeerStore;
   /** Opens a page in the person's own browser, on the machine the answer came from. False when it could not. */
   openPage(sidecarId: string | null, url: string): Promise<boolean>;
+  /**
+   * Does a request the person said yes to, and gives its answer as text
+   * (src/daemon/notch-peers.ts). `from` is the owner's name for who asked.
+   * Without it nothing can be done here, and a request that was said yes to
+   * ends with a no.
+   */
+  work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
   log?: (line: string) => void;
   now?: () => number;
   /** For tests: no timer of its own. `tick` is then called by hand. */
@@ -121,6 +147,24 @@ export function peopleOptions(question: string): string[] {
 }
 
 interface Addressed { person: PeerPerson; verb: string; words: string }
+
+/** What their machine is called when something is asked of it. */
+const MACHINE = '(?:jarvis|pillow|laptop|computer|machine|mac|pc)';
+
+/** Text for a sheet: line by line, each made readable, cut to `max` in all. */
+export function peopleLines(text: string, max: number): string[] {
+  const lines: string[] = [];
+  let left = max;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = peerPlain(raw, left);
+    if (!line) { if (lines.length && lines[lines.length - 1] !== '') lines.push(''); continue; }
+    lines.push(line);
+    left -= line.length + 1;
+    if (left <= 0) break;
+  }
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines;
+}
 
 export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const { inbox, link, store } = deps;
@@ -224,7 +268,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     // The organisation's name is the first thing to cross.
     const joined = others().find((one) => one.name === name);
     if (opener && org && joined) void link.tell(joined.id, peerNoteText(`Organisation: ${org}`, { kind: 'org', name: org }));
-    await stage.say(opener && org ? [em(name), ' joined ', em(org), '. Your Jarvises can talk now.'] : ['Connected with ', em(name), '. Your Jarvises can talk now.'], 4000, { mood: 'proud', mark: 'check' });
+    await stage.say(opener && org ? [em(name), ' joined ', em(org), `. Your ${NOTCH_NAME}s can talk now.`] : ['Connected with ', em(name), `. Your ${NOTCH_NAME}s can talk now.`], 4000, { mood: 'proud', mark: 'check' });
     return true;
   }
 
@@ -291,7 +335,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const people = others();
     const org = orgName();
     if (account.engine !== 'up') return org ? { kind: 'row', id: 'people', say: [em(org), ': not reachable right now.'] } : null;
-    if (!people.length) return { kind: 'row', id: 'people', say: ['Make an organisation, so your Jarvises can talk.'], go: true };
+    if (!people.length) return { kind: 'row', id: 'people', say: [`Make an organisation, so your ${NOTCH_NAME}s can talk.`], go: true };
     return { kind: 'row', id: 'people', say: [em(org ?? 'Your organisation'), ': you and ', em(people.map((one) => one.name).join(', ')), '.'], go: true };
   }
 
@@ -306,7 +350,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         stage.put({
           id, kind: 'ask', say: ['Make an organisation'], placeholder: 'Name it, for example Northwind', yes: 'make', focus: true, mood: 'look',
           blocks: [
-            { kind: 'note', say: ['An organisation is the people whose Jarvises may talk to each other.'] },
+            { kind: 'note', say: [`An organisation is the people whose ${NOTCH_NAME}s may talk to each other.`] },
             { kind: 'buttons', buttons: [{ id: 'join', label: 'Join one with a code' }] },
           ],
         });
@@ -369,7 +413,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const sent = await link.tell(to.id, words);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words });
-      await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ' Jarvis is on.'], 2800, { mark: 'check' });
+      await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
     });
   }
 
@@ -383,18 +427,60 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const sent = await link.tell(to.id, peerNoteText(question, { kind: 'ask', options }));
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'ask', words: question, options, ...(firstId ? { again: firstId } : {}) });
-      await stage.say(firstId ? ['Asked again.'] : sent.delivered ? ['Asked ', em(to.name), '. I will tell you the answer.'] : ['Asked. It waits until ', em(`${to.name}'s`), ' Jarvis is on.'], 2800, { mark: 'check' });
+      await stage.say(firstId ? ['Asked again.'] : sent.delivered ? ['Asked ', em(to.name), '. I will tell you the answer.'] : ['Asked. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
+    });
+  }
+
+  /**
+   * "Ask Leo's Pillow what changed in the last deck", "get me the Q3 numbers
+   * from Leo's laptop": whose machine is asked, and for what.
+   */
+  function requested(text: string): { person: PeerPerson; words: string } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '');
+    const lead = '(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you|would you)[,\\s]+)*';
+    const people = others().slice().sort((a, b) => b.name.length - a.name.length);
+    for (const one of people) {
+      const first = one.name.split(' ')[0]!;
+      const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const theirs = `${escaped(name)}(?:'s|\u2019s)\\s+${MACHINE}`;
+        const direct = new RegExp(`^${lead}(?:ask|tell|get|have)\\s+${theirs}(?![\\p{L}\\p{N}])[\\s,:]*(?:to\\s+|for\\s+)?(.+)$`, 'iu').exec(said);
+        if (direct) return { person: one, words: direct[1]!.trim() };
+        const from = new RegExp(`^${lead}(.+?)\\s+(?:from|on)\\s+${theirs}$`, 'iu').exec(said);
+        if (from) return { person: one, words: from[1]!.trim() };
+      }
+    }
+    return null;
+  }
+
+  function request(to: PeerPerson, words: string): void {
+    const theirs = `${to.name}'s ${NOTCH_NAME}`;
+    inbox.present('people-request', async (stage) => {
+      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!]$/.test(words) ? words : `${words}.`, ' ', em(to.name), ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
+      if (went === 'lost') return;
+      const sent = await link.ask(to.id, words.slice(0, 120), words);
+      if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
+      store.request({ id: sent.id, dir: 'out', peer: to.id, words });
+      following();
+      await stage.say(sent.delivered ? ['Asked ', em(theirs), '. I will tell you what comes back.'] : ['Asked. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
     });
   }
 
   function route(text: string): { did: string; run(): void } | null {
     const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
-    if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another jarvis)|join (?:an|the) organi[sz]ation)$/.test(said)) {
+    if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
+    }
+    // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
+    const wanted = requested(text);
+    if (wanted) {
+      const asked = cap(peerPlain(wanted.words, NOTCH_PEOPLE_SAY_MAX));
+      if (!asked) return null;
+      return { did: `Ask ${wanted.person.name}'s ${NOTCH_NAME}: ${asked}`, run: () => request(wanted.person, asked) };
     }
     const to = addressed(text);
     if (!to) return null;
-    // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
     if (/^'s\b/i.test(to.words)) return null;
     const words = cap(peerPlain(to.words, NOTCH_PEOPLE_SAY_MAX));
     if (!words) {
@@ -488,20 +574,274 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (note.kind === 'org' && !orgName()) { store.setOrg(note.name); inbox.refresh(); }
   }
 
+  // --- a request: what is asked of this machine ---
+
+  /** The work on requests that were said yes to, by the request's id. Gone with the brain: a request cannot outlive it. */
+  const working = new Map<string, Promise<void>>();
+  /** The requests whose item is on the notch right now. */
+  const onNotch = new Set<string>();
+
+  /** "Sam asks me: ... Do it here?" The answer to the engine's own question about the request. */
+  function approve(stage: NotchStage, from: PeerPerson, row: PeerRequestRow) {
+    return async (): Promise<Record<string, unknown> | null> => {
+      const whole = row.words.length <= NOTCH_PEOPLE_REQUEST_MAX;
+      const words = peerPlain(row.words, NOTCH_PEOPLE_REQUEST_MAX);
+      if (words.length <= NOTCH_PEOPLE_LINE_MAX && whole) {
+        const answer = await stage.choose([em(from.name), ' asks me: ', /[.?!]$/.test(words) ? words : `${words}.`, ' Do it here?'], ['Do it', 'No'], { who: from.name, mood: 'look' });
+        if (answer.act !== 'pick') return null;
+        return answer.index === 0 ? { choice: 'allow_once', resultCheck: true } : { choice: 'decline' };
+      }
+      const first = await stage.offer([em(from.name), ' asks me for something. Read it?'], 'read', { who: from.name, mood: 'look' });
+      if (first.act !== 'yes') return null;
+      const id = stage.id();
+      // What cannot be read whole is not offered for a yes: only the no is there.
+      stage.put({
+        id, kind: 'sheet', say: [em(from.name), ' asks me'], who: from.name, mood: 'look', stay: true, no: 'not now', ...(whole ? { yes: 'do it' } : {}),
+        blocks: [
+          { kind: 'paper', lines: peopleLines(row.words, NOTCH_PEOPLE_REQUEST_MAX).map((line) => [line]) },
+          ...(whole ? [] : [{ kind: 'note' as const, say: ['It goes on, and I cannot show the rest here. So I cannot do it from here.'] }]),
+          { kind: 'buttons', buttons: [{ id: 'no', label: 'Say no' }] },
+        ],
+      });
+      const answer = await stage.answer(id, ['yes', 'no', 'button']);
+      if (answer.act === 'yes' && whole) return { choice: 'allow_once', resultCheck: true };
+      if (answer.act === 'button' && answer.button === 'no') return { choice: 'decline' };
+      return null;
+    };
+  }
+
+  /** "For Sam: ... Send only that?" The answer to the engine's own question about what is about to leave. */
+  function sendOnly(stage: NotchStage, from: PeerPerson, answer: string) {
+    return async (): Promise<Record<string, unknown> | null> => {
+      const lines = answer.split('\n');
+      if (lines.length === 1 && answer.length <= NOTCH_PEOPLE_LINE_MAX) {
+        const said = await stage.choose(['For ', em(from.name), ': ', answer, ' Send only that?'], ['Send it', 'No'], { who: from.name, mood: 'look' });
+        if (said.act !== 'pick') return null;
+        return said.index === 0 ? { choice: 'send' } : { choice: 'cancel' };
+      }
+      const first = await stage.offer(['I have the answer for ', em(from.name), '. Read it before it goes?'], 'read', { who: from.name, mood: 'look' });
+      if (first.act !== 'yes') return null;
+      const id = stage.id();
+      stage.put({
+        id, kind: 'sheet', say: ['For ', em(from.name), '. Send only that?'], who: from.name, mood: 'look', stay: true, no: 'not now', yes: 'send',
+        blocks: [{ kind: 'paper', lines: lines.map((line) => [line]) }, { kind: 'buttons', buttons: [{ id: 'no', label: 'Do not send' }] }],
+      });
+      const said = await stage.answer(id, ['yes', 'no', 'button']);
+      if (said.act === 'yes') return { choice: 'send' };
+      if (said.act === 'button' && said.button === 'no') return { choice: 'cancel' };
+      return null;
+    };
+  }
+
+  /** Begins the work on a request that was said yes to. */
+  function begin(row: PeerRequestRow, from: PeerPerson): void {
+    const job = (async () => {
+      let done: { ok: true; answer: string } | { ok: false } = { ok: false };
+      try { if (deps.work) done = await deps.work({ from: from.name, words: row.words }); } catch { done = { ok: false }; }
+      // What goes is what is shown, so it is made into what can be shown here and now: readable lines, cut to size.
+      const answer = done.ok ? peopleLines(done.answer, NOTCH_PEOPLE_ANSWER_MAX).join('\n') : '';
+      if (answer) store.requestState(row.id, 'ready', answer);
+      else if (store.requestState(row.id, 'no')) {
+        void link.refuse(row.id);
+        if (!onNotch.has(row.id)) news(`people:could-not:${row.id}`, ['I could not find what ', em(from.name), ' asked for.'], ['I could not find what ', em(from.name), ' asked for. ', em(from.name), ' gets nothing back.'], { who: from.name });
+      }
+      // Its line left the notch meanwhile: it comes back with what was found.
+      if (answer && !onNotch.has(row.id)) asked(row.id);
+    })();
+    working.set(row.id, job);
+  }
+
+  /** The item for a request that arrived. It plays from wherever the request stands. */
+  function asked(taskId: string): void {
+    const first = store.requestOf(taskId);
+    const from = first ? person(first.peer) : null;
+    if (!first || !from || first.dir !== 'in') return;
+    const short = (text: string): string => { const plain = peerPlain(text, 61); return plain.length > 60 ? `${plain.slice(0, 59)}…` : plain; };
+    inbox.add({
+      id: `people:req:${taskId}`, subject: `people:req:${taskId}`, class: 'person', speaks: true,
+      title: () => {
+        const row = store.requestOf(taskId);
+        return row?.state === 'ready' ? ['The answer for ', em(from.name), ' is ready.'] : row?.state === 'working' ? ['Finding the answer for ', em(from.name), '.'] : [em(from.name), ' asks me: ', short(first.words)];
+      },
+      check: () => { const row = store.requestOf(taskId); return !!row && row.state !== 'done' && row.state !== 'no'; },
+      play: async (stage) => {
+        onNotch.add(taskId);
+        try {
+          const ended = (): void => { if (first.item) { store.done(first.item); void link.seen(first.item); } };
+          let row = store.requestOf(taskId);
+          if (!row) return 'settled';
+          if (row.state === 'new') {
+            const opened = await link.open(taskId, { request: approve(stage, from, row) });
+            if (opened === 'closed') return 'waits';
+            if (opened === 'failed') { await stage.say(['I cannot take that up right now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+            if (opened === 'gone') { store.requestState(taskId, 'no'); ended(); await stage.say([em(from.name), ' took it back.'], 2400, { who: from.name }); return 'settled'; }
+            if (opened === 'declined') { store.requestState(taskId, 'no'); ended(); await stage.say(['Told ', em(from.name), ' no. Nothing was touched.'], 3000, { who: from.name }); return 'settled'; }
+            store.requestState(taskId, 'working');
+            begin(row, from);
+          }
+          row = store.requestOf(taskId);
+          if (row?.state === 'working') {
+            const job = working.get(taskId);
+            if (!job) {
+              // The brain was started anew in the middle of it: nothing is being done, and its hold on the request went with it.
+              store.requestState(taskId, 'no'); ended(); void link.refuse(taskId);
+              await stage.say(['I was stopped in the middle of what ', em(from.name), ' asked. I told ', em(from.name), ' no.'], 3600, { mood: 'sorry' });
+              return 'settled';
+            }
+            const waitId = stage.id();
+            stage.put({ id: waitId, kind: 'work', say: ['Finding the answer for ', em(from.name), '…'], steps: 0, done: 0, mood: 'work', who: from.name });
+            const stopped = stage.answer(waitId, ['stop', 'no']).then(() => 'stop' as const, () => 'left' as const);
+            const how = await Promise.race([job.then(() => 'found' as const), stopped]);
+            if (how === 'left') return 'waits';
+            if (how === 'stop') {
+              // Stopped by the person: nothing of it is sent, whatever is found later.
+              store.requestState(taskId, 'no'); ended(); void link.refuse(taskId);
+              await stage.say(['Stopped. Told ', em(from.name), ' no. Nothing left this laptop.'], 3200, { who: from.name });
+              return 'settled';
+            }
+          }
+          row = store.requestOf(taskId);
+          if (row?.state === 'no') { ended(); await stage.say(['I could not find that. ', em(from.name), ' gets nothing back.'], 3200, { mood: 'sorry', who: from.name }); return 'settled'; }
+          if (row?.state !== 'ready' || !row.answer) return 'settled';
+          const finished = await link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer) });
+          if (finished === 'closed') return 'waits';
+          if (finished === 'failed') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+          if (finished === 'sent') { store.requestState(taskId, 'done'); ended(); await stage.say(['Sent. Only that left this laptop.'], 3200, { mark: 'check', who: from.name }); return 'settled'; }
+          store.requestState(taskId, 'no');
+          ended();
+          if (finished === 'gone') { await stage.say([em(from.name), ' took it back. Nothing was sent.'], 2800, { who: from.name }); return 'settled'; }
+          // Kept back, or closed too often to be asked again: the other side is told no, with nothing of this machine's.
+          void link.refuse(taskId);
+          await stage.say(['Told ', em(from.name), ' no. Nothing left this laptop.'], 3000, { who: from.name });
+          return 'settled';
+        } finally {
+          onNotch.delete(taskId);
+        }
+      },
+    });
+  }
+
+  // --- a request: what this machine asked ---
+
+  /** The answer to something this machine asked: said, or opened to be read. */
+  function answer(row: PeerRequestRow, from: PeerPerson): void {
+    const theirs = `${from.name}'s ${NOTCH_NAME}`;
+    const key = `answer:${row.id}`;
+    store.take(key, row.peer);
+    inbox.add({
+      id: `people:${key}`, subject: `people:${key}`, class: 'person', speaks: true,
+      title: () => [em(theirs), ' answered.'],
+      check: () => store.got(key)?.done !== true,
+      play: async (stage) => {
+        const lines = peopleLines(row.answer ?? '', NOTCH_PEOPLE_ANSWER_MAX);
+        if (lines.length === 1 && lines[0]!.length <= NOTCH_PEOPLE_LINE_MAX) {
+          const said = await stage.offer([em(theirs), ': ', lines[0]!], 'ok', { who: from.name, mood: 'look' });
+          if (said.act !== 'yes') return 'waits';
+        } else {
+          const first = await stage.offer([em(theirs), ' answered. Read it?'], 'read', { who: from.name, mood: 'look' });
+          if (first.act !== 'yes') return 'waits';
+          await stage.sheet([em(theirs)], [{ kind: 'note', say: ['You asked: ', peerPlain(row.words, 200)] }, { kind: 'paper', lines: lines.map((line) => [line]) }], { who: from.name });
+        }
+        store.done(key);
+        return 'settled';
+      },
+    });
+  }
+
+  /** Looks at what became of what this machine asked. */
+  async function follow(): Promise<void> {
+    const open = store.openRequests('out');
+    if (!open.length || link.account().engine !== 'up') return;
+    let all: PeerRequest[];
+    try { all = await link.requests(); } catch { return; }
+    for (const row of open) {
+      const from = person(row.peer);
+      const end = all.find((one) => one.id === row.id && one.dir === 'out' && one.peer === row.peer)?.end ?? null;
+      if (!from) continue;
+      if (!end) {
+        if (row.nudgedAt === null && now() - row.at >= NOTCH_PEOPLE_ASK_WAIT_MS) unanswered(row, from);
+        continue;
+      }
+      inbox.remove(`people:late:${row.id}`);
+      if (end.how === 'answered') {
+        // What they wrote is kept as text and shown as text. Nothing is done with it.
+        if (store.requestState(row.id, 'done', end.text.slice(0, NOTCH_PEOPLE_ANSWER_MAX * 2))) answer(store.requestOf(row.id)!, from);
+        continue;
+      }
+      if (!store.requestState(row.id, 'no') || end.how === 'cancelled') continue;
+      const theirs = `${from.name}'s`;
+      const say: NotchPart[] = end.how === 'expired' ? [em(from.name), ' did not answer in time. It is closed.']
+        : end.how === 'failed' && end.said ? [em(`${theirs} ${NOTCH_NAME}`), ' could not do it.']
+          : end.how === 'declined' ? [em(from.name), ' said no. Nothing left ', em(theirs), ' laptop.']
+            // It was taken up and nothing was sent: kept back there, or not found. This machine cannot tell which.
+            : ['Nothing came back from ', em(`${theirs} ${NOTCH_NAME}`), '. Nothing left ', em(theirs), ' laptop.'];
+      news(`people:end:${row.id}`, say, say, { person: true, who: from.name, ms: 4200 });
+    }
+  }
+
+  /** A request that is out too long: its asker is told once. */
+  function unanswered(row: PeerRequestRow, to: PeerPerson): void {
+    store.requestNudged(row.id);
+    inbox.add({
+      id: `people:late:${row.id}`, subject: `people:late:${row.id}`, class: 'rest', speaks: true,
+      title: () => [em(to.name), ' has not answered.'],
+      check: () => { const kept = store.requestOf(row.id); return !!kept && kept.state === 'new'; },
+      play: async (stage) => {
+        const said = await stage.choose([em(to.name), ' has not answered. Wait, or take it back?'], ['Wait', 'Take it back'], { who: to.name });
+        if (said.act !== 'pick') return 'waits';
+        if (said.index === 0) { await stage.say(['It waits. I will tell you what comes back.'], 3000); return 'settled'; }
+        if (!(await link.takeBack(row.id))) { await stage.say(['I could not take it back now.'], 3000, { mood: 'sorry' }); return 'waits'; }
+        store.requestState(row.id, 'no');
+        await stage.say(['Taken back. ', em(to.name), ' will not be asked.'], 2800);
+        return 'settled';
+      },
+    });
+  }
+
+  /** While something is out, its answer is looked for often: nothing announces it. */
+  let followTimer: ReturnType<typeof setTimeout> | null = null;
+  function following(): void {
+    if (deps.noClock || followTimer) return;
+    followTimer = setTimeout(() => {
+      followTimer = null;
+      void follow().finally(() => { if (store.openRequests('out').length) following(); });
+    }, NOTCH_PEOPLE_FOLLOW_MS);
+    (followTimer as { unref?: () => void }).unref?.();
+  }
+
   async function lookNow(): Promise<void> {
     if (link.account().engine !== 'up' || !link.account().signedIn) return;
     let items: PeerItem[];
     try { items = await link.unread(); } catch { log('[notch] what arrived from the others could not be read'); return; }
     for (const item of items) {
-      if (item.kind !== 'message') continue;
+      // What belongs to something this machine asked (a result, a no, a note of progress) is read with the
+      // request itself (`follow`). Here it is only marked as taken in, so that it is not listed for ever.
+      if (item.kind !== 'message' && item.kind !== 'task_request' && item.kind !== 'task_cancel') { void link.seen(item.id); continue; }
       const known = store.got(item.id);
       if (known?.done) { void link.seen(item.id); continue; }
-      if (known && inbox.has(`people:${item.id}`)) continue;
+      if (known && (inbox.has(`people:${item.id}`) || (item.task !== null && inbox.has(`people:req:${item.task}`)))) continue;
       let from = person(item.from);
       if (!from && now() - refreshedAt > NOTCH_PEOPLE_TICK_MS) { refreshedAt = now(); await link.refresh(); from = person(item.from); }
       // From a device that has no name here: not somebody the owner connected with. Left where it is.
       if (!from) continue;
       store.take(item.id, item.from);
+      if (item.kind === 'task_cancel') {
+        // They took their request back: it leaves, wherever it stood. Work that is under way sends nothing.
+        const row = item.task ? store.requestOf(item.task) : null;
+        if (row && row.dir === 'in' && row.peer === item.from && store.requestState(row.id, 'no')) {
+          if (inbox.remove(`people:req:${row.id}`) || working.has(row.id)) news(`people:back:${row.id}`, [em(from.name), ' took it back.'], [em(from.name), ' took it back.'], { who: from.name, ms: 2400 });
+          if (row.item) store.done(row.item);
+        }
+        store.done(item.id);
+        void link.seen(item.id);
+        continue;
+      }
+      if (item.kind === 'task_request') {
+        if (!item.task) { store.done(item.id); continue; }
+        store.request({ id: item.task, dir: 'in', peer: item.from, words: item.text, item: item.id });
+        asked(item.task);
+        continue;
+      }
       const { words, note } = peerNoteRead(item.text);
       if (note && note.kind !== 'ask') {
         answered(item, from, note);
@@ -547,15 +887,30 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
 
   async function tick(): Promise<void> {
     await look();
+    await follow();
     for (const sent of store.unanswered(now() - NOTCH_PEOPLE_ASK_WAIT_MS)) late(sent);
   }
 
+  if (store.openRequests('out').length) following();
+  /** After the brain was started anew: what waited for the person waits again, once the people are known. */
+  let restored = false;
+  function restore(): void {
+    if (restored || !others().length) return;
+    restored = true;
+    for (const row of store.openRequests('in')) if (row.state !== 'new') asked(row.id);
+    for (const key of store.waiting()) {
+      if (!key.startsWith('answer:')) continue;
+      const row = store.requestOf(key.slice('answer:'.length));
+      const from = row ? person(row.peer) : null;
+      if (row && from && row.state === 'done') answer(row, from);
+    }
+  }
   link.onArrival(() => { void look(); });
-  link.onChange(() => { inbox.refresh(); void look(); });
+  link.onChange(() => { restore(); inbox.refresh(); void look(); });
 
   return {
     row, open, route, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
-    stop() { if (timer) clearInterval(timer); },
+    stop() { if (timer) clearInterval(timer); if (followTimer) clearTimeout(followTimer); },
   };
 }

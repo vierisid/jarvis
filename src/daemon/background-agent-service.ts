@@ -52,6 +52,15 @@ export interface BackgroundTurnOptions {
    * AwarenessHeldError.
    */
   screenDerived?: boolean;
+  /**
+   * The prompt quotes what somebody outside wrote: a request from a person
+   * the owner said yes to (src/daemon/notch-peers.ts). Names where it came
+   * from. The turn starts tainted with that source, so everything that
+   * changes the machine or reaches somebody stops for the owner, as after
+   * reading a web page, from its first step. And it runs on a thread of its
+   * own: nothing of it enters the history later background turns re-send.
+   */
+  outside?: string;
 }
 
 const BG_CDP_PORT = 9223;
@@ -252,7 +261,7 @@ export class BackgroundAgentService implements Service, IAgentService {
           checkpoint: () => { if (!awarenessHistoryVisible()) { held.held = true; throw new AwarenessHeldError(); } },
         } : null;
         // Own empty thread: read, never written, so the primary history keeps none of it.
-        const thread = options.screenDerived ? { history: [] } : null;
+        const thread = options.screenDerived ? { history: [] } : options.outside ? { history: [], untrustedSources: [options.outside] } : null;
         // Inside `run`, not around handleMessage: turns are chained, and a
         // queued turn runs in whichever context resolved the one before it.
         const runTurn = () => this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, thread, null, hold);

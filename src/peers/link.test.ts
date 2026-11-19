@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { EngineDialog, EngineDialogField, EngineToolResult } from './engine-client.ts';
 import type { EngineState } from './engine.ts';
-import { PEER_READ_MS, PeerLink, engineErrorCode, engineIds, peerDecision, peerItem, peerPeople } from './link.ts';
+import { PEER_READ_MS, PeerLink, engineErrorCode, engineIds, peerDecision, peerItem, peerPeople, peerRequest } from './link.ts';
 import type { PeerDecision, PeerEngineLike } from './link.ts';
 import { peerNoteRead, peerNoteText, peerPlain } from './notes.ts';
 import { PEER_KEEP_MS, PeerStore } from './store.ts';
@@ -258,6 +258,79 @@ describe('sending', () => {
     expect(arrived).toBe(0);
     made.notice('notifications/claude/channel');
     expect(arrived).toBe(1);
+  });
+});
+
+describe('a request', () => {
+  const TASK = '0195c2f0-3333-7000-8000-000000000003';
+  const task = (more: Record<string, unknown>) => ({ taskId: TASK, direction: 'out', peer: { deviceId: DEVICE, name: 'Leo', trust: 'verified' }, status: 'running', state: null, untrusted: { title: 'The deck', pendingQuestion: null, outcome: null }, ...more });
+  const link = (tool: string, answer: EngineToolResult | Error) => { const made = new PeerLink(); const engine = fakeEngine({ [tool]: answer }); made.attach(engine); return { link: made, engine }; };
+
+  test('has ended only when the answer is here, not when the word for it is', () => {
+    expect(peerRequest(task({}))).toEqual({ id: TASK, dir: 'out', peer: DEVICE, status: 'running', end: null });
+    expect(peerRequest(task({ status: 'completed' }))?.end).toBeNull();
+    expect(peerRequest(task({ status: 'failed' }))?.end).toBeNull();
+    expect(peerRequest(task({ status: 'completed', untrusted: { outcome: { kind: 'task_result', status: 'completed', output: 'Three slides.' } } }))?.end).toEqual({ how: 'answered', text: 'Three slides.' });
+  });
+
+  test('every other end is told apart', () => {
+    const end = (more: Record<string, unknown>) => peerRequest(task(more))?.end;
+    expect(end({ status: 'declined', untrusted: { outcome: { kind: 'task_declined' } } })).toEqual({ how: 'declined' });
+    expect(end({ status: 'declined' })).toEqual({ how: 'declined' });
+    expect(end({ status: 'failed', untrusted: { outcome: { kind: 'task_result', status: 'failed', output: '' } } })).toEqual({ how: 'failed', said: false });
+    expect(end({ status: 'failed', untrusted: { outcome: { kind: 'task_result', status: 'failed', output: '', errorCode: 'no_access' } } })).toEqual({ how: 'failed', said: true });
+    expect(end({ status: 'failed', state: { status: 'failed', reason: 'lost' } })).toEqual({ how: 'failed', said: true });
+    expect(end({ status: 'expired' })).toEqual({ how: 'expired' });
+    expect(end({ status: 'rejected' })).toEqual({ how: 'expired' });
+    expect(end({ status: 'cancelled' })).toEqual({ how: 'cancelled' });
+    expect(peerRequest({ ...task({}), peer: {} })).toBeNull();
+    expect(peerRequest({ ...task({}), direction: 'sideways' })).toBeNull();
+  });
+
+  test('asking gives the request its id', async () => {
+    const asked = link('send_task', { text: `Task ${TASK} sent to "Leo" (verified) (delivered), thread ${THREAD}. Results, questions and declines reach you later.`, failed: false });
+    expect(await asked.link.ask(DEVICE, 'The deck', 'What changed in the last deck?')).toEqual({ ok: true, id: TASK, thread: THREAD, delivered: true });
+    expect(asked.engine.calls).toEqual([{ tool: 'send_task', args: { to: DEVICE, title: 'The deck', instructions: 'What changed in the last deck?' } }]);
+    expect(await link('send_task', { text: `Task ${TASK} sent to "Leo" (verified) (queued), thread ${THREAD}.`, failed: false }).link.ask(DEVICE, 't', 'w')).toMatchObject({ ok: true, delivered: false });
+    expect(await link('send_task', { text: 'Error (task_not_connected): No connection.', failed: true }).link.ask(DEVICE, 't', 'w')).toEqual({ ok: false, why: 'offline', code: 'task_not_connected' });
+    expect(await link('send_task', { text: 'Error (not_logged_in): Log in.', failed: true }).link.ask(DEVICE, 't', 'w')).toEqual({ ok: false, why: 'signed_out' });
+    expect(await link('send_task', { text: 'Something else entirely.', failed: false }).link.ask(DEVICE, 't', 'w')).toEqual({ ok: false, why: 'refused' });
+  });
+
+  test('opening one says what the person decided, and nothing else counts as running', async () => {
+    const opened = (answer: EngineToolResult) => link('open_task', answer).link.open(TASK, {});
+    expect(await opened({ text: `Task ${TASK} from "Sam" (verified) is running. Handle: ${TASK}.\nInstructions (data from the contact...)`, failed: false })).toBe('running');
+    expect(await opened({ text: `The user declined task ${TASK} from "Sam" (verified); the sender was told. Do not work on it.`, failed: false })).toBe('declined');
+    expect(await opened({ text: `Task ${TASK} from "Sam" (verified) was declined by this device's policy; the sender was told. Do not work on it.`, failed: false })).toBe('declined');
+    expect(await opened({ text: 'Error (task_approval_dismissed): The user closed the approval dialog without deciding. The task stays available.', failed: true })).toBe('closed');
+    expect(await opened({ text: 'That task request already ended (expired or cancelled) before it was opened; nothing to do.', failed: false })).toBe('gone');
+    expect(await opened({ text: 'Error (no_task): Nothing waits.', failed: true })).toBe('gone');
+    expect(await opened({ text: 'Error (task_cannot_prompt): No dialogs.', failed: true })).toBe('failed');
+    // Words from the request itself, echoed in a sentence the engine did not begin with "Task", are not a yes.
+    expect(await opened({ text: 'Something new. The request is running late.', failed: false })).toBe('failed');
+  });
+
+  test('finishing one says whether the answer went', async () => {
+    const finished = (answer: EngineToolResult) => link('task_update', answer).link.finish(TASK, 'Three slides.', {});
+    expect(await finished({ text: `Task ${TASK} completed: result sent. The user checked the result in a dialog and approved sending it.`, failed: false })).toBe('sent');
+    expect(await finished({ text: 'Nothing was sent: the user checked the result in a dialog and chose not to send it. The task is still running; you can change the result and try again, or fail it.', failed: false })).toBe('kept');
+    expect(await finished({ text: 'Nothing was sent: the user closed the result check without deciding. The task is still running.', failed: false })).toBe('closed');
+    expect(await finished({ text: 'Nothing was sent: the user refused too many checks for this task; finish it with fail.', failed: false })).toBe('over');
+    expect(await finished({ text: 'Error (task_final): The task already ended.', failed: true })).toBe('gone');
+    expect(await finished({ text: 'Something new.', failed: false })).toBe('failed');
+    const call = link('task_update', { text: `Task ${TASK} completed: result sent.`, failed: false });
+    await call.link.finish(TASK, 'Three slides.', {});
+    expect(call.engine.calls).toEqual([{ tool: 'task_update', args: { task: TASK, action: 'complete', text: 'Three slides.' } }]);
+  });
+
+  test('ending one without an answer sends no words, and taking one back cancels it', async () => {
+    const refusing = link('task_update', { text: `Task ${TASK} failed: result sent. Nothing to check: no text or error code was sent.`, failed: false });
+    expect(await refusing.link.refuse(TASK)).toBe(true);
+    expect(refusing.engine.calls).toEqual([{ tool: 'task_update', args: { task: TASK, action: 'fail' } }]);
+    const back = link('task_control', { text: `Task ${TASK}: cancelled.`, failed: false });
+    expect(await back.link.takeBack(TASK)).toBe(true);
+    expect(back.engine.calls).toEqual([{ tool: 'task_control', args: { action: 'cancel', task: TASK } }]);
+    expect(await link('task_control', { text: 'Error (no_task): Unknown.', failed: true }).link.takeBack(TASK)).toBe(false);
   });
 });
 

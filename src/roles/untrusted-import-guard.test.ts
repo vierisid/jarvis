@@ -94,6 +94,11 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // F-11 moved the framed legacy awareness prompts out of daemon bootstrap.
       'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
+      // A request from another person's Jarvis that the owner said yes to on
+      // the notch: cut to what the notch lets be said yes to
+      // (PEER_REQUEST_MAX) before it is framed into the prompt of the one
+      // background turn that answers it. That turn starts tainted.
+      'daemon/notch-peers.ts',
       'goals/rhythm.ts',
       // The notch's call notes: what was heard in a call the owner asked to
       // have listened to, each line cut and the whole capped
