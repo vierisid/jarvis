@@ -224,6 +224,9 @@ describe('the environment the engine runs in', () => {
   test('the server and the place of its key are the person\'s to set, and what it needs to run is there', () => {
     const env = engineEnv(base, '/data/peers');
     expect(env.COLLAB_SERVER_URL).toBe('https://collab.invalid');
+    // Not the machine's host name, unless the person chose a name.
+    expect(env.COLLAB_DEVICE_NAME).toBe('Pillow');
+    expect(engineEnv({ ...base, COLLAB_DEVICE_NAME: "Sam's desk" }, '/data/peers').COLLAB_DEVICE_NAME).toBe("Sam's desk");
     expect(env.COLLAB_KEYSTORE).toBe('file');
     expect(env.DBUS_SESSION_BUS_ADDRESS).toBe('unix:path=/run/user/1000/bus');
     expect(env.PATH).toBe('/usr/bin');

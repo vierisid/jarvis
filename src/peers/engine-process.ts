@@ -25,7 +25,13 @@ import type { EngineTransport } from './engine-client.ts';
 export const ENGINE_DATA_FOLDER = join('peers', 'engine');
 
 /** What the person may set for the engine from outside. Passed on as they are. */
-const PASSED_ON = ['COLLAB_SERVER_URL', 'COLLAB_KEYSTORE'] as const;
+const PASSED_ON = ['COLLAB_SERVER_URL', 'COLLAB_KEYSTORE', 'COLLAB_DEVICE_NAME'] as const;
+/**
+ * What this device calls itself to the server and to whoever it is joined
+ * with, unless the person set a name. Left alone, the engine gives the
+ * machine's host name, which is nobody's business.
+ */
+export const ENGINE_DEVICE_NAME = 'Pillow';
 /** Needed to reach the desktop's keychain, where the engine prefers to keep the key that locks its keys. */
 const KEYCHAIN = ['DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'] as const;
 
@@ -40,6 +46,7 @@ export function engineEnv(base: Record<string, string | undefined>, dataDir: str
     const value = base[name];
     if (typeof value === 'string' && value) env[name] = value;
   }
+  if (!env.COLLAB_DEVICE_NAME) env.COLLAB_DEVICE_NAME = ENGINE_DEVICE_NAME;
   env.COLLAB_DATA_DIR = dataDir;
   // Tells the brain that something arrived, the moment it does.
   env.COLLAB_CHANNELS = '1';

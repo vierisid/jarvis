@@ -195,11 +195,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   async function signIn(stage: NotchStage): Promise<boolean> {
     if (link.account().signedIn) return true;
     let opened: boolean | null = null;
+    let agreed = false;
     let waitId: string | null = null;
     const call = link.call('account', { action: 'login' }, {
       server: async (decision) => {
         const answer = await stage.offer(['Sign in at ', em(decision.host ?? 'the server'), '? What you send the others goes through it, sealed. It cannot be changed later.'], 'sign in');
-        return answer.act === 'yes' ? { choice: 'yes' } : null;
+        agreed = answer.act === 'yes';
+        return agreed ? { choice: 'yes' } : null;
       },
       page: async (decision) => {
         opened = decision.url ? await deps.openPage(stage.from(), decision.url) : false;
@@ -218,6 +220,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     }
     if (opened === false) await stage.say(['I could not open the sign-in page on this machine.'], 3200, { mood: 'sorry' });
     else if (opened) await stage.say(['That did not sign in. Try again from Home.'], 3200, { mood: 'sorry' });
+    // Said yes, and no page ever came: the server did not answer.
+    else if (agreed) await stage.say(['I could not reach the server. Try again in a moment.'], 3200, { mood: 'sorry' });
     return false;
   }
 
