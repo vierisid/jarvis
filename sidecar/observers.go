@@ -191,7 +191,8 @@ func (o *ClipboardObserver) Run(ctx context.Context, send EventSender) {
 		o.mu.Lock()
 		o.lastContent = initial
 		o.mu.Unlock()
-		log.Printf("[clipboard] Initial content: %q", truncate(initial, 50))
+		// How much, never what: a log is a plain file, and what a person copied is theirs.
+		log.Printf("[clipboard] Initial content: %d characters", len([]rune(initial)))
 	}
 
 	log.Printf("[clipboard] Monitoring clipboard (every %s)", o.pollInterval)

@@ -135,25 +135,40 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
   need make "Install the Xcode command line tools (xcode-select --install)."
   say "Building Jarvis.app"
   make -C sidecar build
+  # What reads text off the screen is a small helper of its own. Without it the app runs, and reads nothing.
+  make -C sidecar build-ocr-helper || echo "The helper that reads text off the screen was not built. Everything else goes on without it."
   [ -f sidecar/packaging/macos/AppIcon.icns ] || ( cd sidecar && packaging/macos/make-icns.sh ) || true
   mkdir -p "$APP_DIR"
   make -C sidecar app-macos BIN=./jarvis APP_DIR="$APP_DIR/Jarvis.app"
   # The same idea as start-sidecar.cmd on Windows: a profile of its own, so the
   # test build never reads or writes an installed Jarvis's settings.
+  #
+  # It is started as an app (`open`), not as a program from this terminal. macOS
+  # gives a permission to whoever started the program: started from a terminal,
+  # the Accessibility permission the keys need would be the terminal's to have,
+  # and switching it on for Jarvis.app would change nothing. That is what the
+  # first run on a Mac met (19 November 2026). What the app logs goes to
+  # app.log beside it (a crash too), and what it prints to app.out.log.
   cat > "$APP_DIR/start-sidecar.command" <<'EOS'
 #!/bin/bash
+# start-sidecar.command [token]
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="$DIR/profile"
 mkdir -p "$PROFILE"
-BIN="$DIR/Jarvis.app/Contents/MacOS/jarvis"
+APP="$DIR/Jarvis.app"
+LOG="$DIR/app.log"
+OUT="$DIR/app.out.log"
+TOKEN="${1:-}"
 if [ -f "$PROFILE/.jarvis/sidecar.yaml" ]; then
-  HOME="$PROFILE" "$BIN" >/dev/null 2>&1 &
+  open -n "$APP" --env HOME="$PROFILE" --stdout "$OUT" --stderr "$LOG"
   exit 0
 fi
-printf 'Paste the enrollment token: '
-read -r TOKEN
+if [ -z "$TOKEN" ]; then
+  printf 'Paste the enrollment token: '
+  read -r TOKEN
+fi
 [ -n "$TOKEN" ] || { echo "No token entered. Nothing started."; exit 1; }
-HOME="$PROFILE" "$BIN" --token "$TOKEN" >/dev/null 2>&1 &
+open -n "$APP" --env HOME="$PROFILE" --stdout "$OUT" --stderr "$LOG" --args --token "$TOKEN"
 EOS
   chmod +x "$APP_DIR/start-sidecar.command"
   echo "Desktop app: $APP_DIR/Jarvis.app"
@@ -215,10 +230,27 @@ if [ "$START" = 1 ] && [ "$TARGET" = "windows" ] && [ -f "$APP_DIR/bin/jarvis.ex
     done
     echo "The brain did not answer in 90 seconds, so the test build was not started. Run $START_HINT by hand." >&2
   ) &
+elif [ "$START" = 1 ] && [ "$TARGET" = "mac" ] && [ -d "$APP_DIR/Jarvis.app" ]; then
+  # As on Windows: the app is started once the brain answers, with the token that was just made when it
+  # was never enrolled. An installed Jarvis has to be quit from the menu bar first.
+  echo "The test build starts by itself once the brain is up. Its own log: $APP_DIR/app.log"
+  (
+    for _ in $(seq 1 90); do
+      if curl -fsS -m 3 -o /dev/null "http://localhost:$PORT/health" 2>/dev/null; then
+        if [ "$NEW_APP" = 1 ] && [ -n "$TOKEN" ]; then "$APP_DIR/start-sidecar.command" "$TOKEN" >/dev/null 2>&1 || true
+        else "$APP_DIR/start-sidecar.command" >/dev/null 2>&1 </dev/null || true; fi
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "The brain did not answer in 90 seconds, so the test build was not started. Run $START_HINT by hand." >&2
+  ) &
 elif [ -n "${START_HINT:-}" ]; then
   echo "Next:  quit Jarvis from its tray or menu-bar icon, then run"
   echo "       $START_HINT"
 fi
-echo "Ready when you see: [notch] \"$DEVICE\" is showing the notch"
+# Worded so that it is not itself the line it tells of: a script that waits for that line in this output
+# would otherwise find it here, before the notch is up.
+echo "Ready when a line of the brain says that \"$DEVICE\" shows the notch."
 echo
 JARVIS_NOTCH=1 exec bun run dev:local --data-dir "$DATA_DIR" --port "$PORT"

@@ -164,7 +164,7 @@ func platformNotchKeysAvailable() string {
 // platformNotchKeysStart puts the tap in. The function it returns takes it out.
 func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
 	if !setupAXTrusted() {
-		return nil, fmt.Errorf("the keys need the Accessibility permission (System Settings, Privacy & Security, Accessibility); grant it and start Jarvis again")
+		return nil, fmt.Errorf("the keys need the Accessibility permission (System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access); grant it and start Jarvis again")
 	}
 	notchTapKeyboard.Store(kb)
 	if C.jarvis_notch_tap_start() == 0 {

@@ -523,7 +523,7 @@ var darwinLook atomic.Pointer[lookMac]
 // the pointer can be watched nor a thing be read.
 func platformNotchLookHands(l *NotchLook) lookHands {
 	if !macAXTrusted() {
-		log.Printf("[notch] look: not available: the Accessibility permission is not given (System Settings, Privacy & Security, Accessibility)")
+		log.Printf("[notch] look: not available: the Accessibility permission is not given (System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access)")
 		return nil
 	}
 	m := &lookMac{look: l}
