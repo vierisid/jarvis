@@ -186,6 +186,11 @@ if [ "$BUILD" = 1 ] && [ "$TARGET" = "mac" ]; then
     # on a Mac: on in the list, refused by macOS). Only ever the test build's
     # own; an installed Jarvis's are never touched from here.
     if [ "$MAC_BUNDLE_ID" != "com.jarvis.sidecar" ] && command -v tccutil >/dev/null 2>&1; then
+      # macOS has to know the app before it can clear anything of it: an app
+      # that was only just built is not known yet, and the clearing then fails
+      # with "No such bundle identifier" (the fifth run on a Mac).
+      LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+      [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$APP_DIR/Jarvis.app" >/dev/null 2>&1 || true
       tccutil reset All "$MAC_BUNDLE_ID" >/dev/null 2>&1 || true
       echo "New build: macOS has to be told again what it may do (System Settings, Privacy & Security)."
       echo "What the build before it was given has been cleared, so nothing there shows as on that is not."
