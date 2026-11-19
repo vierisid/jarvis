@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"runtime/debug"
@@ -283,7 +284,15 @@ type ScreenObserver struct {
 	// captureTTL is the local retention floor for saved screenshots; <= 0
 	// disables the sidecar-side sweep (the brain may still clean).
 	captureTTL time.Duration
+	// notAllowedSaid is set once the log has said the system does not let
+	// this program see the screen. Only the capture loop touches it.
+	notAllowedSaid bool
 }
+
+// errScreenNotAllowed is a platform's answer when the system has not given
+// this program leave to see the screen, and it therefore did not try
+// (platform_darwin.go). A try that the system refuses is a different error.
+var errScreenNotAllowed = errors.New("the Screen Recording permission is not given (System Settings, Privacy & Security, Screen & System Audio Recording; Jarvis has to be started again after it is)")
 
 func NewScreenObserver(cfg *SidecarConfig, ocrAvailable bool) *ScreenObserver {
 	return &ScreenObserver{
@@ -350,9 +359,19 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 	}
 	imageData, err := observerCaptureScreen()
 	if err != nil {
+		// Not allowed is a state, not a failure of this try: said once, not
+		// every time the screen is looked at for nothing.
+		if errors.Is(err, errScreenNotAllowed) {
+			if !o.notAllowedSaid {
+				o.notAllowedSaid = true
+				log.Printf("[screen] %v. No picture of the screen is taken until then", err)
+			}
+			return
+		}
 		log.Printf("[screen] Capture failed: %v", err)
 		return
 	}
+	o.notAllowedSaid = false
 	if len(imageData) == 0 {
 		return
 	}

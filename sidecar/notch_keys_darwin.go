@@ -15,8 +15,13 @@ package main
 // cover, and docs/notch/README.md says what the tap may look at.
 //
 // It is an active tap, so it needs the Accessibility permission, which the app
-// already asks for in its setup. It never prompts from here: without the
-// permission it does not start, and says so.
+// already asks for in its setup. It never prompts from here.
+//
+// Without the permission the keys are not dead: the two pairs are read by
+// looking at the keyboard's state instead, which any program may do
+// (notch_keys_poll.go has why, and what that cannot do). The third run on a
+// real Mac, 19 November 2026, is why: the permission was on in the list and
+// macOS did not honour it.
 //
 // Most of the deciding whether to wake Go at all is done in C, because a tap
 // sees every key pressed on the machine: plain typing, with no Ctrl, Option or
@@ -26,10 +31,12 @@ package main
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
-#cgo LDFLAGS: -framework Cocoa -framework ApplicationServices
+#cgo LDFLAGS: -framework Cocoa -framework ApplicationServices -framework Security
 
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
+#import <Security/Security.h>
+#include <stdio.h>
 
 extern int goNotchKey(int kind, int mods);
 
@@ -100,6 +107,62 @@ static int jarvis_notch_tap_start(void) {
     return 1;
 }
 
+// The keyboard right now, asked of the system and not heard from it: which
+// modifiers are down, how many keys have gone down since the system started,
+// and whether Esc is down. The keyboard itself only (the HID state), so a key
+// Jarvis presses in another app is not taken for the person's. None of the
+// three needs a permission, and none says which key was typed.
+static void jarvis_notch_keys_now(int* mods, unsigned int* downs, int* esc) {
+    *mods = jarvis_notch_mods(CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState));
+    *downs = (unsigned int)CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown);
+    *esc = CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, (CGKeyCode)53) ? 1 : 0;
+}
+
+// What macOS makes of this program, for one line in the log. A permission that
+// is on in System Settings and not honoured (the third run on a real Mac) can
+// only be told apart from one that was never given by what is written here:
+// who macOS takes the program for, whether its signature holds for the program
+// as it runs, and what each permission answers when asked without prompting.
+//
+// out: "<bundle id>|<signed as>|<signature flags, hex>|<0 when the signature holds, else the system's code>"
+static void jarvis_notch_self(char* out, int n) {
+    if (n <= 0) return;
+    out[0] = 0;
+    @autoreleasepool {
+        NSString* bundle = [[NSBundle mainBundle] bundleIdentifier];
+        NSString* signedAs = @"?";
+        unsigned int flags = 0;
+        int holds = -1;
+        SecCodeRef me = NULL;
+        if (SecCodeCopySelf(kSecCSDefaultFlags, &me) == errSecSuccess && me != NULL) {
+            holds = (int)SecCodeCheckValidity(me, kSecCSDefaultFlags, NULL);
+            SecStaticCodeRef onDisk = NULL;
+            if (SecCodeCopyStaticCode(me, kSecCSDefaultFlags, &onDisk) == errSecSuccess && onDisk != NULL) {
+                CFDictionaryRef info = NULL;
+                if (SecCodeCopySigningInformation(onDisk, kSecCSSigningInformation, &info) == errSecSuccess && info != NULL) {
+                    NSDictionary* d = (__bridge NSDictionary*)info;
+                    id name = d[(__bridge NSString*)kSecCodeInfoIdentifier];
+                    if ([name isKindOfClass:[NSString class]]) signedAs = [(NSString*)name copy];
+                    id f = d[(__bridge NSString*)kSecCodeInfoFlags];
+                    if ([f isKindOfClass:[NSNumber class]]) flags = [(NSNumber*)f unsignedIntValue];
+                    CFRelease(info);
+                }
+                CFRelease(onDisk);
+            }
+            CFRelease(me);
+        }
+        snprintf(out, (size_t)n, "%s|%s|%x|%d", bundle != nil ? bundle.UTF8String : "none", signedAs.UTF8String, flags, holds);
+    }
+}
+
+// Each permission's answer when asked without prompting. 1 yes, 0 no.
+static void jarvis_notch_permissions(int* ax, int* listen, int* post, int* screen) {
+    *ax = AXIsProcessTrusted() ? 1 : 0;
+    *listen = CGPreflightListenEventAccess() ? 1 : 0;
+    *post = CGPreflightPostEventAccess() ? 1 : 0;
+    *screen = CGPreflightScreenCaptureAccess() ? 1 : 0;
+}
+
 static void jarvis_notch_tap_stop(void) {
     CFMachPortRef tap = jarvis_notch_tap;
     CFRunLoopSourceRef source = jarvis_notch_tap_source;
@@ -119,9 +182,12 @@ static void jarvis_notch_tap_stop(void) {
 import "C"
 
 import (
-	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+	"unsafe"
 )
 
 // The keyboard the tap feeds. One notch per process, so one of these.
@@ -151,31 +217,109 @@ func notchTapSeen(kind, mods int) bool {
 	return false
 }
 
-// platformNotchKeysAvailable says whether the keys can be watched here. The
-// tap needs the Accessibility permission, which is asked for in setup and
-// never from here.
+// platformNotchKeysAvailable says how the keys can be watched here: with the
+// tap when the Accessibility permission is given, and by looking at the
+// keyboard's state when it is not. Either way the two pairs work. It never
+// prompts.
 func platformNotchKeysAvailable() string {
 	if !setupAXTrusted() {
-		return notchKeysBlocked
+		return notchKeysPairs
 	}
 	return notchKeysWatch
 }
 
-// platformNotchKeysStart puts the tap in. The function it returns takes it out.
+// How often the keyboard is looked at without the tap. A tap of a pair lasts
+// a tenth of a second or so; this sees each key of it go down and come up.
+const notchKeysLookEvery = 8 * time.Millisecond
+
+// platformNotchKeysStart starts the watch on the keyboard: the tap when it is
+// allowed, else the looking. The function it returns ends it.
 func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
-	if !setupAXTrusted() {
-		return nil, fmt.Errorf("the keys need the Accessibility permission (System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access); grant it and start Jarvis again")
-	}
-	notchTapKeyboard.Store(kb)
-	if C.jarvis_notch_tap_start() == 0 {
+	// On a goroutine: checking the signature reads the whole program from disk.
+	go notchLogMacPermissions()
+	if setupAXTrusted() {
+		notchTapKeyboard.Store(kb)
+		if C.jarvis_notch_tap_start() != 0 {
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					C.jarvis_notch_tap_stop()
+					notchTapKeyboard.CompareAndSwap(kb, nil)
+				})
+			}, nil
+		}
 		notchTapKeyboard.CompareAndSwap(kb, nil)
-		return nil, fmt.Errorf("the system refused the keyboard tap")
+		log.Printf("[notch] keys: the system refused the keyboard tap although the Accessibility permission is given")
 	}
+	log.Printf("[notch] keys: without the Accessibility permission the two pairs are read from the keyboard's state. " +
+		"Esc is heard and not kept from the app in front, and drawing round a thing needs the permission " +
+		"(System Settings, Privacy & Security, Accessibility; newer versions of macOS call the list Device Control and Data Access), then Jarvis started again")
+	return notchKeysLookStart(kb), nil
+}
+
+// notchKeysLookStart feeds the keyboard from looks at its state, on a
+// goroutine of its own. The function it returns ends it and waits for it.
+func notchKeysLookStart(kb *notchKeyboard) (stop func()) {
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(notchKeysLookEvery)
+		defer ticker.Stop()
+		var poll notchKeyPoll
+		last := time.Now()
+		for {
+			select {
+			case <-quit:
+				return
+			case now := <-ticker.C:
+				// The machine slept, or this was held up: what the keyboard did
+				// meanwhile was not seen, so no key can be taken as still down.
+				if now.Sub(last) > time.Second {
+					poll.reset()
+					kb.reset()
+				}
+				last = now
+				var mods, esc C.int
+				var downs C.uint
+				C.jarvis_notch_keys_now(&mods, &downs, &esc)
+				for _, e := range poll.step(notchKeyLook{Mods: notchMods(mods), Downs: uint32(downs), Esc: esc != 0}) {
+					kb.key(e.Kind, e.Mods)
+				}
+			}
+		}
+	}()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			C.jarvis_notch_tap_stop()
-			notchTapKeyboard.CompareAndSwap(kb, nil)
+			close(quit)
+			<-done
 		})
-	}, nil
+	}
+}
+
+// notchLogMacPermissions writes what macOS makes of this program: one line,
+// once for each time the keys are started.
+func notchLogMacPermissions() {
+	buf := make([]byte, 512)
+	C.jarvis_notch_self((*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)))
+	parts := strings.SplitN(C.GoString((*C.char)(unsafe.Pointer(&buf[0]))), "|", 4)
+	for len(parts) < 4 {
+		parts = append(parts, "?")
+	}
+	var ax, listen, post, screen C.int
+	C.jarvis_notch_permissions(&ax, &listen, &post, &screen)
+	yes := func(v C.int) string {
+		if v != 0 {
+			return "yes"
+		}
+		return "no"
+	}
+	holds := "holds"
+	if parts[3] != "0" {
+		holds = "does NOT hold (the system's code " + parts[3] + ")"
+	}
+	log.Printf("[notch] to macOS this program is %q, signed as %q (flags %s); its signature %s as it runs. "+
+		"Accessibility: %s. Hearing keys: %s. Pressing keys: %s. Screen recording: %s.",
+		parts[0], parts[1], parts[2], holds, yes(ax), yes(listen), yes(post), yes(screen))
 }

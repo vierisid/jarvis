@@ -32,7 +32,11 @@ const (
 const (
 	notchKeysNone    = "none"    // not built for this system
 	notchKeysWatch   = "watch"   // can watch for them
-	notchKeysBlocked = "blocked" // the system has not allowed it yet (macOS Accessibility)
+	notchKeysBlocked = "blocked" // the system has not allowed it yet, and there is no other way
+	// The two pairs work, read from the keyboard's state without a permission
+	// (macOS without Accessibility). Esc is not kept from the app in front and
+	// the pointer is not seen.
+	notchKeysPairs = "pairs"
 )
 
 // A message between the brain and the notch's page may be this long, as JSON

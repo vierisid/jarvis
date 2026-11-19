@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 )
 
 func platformClipboardRead() (string, error) {
@@ -18,7 +19,28 @@ func platformClipboardWrite(content string) error {
 	return err
 }
 
+// screenAsked is set once macOS has been asked for the Screen Recording
+// permission by this process.
+var screenAsked atomic.Bool
+
+// platformCaptureScreen takes a picture of the screen with the system's own
+// tool. Without the Screen Recording permission it does not try.
+//
+// It used to: the tool then fails, and on a recent macOS every such try puts
+// the system's "Jarvis would like to record this computer's screen" window up
+// again. What watches the screen takes a picture every 15 seconds, so the
+// window came back every 15 seconds, forty times in thirteen minutes on the
+// third run on a real Mac (19 November 2026): "the mac os pop up keeps on
+// opening". Now macOS is asked once in the life of the program, which also
+// puts Jarvis in the list where the permission is given, and after that the
+// answer is simply no until the permission is there.
 func platformCaptureScreen(outputPath string) error {
+	if !setupScreenAllowed() {
+		if screenAsked.CompareAndSwap(false, true) {
+			setupRequestPermission("screen")
+		}
+		return errScreenNotAllowed
+	}
 	_, err := runCmd("screencapture", []string{"-x", outputPath}, "")
 	return err
 }
