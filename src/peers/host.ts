@@ -33,7 +33,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { delimiter, dirname, join } from 'node:path';
 import { filterEnv } from '../util/subprocess-env.ts';
 import { readPipe } from './engine-process.ts';
-import { ENGINE_TARGETS, engineArchiveName, engineFileName, engineTarget, peerServerAddress } from './install.ts';
+import { engineArchiveName, engineFileName, engineTarget, peerServerAddress } from './install.ts';
 import type { EngineTarget } from './install.ts';
 import { PEER_LOCAL_PAGE } from './link.ts';
 import { zipWrite } from './zip.ts';
@@ -45,6 +45,9 @@ const HOST_SETTINGS = join('deploy', 'ngrok', '.env');
 const HOST_DATA = join('deploy', 'ngrok', 'data');
 const HOST_BUILDS = join('deploy', 'ngrok', 'dist');
 const HOST_BUILDER = join('packages', 'connector-claude-code');
+
+/** The order the other systems' engines are built in: the ones a guest is most likely to sit at come first. */
+export const HOST_BUILD_ORDER: readonly EngineTarget[] = ['darwin-arm64', 'windows-x64', 'linux-x64', 'darwin-x64', 'linux-arm64'];
 
 /** How long the server and its tunnel have to come up: packages are fetched first, the first time. */
 export const HOST_START_MS = 5 * 60_000;
@@ -325,7 +328,7 @@ export class PeerHost {
   /** The systems an engine is built for here, ready to be taken. */
   built(): EngineTarget[] {
     const dir = join(this.options.source, HOST_BUILDS);
-    return ENGINE_TARGETS.filter((target) => existsSync(join(dir, engineArchiveName(target))));
+    return HOST_BUILD_ORDER.filter((target) => existsSync(join(dir, engineArchiveName(target))));
   }
 
   /** The program of a build that was made here, or null. */
@@ -369,7 +372,7 @@ export class PeerHost {
 
   /** Builds for every system that has no build yet, one after the other. Meant to be left running. */
   async buildRest(): Promise<void> {
-    for (const target of ENGINE_TARGETS) {
+    for (const target of HOST_BUILD_ORDER) {
       if (this.current !== 'on') return;
       if (!this.built().includes(target)) await this.build(target);
     }

@@ -57,7 +57,7 @@ import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 import { NotchStageEnded } from './stage.ts';
 import { peerLoginName } from '../peers/host.ts';
-import { peerServerAddress } from '../peers/install.ts';
+import { ENGINE_TARGET_SAID, peerServerAddress } from '../peers/install.ts';
 import { PEER_READ_MS, engineErrorCode } from '../peers/link.ts';
 import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerRequest, PeerSent } from '../peers/link.ts';
 import { PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
@@ -668,7 +668,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (made.why !== 'taken') { await stage.say(['I could not make the account now.'], 3200, { mood: 'sorry' }); return; }
       say = ['Someone called ', em(one), ' has an account here already. Another name.'];
     }
-    const ready = setup.built().length;
+    const ready = setup.built();
     const id = stage.id();
     stage.put({
       id, kind: 'sheet', say: ['For ', em(name), ': three things'], mood: 'look', stay: true, no: 'close',
@@ -677,7 +677,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         { kind: 'row', lead: '2', say: [em(peerLoginName(name) ?? name)], small: 'Their name there.' },
         { kind: 'row', lead: '3', say: [em(password)], small: 'Their password. Shown this once: I do not keep it.' },
         { kind: 'note', say: [`On their ${NOTCH_NAME}: Home, "Join an organisation", then the address. They sign in with the name and the password. When they have, make the code here.`] },
-        ...(ready < 5 ? [{ kind: 'note' as const, say: [`The engines for the other kinds of laptop are still being built: ${ready} of 5 are ready.`] }] : []),
+        // Which kinds of laptop can join now: the others' engines are still being built.
+        ...(ready.length < 5 ? [{ kind: 'note' as const, say: [ready.length ? `They can join now from: ${ready.map((one) => ENGINE_TARGET_SAID[one]).join(', ')}. The engines for the other kinds of laptop are still being built.` : 'The engines for the other kinds of laptop are still being built. Give it a few minutes.'] }] : []),
         { kind: 'buttons', buttons: [{ id: 'code', label: 'They are in: make the code' }] },
       ],
     });

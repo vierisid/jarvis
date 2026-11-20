@@ -22,7 +22,7 @@ import type { EngineState } from './engine.ts';
 import { engineDataDir } from './engine-process.ts';
 import { PeerHost, canHost, signInByForm } from './host.ts';
 import type { HostAccount, HostStarted, HostState } from './host.ts';
-import { engineTarget, fetchEngine, installedEngine, placeEngine } from './install.ts';
+import { engineTarget, fetchEngine, installedEngine, peerServerAddress, placeEngine } from './install.ts';
 import type { EngineFetched, EngineTarget } from './install.ts';
 import type { PeerEngineLike, PeerLink } from './link.ts';
 
@@ -37,6 +37,8 @@ export interface PeerSetupMemory {
 
 /** The name of this machine's owner at the server it runs, and whether the server is meant to be on. */
 const MY_NAME = 'host.me', HOST_ON = 'host.on';
+/** The address of the organisation whose engine was put in place here. */
+const SERVER = 'server';
 
 export type SetupStep = 'server' | 'build' | 'engine';
 
@@ -98,7 +100,7 @@ export interface PeerSetupOptions {
   runtimeDir?: string;
   log?: (line: string) => void;
   /** For tests: other ways to do each thing, and another clock. */
-  makeEngine?: (path: string) => SetupEngine;
+  makeEngine?: (path: string, env: Record<string, string | undefined>) => SetupEngine;
   makeHost?: (source: string, onState: () => void) => PeerHost;
   fetch?: typeof fetch;
   engineUpMs?: number;
@@ -151,12 +153,25 @@ export class PeerSetup implements PeerSetupLike {
       link.engineState(state);
       for (const waiter of this.stateWaiters.splice(0)) waiter();
     };
-    this.engine = this.options.makeEngine?.(path) ?? new PeerEngine({
-      path, brainDataDir: this.options.brainDataDir, env: this.options.env, log: this.log,
+    this.engine = this.options.makeEngine?.(path, this.engineEnv()) ?? new PeerEngine({
+      path, brainDataDir: this.options.brainDataDir, env: this.engineEnv(), log: this.log,
       onDialog: link.dialog, onNotice: link.notice, onState,
     });
     link.attach(this.engine);
     this.engine.start();
+  }
+
+  /**
+   * What the engine is started with. An engine that was put in place here
+   * belongs to one organisation, and is told that organisation's address: a
+   * server setting left over in the environment from another time would
+   * otherwise send its first sign-in there. An engine named by hand keeps
+   * the environment as it is.
+   */
+  private engineEnv(): Record<string, string | undefined> {
+    const base = this.options.env ?? process.env;
+    const server = this.options.enginePath ? null : (this.peerHost?.address() ?? this.options.memory.meta(SERVER));
+    return server ? { ...base, COLLAB_SERVER_URL: server } : base;
   }
 
   /** Waits until the engine is up, as long as it is given. */
@@ -256,6 +271,8 @@ export class PeerSetup implements PeerSetupLike {
         if (before) this.startEngine(before);
         return fetched;
       }
+      const address = peerServerAddress(server);
+      if (address) this.options.memory.setMeta(SERVER, address);
     }
     const path = this.path();
     if (!path) return { ok: false, why: 'engine' };
@@ -266,6 +283,7 @@ export class PeerSetup implements PeerSetupLike {
   async leave(): Promise<boolean> {
     await this.stopHost();
     this.options.memory.setMeta(MY_NAME, null);
+    this.options.memory.setMeta(SERVER, null);
     return this.fresh();
   }
 

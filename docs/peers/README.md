@@ -290,7 +290,8 @@ server stops.
     holding a program for this system under the build's own name. That is the same trust as
     joining at all: the server is where everything goes through.
 42. **An engine has one server for good.** One that is still signed in elsewhere is left only on
-    a yes, and its folder is set aside, not destroyed.
+    a yes, and its folder is set aside, not destroyed. An engine that was put in place here is
+    started with its organisation's address, whatever server the environment names.
 43. **An engine named by hand is never written over**, by a join or by a build.
 
 ### Where it stops
@@ -301,7 +302,9 @@ server stops.
 - Hosting needs bash, bun, curl, openssl and ngrok with an account, on Linux, macOS or WSL. A
   brain on Windows itself can join and cannot host.
 - The other systems' engines take a few minutes the first time: each needs its runtime fetched.
-  Until one is built, a joiner on that system is told to try again.
+  They are built in this order: Mac (Apple chip), Windows, Linux, Mac (Intel), Linux (ARM). The
+  invite sheet says which are ready. Until one is built, a joiner on that system is told to try
+  again.
 - The first start of the tunnel at a real address has been run by the owner only, not by a test:
   the tests use a stand-in script, and the rehearsal outside this repository uses the real script
   with a stand-in for the tunnel program.
