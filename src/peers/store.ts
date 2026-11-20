@@ -73,6 +73,17 @@ export class PeerStore {
     db.run('DELETE FROM notch_peer_got WHERE at < ?', [before]);
   }
 
+  /** A small thing to remember, by name. Null when there is none. */
+  meta(key: string): string | null {
+    const row = this.db.query('SELECT value FROM notch_peer_meta WHERE key = ?').get(key) as { value: string } | null;
+    return row?.value ?? null;
+  }
+
+  setMeta(key: string, value: string | null): void {
+    if (value === null) this.db.run('DELETE FROM notch_peer_meta WHERE key = ?', [key]);
+    else this.db.run('INSERT INTO notch_peer_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value]);
+  }
+
   /** What the organisation is called here. Null until it has a name. */
   org(): string | null {
     const row = this.db.query('SELECT value FROM notch_peer_meta WHERE key = ?').get('org') as { value: string } | null;

@@ -45,8 +45,14 @@ export function devEnv(parent: Record<string, string | undefined>, paths: DevPat
     // organisation with (the first try at it with a second person, 20
     // November 2026). Only with the notch on, which is what shows it.
     const engine = parent.JARVIS_PEERS_ENGINE?.trim();
-    if (engine && isAbsolute(engine)) {
-      env.JARVIS_PEERS_ENGINE = engine;
+    if (engine && isAbsolute(engine)) env.JARVIS_PEERS_ENGINE = engine;
+    // The same switch with no engine yet (JARVIS_PEERS=1): one comes when an
+    // organisation is made or joined. And the engine's source, for whoever
+    // makes one: its server is run from there (src/peers/host.ts).
+    if (parent.JARVIS_PEERS === '1') env.JARVIS_PEERS = '1';
+    const source = parent.JARVIS_PEERS_SOURCE?.trim();
+    if (source && isAbsolute(source)) env.JARVIS_PEERS_SOURCE = source;
+    if (env.JARVIS_PEERS_ENGINE || env.JARVIS_PEERS) {
       for (const key of PEERS_KEYS) if (parent[key]) env[key] = parent[key]!;
     }
   }

@@ -59,4 +59,18 @@ describe('the dev:local environment', () => {
     const without = devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', ...given }, paths, 3143);
     for (const key of Object.keys(given)) expect(key in without).toBe(false);
   });
+  test('carries the switch with no engine yet, and the engine\'s source, with the notch on only', () => {
+    const on = devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS: '1', JARVIS_PEERS_SOURCE: ' /home/sam/collab ', COLLAB_KEYSTORE: 'file' }, paths, 3143);
+    expect(on.JARVIS_PEERS).toBe('1');
+    expect(on.JARVIS_PEERS_SOURCE).toBe('/home/sam/collab');
+    expect(on.COLLAB_KEYSTORE).toBe('file');
+    // By exactly "1", and a path from the root.
+    const loose = devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS: 'yes', JARVIS_PEERS_SOURCE: 'collab', COLLAB_KEYSTORE: 'file' }, paths, 3143);
+    expect('JARVIS_PEERS' in loose).toBe(false);
+    expect('JARVIS_PEERS_SOURCE' in loose).toBe(false);
+    expect('COLLAB_KEYSTORE' in loose).toBe(false);
+    const dark = devEnv({ PATH: '/bin', JARVIS_PEERS: '1', JARVIS_PEERS_SOURCE: '/home/sam/collab' }, paths, 3143);
+    expect('JARVIS_PEERS' in dark).toBe(false);
+    expect('JARVIS_PEERS_SOURCE' in dark).toBe(false);
+  });
 });

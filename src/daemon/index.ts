@@ -188,9 +188,10 @@ import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
-import { PeerEngine } from "../peers/engine.ts";
 import { PeerLink } from "../peers/link.ts";
-import { peersEnginePath } from "../peers/switch.ts";
+import { PeerSetup } from "../peers/setup.ts";
+import { PeerStore } from "../peers/store.ts";
+import { peersEnginePath, peersOn, peersSourcePath } from "../peers/switch.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker, WORKFLOW_WORKER_CONCURRENCY } from "../workflows/queue/worker.ts";
@@ -301,8 +302,8 @@ let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
 let bgAgent: BackgroundAgentService | null = null;
-/** The program that talks to other people's Jarvises, kept up (src/peers/). Null with its switch off. */
-let peerEngine: PeerEngine | null = null;
+/** The program that talks to other people's Jarvises, and the server of an organisation made here (src/peers/setup.ts). Null with the switch off. */
+let peerSetup: PeerSetup | null = null;
 let awarenessService: import('../awareness/service.ts').AwarenessService | null = null;
 // Starts the awareness service when screen awareness is turned on after a boot
 // with it off (owner decision 2026-11-11); a no-op until post-setup is wired.
@@ -524,8 +525,9 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   briefOpportunityActivation?.stop();
   briefOpportunityActivation = null;
   // Told to leave, so that it closes its line to the server in order. It would end with the brain anyway.
-  peerEngine?.stop();
-  peerEngine = null;
+  // An organisation's server that runs here goes down with it, and comes back with the next brain.
+  peerSetup?.stop();
+  peerSetup = null;
   await briefPreparedOpportunities?.close();
   briefPreparedOpportunities = null;
   suggestionComposer?.stop();
@@ -4725,10 +4727,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onSidecarConnected((sidecar) => {
         void sidecarManager.dispatchRPC(sidecar.id, 'panel.close', { id: NOTCH_INSTALLED_CARD }).catch(() => { /* none was up, or an older desktop app */ });
       });
-      // Other people's Jarvises (src/peers/). Dark unless the place of the engine is given.
+      // Other people's Jarvises (src/peers/). Dark unless switched on: by the place of the engine, or by
+      // JARVIS_PEERS=1, with which the engine comes when an organisation is made or joined.
       // The link is made before the notch, which shows what it asks of the person; the engine is started after it.
-      const peersEngine = peersEnginePath();
-      const peerLink = peersEngine ? new PeerLink({ log: (line) => console.log(line) }) : null;
+      const peerLink = peersOn() ? new PeerLink({ log: (line) => console.log(line) }) : null;
+      const peerSetupNow = peerLink ? new PeerSetup({
+        brainDataDir: dataDir, link: peerLink, memory: new PeerStore(getDb()), enginePath: peersEnginePath(), source: peersSourcePath(),
+        // The person's own home, when the brain was given another: the tunnel program keeps its account there.
+        home: os.userInfo().homedir, runtimeDir: path.dirname(process.execPath), log: (line) => console.log(line),
+      }) : null;
       // A page in the person's own browser: where they sign in. Only a page that is reached safely, and
       // on the machine the answer came from. A desktop app that cannot do it opens nothing.
       const notchOpenUrl = async (sidecarId: string | null, url: string): Promise<boolean> => {
@@ -4745,7 +4752,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
-        ...(peerLink ? { peers: { db: getDb(), link: peerLink, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent) } } : {}),
+        ...(peerLink && peerSetupNow ? { peers: { db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent) } } : {}),
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.
@@ -4977,14 +4984,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           openPage: notchOpenPage,
         }),
       });
-      if (peersEngine && peerLink) {
+      if (peerSetupNow) {
         // What the engine asks of the person goes to the link, and from there to the notch. Nothing else answers it.
-        peerEngine = new PeerEngine({
-          path: peersEngine, brainDataDir: dataDir, log: (line) => console.log(line),
-          onDialog: peerLink.dialog, onNotice: peerLink.notice, onState: peerLink.engineState,
-        });
-        peerLink.attach(peerEngine);
-        peerEngine.start();
+        peerSetup = peerSetupNow;
+        peerSetupNow.start();
       }
     }
 

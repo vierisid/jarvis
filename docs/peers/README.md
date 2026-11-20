@@ -3,7 +3,7 @@
 How one person's Jarvis talks to another's. Built in passes on `notch/main`. This file states
 what is built, the rules it keeps, and where it stops.
 
-It ships dark. With `JARVIS_PEERS_ENGINE` unset nothing in `src/peers/` runs.
+It ships dark. With `JARVIS_PEERS` and `JARVIS_PEERS_ENGINE` both unset nothing in `src/peers/` runs.
 
 ## The shape
 
@@ -21,7 +21,9 @@ server is a test server. So the switch is the place of the program:
 
 | Setting | Meaning |
 |---|---|
-| `JARVIS_PEERS_ENGINE` | Full path of the engine program. Unset, or not a full path: off. Needs `JARVIS_NOTCH=1`. |
+| `JARVIS_PEERS_ENGINE` | Full path of the engine program, named by hand. It is used as it is. Needs `JARVIS_NOTCH=1`. |
+| `JARVIS_PEERS` | `1` switches the same thing on with no engine yet: one comes when an organisation is made or joined (see "Getting in"). Needs `JARVIS_NOTCH=1`. |
+| `JARVIS_PEERS_SOURCE` | Full path of a checkout of the engine's source. With it this machine can make an organisation, which means hosting its server. Without it, it can join one. |
 | `COLLAB_SERVER_URL` | Passed on to the engine: its server, for the first sign-in. |
 | `COLLAB_KEYSTORE` | Passed on to the engine: `file` keeps its key out of the desktop's keychain. |
 
@@ -230,6 +232,84 @@ Each has a test that fails without it.
 34. **The people are read from what is stored.** Like the inbox and the requests: the engine under
     the brain is the one line to the server.
 
+## Getting in: making an organisation, joining one (20 November, a demo)
+
+Until here the engine was a file somebody built and named by hand, at a server somebody else ran.
+The owner, 20 November 2026: "when I go to make organization, if I make a new one, then it
+directly downloads the protocol, it integrates for me, and it starts the server. Like, I get to
+choose when to start the server. ... if I instead choose to join a organization, then it would
+download the protocol and install it, and start it for me ... but not start the server." And:
+"This would only be for a demo."
+
+| File | What it does |
+|---|---|
+| `src/peers/setup.ts` | The two ways in. Holds the one engine, so that it can be started after the brain is up and started anew when another is put in its place. |
+| `src/peers/host.ts` | For whoever makes an organisation: runs the server and its tunnel from the engine's own source, makes accounts, builds the engine for each system. Signs the host in at their own server without a browser. |
+| `src/peers/install.ts` | For whoever joins: takes the engine for this system from the organisation's server and puts it in `<data dir>/peers/bin/`. |
+| `src/peers/zip.ts` | Reads and writes the archive the engine travels in, so that no machine needs a zip program. |
+| `src/notch/people.ts` | The steps on the notch: make, invite, join, the server's row, leave. |
+
+**Make.** "Make an organisation" asks its name, the owner's name in it, and, the first time, the
+address of their ngrok tunnel. Then the source's own script starts the server, a proxy and the
+tunnel; the engine for this machine is built against that address, put in place and started; an
+account is made for the owner and they are signed in. The engines for the other four systems are
+built after that, one at a time. Home gets a second row, "Your server is on.", which stops it and
+starts it. A server that was on comes back with the brain; one that was stopped stays off.
+
+**Invite.** The host types a name. An account is made at their server, and the notch shows three
+things once: the address, the name, the password. Then the code, as before.
+
+**Join.** "Join an organisation" asks the address. The engine for this system is taken from
+`<address>/plugin/collab-plugin-<system>.zip`, checked, put in place and started. Then the
+sign-in page opens in the person's own browser, and the code is typed, as before.
+
+**Leave.** Asked once, because it takes something away. The engine's folder is set aside as
+`peers/engine.left-<time>`, not deleted, and the engine starts again with nothing. A host's
+server stops.
+
+### Rules
+
+35. **Nothing of the server is in this repository.** It is run from a checkout the owner names,
+    with fixed words. The only words that vary are a login name made of `[a-z0-9-]` and a build
+    target from a fixed list. No model writes any of them.
+36. **The server lives only as long as the brain.** It is started through a watcher that ends it
+    when the brain's end of a pipe closes. A brain that is killed leaves no server and no open
+    tunnel.
+37. **What the scripts get is made name by name**: the allowlist every child gets, the person's
+    real home (the tunnel program keeps its account there), and two addresses. Pinned in
+    `src/peers/host.test.ts`.
+38. **A password passes through once.** It is made by the server's own tool, shown on the notch
+    (the invited person's) or used for one sign-in (the host's), and is in no log and no store.
+39. **The host is signed in without the question, at their own server only.** Making the
+    organisation was the yes. An engine that names any other server gets no answer.
+40. **The password goes to the server it was made at and nowhere else.** The page, the form and
+    every hop are checked against that address, and the last step only goes to this machine.
+41. **The engine a joiner runs is whatever the organisation's server hands out.** So the address
+    is one a person typed, never one from a message; it is reached over https, or on this machine
+    itself; redirects are not followed; and what comes back is taken only when it is an archive
+    holding a program for this system under the build's own name. That is the same trust as
+    joining at all: the server is where everything goes through.
+42. **An engine has one server for good.** One that is still signed in elsewhere is left only on
+    a yes, and its folder is set aside, not destroyed.
+43. **An engine named by hand is never written over**, by a join or by a build.
+
+### Where it stops
+
+- **A demo.** The source's script calls itself a test environment: one machine, no backups, and
+  the tunnel's address is the server's whole identity. Change the address and every sign-in and
+  every build is void.
+- Hosting needs bash, bun, curl, openssl and ngrok with an account, on Linux, macOS or WSL. A
+  brain on Windows itself can join and cannot host.
+- The other systems' engines take a few minutes the first time: each needs its runtime fetched.
+  Until one is built, a joiner on that system is told to try again.
+- The first start of the tunnel at a real address has been run by the owner only, not by a test:
+  the tests use a stand-in script, and the rehearsal outside this repository uses the real script
+  with a stand-in for the tunnel program.
+- After the server was off, the others' engines need some seconds to find it again. A message
+  said in that time is not sent, and says so.
+- A joiner who typed the wrong address and wants another has to leave first.
+- On a Mac none of this has been run.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of
@@ -238,11 +318,13 @@ Each has a test that fails without it.
 - The engine's command line is reachable by anything that runs as the same user, including a shell
   the model was given. This is the engine's own limit and holds under a coding agent too. Nothing
   here widens it; nothing here closes it.
-- **Nothing that needs the engine's server has been run.** Signing in, the code, a message between
-  two machines: all of it is tested against a model of the engine written from its code
-  (`src/peers/testing/fake-engines.ts`), and that model can be wrong where the reading was. The
-  engine layer itself is tested against the real engine with no network
+- **The tests here do not use the engine's server.** Signing in, the code, a message between two
+  machines: in this repository all of it is tested against a model of the engine written from
+  its code (`src/peers/testing/fake-engines.ts`), and that model can be wrong where the reading
+  was. The engine layer itself is tested against the real engine with no network
   (`src/peers/engine-real.test.ts`, run only when `JARVIS_TEST_PEERS_ENGINE` names the program).
+  The real server and engine have been run with it outside this repository: by two people on
+  20 November 2026, and in a rehearsal of two notches on one machine.
 - An organisation is a name and the people this machine was joined with. There is no list kept
   anywhere else, no admin, no invitation by mail, and joining is two machines at a time.
 - Signing in needs the browser on the machine the brain runs on (the engine waits for the
