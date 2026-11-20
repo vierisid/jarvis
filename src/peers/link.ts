@@ -95,6 +95,9 @@ const DEVICE = /\bdevice ([A-Za-z0-9_-]{22})(?![A-Za-z0-9_-])/;
 const CODE = /^\s*([^\s#]{1,64}#\d{2}-\d{4})\s*$/m;
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
+/** A page on this machine itself, by name or by number: the only pages that are opened without https. */
+export const PEER_LOCAL_PAGE = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?(\/|$)/i;
+
 function choices(dialog: EngineDialog): string {
   return (dialog.fields.choice?.options ?? []).map((option) => option.value).sort().join(',');
 }
@@ -108,8 +111,10 @@ export function peerDecision(dialog: EngineDialog, at: number): PeerDecision {
   if (dialog.mode === 'url') {
     let host: string | undefined;
     try { host = dialog.url ? new URL(dialog.url).host : undefined; } catch { host = undefined; }
-    // Only a page that is reached safely is one to open.
-    const url = dialog.url && /^https:\/\//i.test(dialog.url) ? dialog.url : undefined;
+    // Only a page that is reached safely is one to open: over https, or on this machine itself. The
+    // server takes plain http for the same and no other case (a server run on this machine for a
+    // test), and nothing sent to this machine's own address leaves it.
+    const url = dialog.url && (/^https:\/\//i.test(dialog.url) || PEER_LOCAL_PAGE.test(dialog.url)) ? dialog.url : undefined;
     return { kind: url ? 'page' : 'other', ...base, ...(url ? { url } : {}), ...(host ? { host } : {}) };
   }
   if (dialog.fields.code && !dialog.fields.choice) return { kind: 'code_wanted', ...base };

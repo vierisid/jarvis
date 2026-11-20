@@ -60,6 +60,21 @@ describe('which decision a dialog is', () => {
     expect(page('javascript:alert(1)').kind).toBe('other');
   });
 
+  // A server run on this machine for a test is reached over plain http, as the server itself allows for
+  // that one case. Nothing sent to this machine's own address leaves it.
+  test('a page on this machine itself is one to open without https, and nothing that only looks like it', () => {
+    const page = (url: string): PeerDecision => peerDecision({ mode: 'url', message: 'Sign in', fields: {}, required: [], url, during: null }, 0);
+    for (const url of ['http://localhost:8787/auth/authorize?x=1', 'http://127.0.0.1:8787/auth/authorize', 'http://[::1]:8787/a', 'http://localhost/a', 'http://LOCALHOST:8787/a']) {
+      expect(page(url)).toMatchObject({ kind: 'page', url });
+    }
+    for (const url of [
+      'http://localhost.example.com/a', 'http://localhost@example.com/a', 'http://127.0.0.1.example.com/a', 'http://example.com/?to=http://localhost/',
+      'http://127.0.0.10/a', 'http://192.168.1.4:8787/a', 'http://localhost:8787@example.com/a', 'http://localhostx/a', 'http://localhost:999999/a',
+    ]) {
+      expect(page(url).kind).toBe('other');
+    }
+  });
+
   test('one that is not known is "other", whatever its sentences say', () => {
     expect(kind(form('collab: connect with device? Approve this task request? send a task result', { choice: choice('maybe', 'never') }))).toBe('other');
     expect(kind(form('Approve?', {}))).toBe('other');
