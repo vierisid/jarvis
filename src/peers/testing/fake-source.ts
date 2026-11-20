@@ -14,7 +14,10 @@ case "\${1:-}" in
 start)
   if [ ! -f "$HERE/.env" ]; then echo "NGROK_DOMAIN=\${NGROK_DOMAIN:?}" > "$HERE/.env"; mkdir -p "$HERE/data"; echo db > "$HERE/data/collab.sqlite"; fi
   . "$HERE/.env"
-  if [ "$NGROK_DOMAIN" = "wrong.example.com" ]; then echo "test-env: ngrok exited (log: somewhere)" >&2; exit 1; fi
+  if [ "$NGROK_DOMAIN" = "wrong.example.com" ]; then
+    printf '%s\\n' 't=1 lvl=eror msg="session closing" err="failed to start tunnel: This domain is reserved for another account.\\\\nFailed to create an endpoint with the domain x for the account '"'"'Northwind Ops'"'"'."' 'ERROR:  ERR_NGROK_320' 'ERROR:  https://ngrok.com/docs/errors/err_ngrok_320' >> "$HERE/data/ngrok.log"
+    echo "ERROR:  ERR_NGROK_320" >&2; echo "test-env: ngrok exited (log: somewhere)" >&2; exit 1
+  fi
   if [ -f "$HERE/no-tunnel-program" ]; then echo "test-env: ngrok is not installed" >&2; exit 1; fi
   trap 'echo stopped > "$HERE/stopped"; exit 130' INT TERM
   echo "test-env: starting the server"

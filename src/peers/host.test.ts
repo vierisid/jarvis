@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PeerHost, canHost, hostAddress, hostEnv, hostFailure, peerLoginName, signInByForm } from './host.ts';
+import { PeerHost, canHost, hostAddress, hostEnv, hostFailure, peerLoginName, signInByForm, tunnelFailure } from './host.ts';
 import { engineArchiveEntry, engineArchiveName, fetchEngine, installedEnginePath } from './install.ts';
 import { fakeSource } from './testing/fake-source.ts';
 import { zipEntries } from './zip.ts';
@@ -49,6 +49,12 @@ describe('what the scripts are given', () => {
     expect(hostFailure('test-env: ngrok is not installed\n')).toEqual({ ok: false, why: 'tools', missing: 'ngrok' });
     expect(hostFailure('test-env: something already answers on port 8787 (another test environment?)\n')).toEqual({ ok: false, why: 'busy' });
     expect(hostFailure('lvl=eror msg="x"\ntest-env: ngrok exited (log: /x/ngrok.log)\n')).toEqual({ ok: false, why: 'tunnel' });
+    // The tunnel program's own number, when the script passed it on.
+    expect(hostFailure('ERROR:  ERR_NGROK_108\nERROR:  https://ngrok.com/docs/errors/err_ngrok_108\ntest-env: ngrok exited (log: /x/ngrok.log)\n')).toEqual({ ok: false, why: 'tunnel', code: '108' });
+    expect(tunnelFailure("err=\"Failed to create an endpoint with the domain 'a.ngrok-free.dev' for the account 'Northwind Ops'.\"\nERROR:  ERR_NGROK_320\n")).toEqual({ code: '320', account: 'Northwind Ops' });
+    expect(tunnelFailure('nothing of the kind')).toEqual({});
+    // An older failure further up, a newer one below: the newer one is the reason.
+    expect(tunnelFailure('ERR_NGROK_108\nlater\nERR_NGROK_320')).toEqual({ code: '320' });
     expect(hostFailure('test-env: ngrok did not answer at https://x/health\n')).toEqual({ ok: false, why: 'tunnel' });
     expect(hostFailure('anything else')).toEqual({ ok: false, why: 'failed' });
   });
@@ -103,11 +109,19 @@ describe.if(unix)('the organisation\'s server', () => {
   test('a start that fails says why, and leaves nothing of a first try behind', async () => {
     const dir = source();
     const host = new PeerHost({ source: dir, env });
-    expect(await host.start('wrong.example.com')).toEqual({ ok: false, why: 'tunnel' });
+    const logged: string[] = [];
+    const failing = new PeerHost({ source: dir, env, log: (line) => logged.push(line) });
+    // The tunnel program's own reason comes with it: its number, and the account it named.
+    expect(await failing.start('wrong.example.com')).toEqual({ ok: false, why: 'tunnel', code: '320', account: 'Northwind Ops' });
     expect(host.state()).toBe('off');
-    // The mistyped address is gone with what was made for it: the next try is a first try again.
+    // The log has the number and not the account's name.
+    expect(logged).toContain("[peers] the organisation's server did not start (tunnel, ERR_NGROK_320)");
+    expect(logged.join('\n')).not.toContain('Northwind Ops');
+    // The mistyped address is gone with the database that was made for it: the next try is a first try again.
     expect(host.address()).toBeNull();
-    expect(existsSync(join(dir, 'deploy', 'ngrok', 'data'))).toBe(false);
+    expect(existsSync(join(dir, 'deploy', 'ngrok', 'data', 'collab.sqlite'))).toBe(false);
+    // What the tunnel program wrote is kept: it is how the failure is understood afterwards.
+    expect(readFileSync(join(dir, 'deploy', 'ngrok', 'data', 'ngrok.log'), 'utf8')).toContain('ERR_NGROK_320');
     expect((await host.start('northwind.ngrok-free.app')).ok).toBe(true);
     await host.stop();
     // A later failure takes nothing away: the address and the accounts are kept.
