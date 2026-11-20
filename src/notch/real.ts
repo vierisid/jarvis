@@ -54,6 +54,7 @@ import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from 
 import { attachNotchPeople } from './people.ts';
 import type { NotchPeople } from './people.ts';
 import type { PeerLink } from '../peers/link.ts';
+import type { PeerSetupLike } from '../peers/setup.ts';
 import { PeerStore } from '../peers/store.ts';
 import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
@@ -217,6 +218,8 @@ export interface NotchRealDeps {
     db: Database; link: PeerLink; openPage(sidecarId: string | null, url: string): Promise<boolean>;
     /** Does a request the person said yes to (src/daemon/notch-peers.ts). */
     work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+    /** Getting in: the engine put in place, and the server for whoever makes an organisation. */
+    setup?: PeerSetupLike;
     noClock?: boolean;
   };
   /**
@@ -472,6 +475,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     people = attachNotchPeople({
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
+      ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
     });
   }
@@ -544,9 +548,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // What the assistant built in a turn is an agent like any other: switched on and named here.
       afterTurn: (since) => agents?.adopt(since),
       standing: {
-        rows: () => { const row = agents?.row(); const org = people?.row(); return [...(org ? [org] : []), ...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
+        rows: () => { const row = agents?.row(); return [...(people?.rows() ?? []), ...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
         open: async (stage, row) => {
           if (row === 'people') await people?.open(stage);
+          else if (row === 'people-server') await people?.server(stage);
           else if (row === 'agents') await agents?.open(stage);
           else if (row === 'eyes' || row === 'chases') await standing?.open(stage, row);
           else if (row === 'calls') await calls?.open(stage, row);

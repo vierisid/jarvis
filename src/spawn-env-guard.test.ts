@@ -112,6 +112,16 @@ const EXEMPT: Record<string, Exemption> = {
   'scripts/google-setup.ts': { reason: 'Interactive setup script; opens a URL with the desktop opener. ' + DESKTOP_SESSION, calls: { main: 1 } },
   'peers/engine-process.ts': { reason: PEER_ENGINE, calls: { startEngine: 1 } },
   'peers/engine-read.ts': { reason: PEER_ENGINE + ' This one is a read of what the engine stored, printed as JSON.', calls: { readEngine: 1 } },
+  'peers/host.ts': {
+    reason:
+      'An organisation\'s server, for the one who makes it: the tunnel script and the build script of the engine\'s own source, ' +
+      'a checkout the owner names in JARVIS_PEERS_SOURCE, run with fixed words (the only words that vary are a login name ' +
+      'made of [a-z0-9-] and a build target from a fixed list; none is model-authored). What they get is not the daemon\'s ' +
+      'environment: hostEnv() starts from the same allowlist (filterEnv) and adds the person\'s real HOME (the tunnel program ' +
+      'keeps its account there), the runtime\'s own folder on PATH, and NGROK_DOMAIN and COLLAB_OFFICIAL_SERVER_URL, an ' +
+      'address each. src/peers/host.test.ts pins what reaches them and what does not.',
+    calls: { runHost: 1 },
+  },
 
   'actions/tools/builtin.ts': {
     reason: 'Clipboard and screenshot tools (pbcopy/xclip/xsel/clip/powershell/scrot/import/screencapture); the only interpolation is the same generated temp path, in the screenshot commands. ' + DESKTOP_SESSION,

@@ -7,6 +7,9 @@ import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import { PeerLink } from '../peers/link.ts';
 import { peerNoteText } from '../peers/notes.ts';
+import type { HostAccount, HostState } from '../peers/host.ts';
+import type { EngineTarget } from '../peers/install.ts';
+import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import { PeerStore } from '../peers/store.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
 
@@ -21,7 +24,67 @@ async function settle(): Promise<void> {
   }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number } = {}) {
+/**
+ * Getting in, as the notch sees it: a stand-in for src/peers/setup.ts that
+ * notes what was asked of it. Its engine is the stand-in engine of the test.
+ */
+class FakeSetup implements PeerSetupLike {
+  ready: boolean;
+  hostable: boolean;
+  state: HostState = 'off';
+  address: string | null = null;
+  me: string | null = null;
+  readonly calls: string[] = [];
+  readonly accounts = new Map<string, string>();
+  hostFails: Extract<SetupHosted, { ok: false }> | null = null;
+  joinFails: Extract<SetupJoined, { ok: false }>[] = [];
+  signInWorks = true;
+  ready5: EngineTarget[] = ['linux-x64', 'linux-arm64', 'darwin-arm64', 'darwin-x64', 'windows-x64'];
+  private listeners: (() => void)[] = [];
+  constructor(private readonly engine: FakeEngine, more: { ready?: boolean; hostable?: boolean } = {}) {
+    this.ready = more.ready ?? false;
+    this.hostable = more.hostable ?? true;
+    if (!this.ready) engine.up = 'stopped';
+  }
+  engineReady(): boolean { return this.ready; }
+  canHost(): boolean { return this.hostable; }
+  hosting(): { state: HostState; address: string | null } { return { state: this.state, address: this.address }; }
+  myName(): string | null { return this.me; }
+  async host(domain: string | undefined, step?: (step: SetupStep) => void): Promise<SetupHosted> {
+    this.calls.push(`host ${domain ?? '-'}`);
+    step?.('server');
+    if (this.hostFails) return this.hostFails;
+    this.address ??= domain ?? null;
+    if (!this.address) return { ok: false, why: 'address' };
+    this.state = 'on';
+    if (!this.ready) { step?.('build'); this.ready = true; step?.('engine'); this.engine.up = 'up'; }
+    for (const listener of this.listeners) listener();
+    return { ok: true, address: this.address };
+  }
+  async stopHost(): Promise<void> { this.calls.push('stopHost'); this.state = 'off'; for (const listener of this.listeners) listener(); }
+  async myAccount(name: string): Promise<HostAccount> { this.calls.push(`myAccount ${name}`); this.me = name; return { ok: true, password: 'pw-mine-91' }; }
+  async account(name: string): Promise<HostAccount> {
+    this.calls.push(`account ${name}`);
+    if (this.accounts.has(name.toLowerCase())) return { ok: false, why: 'taken' };
+    this.accounts.set(name.toLowerCase(), `pw-${name.toLowerCase()}-73`);
+    return { ok: true, password: `pw-${name.toLowerCase()}-73` };
+  }
+  async signIn(page: string, login: string, password: string): Promise<boolean> { this.calls.push(`signIn ${new URL(page).host} ${login} ${password}`); return this.signInWorks; }
+  async join(address: string): Promise<SetupJoined> {
+    this.calls.push(`join ${address}`);
+    const fails = this.joinFails.shift();
+    if (fails) return fails;
+    this.ready = true;
+    this.engine.up = 'up';
+    return { ok: true };
+  }
+  built(): EngineTarget[] { return this.ready5; }
+  async leave(): Promise<boolean> { this.calls.push('leave'); this.state = 'off'; this.me = null; return this.fresh(); }
+  async fresh(): Promise<boolean> { this.calls.push('fresh'); this.engine.signedIn = false; this.engine.contacts.clear(); return true; }
+  onChange(listener: () => void): void { this.listeners.push(listener); }
+}
+
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -38,6 +101,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   // In these tests the person answers at once. The rule about a yes that comes too soon has its own tests (peers/link.test.ts).
   const link = new PeerLink({ readMs: 0, log: (line) => logs.push(line) });
   link.attach(engine);
+  const setup = more.setup ? new FakeSetup(engine, more.setup) : null;
   engine.dialog = link.dialog;
   engine.notice = link.notice;
   const store = new PeerStore(new Database(':memory:'), () => server.now());
@@ -53,6 +117,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     ...(more.engineWaitMs ? { engineWaitMs: more.engineWaitMs } : {}),
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
     ...(more.noWork ? {} : { work: async (request: { from: string; words: string }) => { worked.push(request); return state.answer; } }),
+    ...(setup ? { setup } : {}),
   });
   const people = make();
   const line = (): NotchLine | null => surface.current().line;
@@ -60,6 +125,11 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
     engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, make,
+    /** Getting in, when this side was given it. */
+    setup: setup as FakeSetup,
+    /** The sheet's or the line's blocks, as text. */
+    blocks: (): string => JSON.stringify((line() as { blocks?: unknown } | null)?.blocks ?? []),
+    buttons: (): string[] => ((line() as { blocks?: { kind: string; buttons?: { id: string }[] }[] } | null)?.blocks ?? []).flatMap((block) => (block.kind === 'buttons' ? (block.buttons ?? []).map((one) => one.id) : [])),
     /** A tap on the resting notch: what waits is gone through. */
     tap: async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); },
     options: (): string[] | undefined => (line() as { options?: string[] } | null)?.options,
@@ -1205,5 +1275,285 @@ describe('a name', () => {
     expect(peopleName("Anna-Maria O'Neil")).toBe("Anna-Maria O'Neil");
     expect(peopleName('<b>')).toBe('b');
     expect(peopleName('!!!')).toBe('');
+  });
+});
+
+describe('getting in: making an organisation on this machine', () => {
+  /** The automatic sign-in waits as long as a line takes to be read. */
+  const signedIn = async (): Promise<void> => { await new Promise((resolve) => setTimeout(resolve, 650)); await settle(); };
+
+  test('with no engine yet, Home offers to make one where a server can run, and to join one where it cannot', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    expect(sam.people.rows()).toEqual([{ kind: 'row', id: 'people', say: ['Make an organisation, so your Pillows can talk.'], go: true }]);
+    const anna = side(new FakeServer(), ANNA, 'anna', { setup: { hostable: false } });
+    expect(anna.people.rows()).toEqual([{ kind: 'row', id: 'people', say: ['Join an organisation, so your Pillows can talk.'], go: true }]);
+  });
+
+  test('a name, your name, the tunnel\'s address: the server starts, the engine comes, and you are signed in with no page', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    expect(sam.said()).toBe('Make an organisation');
+    expect(sam.buttons()).toEqual(['join']);
+    await sam.type('Northwind');
+    expect(sam.said()).toBe('Your name in Northwind');
+    await sam.type('!!');
+    expect(sam.said()).toBe('A name with letters in it. Your name in Northwind?');
+    await sam.type('Sam');
+    expect(sam.said()).toBe('The address of your tunnel');
+    await sam.type('not an address');
+    expect(sam.said()).toBe('That is not an address like name.ngrok-free.app. Again.');
+    // Plain http and an odd door are not a tunnel's address.
+    await sam.type('http://localhost:8787');
+    expect(sam.said()).toBe('That is not an address like name.ngrok-free.app. Again.');
+    expect(sam.setup.calls).toEqual([]);
+    await sam.type('Collab.invalid');
+    await signedIn();
+    expect(sam.setup.calls).toEqual(['host https://collab.invalid', 'myAccount Sam', 'signIn collab.invalid sam pw-mine-91']);
+    expect(sam.said()).toBe('Northwind is made. Its server is on, at collab.invalid.');
+    // No question about the server and no page in a browser: making it was the yes.
+    expect(sam.everShown()).not.toContain('Sign in at');
+    expect(sam.opened).toEqual([]);
+    expect(sam.engine.signedIn).toBe(true);
+    expect(sam.store.org()).toBe('Northwind');
+    // The password never reached the page or a log.
+    expect(sam.everShown()).not.toContain('pw-mine-91');
+    expect(sam.logs.join('\n')).not.toContain('pw-mine-91');
+    await sam.done();
+    expect(sam.kind()).toBe('sheet');
+    expect(sam.said()).toBe('Northwind, your organisation');
+    expect(sam.blocks()).toContain('On, at collab.invalid.');
+    expect(sam.buttons()).toEqual(['invite', 'join', 'server', 'leave']);
+    expect(sam.people.rows()).toEqual([
+      { kind: 'row', id: 'people', say: [{ em: 'Northwind' }, ': only you so far. Invite someone.'], go: true },
+      { kind: 'row', id: 'people-server', say: ['Your server is ', { em: 'on' }, '.'], go: true },
+    ]);
+  });
+
+  test('while it starts the notch says what it is doing', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    const shown = sam.everShown();
+    for (const line of ['Starting your server and its tunnel…', 'Building the engine for this laptop. The first time takes a minute…', 'Starting the engine…']) expect(shown).toContain(line);
+  });
+
+  test('a server that does not start is said why, and nothing is made', async () => {
+    for (const [fails, said] of [
+      [{ ok: false, why: 'tunnel' }, 'The tunnel did not come up at that address. Check it in your ngrok dashboard and try again.'],
+      [{ ok: false, why: 'tools', missing: 'ngrok' }, 'I cannot start the server: ngrok is not installed on this laptop.'],
+      [{ ok: false, why: 'busy' }, 'Something else already answers where the server would. Is another one running on this laptop?'],
+      [{ ok: false, why: 'build' }, 'The server is on, but I could not build the engine for this laptop.'],
+    ] as const) {
+      const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+      sam.setup.hostFails = fails;
+      await sam.open();
+      await sam.type('Northwind');
+      await sam.type('Sam');
+      await sam.type('collab.invalid');
+      expect(sam.said()).toBe(said);
+      expect(sam.store.org()).toBeNull();
+      expect(sam.engine.signedIn).toBe(false);
+    }
+  });
+
+  test('it signs in at its own server only: an engine that names another is not answered', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    // The tunnel is at one address, and the engine asks about another (collab.invalid).
+    await sam.type('northwind.ngrok-free.app');
+    await signedIn();
+    expect(sam.said()).toBe('The server is on, but I could not sign you in at it. Open your organisation and try again.');
+    expect(sam.engine.signedIn).toBe(false);
+    expect(sam.setup.calls.some((call) => call.startsWith('signIn'))).toBe(false);
+    expect(sam.store.org()).toBeNull();
+  });
+
+  test('Esc while it starts stops the server again', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    let finish: () => void = () => {};
+    const real = sam.setup.host.bind(sam.setup);
+    sam.setup.host = async (domain, step) => { step?.('server'); await new Promise<void>((resolve) => { finish = resolve; }); return real(domain, step); };
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    expect(sam.said()).toBe('Starting your server and its tunnel…');
+    await sam.answer('stop');
+    expect(sam.said()).toBe('Stopped. The server is off.');
+    expect(sam.setup.calls).toContain('stopHost');
+    expect(sam.store.org()).toBeNull();
+    finish();
+    await settle();
+  });
+
+  test('the server\'s row in Home stops it and starts it', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    await signedIn();
+    await sam.done();
+    await sam.no();
+    sam.inbox.present('server', (stage) => sam.people.server(stage));
+    await settle();
+    expect(sam.said()).toBe('Your server is on, at collab.invalid. While it is off, nobody in Northwind reaches anybody.');
+    expect(sam.options()).toEqual(['Stop it', 'Leave it on']);
+    await sam.pick(0);
+    expect(sam.said()).toBe('The server is off.');
+    expect(sam.people.rows()[1]).toEqual({ kind: 'row', id: 'people-server', say: ['Your server is ', { em: 'off' }, '. Start it?'], go: true });
+    await sam.done();
+    // Pressing the row that says "Start it?" starts it: no second question, and no address again.
+    sam.inbox.present('server', (stage) => sam.people.server(stage));
+    await settle();
+    expect(sam.said()).toBe('Your server is on.');
+    expect(sam.setup.calls.filter((call) => call.startsWith('host'))).toEqual(['host https://collab.invalid', 'host -']);
+    expect(sam.people.rows()[1]).toEqual({ kind: 'row', id: 'people-server', say: ['Your server is ', { em: 'on' }, '.'], go: true });
+  });
+
+  test('inviting makes an account and shows its three things once, then the code', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    await signedIn();
+    await sam.done();
+    sam.setup.accounts.set('leo', 'x');
+    sam.setup.ready5 = ['linux-x64', 'darwin-arm64'];
+    await sam.button('invite');
+    expect(sam.said()).toBe('Who do you invite?');
+    await sam.type('Leo');
+    expect(sam.said()).toBe('Someone called Leo has an account here already. Another name.');
+    await sam.type('Leo Rossi');
+    expect(sam.kind()).toBe('sheet');
+    expect(sam.said()).toBe('For Leo Rossi: three things');
+    const blocks = sam.blocks();
+    for (const thing of ['collab.invalid', 'leo-rossi', 'pw-leo rossi-73', 'Shown this once: I do not keep it.', '2 of 5 are ready']) expect(blocks).toContain(thing);
+    expect(sam.logs.join('\n')).not.toContain('pw-leo');
+    await sam.button('code');
+    expect(sam.said()).toContain('Read them this code: ');
+  });
+
+  test('with the server off, nobody can be invited, and the notch says to start it', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    await signedIn();
+    await sam.done();
+    await sam.setup.stopHost();
+    await sam.button('invite');
+    expect(sam.said()).toBe('Your server is off. Start it first: nobody can join while it is off.');
+    expect(sam.setup.calls.some((call) => call.startsWith('account'))).toBe(false);
+  });
+});
+
+describe('getting in: joining an organisation from its address', () => {
+  test('the address, the engine from there, the sign-in page, then the code', async () => {
+    const server = new FakeServer();
+    const anna = side(server, ANNA, 'anna', { setup: { hostable: false } });
+    anna.store.setOrg('An organisation that was left');
+    await anna.open();
+    expect(anna.kind()).toBe('ask');
+    expect(anna.said()).toBe('Join an organisation');
+    await anna.type('northwind');
+    expect(anna.said()).toBe('That is not an address like name.ngrok-free.app. Again.');
+    anna.setup.joinFails.push({ ok: false, why: 'unreachable' });
+    await anna.type('collab.invalid');
+    expect(anna.said()).toBe('I could not reach collab.invalid. Is their server on? The address again.');
+    await anna.type('https://collab.invalid/');
+    expect(anna.setup.calls).toEqual(['join https://collab.invalid', 'join https://collab.invalid']);
+    // The engine is there now. Signing in is theirs to say yes to, on a page in their own browser.
+    expect(anna.said()).toBe('Sign in at collab.invalid? What you send the others goes through it, sealed. It cannot be changed later.');
+    // The name of the organisation that was left is not this one's.
+    expect(anna.store.org()).toBeNull();
+    await anna.yes();
+    expect(anna.opened.length).toBe(1);
+    expect(anna.said()).toBe('Signed in.');
+    await anna.done();
+    expect(anna.said()).toBe('Type the code they read to you.');
+  });
+
+  test('a server with no engine for this kind of machine is said so', async () => {
+    const anna = side(new FakeServer(), ANNA, 'anna', { setup: { hostable: false } });
+    anna.setup.joinFails.push({ ok: false, why: 'no_build' });
+    await anna.open();
+    await anna.type('collab.invalid');
+    expect(anna.said()).toBe('Their server has no engine for this kind of laptop yet. It is being built: try again in a few minutes.');
+    expect(anna.engine.signedIn).toBe(false);
+  });
+
+  test('what comes from the address and is not the engine is refused in words', async () => {
+    const anna = side(new FakeServer(), ANNA, 'anna', { setup: { hostable: false } });
+    anna.setup.joinFails.push({ ok: false, why: 'bad' });
+    await anna.open();
+    await anna.type('collab.invalid');
+    expect(anna.said()).toBe('What came from that address is not the engine. Check the address with whoever made the organisation.');
+  });
+
+  test('a machine that can host joins through the button', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.button('join');
+    expect(sam.said()).toBe('Join an organisation');
+    await sam.type('collab.invalid');
+    expect(sam.said()).toBe('Sign in at collab.invalid? What you send the others goes through it, sealed. It cannot be changed later.');
+    expect(sam.setup.calls).toEqual(['join https://collab.invalid']);
+  });
+
+  test('an engine still signed in at another organisation is left only on a yes', async () => {
+    const server = new FakeServer();
+    const anna = side(server, ANNA, 'anna', { setup: { hostable: false } });
+    // The engine's folder is from before: signed in at collab.invalid, with somebody in it.
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
+    await anna.open();
+    await anna.type('other.example');
+    expect(anna.said()).toBe('This laptop is still in an organisation at collab.invalid. Leave it for this one? Its people here are set aside, not deleted.');
+    expect(anna.options()).toEqual(['Leave it', 'Stay']);
+    await anna.pick(1);
+    expect(anna.said()).toBe('Nothing changed.');
+    expect(anna.setup.calls).not.toContain('fresh');
+    expect(anna.engine.signedIn).toBe(true);
+    await anna.done();
+    // Again, and this time it is left.
+    anna.setup.ready = false;
+    await anna.open();
+    await anna.type('other.example');
+    await anna.pick(0);
+    expect(anna.setup.calls).toContain('fresh');
+    expect(anna.said()).toBe('Sign in at collab.invalid? What you send the others goes through it, sealed. It cannot be changed later.');
+  });
+});
+
+describe('getting in: leaving', () => {
+  test('is asked once, sets the people aside and clears the name', async () => {
+    const { sam } = await joined();
+    const withSetup = side(new FakeServer(), ANNA, 'anna', { setup: { ready: true, hostable: false } });
+    withSetup.engine.signedIn = true;
+    withSetup.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
+    withSetup.store.setOrg('Northwind');
+    await withSetup.refresh();
+    await withSetup.open();
+    expect(withSetup.buttons()).toEqual(['invite', 'join', 'leave']);
+    await withSetup.button('leave');
+    expect(withSetup.said()).toBe('Leave Northwind? The people in it are set aside on this laptop. To come back you join again.');
+    await withSetup.pick(1);
+    expect(withSetup.setup.calls).toEqual([]);
+    expect(withSetup.kind()).toBe('sheet');
+    await withSetup.button('leave');
+    await withSetup.pick(0);
+    expect(withSetup.setup.calls).toEqual(['leave', 'fresh']);
+    expect(withSetup.said()).toBe('Left. Nothing goes out and nothing comes in.');
+    expect(withSetup.store.org()).toBeNull();
+    // Without the set-up part there is nothing to leave with: the sheet is as it was.
+    await sam.open();
+    expect(sam.buttons()).toEqual(['invite', 'join']);
   });
 });

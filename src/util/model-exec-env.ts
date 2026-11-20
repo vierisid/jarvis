@@ -214,6 +214,11 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // Where the program is that talks to other people's Jarvises, and with it
   // the switch for that (src/peers/switch.ts). A path. Not a credential.
   'JARVIS_PEERS_ENGINE',
+  // The same switch with no engine named ("1"), and a checkout of the
+  // engine's source for whoever makes an organisation: its server is run
+  // from there (src/peers/host.ts). A flag and a path. Not credentials.
+  'JARVIS_PEERS',
+  'JARVIS_PEERS_SOURCE',
   'JARVIS_ALLOW_LEAKED_ENGINES',
   // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
   // A daemon or browser started from the model's shell must keep the user's

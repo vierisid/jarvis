@@ -23,10 +23,20 @@
  *     done with it. No model reads it and nothing runs on it.
  *   - A decision of the engine (sign in here? connect with this device?) is
  *     put on the notch as one line, and only the key pressed there answers it.
+ *     One exception: whoever makes an organisation is signed in at the server
+ *     their own machine runs without that line. Making it was the yes.
  *   - A pairing code is shown and typed on the notch. It is in no log, no
  *     list of what was asked, and no model sees it.
  *   - Not now is never no: a message or a question that was left alone waits
  *     in the count. One that was answered is never shown again.
+ *
+ * GETTING IN (src/peers/setup.ts, given as `setup`). Whoever makes an
+ * organisation hosts it: "Make an organisation" starts its server on this
+ * machine, and a row in Home turns it off and on. Whoever is invited gets
+ * three things from the host (the address, a name, a password, shown once on
+ * the host's notch) and "Join an organisation" takes the engine from that
+ * address. Without `setup` the engine is one that was named by hand, at a
+ * server somebody else runs, and none of that is offered.
  *
  * A REQUEST is the other thing that crosses: "Ask Leo's Pillow what changed
  * in the last deck." It is asked of the other person's Jarvis, not of the
@@ -45,10 +55,13 @@ import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 import { NotchStageEnded } from './stage.ts';
-import { engineErrorCode } from '../peers/link.ts';
+import { peerLoginName } from '../peers/host.ts';
+import { peerServerAddress } from '../peers/install.ts';
+import { PEER_READ_MS, engineErrorCode } from '../peers/link.ts';
 import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerRequest, PeerSent } from '../peers/link.ts';
 import { PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
 import type { PeerNote } from '../peers/notes.ts';
+import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -99,6 +112,8 @@ export interface NotchPeopleDeps {
    * ends with a no.
    */
   work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  /** Getting in: the engine put in place, and the server for whoever makes an organisation (src/peers/setup.ts). */
+  setup?: PeerSetupLike;
   log?: (line: string) => void;
   now?: () => number;
   /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
@@ -110,8 +125,12 @@ export interface NotchPeopleDeps {
 export interface NotchPeople {
   /** Home's row. Null while there is nothing to say about an organisation. */
   row(): NotchBlock | null;
+  /** Home's rows: that one, and the server's when this machine runs it. */
+  rows(): NotchBlock[];
   /** The organisation's sheet. Comes back when it is closed. */
   open(stage: NotchStage): Promise<void>;
+  /** The server's row in Home: stops it when it is on, starts it when it is off. */
+  server(stage: NotchStage): Promise<void>;
   /** Words the notch acts on itself: "tell Leo ...", "ask Leo ...", "show my organisation". */
   route(text: string): { did: string; run(): void } | null;
   /** The people by name, for reading back a name that was heard and is close to one of theirs. */
@@ -181,6 +200,7 @@ export function peopleLines(text: string, max: number): string[] {
 
 export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const { inbox, link, store } = deps;
+  const setup = deps.setup ?? null;
   const now = deps.now ?? Date.now;
   const log = deps.log ?? (() => { /* quiet */ });
   const engineWait = deps.engineWaitMs ?? NOTCH_PEOPLE_ENGINE_WAIT_MS;
@@ -218,6 +238,10 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   }
 
   // --- signing in and connecting ---
+
+  const hostOf = (address: string | null | undefined): string => { try { return new URL(address ?? '').host; } catch { return ''; } };
+  /** A tunnel that puts a page of its own in front of a browser the first time it is visited. */
+  const tunnelled = (address: string | null | undefined): boolean => /\.ngrok(-free)?\.(app|dev|io)$/i.test(hostOf(address).replace(/:\d+$/, ''));
 
   /**
    * Waiting on the engine, in view.
@@ -275,7 +299,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         if (waiting.over()) return null;
         opened = decision.url ? await deps.openPage(stage.from(), decision.url) : false;
         if (!opened) return null;
-        waiting.line(['Sign in on the page I opened. I wait here.']);
+        waiting.line(tunnelled(decision.url) ? ['Sign in on the page I opened. The tunnel may ask you to press "Visit Site" first. I wait here.'] : ['Sign in on the page I opened. I wait here.']);
         return {};
       },
     }, NOTCH_PEOPLE_SIGN_IN_MS).then((result) => result.text, () => '');
@@ -425,15 +449,276 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await connected(stage, text, named, false);
   }
 
+  // --- getting in: making one here, joining one from its address ---
+
+  /** Why the server, or the engine that goes with it, did not start. */
+  function hostSorry(failed: Extract<SetupHosted, { ok: false }>): NotchPart[] {
+    if (failed.why === 'address') return ['That address did not work for a tunnel. Try again with the one in your ngrok dashboard.'];
+    if (failed.why === 'tools') return ['I cannot start the server: ', em(failed.missing ?? 'a program it needs'), ' is not installed on this laptop.'];
+    if (failed.why === 'busy') return ['Something else already answers where the server would. Is another one running on this laptop?'];
+    if (failed.why === 'tunnel') return ['The tunnel did not come up at that address. Check it in your ngrok dashboard and try again.'];
+    if (failed.why === 'build') return ['The server is on, but I could not build the engine for this laptop.'];
+    if (failed.why === 'engine') return ['The server is on, but the engine did not start on this laptop.'];
+    if (failed.why === 'system') return ['There is no engine for this kind of machine yet.'];
+    return ['I could not start the server.'];
+  }
+
+  function joinSorry(failed: Extract<SetupJoined, { ok: false }>): NotchPart[] {
+    if (failed.why === 'no_build') return ['Their server has no engine for this kind of laptop yet. It is being built: try again in a few minutes.'];
+    if (failed.why === 'system') return ['There is no engine for this kind of machine yet.'];
+    if (failed.why === 'bad') return ['What came from that address is not the engine. Check the address with whoever made the organisation.'];
+    if (failed.why === 'disk') return ['I could not put the engine on this laptop.'];
+    if (failed.why === 'engine') return ['The engine did not start on this laptop.'];
+    return ['I could not reach that address.'];
+  }
+
+  /**
+   * The engine on this machine may still be signed in somewhere else: at the
+   * server of an organisation it was in before. An engine has one server for
+   * good, so the old one has to be left before the new one can be entered.
+   * Leaving sets its keys and its people aside. That is asked, once.
+   */
+  async function elsewhere(stage: NotchStage, address: string): Promise<'clear' | 'stay' | 'failed'> {
+    if (!setup) return 'clear';
+    await link.refresh();
+    const account = link.account();
+    if (!account.signedIn || !account.server || account.server.toLowerCase() === hostOf(address).toLowerCase()) return 'clear';
+    const answer = await stage.choose(['This laptop is still in an organisation at ', em(account.server), '. Leave it for this one? Its people here are set aside, not deleted.'], ['Leave it', 'Stay']);
+    if (answer.act !== 'pick' || answer.index !== 0) return 'stay';
+    if (!(await meanwhile(stage, ['Leaving…'], setup.fresh()))) return 'failed';
+    // Who is signed in is read again before anything goes on: the engine that runs now knows nobody.
+    await link.refresh();
+    return 'clear';
+  }
+
+  /**
+   * Signs in at the server this machine itself runs. No question and no
+   * page: making the organisation was the yes, the server named must be this
+   * machine's own, and the account is one that was made here a moment ago.
+   */
+  async function signInAsHost(stage: NotchStage, name: string): Promise<boolean> {
+    if (!setup) return false;
+    if (link.account().signedIn) return true;
+    const mine = hostOf(setup.hosting().address);
+    const login = peerLoginName(name);
+    if (!login || !mine) return false;
+    const made = await setup.myAccount(name);
+    if (!made.ok) return false;
+    const text = await link.call('account', { action: 'login' }, {
+      server: async (decision) => {
+        if ((decision.host ?? '').toLowerCase() !== mine.toLowerCase()) return null;
+        // No key answers this, so no key can have come too soon. The link takes no yes before a line could have been read: it waits that long.
+        await stage.wait(PEER_READ_MS + 100);
+        return { choice: 'yes' };
+      },
+      page: async (decision) => (decision.url && (await setup.signIn(decision.url, login, made.password)) ? {} : null),
+    }, NOTCH_PEOPLE_SIGN_IN_MS).then((result) => result.text, () => '');
+    await link.refresh();
+    return link.account().signedIn || /^(Logged in:|Already logged in)/.test(text);
+  }
+
+  /** Starts the server, and the engine with it, in view. `org`: it is being made now, under that name. */
+  async function startHosting(stage: NotchStage, more: { org?: string; me: string; domain?: string }): Promise<boolean> {
+    if (!setup) return false;
+    const waiting = watch(stage);
+    waiting.reached();
+    const lines: Record<SetupStep, NotchPart[]> = {
+      server: ['Starting your server and its tunnel…'],
+      build: ['Building the engine for this laptop. The first time takes a minute…'],
+      engine: ['Starting the engine…'],
+    };
+    const hosted = await Promise.race([setup.host(more.domain, (step) => { if (!waiting.over()) waiting.line(lines[step]); }), waiting.gone]);
+    if (hosted === 'stop' || hosted === 'late') {
+      // Stopped by the person: whatever came up goes down again.
+      void setup.stopHost();
+      if (!stage.ended()) await stage.say(['Stopped. The server is off.'], 2600);
+      return false;
+    }
+    if (!hosted.ok) { await stage.say(hostSorry(hosted), 4600, { mood: 'sorry' }); return false; }
+    const other = await elsewhere(stage, hosted.address);
+    if (other !== 'clear') {
+      void setup.stopHost();
+      await stage.say(other === 'stay' ? ['Nothing changed. The new server is off again.'] : ['I could not leave the other organisation. The new server is off again.'], 3400, other === 'stay' ? {} : { mood: 'sorry' });
+      return false;
+    }
+    if (!link.account().signedIn) {
+      const signed = await meanwhile(stage, ['Signing you in…'], signInAsHost(stage, more.me));
+      if (!signed) { await stage.say(['The server is on, but I could not sign you in at it. Open your organisation and try again.'], 4600, { mood: 'sorry' }); return false; }
+    }
+    if (more.org) store.setOrg(more.org);
+    inbox.refresh();
+    await stage.say(more.org ? [em(more.org), ' is made. Its server is on, at ', em(hostOf(hosted.address)), '.'] : ['Your server is on.'], 3600, { mood: 'proud', mark: 'check' });
+    return true;
+  }
+
+  /** Asks for one thing to be typed, until it checks or the person leaves. */
+  async function typed<T>(stage: NotchStage, first: NotchPart[], more: { placeholder: string; yes: string; note: NotchPart[]; again: NotchPart[] }, check: (text: string) => T | null): Promise<T | null> {
+    let say = first;
+    for (;;) {
+      const id = stage.id();
+      stage.put({ id, kind: 'ask', say, placeholder: more.placeholder, yes: more.yes, focus: true, stay: true, mood: 'look', blocks: [{ kind: 'note', say: more.note }] });
+      const answer = await stage.answer(id, ['ask', 'no']);
+      if (answer.act !== 'ask') return null;
+      const got = check(answer.text ?? '');
+      if (got !== null) return got;
+      say = more.again;
+    }
+  }
+
+  /** A tunnel's address, as it is typed by the one who hosts: reached safely, at its usual door. */
+  const tunnelAddress = (text: string): string | null => {
+    const address = peerServerAddress(text);
+    return address && address.startsWith('https://') && !new URL(address).port ? address : null;
+  };
+
+  /** "Make an organisation": this machine becomes its host. */
+  async function make(stage: NotchStage, name: string): Promise<boolean> {
+    if (!setup) return false;
+    const me = setup.myName() ?? await typed(stage, ['Your name in ', em(name)], {
+      placeholder: 'for example Sam', yes: 'next',
+      note: ['It is what the others see you as, and what their pairing codes begin with.'],
+      again: ['A name with letters in it. Your name in ', em(name), '?'],
+    }, (text) => { const one = peopleName(text); return one && peerLoginName(one) ? one : null; });
+    if (!me) return false;
+    let domain: string | undefined;
+    if (!setup.hosting().address) {
+      const address = await typed(stage, ['The address of your tunnel'], {
+        placeholder: 'for example name.ngrok-free.app', yes: 'start',
+        note: ['The server runs on this laptop, and the others reach it through your ngrok tunnel. Its address is in the ngrok dashboard, under Domains. It stays the address of this organisation.'],
+        again: ['That is not an address like ', em('name.ngrok-free.app'), '. Again.'],
+      }, tunnelAddress);
+      if (!address) return false;
+      domain = address;
+    }
+    return startHosting(stage, { org: name, me, ...(domain ? { domain } : {}) });
+  }
+
+  /** "Join an organisation", on a machine with no engine yet: its address, and its engine for this machine. */
+  async function arrive(stage: NotchStage): Promise<boolean> {
+    if (!setup) return false;
+    let say: NotchPart[] = ['Join an organisation'];
+    for (;;) {
+      const address = await typed(stage, say, {
+        placeholder: 'Its address, for example name.ngrok-free.app', yes: 'join',
+        note: ['Whoever made it gives you three things: its address, your name there, and a password.'],
+        again: ['That is not an address like ', em('name.ngrok-free.app'), '. Again.'],
+      }, peerServerAddress);
+      if (!address) return false;
+      const waiting = watch(stage);
+      waiting.reached();
+      waiting.line(['Getting the engine from ', em(hostOf(address)), '…']);
+      const joined = await Promise.race([setup.join(address), waiting.gone]);
+      if (joined === 'stop' || joined === 'late') { if (!stage.ended()) await stage.say(['Stopped.'], 2000); return false; }
+      if (!joined.ok) {
+        // Not reached: most often a letter of the address, or a server that is off. It can be typed again.
+        if (joined.why === 'unreachable') { say = ['I could not reach ', em(hostOf(address)), '. Is their server on? The address again.']; continue; }
+        await stage.say(joinSorry(joined), 4600, { mood: 'sorry' });
+        return false;
+      }
+      const other = await elsewhere(stage, address);
+      if (other !== 'clear') { await stage.say(other === 'stay' ? ['Nothing changed.'] : ['I could not leave the other organisation.'], 2800, other === 'stay' ? {} : { mood: 'sorry' }); return false; }
+      // The name of an organisation that was left here before is not this one's: theirs arrives when the two are joined.
+      store.setMeta('org', null);
+      inbox.refresh();
+      return true;
+    }
+  }
+
+  /**
+   * The host invites: an account is made for the person, and the three
+   * things they need are shown once. The password is on the notch and
+   * nowhere else: in no log, in no list, and it is not kept.
+   */
+  async function inviteAsHost(stage: NotchStage): Promise<void> {
+    if (!setup) return;
+    const hosting = setup.hosting();
+    if (hosting.state !== 'on' || !hosting.address) { await stage.say(['Your server is off. Start it first: nobody can join while it is off.'], 3600, { mood: 'sorry' }); return; }
+    let name = '';
+    let password = '';
+    let say: NotchPart[] = ['Who do you invite?'];
+    for (;;) {
+      const one = await typed(stage, say, {
+        placeholder: 'Their name, for example Leo', yes: 'invite',
+        note: ['I make them a name and a password at your server. You give them those, and they join.'],
+        again: ['A name with letters in it. Who do you invite?'],
+      }, (text) => { const got = peopleName(text); return got && peerLoginName(got) ? got : null; });
+      if (!one) return;
+      const made = await meanwhile(stage, ['Making their account…'], setup.account(one));
+      if (made.ok) { name = one; password = made.password; break; }
+      if (made.why !== 'taken') { await stage.say(['I could not make the account now.'], 3200, { mood: 'sorry' }); return; }
+      say = ['Someone called ', em(one), ' has an account here already. Another name.'];
+    }
+    const ready = setup.built().length;
+    const id = stage.id();
+    stage.put({
+      id, kind: 'sheet', say: ['For ', em(name), ': three things'], mood: 'look', stay: true, no: 'close',
+      blocks: [
+        { kind: 'row', lead: '1', say: [em(hostOf(hosting.address))], small: 'The address.' },
+        { kind: 'row', lead: '2', say: [em(peerLoginName(name) ?? name)], small: 'Their name there.' },
+        { kind: 'row', lead: '3', say: [em(password)], small: 'Their password. Shown this once: I do not keep it.' },
+        { kind: 'note', say: [`On their ${NOTCH_NAME}: Home, "Join an organisation", then the address. They sign in with the name and the password. When they have, make the code here.`] },
+        ...(ready < 5 ? [{ kind: 'note' as const, say: [`The engines for the other kinds of laptop are still being built: ${ready} of 5 are ready.`] }] : []),
+        { kind: 'buttons', buttons: [{ id: 'code', label: 'They are in: make the code' }] },
+      ],
+    });
+    const answer = await stage.answer(id, ['button', 'no', 'yes']);
+    if (answer.act === 'button' && answer.button === 'code') await invite(stage);
+  }
+
+  /** The server's row in Home. */
+  async function server(stage: NotchStage): Promise<void> {
+    if (!setup) return;
+    const hosting = setup.hosting();
+    if (!hosting.address) return;
+    if (hosting.state === 'starting') { await stage.say(['Your server is starting.'], 2400); return; }
+    if (hosting.state === 'off') { await startHosting(stage, { me: setup.myName() ?? '' }); return; }
+    const answer = await stage.choose(['Your server is on, at ', em(hostOf(hosting.address)), '. While it is off, nobody in ', em(orgName() ?? 'your organisation'), ' reaches anybody.'], ['Stop it', 'Leave it on']);
+    if (answer.act !== 'pick' || answer.index !== 0) return;
+    await meanwhile(stage, ['Stopping the server…'], setup.stopHost());
+    inbox.refresh();
+    await stage.say(['The server is off.'], 2400, { mark: 'check' });
+  }
+
+  /** Leaving: the one thing here that is asked twice, because it takes something away. */
+  async function leave(stage: NotchStage): Promise<boolean> {
+    if (!setup) return false;
+    const org = orgName();
+    const hosts = !!setup.hosting().address;
+    const answer = await stage.choose(
+      hosts ? ['Leave ', em(org ?? 'this organisation'), '? Its server stops, and the people in it are set aside on this laptop.'] : ['Leave ', em(org ?? 'this organisation'), '? The people in it are set aside on this laptop. To come back you join again.'],
+      ['Leave', 'Stay']);
+    if (answer.act !== 'pick' || answer.index !== 0) return false;
+    if (!(await meanwhile(stage, ['Leaving…'], setup.leave()))) { await stage.say(['I could not leave now.'], 3000, { mood: 'sorry' }); return false; }
+    store.setMeta('org', null);
+    await link.refresh();
+    inbox.refresh();
+    await stage.say(['Left. Nothing goes out and nothing comes in.'], 3000, { mark: 'check' });
+    return true;
+  }
+
   // --- the sheet ---
 
   function row(): NotchBlock | null {
     const account = link.account();
     const people = others();
     const org = orgName();
+    const start = `${setup && !setup.canHost() ? 'Join' : 'Make'} an organisation, so your ${NOTCH_NAME}s can talk.`;
+    // No engine on this machine yet: one comes with making an organisation, or with joining one.
+    if (setup && !setup.engineReady()) return { kind: 'row', id: 'people', say: [start], go: true };
     if (account.engine !== 'up') return org ? { kind: 'row', id: 'people', say: [em(org), ': not reachable right now.'] } : null;
-    if (!people.length) return { kind: 'row', id: 'people', say: [`Make an organisation, so your ${NOTCH_NAME}s can talk.`], go: true };
+    if (!people.length) return { kind: 'row', id: 'people', say: org && setup ? [em(org), ': only you so far. Invite someone.'] : [start], go: true };
     return { kind: 'row', id: 'people', say: [em(org ?? 'Your organisation'), ': you and ', em(people.map((one) => one.name).join(', ')), '.'], go: true };
+  }
+
+  function rows(): NotchBlock[] {
+    const main = row();
+    const hosting = setup?.hosting();
+    // The server's own row, for whoever hosts: it is theirs to turn off and on.
+    const mine: NotchBlock | null = !hosting?.address || !orgName() ? null
+      : hosting.state === 'on' ? { kind: 'row', id: 'people-server', say: ['Your server is ', em('on'), '.'], go: true }
+        : hosting.state === 'starting' ? { kind: 'row', id: 'people-server', say: ['Your server is starting…'] }
+          : { kind: 'row', id: 'people-server', say: ['Your server is ', em('off'), '. Start it?'], go: true };
+    return [...(main ? [main] : []), ...(mine ? [mine] : [])];
   }
 
   async function open(stage: NotchStage): Promise<void> {
@@ -441,44 +726,70 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const account = link.account();
       const people = others();
       const org = orgName();
-      if (account.engine !== 'up') { await stage.say(['I cannot reach the others right now.'], 2600, { mood: 'sorry' }); return; }
-      if (!org && !people.length) {
+      const noEngine = !!setup && !setup.engineReady();
+      if (!noEngine && account.engine !== 'up') { await stage.say(['I cannot reach the others right now.'], 2600, { mood: 'sorry' }); return; }
+      if (noEngine || (!org && !people.length)) {
+        // A machine that cannot run a server has one way in.
+        if (setup && !setup.canHost()) {
+          if (noEngine && !(await arrive(stage))) return;
+          await join(stage);
+          if (!others().length) return;
+          continue;
+        }
         const id = stage.id();
         stage.put({
           id, kind: 'ask', say: ['Make an organisation'], placeholder: 'Name it, for example Northwind', yes: 'make', focus: true, mood: 'look',
           blocks: [
-            { kind: 'note', say: [`An organisation is the people whose ${NOTCH_NAME}s may talk to each other.`] },
-            { kind: 'buttons', buttons: [{ id: 'join', label: 'Join one with a code' }] },
+            { kind: 'note', say: [setup ? `An organisation is the people whose ${NOTCH_NAME}s may talk to each other. Its server runs on this laptop, and you choose when it is on.` : `An organisation is the people whose ${NOTCH_NAME}s may talk to each other.`] },
+            { kind: 'buttons', buttons: [{ id: 'join', label: setup ? 'Join one' : 'Join one with a code' }] },
           ],
         });
         const answer = await stage.answer(id, ['ask', 'button', 'no']);
-        if (answer.act === 'button' && answer.button === 'join') { await join(stage); if (!others().length) return; continue; }
+        if (answer.act === 'button' && answer.button === 'join') {
+          if (noEngine && !(await arrive(stage))) return;
+          await join(stage);
+          if (!others().length) return;
+          continue;
+        }
         if (answer.act !== 'ask') return;
         const name = peerPlain(answer.text ?? '', PEER_ORG_MAX);
         if (!name) continue;
+        if (setup) { if (!(await make(stage, name))) return; continue; }
         store.setOrg(name);
         if (!(await signIn(stage))) return;
         continue;
       }
+      const hosting = setup?.hosting();
+      const hosts = !!hosting?.address;
       const id = stage.id();
       stage.put({
         id, kind: 'sheet', say: org ? [em(org), ', your organisation'] : ['Your organisation'], mood: 'look',
         blocks: [
           { kind: 'row', lead: 'You', say: ['This laptop'], small: 'You say yes or no to what is asked of it.' },
           ...people.map((one): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : 'Connected by a code. Asks you every time.' })),
+          ...(hosts ? [{ kind: 'row' as const, lead: 'S', say: ['Its server, on this laptop'], small: hosting!.state === 'on' ? `On, at ${hostOf(hosting!.address)}.` : hosting!.state === 'starting' ? 'Starting.' : 'Off. Nobody reaches anybody until it is on.' }] : []),
           ...(account.signedIn ? [] : [{ kind: 'note' as const, say: ['You are signed out. Nothing goes out and nothing comes in until you sign in.'] }]),
           { kind: 'buttons', buttons: [
             ...(account.signedIn ? [] : [{ id: 'signin', label: 'Sign in' }]),
             { id: 'invite', label: 'Invite someone' },
             { id: 'join', label: 'Join with a code' },
+            ...(hosts && hosting!.state !== 'starting' ? [{ id: 'server', label: hosting!.state === 'on' ? 'Stop the server' : 'Start the server' }] : []),
+            ...(setup ? [{ id: 'leave', label: 'Leave' }] : []),
           ] },
         ],
       });
       const answer = await stage.answer(id, ['button', 'no', 'yes']);
       if (answer.act !== 'button') return;
-      if (answer.button === 'signin') { await signIn(stage); continue; }
-      if (answer.button === 'invite') { await invite(stage); continue; }
+      if (answer.button === 'signin') {
+        if (hosts && hosting!.state === 'on') {
+          if (!(await meanwhile(stage, ['Signing you in…'], signInAsHost(stage, setup!.myName() ?? '')))) await stage.say(['I could not sign you in at your server.'], 3200, { mood: 'sorry' });
+        } else await signIn(stage);
+        continue;
+      }
+      if (answer.button === 'invite') { if (hosts) await inviteAsHost(stage); else await invite(stage); continue; }
       if (answer.button === 'join') { await join(stage); continue; }
+      if (answer.button === 'server') { await server(stage); continue; }
+      if (answer.button === 'leave') { if (await leave(stage)) return; continue; }
       return;
     }
   }
@@ -1061,9 +1372,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   }
   link.onArrival(() => { void look(); });
   link.onChange(() => { restore(); inbox.refresh(); void look(); });
+  // The server went on or off: Home's row for it says so.
+  setup?.onChange(() => { inbox.refresh(); });
 
   return {
-    row, open, route, look, tick,
+    row, rows, open, server, route, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
     stop() { if (timer) clearInterval(timer); if (followTimer) clearTimeout(followTimer); },
   };
