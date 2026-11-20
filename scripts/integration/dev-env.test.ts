@@ -34,4 +34,29 @@ describe('the dev:local environment', () => {
     expect('JARVIS_NOTCH_DEMO' in devEnv({ PATH: '/bin', JARVIS_NOTCH_DEMO: secret }, paths, 3143)).toBe(false);
     expect('JARVIS_NOTCH_DEMO' in devEnv({ PATH: '/bin', JARVIS_NOTCH: '1' }, paths, 3143)).toBe(false);
   });
+
+  // The first try at an organisation with a second person, 20 November 2026:
+  // "JARVIS_PEERS_ENGINE=... scripts/notch/try.sh" started a brain with no
+  // engine and no row to make an organisation with, because the launcher
+  // builds its environment from scratch and the name was not in it.
+  test('carries the place of the peers engine across, with the notch on and only as a path from the root', () => {
+    const engine = '/opt/collab/collab-claude';
+    expect(devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS_ENGINE: engine }, paths, 3143).JARVIS_PEERS_ENGINE).toBe(engine);
+    expect(devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS_ENGINE: `  ${engine} ` }, paths, 3143).JARVIS_PEERS_ENGINE).toBe(engine);
+    // Without the notch nothing would show what it asks.
+    expect('JARVIS_PEERS_ENGINE' in devEnv({ PATH: '/bin', JARVIS_PEERS_ENGINE: engine }, paths, 3143)).toBe(false);
+    // What gets run must not depend on the folder the launcher was started in.
+    expect('JARVIS_PEERS_ENGINE' in devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS_ENGINE: 'collab-claude' }, paths, 3143)).toBe(false);
+    expect('JARVIS_PEERS_ENGINE' in devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS_ENGINE: '' }, paths, 3143)).toBe(false);
+  });
+
+  test('what the engine may be given from outside travels with it, and never without it', () => {
+    const given = { COLLAB_SERVER_URL: 'https://collab.example', COLLAB_DEVICE_NAME: 'Desk', XDG_RUNTIME_DIR: '/run/user/1000', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus' };
+    const withEngine = devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', JARVIS_PEERS_ENGINE: '/opt/collab/collab-claude', ...given, COLLAB_UNATTENDED_TASKS: '1' }, paths, 3143);
+    for (const [key, value] of Object.entries(given)) expect(withEngine[key]).toBe(value);
+    // A setting of the engine's that is not the person's to make is not carried.
+    expect('COLLAB_UNATTENDED_TASKS' in withEngine).toBe(false);
+    const without = devEnv({ PATH: '/bin', JARVIS_NOTCH: '1', ...given }, paths, 3143);
+    for (const key of Object.keys(given)) expect(key in without).toBe(false);
+  });
 });
