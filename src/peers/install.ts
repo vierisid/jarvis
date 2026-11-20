@@ -37,6 +37,11 @@ export function engineTarget(platform: string = process.platform, arch: string =
   return (ENGINE_TARGETS as readonly string[]).includes(target) ? (target as EngineTarget) : null;
 }
 
+/** A system as it is said to a person. */
+export const ENGINE_TARGET_SAID: Record<EngineTarget, string> = {
+  'darwin-arm64': 'Mac (Apple chip)', 'windows-x64': 'Windows', 'linux-x64': 'Linux', 'darwin-x64': 'Mac (Intel)', 'linux-arm64': 'Linux (ARM)',
+};
+
 export const engineFileName = (target: EngineTarget): string => (target.startsWith('windows-') ? 'collab-claude.exe' : 'collab-claude');
 
 /** Where the engine is kept once it is in place. */

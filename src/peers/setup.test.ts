@@ -21,7 +21,9 @@ const until = async (what: () => boolean, ms = 4000): Promise<boolean> => { cons
 function engines(more: { never?: boolean } = {}) {
   const started: string[] = [];
   const stopped: string[] = [];
-  const make = (path: string): SetupEngine => {
+  const envs: (string | undefined)[] = [];
+  const make = (path: string, given: Record<string, string | undefined>): SetupEngine => {
+    envs.push(given.COLLAB_SERVER_URL);
     let state: EngineState = 'stopped';
     return {
       state: () => state,
@@ -31,15 +33,15 @@ function engines(more: { never?: boolean } = {}) {
       read: async () => ({ account: { loggedIn: false } }),
     };
   };
-  return { started, stopped, make };
+  return { started, stopped, envs, make };
 }
 
-function setup(more: { source?: string | null; enginePath?: string; fetch?: typeof fetch; never?: boolean; dir?: string; db?: Database } = {}) {
+function setup(more: { source?: string | null; enginePath?: string; fetch?: typeof fetch; never?: boolean; dir?: string; db?: Database; stray?: string } = {}) {
   const dir = more.dir ?? mkdtempSync(join(tmpdir(), 'peers-setup-'));
   const memory = new PeerStore(more.db ?? new Database(':memory:'));
   const kept = engines({ never: more.never });
   const made = new PeerSetup({
-    brainDataDir: dir, link: new PeerLink(), memory, env, source: more.source ?? null, makeEngine: kept.make, engineUpMs: 600,
+    brainDataDir: dir, link: new PeerLink(), memory, env: more.stray ? { ...env, COLLAB_SERVER_URL: more.stray } : env, source: more.source ?? null, makeEngine: kept.make, engineUpMs: 600,
     ...(more.enginePath ? { enginePath: more.enginePath } : {}), ...(more.fetch ? { fetch: more.fetch } : {}),
   });
   return { dir, memory, made, ...kept };
@@ -104,6 +106,25 @@ describe('joining', () => {
     expect(started).toEqual(['/opt/collab/collab-claude']);
   });
 
+  test('the engine is told the address it was taken from, whatever is left over in the environment', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'peers-setup-'));
+    const db = new Database(':memory:');
+    const first = setup({ fetch: serving(await archive(program(1))), stray: 'https://another.example', dir, db });
+    expect(await first.made.join('Northwind.ngrok-free.app')).toEqual({ ok: true });
+    expect(first.envs).toEqual(['https://northwind.ngrok-free.app']);
+    // And again when the brain is started anew.
+    const second = setup({ stray: 'https://another.example', dir, db });
+    second.made.start();
+    expect(second.envs).toEqual(['https://northwind.ngrok-free.app']);
+    // After leaving, it is told nothing: the next organisation's address comes with its engine.
+    await second.made.leave();
+    expect(second.envs[second.envs.length - 1]).toBe('https://another.example');
+    // An engine named by hand keeps the environment as it is.
+    const named = setup({ enginePath: '/opt/collab/collab-claude', stray: 'https://another.example' });
+    named.made.start();
+    expect(named.envs).toEqual(['https://another.example']);
+  });
+
   test('an engine that does not come up is said so', async () => {
     const { made } = setup({ fetch: serving(await archive(program(1))), never: true });
     expect(await made.join('northwind.ngrok-free.app')).toEqual({ ok: false, why: 'engine' });
@@ -113,11 +134,13 @@ describe('joining', () => {
 describe.if(unix)('hosting', () => {
   test('starts the server, builds the engine for this machine against it, starts it, and builds for the others after', async () => {
     const source = fakeSource();
-    const { made, dir, started, memory } = setup({ source });
+    const { made, dir, started, memory, envs } = setup({ source, stray: 'https://another.example' });
     expect(made.canHost()).toBe(true);
     const steps: SetupStep[] = [];
     expect(await made.host('northwind.ngrok-free.app', (step) => steps.push(step))).toEqual({ ok: true, address: 'https://northwind.ngrok-free.app' });
     expect(steps).toEqual(['server', 'build', 'engine']);
+    // The engine that hosts is told its own server.
+    expect(envs).toEqual(['https://northwind.ngrok-free.app']);
     expect(made.hosting()).toEqual({ state: 'on', address: 'https://northwind.ngrok-free.app' });
     expect(started).toEqual([installedEnginePath(dir)]);
     expect(memory.meta('host.on')).toBe('1');

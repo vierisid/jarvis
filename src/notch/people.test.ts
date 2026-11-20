@@ -1442,7 +1442,7 @@ describe('getting in: making an organisation on this machine', () => {
     expect(sam.kind()).toBe('sheet');
     expect(sam.said()).toBe('For Leo Rossi: three things');
     const blocks = sam.blocks();
-    for (const thing of ['collab.invalid', 'leo-rossi', 'pw-leo rossi-73', 'Shown this once: I do not keep it.', '2 of 5 are ready']) expect(blocks).toContain(thing);
+    for (const thing of ['collab.invalid', 'leo-rossi', 'pw-leo rossi-73', 'Shown this once: I do not keep it.', 'They can join now from: Linux, Mac (Apple chip). The engines for the other kinds of laptop are still being built.']) expect(blocks).toContain(thing);
     expect(sam.logs.join('\n')).not.toContain('pw-leo');
     await sam.button('code');
     expect(sam.said()).toContain('Read them this code: ');
