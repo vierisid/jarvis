@@ -866,6 +866,45 @@ describe('what the hardening audit found in day one', () => {
     expect(h.setups).toEqual(['finish setup']);
   });
 
+  // 20 November 2026: a colleague asked a Pillow for something and it said no. It had an AI, and no agent
+  // to do the work: its day one was gone through on a build that did not finish the setup yet, and nothing
+  // but day one's own steps ever did.
+  test('a brain whose day one is over and that still reads never set up is finished when the notch comes up', async () => {
+    const h = harness({ works: true });
+    h.settings.set('dayone', { step: 13, done: true });
+    h.day.cameUp();
+    await settle();
+    expect(h.setups).toEqual(['finish setup']);
+    // Day one itself does not begin again.
+    expect(h.line()).toBeNull();
+    // Coming up again asks the AI nothing more and finishes nothing twice.
+    h.day.cameUp();
+    await settle();
+    expect(h.setups).toEqual(['finish setup']);
+    expect(h.checks).toEqual(['check']);
+  });
+
+  test('it is not finished without an AI that answers, and a brain that is set up is asked nothing', async () => {
+    const mute = harness({ works: false });
+    mute.settings.set('dayone', { step: 13, done: true });
+    mute.day.cameUp();
+    await settle();
+    expect(mute.setups).toEqual([]);
+    const none = harness({ model: { ready: false, name: '', hosted: false }, works: true });
+    none.settings.set('dayone', { step: 13, done: true });
+    none.day.cameUp();
+    await settle();
+    expect(none.setups).toEqual([]);
+    expect(none.checks).toEqual([]);
+    // Set up already: not even the small question to the AI.
+    const done = harness({ fresh: false, works: true });
+    done.settings.set('dayone', { step: 13, done: true });
+    done.day.cameUp();
+    await settle();
+    expect(done.setups).toEqual([]);
+    expect(done.checks).toEqual([]);
+  });
+
   test('coming up by itself it is not "asked for": its line is marked as unasked, and it waits for a still moment', async () => {
     const h = harness();
     h.day.cameUp();
