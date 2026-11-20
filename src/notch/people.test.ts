@@ -1350,7 +1350,13 @@ describe('getting in: making an organisation on this machine', () => {
 
   test('a server that does not start is said why, and nothing is made', async () => {
     for (const [fails, said] of [
-      [{ ok: false, why: 'tunnel' }, 'The tunnel did not come up at that address. Check it in your ngrok dashboard and try again.'],
+      [{ ok: false, why: 'tunnel' }, 'The tunnel did not come up at that address. Is ngrok signed in on this laptop?'],
+      // The owner's first try, 20 November 2026: the address of one account, and a laptop signed in to another.
+      [{ ok: false, why: 'tunnel', code: '320', account: 'Northwind Ops' }, 'That address belongs to another ngrok account. ngrok on this laptop is signed in as Northwind Ops. Sign it in with the right authtoken and try again.'],
+      [{ ok: false, why: 'tunnel', code: '320' }, 'That address belongs to another ngrok account than the one ngrok on this laptop is signed in to. Sign it in with the right authtoken and try again.'],
+      [{ ok: false, why: 'tunnel', code: '108' }, 'Another ngrok is already running on your account. Close it and try again.'],
+      [{ ok: false, why: 'tunnel', code: '4018' }, 'ngrok on this laptop is not signed in to an account. Add your authtoken and try again.'],
+      [{ ok: false, why: 'tunnel', code: '9999' }, 'ngrok would not open the tunnel at that address. It says ERR_NGROK_9999.'],
       [{ ok: false, why: 'tools', missing: 'ngrok' }, 'I cannot start the server: ngrok is not installed on this laptop.'],
       [{ ok: false, why: 'busy' }, 'Something else already answers where the server would. Is another one running on this laptop?'],
       [{ ok: false, why: 'build' }, 'The server is on, but I could not build the engine for this laptop.'],

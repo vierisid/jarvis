@@ -476,7 +476,17 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (failed.why === 'address') return ['That address did not work for a tunnel. Try again with the one in your ngrok dashboard.'];
     if (failed.why === 'tools') return ['I cannot start the server: ', em(failed.missing ?? 'a program it needs'), ' is not installed on this laptop.'];
     if (failed.why === 'busy') return ['Something else already answers where the server would. Is another one running on this laptop?'];
-    if (failed.why === 'tunnel') return ['The tunnel did not come up at that address. Check it in your ngrok dashboard and try again.'];
+    if (failed.why === 'tunnel') {
+      // The tunnel program's own reason, by its number. The account's name is its own word, made readable.
+      const account = failed.account ? peerPlain(failed.account, 40) : '';
+      if (failed.code === '320') return account
+        ? ['That address belongs to another ngrok account. ngrok on this laptop is signed in as ', em(account), '. Sign it in with the right authtoken and try again.']
+        : ['That address belongs to another ngrok account than the one ngrok on this laptop is signed in to. Sign it in with the right authtoken and try again.'];
+      if (failed.code === '108') return ['Another ngrok is already running on your account. Close it and try again.'];
+      if (failed.code === '334') return ['That address already has a tunnel open somewhere else. Close that one and try again.'];
+      if (failed.code === '105' || failed.code === '107' || failed.code === '4018') return ['ngrok on this laptop is not signed in to an account. Add your authtoken and try again.'];
+      return failed.code ? ['ngrok would not open the tunnel at that address. It says ', em(`ERR_NGROK_${failed.code}`), '.'] : ['The tunnel did not come up at that address. Is ngrok signed in on this laptop?'];
+    }
     if (failed.why === 'build') return ['The server is on, but I could not build the engine for this laptop.'];
     if (failed.why === 'engine') return ['The server is on, but the engine did not start on this laptop.'];
     if (failed.why === 'system') return ['There is no engine for this kind of machine yet.'];
@@ -554,7 +564,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (!stage.ended()) await stage.say(['Stopped. The server is off.'], 2600);
       return false;
     }
-    if (!hosted.ok) { await stage.say(hostSorry(hosted), 4600, { mood: 'sorry' }); return false; }
+    if (!hosted.ok) { await stage.say(hostSorry(hosted), 9000, { mood: 'sorry' }); return false; }
     const other = await elsewhere(stage, hosted.address);
     if (other !== 'clear') {
       void setup.stopHost();

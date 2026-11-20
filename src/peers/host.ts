@@ -144,9 +144,11 @@ export type HostStarted =
    * address: no tunnel address is known yet, or the one given is not one.
    * tools: a program the script needs is not installed (`missing` names it).
    * busy: something else answers on the server's port. tunnel: the tunnel did
-   * not come up at that address. failed: anything else.
+   * not come up at that address (`code` is the tunnel program's own error
+   * number, and `account` the account it says it is signed in to, when it
+   * gave them). failed: anything else.
    */
-  | { ok: false; why: 'address' | 'tools' | 'busy' | 'tunnel' | 'failed'; missing?: string };
+  | { ok: false; why: 'address' | 'tools' | 'busy' | 'tunnel' | 'failed'; missing?: string; code?: string; account?: string };
 
 export type HostAccount = { ok: true; password: string } | { ok: false; why: 'name' | 'taken' | 'failed' };
 
@@ -165,12 +167,25 @@ export interface PeerHostOptions {
   stopMs?: number;
 }
 
+/**
+ * Why the tunnel program would not open the tunnel, read from what it wrote:
+ * its error number (the last one it gave), and the account it named. On 20
+ * November 2026 the owner's first try failed with number 320, the address of
+ * one account typed into a machine signed in to another, and all the notch
+ * could say was that the tunnel did not come up.
+ */
+export function tunnelFailure(written: string): { code?: string; account?: string } {
+  const code = [...written.matchAll(/ERR_NGROK_(\d{1,6})/g)].pop()?.[1];
+  const account = [...written.matchAll(/for the account '([^'\\\n]{1,80})'/g)].pop()?.[1];
+  return { ...(code ? { code } : {}), ...(account ? { account } : {}) };
+}
+
 /** What the script said went wrong, by its own fixed sentences. */
 export function hostFailure(said: string): Extract<HostStarted, { ok: false }> {
   const missing = /^test-env: (\S+) is not installed$/m.exec(said)?.[1];
   if (missing) return { ok: false, why: 'tools', missing };
   if (/^test-env: something already answers on port/m.test(said)) return { ok: false, why: 'busy' };
-  if (/^test-env: ngrok (exited|did not answer)/m.test(said)) return { ok: false, why: 'tunnel' };
+  if (/^test-env: ngrok (exited|did not answer)/m.test(said)) return { ok: false, why: 'tunnel', ...tunnelFailure(said) };
   if (/is not a host name/.test(said)) return { ok: false, why: 'address' };
   return { ok: false, why: 'failed' };
 }
@@ -260,15 +275,25 @@ export class PeerHost {
       this.options.log?.('[peers] the organisation\'s server is on');
       return { ok: true, address };
     }
-    // It did not come up. Whatever is left of it is ended, and what this start alone made is taken away,
-    // so that a mistyped address can be typed again.
+    // It did not come up. Whatever is left of it is ended.
     await this.end(child);
+    let failure = hostFailure(said);
+    if (failure.why === 'tunnel') {
+      // The tunnel program's own words are in its log: more of them than the script passes on.
+      let written = '';
+      try { written = readFileSync(join(source, HOST_DATA, 'ngrok.log'), 'utf8').slice(-16_000); } catch { /* it wrote none */ }
+      failure = { ...failure, ...tunnelFailure(written), ...tunnelFailure(said) };
+    }
+    // What this start alone made is taken away, so that another address can be typed: the settings, and the
+    // database that was made for them. The logs stay: they are how a failure is understood afterwards.
     if (fresh) {
       rmSync(join(source, HOST_SETTINGS), { force: true });
-      rmSync(join(source, HOST_DATA), { recursive: true, force: true });
+      try {
+        for (const name of readdirSync(join(source, HOST_DATA))) if (name.startsWith('collab.sqlite')) rmSync(join(source, HOST_DATA, name), { force: true });
+      } catch { /* nothing was made */ }
     }
-    const failure = hostFailure(said);
-    this.options.log?.(`[peers] the organisation's server did not start (${failure.why})`);
+    // The number only: an account's name is said on the notch and written nowhere.
+    this.options.log?.(`[peers] the organisation's server did not start (${failure.why}${failure.code ? `, ERR_NGROK_${failure.code}` : ''})`);
     return failure;
   }
 

@@ -45,7 +45,7 @@ export type SetupStep = 'server' | 'build' | 'engine';
 export type SetupHosted =
   | { ok: true; address: string }
   /** As ./host.ts says, and: build, the engine for this machine could not be built. engine, it did not start. */
-  | { ok: false; why: 'address' | 'tools' | 'busy' | 'tunnel' | 'failed' | 'build' | 'engine' | 'system'; missing?: string };
+  | { ok: false; why: 'address' | 'tools' | 'busy' | 'tunnel' | 'failed' | 'build' | 'engine' | 'system'; missing?: string; code?: string; account?: string };
 
 export type SetupJoined = { ok: true } | { ok: false; why: Extract<EngineFetched, { ok: false }>['why'] | 'engine' };
 

@@ -308,6 +308,10 @@ server stops.
 - The first start of the tunnel at a real address has been run by the owner only, not by a test:
   the tests use a stand-in script, and the rehearsal outside this repository uses the real script
   with a stand-in for the tunnel program.
+- The tunnel program must be signed in to the account that owns the address. When it is not, or
+  when it refuses for another reason, the notch says so with the program's own error number, and
+  the account it named. The first real try failed on exactly this (number 320). The program's
+  log of a failed start is kept in the source's `deploy/ngrok/data/`.
 - After the server was off, the others' engines need some seconds to find it again. A message
   said in that time is not sent, and says so.
 - A joiner who typed the wrong address and wants another has to leave first.
