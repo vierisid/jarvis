@@ -51,6 +51,7 @@
  *     reach somebody stops for an approval of its own (src/daemon/notch-peers.ts).
  */
 import type { NotchInbox } from './inbox.ts';
+import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -114,6 +115,12 @@ export interface NotchPeopleDeps {
   work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
   /** Getting in: the engine put in place, and the server for whoever makes an organisation (src/peers/setup.ts). */
   setup?: PeerSetupLike;
+  /**
+   * Files between Pillows (./people-files.ts): a folder of the brain's own
+   * to keep one in while it crosses, and how one that arrived is put where
+   * the person finds it. Without it no file is offered and none is taken.
+   */
+  files?: { dir: string; save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null>; paceMs?: number; retryMs?: number };
   log?: (line: string) => void;
   now?: () => number;
   /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
@@ -135,6 +142,12 @@ export interface NotchPeople {
   route(text: string): { did: string; run(): void } | null;
   /** The people by name, for reading back a name that was heard and is close to one of theirs. */
   names(): { name: string }[];
+  /** Who a file can be sent to: nobody while files are not set up, or while nothing can go out. */
+  fileTargets(): { id: string; name: string }[];
+  /** Offers a file to one of them. False when that person is not there. */
+  sendFile(to: string, file: { name: string; bytes: Uint8Array }): boolean;
+  /** Every piece of every file that is crossing has gone. For tests. */
+  filesIdle(): Promise<void>;
   /** Takes in what arrived. */
   look(): Promise<void>;
   /** Looks, and tells the person of a question that got no answer. */
@@ -236,6 +249,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (sent.why === 'down') return ['I cannot reach the others now. It was not sent.'];
     return ['That could not be sent.'];
   }
+
+  /** Files, when this brain was given somewhere to keep and to put them. */
+  const files = deps.files ? attachNotchPeopleFiles({
+    inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log,
+    news: (id, say, more) => news(id, say, say, { person: true, ms: 4200, ...(more?.who ? { who: more.who } : {}) }),
+    ...(deps.files.paceMs !== undefined ? { paceMs: deps.files.paceMs } : {}), ...(deps.files.retryMs !== undefined ? { retryMs: deps.files.retryMs } : {}),
+  }) : null;
 
   // --- signing in and connecting ---
 
@@ -1303,6 +1323,16 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         continue;
       }
       const { words, note } = peerNoteRead(item.text);
+      if (isFileNote(note)) {
+        if (files) {
+          // An offer that is already on the notch, or in the count, is not put there twice.
+          if (note.kind !== 'file' || !inbox.has(`people:file:${note.id}`)) await files.note(item, from, note, words);
+          // Pieces come many at a time, and more than one look takes in: looked again until none is left.
+          if (note.kind === 'file-part') again = true;
+        } else if (note.kind === 'file') message(item, from, words);
+        else { store.done(item.id); void link.seen(item.id); }
+        continue;
+      }
       if (note && note.kind !== 'ask') {
         answered(item, from, note);
         store.done(item.id);
@@ -1363,6 +1393,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (restored || !others().length) return;
     restored = true;
     for (const row of store.openRequests('in')) if (row.state !== 'new') asked(row.id);
+    files?.restore();
     for (const key of store.waiting()) {
       if (!key.startsWith('answer:')) continue;
       const row = store.requestOf(key.slice('answer:'.length));
@@ -1378,6 +1409,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   return {
     row, rows, open, server, route, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
+    fileTargets: () => (files && link.account().engine === 'up' && link.account().signedIn ? others().map((one) => ({ id: one.id, name: one.name })) : []),
+    sendFile(to, file) { const one = person(to); if (!files || !one) return false; files.send(one, file); return true; },
+    filesIdle: () => files?.idle() ?? Promise.resolve(),
     stop() { if (timer) clearInterval(timer); if (followTimer) clearTimeout(followTimer); },
   };
 }

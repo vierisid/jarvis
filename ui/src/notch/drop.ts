@@ -14,14 +14,14 @@
  *     is to leave this page and show the file instead. That holds for
  *     anything dragged here, a file or not.
  *
- * A file too large to be read at all is not sent: the brain is told its
+ * A file too large to be read or sent on is not sent: the brain is told its
  * name, kind and size, and says so.
  */
 import type { NotchFromPage } from '../../../src/notch/protocol.ts';
 
 /** Where a dropped file goes, and the most that is sent (src/notch/drop.ts). */
 export const NOTCH_DROP_PATH = '/api/notch/drop';
-export const NOTCH_DROP_MAX_BYTES = 16 * 1024 * 1024;
+export const NOTCH_DROP_MAX_BYTES = 25 * 1024 * 1024;
 /** The most files taken from one drop (src/notch/drop.ts). */
 export const NOTCH_DROP_MOST = 3;
 
@@ -70,7 +70,7 @@ export async function notchUpload(file: File, count: number, request: typeof fet
     method: 'POST',
     credentials: 'same-origin',
     headers: notchDropHeaders(file, count),
-    // Too large to be read: only what it is goes, and the brain says so.
+    // Too large to be read or sent on: only what it is goes, and the brain says so.
     body: file.size > NOTCH_DROP_MAX_BYTES ? '' : file,
     ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? { signal: AbortSignal.timeout(NOTCH_UPLOAD_MS) } : {}),
   });

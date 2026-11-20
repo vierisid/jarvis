@@ -188,6 +188,7 @@ import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
+import { downloadsFolder, saveDownload } from "../peers/downloads.ts";
 import { PeerLink } from "../peers/link.ts";
 import { PeerSetup } from "../peers/setup.ts";
 import { PeerStore } from "../peers/store.ts";
@@ -4750,7 +4751,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
         // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
-        ...(peerLink && peerSetupNow ? { peers: { db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent) } } : {}),
+        ...(peerLink && peerSetupNow ? { peers: {
+          db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent),
+          // A file from somebody in the organisation: kept in the brain's own folder while it crosses, then put in the person's Downloads.
+          files: {
+            dir: path.join(dataDir, 'peers', 'files'),
+            save: async (name, bytes) => { const saved = saveDownload(await downloadsFolder(), name, bytes); return saved ? { place: 'Downloads', name: saved.name } : null; },
+          },
+        } } : {}),
         approvalManager,
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.

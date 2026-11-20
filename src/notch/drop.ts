@@ -29,11 +29,17 @@ import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchSurface } from './surface.ts';
 
 /**
- * The most the page sends: the largest file that could be read at all. A
- * Word file or a deck is mostly its pictures, so it may be far larger than
- * the words that are taken from it.
+ * The largest file that could be read at all. A Word file or a deck is
+ * mostly its pictures, so it may be far larger than the words that are taken
+ * from it.
  */
-export const NOTCH_DROP_MAX_BYTES = 16 * 1024 * 1024;
+export const NOTCH_DROP_READ_MAX_BYTES = 16 * 1024 * 1024;
+/**
+ * The most the page sends: the largest file that can be sent on to somebody
+ * in the organisation (src/peers/notes.ts, PEER_FILE_MAX). Between the two
+ * sizes a file can be sent on and cannot be read.
+ */
+export const NOTCH_DROP_MAX_BYTES = 25 * 1024 * 1024;
 export const NOTCH_DROP_NAME_MAX = 120;
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -88,7 +94,7 @@ export function dropVerdict(name: string, mediaType: string, size: number): Drop
   // Made of words in another dress: a web page, an Office file, code.
   const reader = NOTCH_DROP_READERS[ext] ?? (type === 'text/html' ? 'html' : null);
   if (reader && !READABLE[ext]) {
-    if (size > NOTCH_DROP_MAX_BYTES) return { ok: false, why: `${shown} is larger than I can read yet: ${Math.round(NOTCH_DROP_MAX_BYTES / (1024 * 1024))} MB is the most.` };
+    if (size > NOTCH_DROP_READ_MAX_BYTES) return { ok: false, why: `${shown} is larger than I can read yet: ${Math.round(NOTCH_DROP_READ_MAX_BYTES / (1024 * 1024))} MB is the most.` };
     return { ok: true, kind: 'document', mediaType: 'text/plain', reader };
   }
   const known = READABLE[ext] ?? BY_TYPE[type] ?? null;
@@ -134,6 +140,27 @@ export interface DropHeld {
   /** Only its first part could be read. */
   cut: boolean;
   file: NotchAskFile;
+  /** The file itself, as it was dropped: what is sent on when it is for somebody else. */
+  raw: Uint8Array;
+  /** It cannot be read here, and is held only to be sent on. Why it cannot, in a sentence. */
+  unread?: string;
+}
+
+/** Somebody a dropped file can be sent on to. */
+export interface DropPerson { id: string; name: string }
+
+/**
+ * Whom the words name, when they are about sending what is held: "send it
+ * to Leo", "give this to Leo Rossi", "for Leo". With `bare`, a name alone
+ * is enough. Null when they name nobody who is there, or more than one.
+ */
+export function dropSendTo(text: string, people: readonly DropPerson[], bare = false): DropPerson | null {
+  const said = text.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '');
+  const found = /^(?:please\s+)?(?:(?:send|give|share|pass)\s+(?:(?:it|this|that|them|these|those|the\s+files?)\s+)?(?:on\s+)?(?:to|with)|for)\s+(.+)$/i.exec(said);
+  const name = (found ? found[1]! : bare ? said : '').toLowerCase();
+  if (!name) return null;
+  const matches = people.filter((one) => one.name.toLowerCase() === name || one.name.split(' ')[0]!.toLowerCase() === name);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 /** One thing that can be asked about a file with a click. */
@@ -209,6 +236,12 @@ export interface NotchDropDeps {
   ask(text: string, files: NotchAskFile[]): void;
   /** One line that is not about an instruction. */
   tell(parts: NotchPart[], mood?: 'careful' | 'confused' | 'sorry'): void;
+  /**
+   * Sending a file on to somebody in the organisation (./people-files.ts):
+   * who is there, and the handing over. Without it, or with nobody there,
+   * a file is only ever read.
+   */
+  send?: { to(): DropPerson[]; file(to: string, file: { name: string; bytes: Uint8Array }): boolean };
   /** Everything is stopped (Esc twice). */
   paused?: () => boolean;
   /** A file was taken, and what is wanted from it is being asked. Day one, waiting for a file, hears of it here. */
@@ -310,9 +343,16 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
     if (id) inbox.remove(id);
   };
   const hand = (): NotchAskFile[] => {
-    const files = held.map((one) => one.file);
+    // What cannot be read does not go with a question: it was held to be sent on, and is let go.
+    const files = held.filter((one) => !one.unread).map((one) => one.file);
     forget();
     return files;
+  };
+  /** Sends what is held on to somebody, each file as it was dropped, once the card has left the notch. */
+  const sendOn = (to: DropPerson): void => {
+    const files = held.map((one) => ({ name: one.name, bytes: one.raw }));
+    forget();
+    inbox.after(() => { for (const file of files) deps.send?.file(to.id, file); });
   };
 
   /** Puts the question about what is held on the notch. A new one takes the place of the one before it. */
@@ -338,17 +378,29 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
           await stage.say(held.length > 1 ? ['Got ', em(name), ' too.'] : ['Got ', em(name), '.'], gotMs, { mood: 'happy' });
         }
         if (item !== id || held.length === 0) return 'settled';
-        const asks = dropSuggestions(held);
+        const people = (deps.send?.to() ?? []).slice(0, 3);
+        const readable = held.filter((one) => !one.unread);
+        const asks = dropSuggestions(readable);
         const line = stage.id();
-        stage.put({
-          id: line, kind: 'ask', say: [], yes: 'ask', mood: 'curious', focus: true,
-          placeholder: `Ask about ${held.length > 1 ? 'them' : 'it'}, or hold the keys and say it`,
-          blocks: [
-            ...held.map((one): NotchBlock => ({ kind: 'file', icon: dropSort(one) === 'picture' ? 'image' : dropSort(one) === 'sheet' ? 'sheet' : 'doc', name: one.name, meta: dropMeta(one) })),
-            // No number keys on them: the field has the keyboard, as in the prototype, and a number typed there is a number.
-            { kind: 'buttons', buttons: asks.map((ask, i) => ({ id: `ask${i}`, label: ask.label })) },
-          ],
-        });
+        const cards = held.map((one): NotchBlock => ({ kind: 'file', icon: dropSort(one) === 'picture' ? 'image' : dropSort(one) === 'sheet' ? 'sheet' : 'doc', name: one.name, meta: one.unread ? megabytes(one.size) : dropMeta(one) }));
+        const sends = people.map((one, i) => ({ id: `to${i}`, label: `Send to ${one.name}` }));
+        if (readable.length === 0) {
+          // Nothing here can be read: it is held to be sent on, and that is all that is offered.
+          stage.put({
+            id: line, kind: 'ask', say: [], yes: 'send', mood: 'curious', focus: true, placeholder: 'Who is it for?',
+            blocks: [...cards, { kind: 'note', say: [held.length > 1 ? 'I cannot read these, but I can send them on.' : 'I cannot read this, but I can send it on.'] }, { kind: 'buttons', buttons: sends }],
+          });
+        } else {
+          stage.put({
+            id: line, kind: 'ask', say: [], yes: 'ask', mood: 'curious', focus: true,
+            placeholder: `Ask about ${held.length > 1 ? 'them' : 'it'}, or hold the keys and say it`,
+            blocks: [
+              ...cards,
+              // No number keys on them: the field has the keyboard, as in the prototype, and a number typed there is a number.
+              { kind: 'buttons', buttons: [...asks.map((ask, i) => ({ id: `ask${i}`, label: ask.label })), ...sends] },
+            ],
+          });
+        }
         const answer = await stage.answer(line, ['button', 'ask', 'no']);
         // Said with the keys while this was up: the words took the files.
         if (item !== id || held.length === 0) return 'settled';
@@ -357,6 +409,16 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
           return 'settled';
         }
         const typed = answer.act === 'ask' ? (answer.text ?? '').trim() : '';
+        // For somebody else: by their button, or by words that say so.
+        const to = answer.act === 'button' && /^to\d$/.test(answer.button ?? '') ? people[Number(answer.button!.slice(2))] ?? null
+          : typed ? dropSendTo(typed, deps.send?.to() ?? [], readable.length === 0) : null;
+        if (to) { sendOn(to); return 'settled'; }
+        if (readable.length === 0) {
+          // Said while this card still has the notch, and let go after: letting go takes the card away.
+          const why = held[0]!.unread ?? '';
+          try { await stage.say(typed ? ['I do not know who that is. ', why] : [why], 4200, { mood: 'confused' }); } finally { if (item === id) forget(); }
+          return 'settled';
+        }
         const picked = answer.act === 'button' ? asks[Number(answer.button?.slice(3))] : undefined;
         const question = typed || (picked ?? asks[0]!).question;
         deps.ask(question, hand());
@@ -393,21 +455,32 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       };
       if (deps.paused?.()) return refuse(['Everything is stopped. Wake me first.']);
       const verdict = dropVerdict(name, dropped.mediaType, dropped.size);
-      if (!verdict.ok) return refuse([verdict.why]);
-      if (dropped.bytes.length !== dropped.size) return refuse(['Only part of ', em(name), ' arrived, so I did not read it. Try dropping it again.'], 'sorry');
+      const whole = dropped.bytes.length === dropped.size;
+      // A file that cannot be read can still be for somebody: with people to send it to, it is held for that.
+      const sendable = whole && dropped.size > 0 && dropped.size <= NOTCH_DROP_MAX_BYTES && (deps.send?.to().length ?? 0) > 0;
+      const holdUnread = (why: string): { taken: boolean } => {
+        if (held.length >= NOTCH_DROP_MOST) return refuse([`I am holding ${NOTCH_DROP_MOST} files already. Ask about those first.`]);
+        held.push({ name, size: dropped.size, cut: false, raw: dropped.bytes, unread: why, file: { kind: 'document', name, mediaType: 'application/octet-stream', bytes: new Uint8Array(0) } });
+        unsaid = name;
+        shut('gulp');
+        show();
+        return { taken: true };
+      };
+      if (!verdict.ok) return sendable ? holdUnread(verdict.why) : refuse([verdict.why]);
+      if (!whole) return refuse(['Only part of ', em(name), ' arrived, so I did not read it. Try dropping it again.'], 'sorry');
       let bytes = dropped.bytes;
       let cut = false;
       if (verdict.reader) {
         // A web page, an Office file, code: its words, as plain text under its own name.
         const read = readDropped(verdict.reader, dropped.bytes);
-        if (!read) return refuse(['I could not read ', em(name), '. It may be damaged, protected with a password, or hold no words.'], 'sorry');
+        if (!read) return sendable ? holdUnread(`I could not read ${name}. It may be damaged, protected with a password, or hold no words.`) : refuse(['I could not read ', em(name), '. It may be damaged, protected with a password, or hold no words.'], 'sorry');
         bytes = new TextEncoder().encode(read.text);
         cut = read.cut;
       }
       if (held.length >= NOTCH_DROP_MOST) return refuse([`I am holding ${NOTCH_DROP_MOST} files already. Ask about those first.`]);
       const together = held.reduce((sum, one) => sum + one.file.bytes.length, 0) + bytes.length;
       if (held.length > 0 && together > ATTACHMENT_LIMITS.turnBytes) return refuse([em(name), ' is too large to read together with what I am holding. Ask about that first.']);
-      held.push({ name, size: dropped.size, cut, file: { kind: verdict.kind, name, mediaType: verdict.mediaType, bytes } });
+      held.push({ name, size: dropped.size, cut, raw: dropped.bytes, file: { kind: verdict.kind, name, mediaType: verdict.mediaType, bytes } });
       unsaid = name;
       // Swallowed: one gulp, then what it got and what is wanted from it.
       shut('gulp');
