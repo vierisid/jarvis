@@ -55,6 +55,20 @@ describe('doing what another person\'s Jarvis asked', () => {
     expect(worker.turns[0]!.text).toContain('What changed in the last deck?');
   });
 
+  // 20 November 2026, the first real request from a colleague. Background work is refused, not queued,
+  // while the brain is busy with something of the owner's own or with two background things already; a
+  // request the owner had just said yes to would then be answered "no" by chance.
+  test('the work is admitted as something the owner asked for: never refused because the brain is busy', async () => {
+    const { currentAdmission } = await import('../llm/background-budget.ts');
+    let during: string | undefined = 'not run';
+    const worker = { handleMessage: async (): Promise<string> => { during = currentAdmission(); return 'An answer.'; } };
+    expect(currentAdmission()).toBeUndefined();
+    expect(await notchPeerWork(() => worker)({ from: 'Sam', words: 'What changed?' })).toEqual({ ok: true, answer: 'An answer.' });
+    expect(during).toBe('exempt');
+    // And nothing of it is left on whoever called.
+    expect(currentAdmission()).toBeUndefined();
+  });
+
   test('a failure of the agent is not an answer, and nothing of it is sent', async () => {
     expect(await notchPeerWork(() => agent('Error: the model refused'))({ from: 'Sam', words: 'x' })).toEqual({ ok: false });
     expect(await notchPeerWork(() => agent('skipped: draining'))({ from: 'Sam', words: 'x' })).toEqual({ ok: false });
