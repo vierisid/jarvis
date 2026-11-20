@@ -220,6 +220,8 @@ export interface NotchRealDeps {
     work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
     /** Getting in: the engine put in place, and the server for whoever makes an organisation. */
     setup?: PeerSetupLike;
+    /** Files between Pillows: where one is kept while it crosses, and how one that arrived is saved (./people-files.ts). */
+    files?: { dir: string; save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null> };
     noClock?: boolean;
   };
   /**
@@ -476,6 +478,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
+      ...(deps.peers.files ? { files: deps.peers.files } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
     });
   }
@@ -606,6 +609,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     drop = attachNotchDrop(surface, inbox, {
       ask: (text, files) => { owner.typed(text, files); },
       tell: (parts, mood) => { owner.tell(parts, mood); },
+      // For somebody in the organisation: the file goes on as it was dropped (./people-files.ts).
+      ...(people ? { send: { to: () => people!.fileTargets(), file: (to: string, file: { name: string; bytes: Uint8Array }) => people!.sendFile(to, file) } } : {}),
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
       // On day one, the first file anyone drops is the lesson, and is asked about as any file is.
       taken: () => dayOne?.gave(),

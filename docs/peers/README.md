@@ -310,6 +310,50 @@ server stops.
 - A joiner who typed the wrong address and wants another has to leave first.
 - On a Mac none of this has been run.
 
+## A file, from one Pillow to another (20 November, a demo)
+
+The engine carries text and no files. So a file crosses as what it does carry: messages, through
+the same sealed channel as every word. The owner agreed to that for a demo, capped at 25 MB.
+
+| File | What it does |
+|---|---|
+| `src/notch/people-files.ts` | The offer, the yes, the pieces, the check, the news on both sides. |
+| `src/peers/notes.ts` | The notes it rides on: `file`, `file-yes`, `file-no`, `file-part`, `file-got`, `file-lost`. |
+| `src/peers/downloads.ts` | Where a file that arrived is put: the person's Downloads, under WSL the Windows one. |
+| `src/notch/drop.ts` | The way in: a file dropped on the notch can be sent on, by a button or by "send it to Leo". |
+
+1. **The offer.** A file is dropped on the notch and somebody is named. One message goes: the
+   file's name, its size, the number of pieces, and the SHA-256 of its bytes. Nothing of the file.
+2. **The yes.** "Sam sends you a file: deck.pdf, 2.1 MB. Take it?" Only a yes brings it.
+3. **The pieces.** 144 KB each, in base64, one message each, a little slower than the server's
+   limit of two a second from one machine.
+4. **The check.** The whole is compared with the offer, byte count and SHA-256. Only then is it
+   saved. Both sides are told how it ended.
+
+### Rules
+
+44. **A yes on both sides.** The sender's is the saying, with the same window to take it back as
+    a message. The receiver's is a key. No piece leaves before both.
+45. **A piece is taken only for an offer the person said yes to, from the one who made it, and no
+    longer than the offer said.** A piece of anything else is dropped unseen and never shown.
+46. **What arrives is saved and nothing else.** It is not opened, not read, not run, and no model
+    sees it. It is never written over something that is there.
+47. **A name from outside is made safe before it is shown or used**: the last part of a path,
+    readable characters only, nothing a file system gives a meaning to.
+48. **A file that does not check is not kept**, and both sides are told.
+49. **A file that cannot be read can still be sent on**, when there is somebody to send it to. It
+    is then held for that alone, and no question is asked about it.
+
+### Where it stops
+
+- 25 MB, and both sides must be Pillows. Anybody else reads one sentence that a file is offered.
+- The sender's brain has to be on when the yes comes. Its pieces start again from the first after
+  a restart.
+- It is slow by design of the channel: about 14 MB a minute at best.
+- A file is sent by dropping it on the notch. It cannot be named by voice yet ("send Leo the deck
+  on my desktop").
+- An offer that is never answered waits. It is not taken back by itself.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of
@@ -329,8 +373,9 @@ server stops.
   anywhere else, no admin, no invitation by mail, and joining is two machines at a time.
 - Signing in needs the browser on the machine the brain runs on (the engine waits for the
   browser on its own machine's loopback address). A hosted brain cannot be signed in this way.
-- No files cross: a request's answer is text. "Get the deck from Leo's laptop" gives what Leo's
-  Jarvis can say about it, not the file.
+- A request's answer is text. "Get the deck from Leo's laptop" gives what Leo's Jarvis can say
+  about it, not the file. A file crosses only when its owner drops it on the notch for somebody
+  (see "A file, from one Pillow to another").
 - The asker cannot tell "they kept it back" from "it was not found": both end with nothing sent.
 - A request that is being done when the brain stops is ended with a no. It is not picked up again.
 - While somebody's request is open here with its check on, the engine checks everything else

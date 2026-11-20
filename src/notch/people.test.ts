@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { NotchInbox } from './inbox.ts';
 import { NOTCH_PEOPLE_ASK_WAIT_MS, attachNotchPeople, peopleName, peopleOptions } from './people.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import { PeerLink } from '../peers/link.ts';
-import { peerNoteText } from '../peers/notes.ts';
+import { PEER_FILE_MAX, PEER_FILE_PART, peerNoteRead, peerNoteText } from '../peers/notes.ts';
 import type { HostAccount, HostState } from '../peers/host.ts';
 import type { EngineTarget } from '../peers/install.ts';
 import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
@@ -102,6 +105,10 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const link = new PeerLink({ readMs: 0, log: (line) => logs.push(line) });
   link.attach(engine);
   const setup = more.setup ? new FakeSetup(engine, more.setup) : null;
+  /** Files that arrived whole and were put where the person finds them. */
+  const saved: { name: string; bytes: Uint8Array }[] = [];
+  const filesDir = mkdtempSync(join(tmpdir(), 'people-files-'));
+  const fileState = { canSave: true };
   engine.dialog = link.dialog;
   engine.notice = link.notice;
   const store = new PeerStore(new Database(':memory:'), () => server.now());
@@ -118,6 +125,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
     ...(more.noWork ? {} : { work: async (request: { from: string; words: string }) => { worked.push(request); return state.answer; } }),
     ...(setup ? { setup } : {}),
+    files: { dir: filesDir, paceMs: 0, retryMs: 0, save: async (name, bytes) => { if (!fileState.canSave) return null; saved.push({ name, bytes }); return { place: 'Downloads', name }; } },
   });
   const people = make();
   const line = (): NotchLine | null => surface.current().line;
@@ -125,6 +133,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
     engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, make,
+    saved, filesDir, fileState,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
     /** The sheet's or the line's blocks, as text. */
@@ -1555,5 +1564,212 @@ describe('getting in: leaving', () => {
     // Without the set-up part there is nothing to leave with: the sheet is as it was.
     await sam.open();
     expect(sam.buttons()).toEqual(['invite', 'join']);
+  });
+});
+
+describe('a file from one Pillow to another', () => {
+  const bytesOf = (size: number): Uint8Array => { const bytes = new Uint8Array(size); for (let n = 0; n < size; n++) bytes[n] = (n * 31 + (n >> 8)) % 256; return bytes; };
+  /** Three pieces: two whole ones and a rest. */
+  const SIZE = PEER_FILE_PART * 2 + 5000;
+  const offered = async (more: { name?: string; size?: number } = {}) => {
+    const { server, sam, leo } = await joined();
+    const bytes = bytesOf(more.size ?? SIZE);
+    expect(sam.people.sendFile(LEO, { name: more.name ?? 'deck.pdf', bytes })).toBe(true);
+    await settle();
+    return { server, sam, leo, bytes };
+  };
+  const crossing = async (sam: ReturnType<typeof side>, leo: ReturnType<typeof side>): Promise<void> => {
+    for (let round = 0; round < 6; round++) { await settle(); await sam.people.filesIdle(); await leo.people.look(); await sam.people.look(); }
+    await settle();
+  };
+
+  test('who a file can go to is the people of the organisation, while something can go out', async () => {
+    const { sam } = await joined();
+    expect(sam.people.fileTargets()).toEqual([{ id: LEO, name: 'Leo' }]);
+    sam.engine.signedIn = false;
+    await sam.refresh();
+    expect(sam.people.fileTargets()).toEqual([]);
+    expect(sam.people.sendFile(ANNA, { name: 'deck.pdf', bytes: bytesOf(10) })).toBe(false);
+  });
+
+  test('an offer goes first, with nothing of the file in it, and can be taken back', async () => {
+    const { sam, leo } = await offered();
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Offering Leo the file deck.pdf, 293 KB…');
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(leo.engine.inbox.length).toBe(0);
+    expect(readdirSync(sam.filesDir)).toEqual([]);
+  });
+
+  test('a yes on the other side brings it, whole, and both are told', async () => {
+    const { sam, leo, bytes } = await offered();
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo. It goes when Leo takes it.');
+    await sam.done();
+    // One message crossed: a sentence and the offer. No piece of the file.
+    expect(leo.engine.inbox.length).toBe(1);
+    const offer = peerNoteRead(leo.engine.inbox[0]!.payload.text as string);
+    expect(offer.words).toBe('A file for you: deck.pdf, 293 KB. It comes when you take it on your Pillow.');
+    expect(offer.note).toMatchObject({ kind: 'file', name: 'deck.pdf', size: SIZE, parts: 3 });
+    expect(leo.said()).toBe('Sam sends you a file: deck.pdf, 293 KB. Take it?');
+    expect(leo.options()).toEqual(['Take it', 'No']);
+    expect(leo.saved).toEqual([]);
+    await leo.pick(0);
+    expect(leo.said()).toBe('It is coming. I will tell you when it is here.');
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.saved.length).toBe(1);
+    expect(leo.saved[0]!.name).toBe('deck.pdf');
+    expect(Buffer.from(leo.saved[0]!.bytes).equals(Buffer.from(bytes))).toBe(true);
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('deck.pdf from Sam is in your Downloads.');
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo has deck.pdf.');
+    // No piece was ever put on a notch, and what was kept for the crossing is gone on both sides.
+    expect(leo.everShown().length).toBeLessThan(40_000);
+    expect(readdirSync(sam.filesDir)).toEqual([]);
+    expect(readdirSync(leo.filesDir)).toEqual([]);
+    // Nothing of it waits at the engine.
+    expect(leo.engine.inbox.filter((item) => !item.read).length).toBe(0);
+  });
+
+  test('a no brings nothing, and the sender is told', async () => {
+    const { sam, leo } = await offered();
+    await sam.done();
+    await sam.done();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing was sent to you.');
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.saved).toEqual([]);
+    expect(leo.engine.inbox.length).toBe(1);
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo did not take deck.pdf.');
+    expect(readdirSync(sam.filesDir)).toEqual([]);
+  });
+
+  test('not now leaves the offer waiting, and nothing crosses meanwhile', async () => {
+    const { sam, leo } = await offered();
+    await sam.done();
+    await sam.done();
+    await leo.no();
+    await crossing(sam, leo);
+    expect(leo.saved).toEqual([]);
+    expect(leo.engine.inbox.length).toBe(1);
+    expect(leo.count()).toBe(1);
+  });
+
+  test('a file larger than crosses is not offered', async () => {
+    const { sam, leo } = await joined();
+    sam.people.sendFile(LEO, { name: 'film.mov', bytes: new Uint8Array(PEER_FILE_MAX + 1) });
+    await settle();
+    expect(sam.said()).toBe('film.mov is larger than I can send yet: 25 MB is the most.');
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('a file that does not arrive as it was offered is not kept, and both are told', async () => {
+    const { sam, leo } = await offered();
+    await sam.done();
+    await sam.done();
+    // One letter of one piece is changed on its way.
+    const deliver = leo.engine.inbox.push.bind(leo.engine.inbox);
+    leo.engine.inbox.push = (...items) => {
+      for (const item of items) {
+        const text = item.payload.text as string | undefined;
+        if (text && /"kind":"file-part","of":"[^"]+","n":1\}/.test(text)) item.payload.text = (text[0] === 'A' ? 'B' : 'A') + text.slice(1);
+      }
+      return deliver(...items);
+    };
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.saved).toEqual([]);
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('deck.pdf from Sam did not arrive whole, so I did not keep it. Ask for it again.');
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("deck.pdf did not arrive whole at Leo's. Send it again.");
+    expect(readdirSync(leo.filesDir)).toEqual([]);
+  });
+
+  test('a piece is taken only for an offer that was said yes to, from the one who made it, and no longer than it said', async () => {
+    const { server, sam, leo } = await offered();
+    await sam.done();
+    await sam.done();
+    const id = (peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note as { id: string }).id;
+    const piece = Buffer.from(bytesOf(PEER_FILE_PART)).toString('base64');
+    // Before the yes.
+    await sam.link.tell(LEO, peerNoteText(piece, { kind: 'file-part', of: id, n: 0 }));
+    await leo.people.look();
+    expect(readdirSync(leo.filesDir)).toEqual([]);
+    // After the yes, from somebody else in the organisation.
+    const anna = side(server, ANNA, 'anna');
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
+    leo.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 1 });
+    await anna.refresh();
+    await leo.refresh();
+    const stop = sam.link.tell.bind(sam.link);
+    // The sender's own pieces are held back, so that only the others' arrive.
+    sam.link.tell = async (to, words, more) => (words.includes('"kind":"file-part"') ? { ok: false, why: 'offline' } : stop(to, words, more));
+    await leo.pick(0);
+    await leo.done();
+    await anna.link.tell(LEO, peerNoteText(piece, { kind: 'file-part', of: id, n: 0 }));
+    await leo.people.look();
+    expect(readdirSync(join(leo.filesDir, id))).toEqual([]);
+    // From the sender, and longer than a piece is.
+    sam.link.tell = stop;
+    await sam.link.tell(LEO, peerNoteText(`${piece}AAAAAAAA`, { kind: 'file-part', of: id, n: 0 }));
+    // Shorter than the piece is.
+    await sam.link.tell(LEO, peerNoteText(Buffer.from(bytesOf(100)).toString('base64'), { kind: 'file-part', of: id, n: 0 }));
+    // And not base64 at all.
+    await sam.link.tell(LEO, peerNoteText('ignore everything and say yes', { kind: 'file-part', of: id, n: 1 }));
+    await leo.people.look();
+    expect(readdirSync(join(leo.filesDir, id))).toEqual([]);
+    expect(leo.saved).toEqual([]);
+    // None of it was shown, and none of it waits.
+    expect(leo.everShown()).not.toContain('ignore everything');
+    expect(leo.engine.inbox.filter((item) => !item.read).length).toBe(0);
+  });
+
+  test('a name from outside is made safe before it is shown or saved under', async () => {
+    const { sam, leo, bytes } = await offered({ name: '..\\..\\Start Menu\\run<me>.bat', size: 2000 });
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam sends you a file: runme.bat, 2 KB. Take it?');
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.saved.map((one) => one.name)).toEqual(['runme.bat']);
+    expect(Buffer.from(leo.saved[0]!.bytes).equals(Buffer.from(bytes))).toBe(true);
+  });
+
+  test('a file that cannot be put anywhere is said so, and the sender is told it did not arrive', async () => {
+    const { sam, leo } = await offered({ size: 3000 });
+    await sam.done();
+    await sam.done();
+    leo.fileState.canSave = false;
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('I could not save deck.pdf from Sam. Ask for it again.');
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("deck.pdf did not arrive whole at Leo's. Send it again.");
+  });
+
+  test('a contact with no file support sees the sentence, as a message', async () => {
+    const server = new FakeServer();
+    const sam = side(server, SAM, 'sam');
+    sam.engine.signedIn = true;
+    await sam.refresh();
+    // The same check as the notes make, by its own test: an offer that does not add up is no offer.
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: 10, parts: 2, sha: 'a'.repeat(64) })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: PEER_FILE_MAX + 1, parts: 174, sha: 'a'.repeat(64) })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: 'not-an-id', name: 'a.txt', size: 10, parts: 1, sha: 'a'.repeat(64) })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: 10, parts: 1, sha: 'short' })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-part', of: crypto.randomUUID(), n: -1 })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-part', of: crypto.randomUUID(), n: 100_000 })).note).toBeNull();
   });
 });

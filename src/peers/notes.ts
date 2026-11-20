@@ -31,12 +31,40 @@ export type PeerNote =
    */
   | { kind: 'back'; of: string }
   /** The name of the organisation the two are now in. */
-  | { kind: 'org'; name: string };
+  | { kind: 'org'; name: string }
+  /**
+   * A file is offered: what it is called, how large it is, in how many
+   * pieces it would come, and what its bytes add up to (SHA-256). Nothing of
+   * the file itself: that follows only after a yes.
+   */
+  | { kind: 'file'; id: string; name: string; size: number; parts: number; sha: string }
+  /** What became of an offer (`of` is its id): taken, turned down, arrived whole, or not whole. */
+  | { kind: 'file-yes' | 'file-no' | 'file-got' | 'file-lost'; of: string }
+  /** One piece of a file that was taken, the `n`th from nought. The message's words are the piece, in base64. */
+  | { kind: 'file-part'; of: string; n: number };
 
 export const PEER_NOTE_VERSION = 1;
 export const PEER_OPTIONS_MAX = 4;
 export const PEER_OPTION_MAX = 40;
 export const PEER_ORG_MAX = 60;
+/** The largest file that crosses, for now, and the size of one piece of it: what fits one message in base64. */
+export const PEER_FILE_MAX = 25 * 1024 * 1024;
+export const PEER_FILE_PART = 144 * 1024;
+export const PEER_FILE_NAME_MAX = 120;
+
+/** In how many pieces a file of this size comes. */
+export const peerFileParts = (size: number): number => Math.ceil(size / PEER_FILE_PART);
+
+/**
+ * A file's name as it is shown and saved: the last part of a path, what a
+ * person can read, and nothing that means something to a file system. The
+ * name came from the other side, or from a file of unknown origin.
+ */
+export function peerFileName(raw: string): string {
+  const base = raw.split(/[\\/]/).pop() ?? '';
+  const name = peerPlain(base, 400).replace(/[<>:"|?*]/g, '').replace(/^[.\s]+/, '').replace(/[.\s]+$/, '').slice(0, PEER_FILE_NAME_MAX).trim();
+  return name || 'file';
+}
 
 const LINE = /(?:^|\n)\[\[jarvis:(\d+) (\{[^\n]{0,2000}\})\]\][ \t]*$/;
 
@@ -75,6 +103,24 @@ function checked(raw: unknown): PeerNote | null {
   if (note.kind === 'org') {
     const name = typeof note.name === 'string' ? peerPlain(note.name, PEER_ORG_MAX) : '';
     return name ? { kind: 'org', name } : null;
+  }
+  const id = (value: unknown): string | null => (typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) ? value.toLowerCase() : null);
+  if (note.kind === 'file') {
+    const of = id(note.id);
+    const size = note.size;
+    if (!of || typeof note.name !== 'string' || typeof size !== 'number' || !Number.isInteger(size) || size < 1 || size > PEER_FILE_MAX) return null;
+    // The pieces follow from the size. An offer that says otherwise is not one.
+    if (note.parts !== peerFileParts(size) || typeof note.sha !== 'string' || !/^[0-9a-f]{64}$/.test(note.sha)) return null;
+    return { kind: 'file', id: of, name: peerFileName(note.name), size, parts: note.parts, sha: note.sha };
+  }
+  if (note.kind === 'file-yes' || note.kind === 'file-no' || note.kind === 'file-got' || note.kind === 'file-lost') {
+    const of = id(note.of);
+    return of ? { kind: note.kind, of } : null;
+  }
+  if (note.kind === 'file-part') {
+    const of = id(note.of);
+    const n = note.n;
+    return of && typeof n === 'number' && Number.isInteger(n) && n >= 0 && n < peerFileParts(PEER_FILE_MAX) ? { kind: 'file-part', of, n } : null;
   }
   return null;
 }

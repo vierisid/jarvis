@@ -57,6 +57,24 @@ export interface PeerRequestRow {
   nudgedAt: number | null;
 }
 
+/** offered: waits for the yes. going: its pieces cross. done, no, lost: over. */
+export type PeerFileState = 'offered' | 'going' | 'done' | 'no' | 'lost';
+
+export interface PeerFileRow {
+  id: string;
+  dir: 'in' | 'out';
+  /** The device it goes to, or comes from. */
+  peer: string;
+  name: string;
+  size: number;
+  parts: number;
+  sha: string;
+  state: PeerFileState;
+  at: number;
+  /** The message the offer arrived as. */
+  item: string | null;
+}
+
 export class PeerStore {
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -64,6 +82,9 @@ export class PeerStore {
       id TEXT PRIMARY KEY, to_id TEXT NOT NULL, kind TEXT NOT NULL, words TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '[]',
       sent_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'sent', answer TEXT, nudged_at INTEGER, first_id TEXT)`);
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_got (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0)');
+    db.run(`CREATE TABLE IF NOT EXISTS notch_peer_files (
+      id TEXT PRIMARY KEY, dir TEXT NOT NULL, peer TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, parts INTEGER NOT NULL,
+      sha TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, item TEXT)`);
     db.run(`CREATE TABLE IF NOT EXISTS notch_peer_requests (
       id TEXT PRIMARY KEY, dir TEXT NOT NULL, peer_id TEXT NOT NULL, words TEXT NOT NULL, at INTEGER NOT NULL,
       state TEXT NOT NULL DEFAULT 'new', answer TEXT, item_id TEXT, nudged_at INTEGER)`);
@@ -71,6 +92,29 @@ export class PeerStore {
     db.run('DELETE FROM notch_peer_requests WHERE at < ?', [before]);
     db.run('DELETE FROM notch_peer_sent WHERE sent_at < ?', [before]);
     db.run('DELETE FROM notch_peer_got WHERE at < ?', [before]);
+  }
+
+  // --- files ---
+
+  /** Notes a file that is offered: by this machine (`out`) or to it (`in`). */
+  file(row: { id: string; dir: 'in' | 'out'; peer: string; name: string; size: number; parts: number; sha: string; item?: string }): void {
+    this.db.run('INSERT OR IGNORE INTO notch_peer_files (id, dir, peer, name, size, parts, sha, state, at, item) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [row.id, row.dir, row.peer, row.name, row.size, row.parts, row.sha, 'offered', this.now(), row.item ?? null]);
+  }
+
+  fileOf(id: string): PeerFileRow | null {
+    return this.db.query('SELECT id, dir, peer, name, size, parts, sha, state, at, item FROM notch_peer_files WHERE id = ?').get(id) as PeerFileRow | null;
+  }
+
+  /** Moves a file on, from one of the states it may be in. False when it was in none of them. */
+  fileState(id: string, state: PeerFileState, from: PeerFileState[]): boolean {
+    const marks = from.map(() => '?').join(', ');
+    return this.db.run(`UPDATE notch_peer_files SET state = ? WHERE id = ? AND state IN (${marks})`, [state, id, ...from]).changes > 0;
+  }
+
+  /** The files that are on their way: offered, or coming piece by piece. */
+  openFiles(dir: 'in' | 'out'): PeerFileRow[] {
+    return this.db.query("SELECT id, dir, peer, name, size, parts, sha, state, at, item FROM notch_peer_files WHERE dir = ? AND state IN ('offered', 'going') ORDER BY at").all(dir) as PeerFileRow[];
   }
 
   /** A small thing to remember, by name. Null when there is none. */
