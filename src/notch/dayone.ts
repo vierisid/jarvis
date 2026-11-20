@@ -778,8 +778,15 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     cameUp() {
       if (stopped || begun) return;
       const state = kept();
+      // Day one is over and the product still reads "never set up": its setup is finished now. Only day
+      // one's own steps finished it, so a brain whose day one ended before it could (it was gone through
+      // on a build that did not finish the setup yet) stayed never set up for good, with nothing of what
+      // waits for a setup running. Found when a colleague's request was answered "no" by a Pillow that
+      // had an AI and no agent to do the work (20 November 2026). It asks nothing of a brain that is set
+      // up, and it finishes nothing without an AI that answers.
+      if (state?.done) { if (deps.fresh()) void finishSetup(); return; }
       // Under way from an earlier start: it goes on. Never begun: only on a brain that was never set up.
-      if (state ? state.done : !deps.fresh()) return;
+      if (!state && !deps.fresh()) return;
       begun = true;
       if (!state) { keep({ step: 1, done: false }); log('[notch] day one begins by itself: this brain was never set up'); }
       // Before its first word: the card that says it is installed, and where it lives. Only where it has never
