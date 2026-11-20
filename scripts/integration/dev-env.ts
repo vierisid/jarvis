@@ -5,6 +5,8 @@
  * an existing hosted instance's settings. Anything a developer wants carried
  * across has to be named here.
  */
+import { isAbsolute } from 'node:path';
+
 const PLATFORM_KEYS = ['TZ', 'SystemRoot', 'SYSTEMROOT', 'WSL_INTEROP', 'WSL_DISTRO_NAME'] as const;
 
 const BRIEF_FEATURES = [
@@ -13,6 +15,14 @@ const BRIEF_FEATURES = [
   'OPPORTUNITY_ACTIVATION', 'QUIET_AWARENESS', 'DECISIONS', 'DECISION_EDITS', 'RECOMMENDATIONS', 'GOAL_MEASUREMENTS',
   'OUTCOMES', 'MEMORY_STREAM', 'MEMORY_USAGE', 'MEMORY_FORGET', 'WORKFLOW_REMOVAL', 'WORKFLOW_CONTEXT', 'CONNECTIONS', 'PROFILE_SETTINGS',
 ] as const;
+
+/**
+ * What the engine that talks to other people's Jarvises may be given from
+ * outside (src/peers/engine-process.ts names the same): where its server is,
+ * how it keeps its keys, what this device is called, and the two that reach
+ * the desktop's keychain. Carried across only together with the engine.
+ */
+const PEERS_KEYS = ['COLLAB_SERVER_URL', 'COLLAB_KEYSTORE', 'COLLAB_DEVICE_NAME', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'] as const;
 
 export interface DevPaths { home: string; data: string; tmp: string }
 
@@ -28,6 +38,17 @@ export function devEnv(parent: Record<string, string | undefined>, paths: DevPat
     env.JARVIS_NOTCH = '1';
     // The demo secret only means anything with the notch on (src/notch/demo-gate.ts).
     if (parent.JARVIS_NOTCH_DEMO) env.JARVIS_NOTCH_DEMO = parent.JARVIS_NOTCH_DEMO;
+    // Other people's Jarvises: the place of the engine (src/peers/switch.ts),
+    // by the same rule the daemon applies, a path from the root. It was not
+    // named here, so "JARVIS_PEERS_ENGINE=... scripts/notch/try.sh" started a
+    // brain that never heard of it: no engine, and no row to make an
+    // organisation with (the first try at it with a second person, 20
+    // November 2026). Only with the notch on, which is what shows it.
+    const engine = parent.JARVIS_PEERS_ENGINE?.trim();
+    if (engine && isAbsolute(engine)) {
+      env.JARVIS_PEERS_ENGINE = engine;
+      for (const key of PEERS_KEYS) if (parent[key]) env[key] = parent[key]!;
+    }
   }
   return env;
 }
