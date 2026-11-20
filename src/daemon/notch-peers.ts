@@ -20,6 +20,7 @@
  * What comes back is the answer as text. It is not sent from here: the
  * notch shows it to the owner first ("Send only that?").
  */
+import { runWithAdmission } from '../llm/background-budget.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import type { BackgroundTurnOptions } from './background-agent-service.ts';
 
@@ -59,7 +60,13 @@ export function notchPeerWork(agent: () => Agent | null): (request: PeerRequestW
     if (!worker) return { ok: false };
     let said: string;
     try {
-      said = await worker.handleMessage(peerRequestPrompt(request), 'peer', { outside: PEER_REQUEST_SOURCE });
+      // Work the owner said yes to a moment ago, that runs once, with the other person waiting. The brain
+      // pauses its background work whenever something of the owner's own is going on, and holds it to two
+      // things at a time; a turn that is refused for that is not waited for, it fails. Left to that rule
+      // the request would be answered "no" whenever the brain happened to be busy. So it is admitted the
+      // way a promise that came due is (src/daemon/commitment-executor.ts): never refused for being busy.
+      // Whose words it carries does not change: the agent still marks the turn as background.
+      said = await runWithAdmission('exempt', () => worker.handleMessage(peerRequestPrompt(request), 'peer', { outside: PEER_REQUEST_SOURCE }));
     } catch {
       return { ok: false };
     }
