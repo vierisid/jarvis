@@ -201,6 +201,27 @@ export function notchRememberFile(db: Database, place: string, name: string, lin
   return 'kept';
 }
 
+/**
+ * The line that is kept about one file at the top of a place, or null when
+ * there is none: it was never read, or the owner forgot it. For telling
+ * which file somebody means when they ask for it by what it is
+ * (src/notch/people-files.ts).
+ */
+export function notchFileKnown(_db: Database, place: string, name: string): string | null {
+  const ref = notchFileRef(place, name);
+  const called = (name.replace(/\.[A-Za-z0-9]{1,8}$/, '').trim() || name).slice(0, 120);
+  try {
+    for (const entity of findEntities({ name: called })) {
+      if (entity.source !== NOTCH_FILE_ENTITY_SOURCE) continue;
+      for (const fact of findFacts({ subject_id: entity.id })) {
+        const line = fact.evidence.find((evidence) => evidence.source_ref === ref)?.quote;
+        if (typeof line === 'string' && line.trim()) return line.trim().slice(0, 300);
+      }
+    }
+  } catch { /* nothing is known, then */ }
+  return null;
+}
+
 /** How long the reading of the files may take in all before the look around goes on without it. */
 const READING_MOST_MS = 60_000;
 

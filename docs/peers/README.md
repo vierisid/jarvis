@@ -385,13 +385,29 @@ prototype's scenes (v15, `fetchFromLapo` and `lfile`) are the script.
    file. Their laptop can be named anywhere in the sentence, and as speech is written down
    ("Leos pc"). "Get the deck from Leo" and "ask Leo for the contract" count too, when the thing is
    named as a file.
-2. **The looking.** Leo's Pillow looks for it by name at the top of his desktop, documents and
-   downloads, when its line is about to be shown, and asks HIM: "Sam asks for the Q3 numbers. I
-   found Q3 numbers.xlsx in your Documents, 180 KB. Send only that?" Send it, Another file, No.
+2. **The looking.** Leo's Pillow looks for it on his desktop, documents and downloads, two
+   folders deep, when its line is about to be shown, and asks HIM: "Sam asks for the Q3 numbers. I
+   found Q3 numbers.xlsx, in your Documents, changed today, 180 KB. Send only that?" Send it,
+   Another file, No.
 3. **The yes.** It crosses as any file does. Sam is not asked "Take it?": the asking was the yes.
    Leo's line stays until it has gone: "Sent. One file left this laptop, nothing else."
-4. **Another file.** Nothing is sent. Leo drops the right one on his notch and picks "Send to
-   Sam": that file is the answer.
+4. **Another file.** Nothing is sent. Leo is shown the other files that may be meant and picks
+   one, or drops the right one on his notch and picks "Send to Sam": that file is the answer.
+
+**Which file is meant (23 November).** The owner, after trying it: "it only basically works if I
+already know what the file name is, which shouldn't ... Send me the deck. It might not be called
+deck. It might be called deck v30." Nobody who asks a colleague for the deck knows what the
+colleague called it. So a name is only one of the things a file is told by.
+
+- The desktop app names the files that fit by name, and with them the ones that were changed
+  last and are the kind of thing people ask for (documents, sheets, slides, PDFs, pictures),
+  whatever they are called: 60 at the most.
+- The model is asked which of them is meant, from each one's name, kind, size, when it was
+  changed, the folder it is in, and the line that is remembered about it where the owner once
+  had it read. 40 at the most are put to it.
+- One file: "I think that is Pillow v30.pdf, in your Documents, in Pitch › Decks, changed
+  yesterday, 4.2 MB. Send only that?" ("I found" when its name says so.) Two or three: "Which
+  one?", and Leo picks. None: it says so.
 
 51. **The one who asks learns nothing from the looking.** Not what was found, and not that
     nothing was. Only the owner's yes or no comes back, and a no reads the same whatever was
@@ -405,11 +421,30 @@ prototype's scenes (v15, `fetchFromLapo` and `lfile`) are the script.
     still open.** One that claims to answer anything else is asked about like any other.
 55. **Something to do there is still a request.** "Restart the server on Leo's laptop", "ask
     Leo's Pillow what changed": the request of pass I4, with its two questions on his side.
+56. **The model picks from a list and can do nothing else.** What it answers is read as numbers
+    of that list: at most three, each a file that is in it. Anything else is nothing. It can put
+    a file in front of the owner. It can send nothing, and the yes is the owner's.
+57. **It adds what a name does not say, and never takes away what a name does say.** The one
+    file whose name fits best is put to the owner even when the model picked another or none.
+    A file whose whole name was said is the one, and the model is not asked.
+58. **The words asked with, and the names of the files, are outside text to the model**, each
+    inside the marks every outside text goes in, cut to fixed lengths before they are framed.
+59. **Nothing is opened to find a file.** What is known about one is what the owner had read
+    before, and it is about the file at the top of its place, not one of the same name in a
+    folder below. The names of up to 40 of the owner's files go to the owner's own model when
+    somebody asks for a file. Nothing of them goes to the one who asked.
+60. **A folder is gone into two deep and no further**, and never one that is hidden, blocked,
+    private by its name, a link to somewhere else, or the kind nobody keeps their own files in
+    (`node_modules` and the like). A file is taken from a folder below only through real folders
+    of that place.
 
 ### Where it stops
 
-- A file is found at the top of the desktop, the documents and the downloads, not inside their
-  folders, and by its name, not by what is in it. 16 MB is the most that is taken from a folder.
+- A file is found on the desktop, in the documents and in the downloads, two folders deep. It is
+  told by its name, its kind, its date, its folder and what is remembered about it, not by
+  opening it. 16 MB is the most that is taken from a folder.
+- Which file the model picks has not been tried with a real model: the tests and the rehearsal
+  use a stand-in for it. That its pick reaches the owner, and only as a pick, is tested.
 - An asking that is never answered waits. The asker is not told that it waits.
 - The desktop app's saving and looking have been run in its own tests and not on a person's
   machine yet. On a Mac, macOS may ask once whether Jarvis may use the Downloads folder.

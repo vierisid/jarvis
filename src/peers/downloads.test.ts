@@ -102,8 +102,13 @@ describe('saving through the desktop app', () => {
 
 describe('what the desktop app found', () => {
   test('is taken field by field', () => {
-    expect(appFound({ found: [{ place: 'documents', name: 'Q3 numbers.xlsx', kind: 'sheet', size: 184320, changed: 5 }, { place: 'desktop', name: 'Deck, November.pdf', kind: 'pdf', size: 10 }] }))
-      .toEqual([{ place: 'documents', name: 'Q3 numbers.xlsx', kind: 'sheet', size: 184320 }, { place: 'desktop', name: 'Deck, November.pdf', kind: 'pdf', size: 10 }]);
+    expect(appFound({ found: [
+      { place: 'documents', dir: 'Pitch/Decks', name: 'Pillow v30.pdf', kind: 'pdf', size: 184320, changed: 1795000000000, score: 13 },
+      { place: 'desktop', name: 'Deck, November.pdf', kind: 'pdf', size: 10 },
+    ] })).toEqual([
+      { place: 'documents', dir: 'Pitch/Decks', name: 'Pillow v30.pdf', kind: 'pdf', size: 184320, changed: 1795000000000, score: 13 },
+      { place: 'desktop', dir: '', name: 'Deck, November.pdf', kind: 'pdf', size: 10, changed: 0, score: 0 },
+    ]);
     expect(appFound({ found: [] })).toEqual([]);
     expect(appFound(null)).toBeNull();
     expect(appFound({ places: [] })).toBeNull();
@@ -121,5 +126,18 @@ describe('what the desktop app found', () => {
       { place: 'desktop', name: 7, kind: 'document', size: 10 },
       'not a file',
     ] })).toEqual([]);
+  });
+
+  test('a folder below the place is one or two plain folder names, or the file is not taken', () => {
+    const one = (dir: unknown) => appFound({ found: [{ place: 'documents', dir, name: 'deck.pdf', kind: 'pdf', size: 10 }] });
+    expect(one('Pitch')![0]!.dir).toBe('Pitch');
+    expect(one('Pitch/Decks 2026')![0]!.dir).toBe('Pitch/Decks 2026');
+    expect(one('')![0]!.dir).toBe('');
+    for (const bad of ['..', 'Pitch/..', '../Pitch', '/etc', 'Pitch//Decks', 'a/b/c', '.hidden', 'Pitch/.git', 'Pi\\tch', 'Pitch\nDecks', 7, 'x'.repeat(500)]) expect(one(bad)).toEqual([]);
+  });
+
+  test('a score and a date that are no numbers are nought, and a kind is a plain word', () => {
+    expect(appFound({ found: [{ place: 'desktop', name: 'deck.pdf', kind: 'pdf<script>', size: 10, changed: 'yesterday', score: -5 }] }))
+      .toEqual([{ place: 'desktop', dir: '', name: 'deck.pdf', kind: 'pdfscript', size: 10, changed: 0, score: 0 }]);
   });
 });

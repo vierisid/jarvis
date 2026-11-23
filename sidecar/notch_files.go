@@ -383,9 +383,39 @@ func notchFileAttrsElsewhere(attrs uint32) bool {
 }
 
 func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, place, name string) ([]byte, string, error) {
+	return notchFileOpenIn(roots, blocked, place, "", name)
+}
+
+// notchFileSub reads the folder below a place that a file is said to be in:
+// "" for its top, or one or two folder names with a stroke between. Each is
+// a name and nothing else, and none of them is hidden or private.
+func notchFileSub(sub string) ([]string, bool) {
+	if sub == "" {
+		return nil, true
+	}
+	parts := strings.Split(sub, "/")
+	if len(parts) > 2 {
+		return nil, false
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, `\`) || len(part) > 255 || notchFileHidden(part) || notchFileNameOdd(part) || notchFilePrivate(part) {
+			return nil, false
+		}
+	}
+	return parts, true
+}
+
+// notchFileOpenIn is notchFileOpen for a file that lies in a folder below
+// the place (`sub`, as notch.find names it). The folders on the way are real
+// folders of that place: a link among them is not followed.
+func notchFileOpenIn(roots map[string][]string, blocked func(dir string) bool, place, sub, name string) ([]byte, string, error) {
 	dirs, known := roots[place]
 	if !known {
 		return nil, "", fmt.Errorf("that is not a place I look in")
+	}
+	folders, ok := notchFileSub(sub)
+	if !ok {
+		return nil, "", fmt.Errorf("that is not a folder I look in")
 	}
 	// A name, not a way to somewhere: no folder in it, and not "." or "..".
 	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, `/\`) || name == "." || name == ".." || len(name) > 255 {
@@ -407,6 +437,17 @@ func notchFileOpen(roots map[string][]string, blocked func(dir string) bool, pla
 	_, dir := notchFilesPlace(place, dirs, blocked)
 	if dir == "" {
 		return nil, "", fmt.Errorf("that place is not reached")
+	}
+	for _, folder := range folders {
+		dir = filepath.Join(dir, folder)
+		if blocked != nil && blocked(dir) {
+			return nil, "", fmt.Errorf("that folder is blocked")
+		}
+		// Not followed: a link among the folders may lead anywhere on the machine.
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() {
+			return nil, "", fmt.Errorf("that folder is not there")
+		}
 	}
 	path := filepath.Join(dir, name)
 	// A file the person has blocked by itself is not handed over either: only
@@ -473,9 +514,11 @@ func makeNotchFileHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		place, _ := params["place"].(string)
 		name, _ := params["name"].(string)
-		bytes, kind, err := notchFileOpen(notchFileRootsHere(), func(dir string) bool {
+		// A folder below the place, for a file that was found there (notch.find).
+		sub, _ := params["dir"].(string)
+		bytes, kind, err := notchFileOpenIn(notchFileRootsHere(), func(dir string) bool {
 			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
-		}, place, name)
+		}, place, sub, name)
 		if err != nil {
 			// Why, never which.
 			logNotchFile(place, "", 0, err.Error())

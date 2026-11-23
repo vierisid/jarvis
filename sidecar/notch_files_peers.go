@@ -10,8 +10,16 @@ package main
 // in the folder".
 //
 // notch.find takes the words somebody asked with ("the Q3 numbers") and
-// names the few files at the top of the desktop, the documents and the
-// downloads that they fit best. It opens nothing. What it names is shown to
+// names the files of the desktop, the documents and the downloads that they
+// fit best, down to two folders deep. It opens nothing.
+//
+// The owner, 23 November 2026, after trying it: "it only basically works if
+// I already know what the file name is, which shouldn't ... Send me the
+// deck. It might not be called deck. It might be called deck v30." So it
+// also names the files that were changed last and are the kind of thing
+// people ask for (documents, sheets, slides, PDFs, pictures), whatever they
+// are called. Which of them is meant is then worked out by the brain, from
+// more than the name, and put to the person at this computer. What it names is shown to
 // the person at this computer, who says whether one of them is sent: the
 // one who asked is told nothing by this, not even that nothing was found.
 // A file that would never be handed over (private by its name, a shortcut,
@@ -45,8 +53,14 @@ import (
 )
 
 const (
-	// How many files are named for one asking.
+	// How many files are named for one asking by their name alone, and how
+	// many in all with the ones that were changed last.
 	notchFindNamed = 5
+	notchFindWide  = 60
+	// How far down the folders are looked through, and the most that is
+	// looked at in all.
+	notchFindDepth = 2
+	notchFindLooks = 6000
 	// The longest asking that is read.
 	notchFindWordsMost = 200
 	// The largest file that is saved: what crosses at the most
@@ -62,13 +76,79 @@ const (
 	notchSaveNames = 200
 )
 
-// notchFileFound is one file that fits what was asked for.
+// notchFileFound is one file that fits what was asked for, or may.
 type notchFileFound struct {
-	Place   string `json:"place"`
+	Place string `json:"place"`
+	// The folder it is in, below the place: "" at its top, "Pitch/Decks"
+	// further down. Never more than notchFindDepth folders.
+	Dir     string `json:"dir"`
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
 	Size    int64  `json:"size"`
 	Changed int64  `json:"changed"`
+	// How well its name and kind fit the words. Nought: it is named only
+	// because it was changed lately and is the kind of thing people ask for.
+	Score int `json:"score"`
+}
+
+// The kinds of file people ask each other for.
+var notchFindAsked = map[string]bool{"document": true, "sheet": true, "slides": true, "pdf": true, "picture": true}
+
+// Folders nobody keeps their own files in.
+var notchFindSkipped = map[string]bool{"node_modules": true, "__pycache__": true, "venv": true, "dist": true, "build": true, "target": true, "vendor": true}
+
+// notchFileIn is one file with the folder it was found in.
+type notchFileIn struct {
+	dir  string
+	file notchFileSeen
+}
+
+// notchFilesDeep lists the files of one place, down to `depth` folders. A
+// folder that is hidden, blocked, private by its name, or only a link to
+// somewhere else is not gone into.
+func notchFilesDeep(root, sub string, depth int, blocked func(path string) bool, looked *int, out *[]notchFileIn) {
+	dir := filepath.Join(root, filepath.FromSlash(sub))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if *looked >= notchFindLooks {
+			return
+		}
+		name := entry.Name()
+		if notchFileHidden(name) || notchFileNameOdd(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if blocked != nil && blocked(path) {
+			continue
+		}
+		*looked++
+		// A link is neither gone into nor named: it may lead anywhere.
+		if entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		if entry.IsDir() {
+			if depth > 0 && filepath.Ext(name) != ".app" && !notchFindSkipped[strings.ToLower(name)] && !notchFilePrivate(name) {
+				next := name
+				if sub != "" {
+					next = sub + "/" + name
+				}
+				notchFilesDeep(root, next, depth-1, blocked, looked, out)
+			}
+			continue
+		}
+		kind := notchFileKind(name, false)
+		if kind == "shortcut" || notchFilePrivate(name) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || notchFileElsewhere(info) {
+			continue
+		}
+		*out = append(*out, notchFileIn{sub, notchFileSeen{Name: notchFileName(name), Kind: kind, Changed: info.ModTime().UnixMilli(), Size: info.Size()}})
+	}
 }
 
 // Words that say nothing about which file is meant.
@@ -154,9 +234,21 @@ func notchFindScore(asked string, wanted []string, kinds map[string]bool, file n
 	return score
 }
 
-// notchFileFind looks through the top of the three places for the files
-// that fit, the best first, and among equals the newest.
+// notchFileFind looks through the three places for the files that fit, the
+// best first, and among equals the newest.
 func notchFileFind(roots map[string][]string, blocked func(path string) bool, asked string) []notchFileFound {
+	found := notchFileFindWide(roots, blocked, asked, false)
+	if len(found) > notchFindNamed {
+		found = found[:notchFindNamed]
+	}
+	return found
+}
+
+// notchFileFindWide is the same looking. With `wide` it goes on to name the
+// files that were changed last and are the kind of thing people ask for,
+// with a score of nought, so that the one that is meant can be told by more
+// than its name. The ones that fit by name come first.
+func notchFileFindWide(roots map[string][]string, blocked func(path string) bool, asked string, wide bool) []notchFileFound {
 	if len(asked) > notchFindWordsMost {
 		// Cut at a word's end: half a word would count as a word that is in no name.
 		asked = asked[:notchFindWordsMost]
@@ -178,59 +270,74 @@ func notchFileFind(roots map[string][]string, blocked func(path string) bool, as
 			wanted = append(wanted, word)
 		}
 	}
-	if len(wanted) == 0 {
+	if len(wanted) == 0 && !wide {
 		return []notchFileFound{}
 	}
-	type scored struct {
-		file  notchFileFound
-		score int
-	}
-	all := []scored{}
+	all := []notchFileFound{}
+	looked := 0
 	for _, place := range []string{"desktop", "documents", "downloads"} {
 		_, dir := notchFilesPlace(place, roots[place], blocked)
 		if dir == "" {
 			continue
 		}
-		_, seen := notchFilesAll(place, dir, blocked)
-		for _, file := range seen {
-			// What would not be handed over is not named: a folder, something
-			// private by its name, an empty file, one that is kept online only.
-			if file.Kind == "folder" || file.Private || file.Size <= 0 || notchFileNameOdd(file.Name) {
+		in := []notchFileIn{}
+		notchFilesDeep(dir, "", notchFindDepth, blocked, &looked, &in)
+		for _, one := range in {
+			score := 0
+			if len(wanted) > 0 {
+				score = notchFindScore(asked, wanted, kinds, one.file)
+			}
+			if score == 0 && !(wide && notchFindAsked[one.file.Kind]) {
 				continue
 			}
-			if info, err := os.Lstat(filepath.Join(dir, file.Name)); err != nil || !info.Mode().IsRegular() || notchFileElsewhere(info) {
-				continue
-			}
-			if score := notchFindScore(asked, wanted, kinds, file); score > 0 {
-				all = append(all, scored{notchFileFound{Place: place, Name: file.Name, Kind: file.Kind, Size: file.Size, Changed: file.Changed}, score})
-			}
+			all = append(all, notchFileFound{Place: place, Dir: one.dir, Name: one.file.Name, Kind: one.file.Kind, Size: one.file.Size, Changed: one.file.Changed, Score: score})
 		}
 	}
 	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].score != all[j].score {
-			return all[i].score > all[j].score
+		if all[i].Score != all[j].Score {
+			return all[i].Score > all[j].Score
 		}
-		return all[i].file.Changed > all[j].file.Changed
+		return all[i].Changed > all[j].Changed
 	})
-	out := []notchFileFound{}
-	for _, one := range all {
-		if len(out) >= notchFindNamed {
-			break
-		}
-		out = append(out, one.file)
+	most := notchFindNamed
+	if wide {
+		most = notchFindWide
 	}
-	return out
+	if !wide {
+		// By name alone: only the ones that fit.
+		fit := all[:0]
+		for _, one := range all {
+			if one.Score > 0 {
+				fit = append(fit, one)
+			}
+		}
+		all = fit
+	}
+	if len(all) > most {
+		all = all[:most]
+	}
+	return all
 }
 
 // makeNotchFindHandler serves notch.find: {words} gives the files that fit.
 func makeNotchFindHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		words, _ := params["words"].(string)
-		found := notchFileFind(notchFileRootsHere(), func(dir string) bool {
+		wide, _ := params["wide"].(bool)
+		found := notchFileFindWide(notchFileRootsHere(), func(dir string) bool {
 			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
-		}, words)
+		}, words, wide)
+		if !wide && len(found) > notchFindNamed {
+			found = found[:notchFindNamed]
+		}
+		fit := 0
+		for _, one := range found {
+			if one.Score > 0 {
+				fit++
+			}
+		}
 		// How many, never which, and never what was asked for.
-		log.Printf("[notch] a file was looked up by name: %d fit", len(found))
+		log.Printf("[notch] a file was looked up: %d fit by name, %d named in all", fit, len(found))
 		return &RPCResult{Result: map[string]any{"found": found}}, nil
 	}
 }

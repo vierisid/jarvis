@@ -80,17 +80,45 @@ export async function saveThroughApp(rpc: AppRpc, name: string, bytes: Uint8Arra
 
 const PLACES: ReadonlySet<string> = new Set(['desktop', 'documents', 'downloads']);
 
+/** One file the desktop app named (`notch.find`). */
+export interface AppFound {
+  place: 'desktop' | 'documents' | 'downloads';
+  /** The folder below the place: '' at its top, or one or two folder names with a stroke between. */
+  dir: string;
+  name: string;
+  kind: string;
+  size: number;
+  changed: number;
+  score: number;
+}
+
+/** The most files that are taken from one answer of the app. */
+export const APP_FOUND_MOST = 60;
+
+/** A folder below a place, as the app names it: nothing, or one or two plain folder names. */
+function appDir(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw !== 'string' || raw.length > 400) return null;
+  const parts = raw.split('/');
+  if (parts.length > 2) return null;
+  for (const part of parts) if (!part || part.startsWith('.') || /[\\\u0000-\u001f\u007f]/.test(part) || peerFileName(part) !== part.trim()) return null;
+  return parts.join('/');
+}
+
 /** The files the desktop app found for some words (`notch.find`), checked field by field. Null when it did not answer as that. */
-export function appFound(answer: unknown): { place: 'desktop' | 'documents' | 'downloads'; name: string; kind: string; size: number }[] | null {
+export function appFound(answer: unknown): AppFound[] | null {
   const found = (answer as { found?: unknown } | null)?.found;
   if (!Array.isArray(found)) return null;
-  const out: { place: 'desktop' | 'documents' | 'downloads'; name: string; kind: string; size: number }[] = [];
-  for (const raw of found.slice(0, 8)) {
-    const one = (raw ?? {}) as { place?: unknown; name?: unknown; kind?: unknown; size?: unknown };
+  const out: AppFound[] = [];
+  for (const raw of found.slice(0, APP_FOUND_MOST)) {
+    const one = (raw ?? {}) as { place?: unknown; dir?: unknown; name?: unknown; kind?: unknown; size?: unknown; changed?: unknown; score?: unknown };
     if (typeof one.place !== 'string' || !PLACES.has(one.place) || typeof one.name !== 'string' || typeof one.size !== 'number' || !Number.isFinite(one.size) || one.size <= 0) continue;
     // A name the app would hand over: one name, no path, readable. Anything else is not shown and not asked for.
     if (!one.name || one.name.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(one.name) || peerFileName(one.name) !== one.name.trim()) continue;
-    out.push({ place: one.place as 'desktop' | 'documents' | 'downloads', name: one.name, kind: String(one.kind ?? '').slice(0, 12), size: Math.floor(one.size) });
+    const dir = appDir(one.dir);
+    if (dir === null) continue;
+    const number = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0);
+    out.push({ place: one.place as AppFound['place'], dir, name: one.name, kind: String(one.kind ?? '').replace(/[^a-z]/g, '').slice(0, 12), size: Math.floor(one.size), changed: number(one.changed), score: Math.min(number(one.score), 1000) });
   }
   return out;
 }

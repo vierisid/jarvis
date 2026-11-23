@@ -129,7 +129,11 @@ export interface NotchPeopleDeps {
     /** Looks on this laptop for the files that fit some words. Null when it cannot look. */
     find?: (words: string) => Promise<PeerFileFound[] | null>;
     /** Takes one of them from its folder. */
-    open?: (place: PeerFileFound['place'], name: string) => Promise<Uint8Array | null>;
+    open?: (place: PeerFileFound['place'], name: string, dir: string) => Promise<Uint8Array | null>;
+    /** One bounded question to the model: which of the files is meant. */
+    think?: (messages: { role: 'system' | 'user'; content: string }[], signal?: AbortSignal) => Promise<string>;
+    /** The line that is remembered about a file the owner once had read. */
+    known?: (place: PeerFileFound['place'], name: string) => string | null;
     paceMs?: number; retryMs?: number;
   };
   log?: (line: string) => void;
@@ -265,6 +269,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const files = deps.files ? attachNotchPeopleFiles({
     inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log, now,
     ...(deps.files.arrived ? { arrived: deps.files.arrived } : {}), ...(deps.files.find ? { find: deps.files.find } : {}), ...(deps.files.open ? { open: deps.files.open } : {}),
+    ...(deps.files.think ? { think: deps.files.think } : {}), ...(deps.files.known ? { known: deps.files.known } : {}),
     news: (id, say, more) => news(id, say, say, { person: true, ms: 4200, ...(more?.who ? { who: more.who } : {}) }),
     ...(deps.files.paceMs !== undefined ? { paceMs: deps.files.paceMs } : {}), ...(deps.files.retryMs !== undefined ? { retryMs: deps.files.retryMs } : {}),
   }) : null;

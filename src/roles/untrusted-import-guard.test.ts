@@ -118,6 +118,13 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // (pointWindow), framed into the prompt that asks whether one thing
       // there is waiting for the owner.
       'notch/notice.ts',
+      // Which file a colleague means when they ask for one by what it is
+      // ("the deck"): their words, cut to 200 characters, and the list of
+      // the owner's files that may be meant (at most 40 lines, each cut to
+      // fixed lengths), each framed into the prompt of one bounded
+      // question. The answer is read as numbers of that list and nothing
+      // else, and puts a file in front of the owner: it sends nothing.
+      'notch/people-files.ts',
       // The notch's "where is": the names of the things in the window in
       // front, each cut and capped in number where the read is parsed,
       // framed into the prompt that asks which one answers.

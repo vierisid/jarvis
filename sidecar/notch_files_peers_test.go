@@ -297,3 +297,156 @@ func TestNotchDownloadsHere(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func peersDeep(t *testing.T, root string, rel string, text string, age time.Duration) {
+	t.Helper()
+	dir := filepath.Join(root, filepath.Dir(filepath.FromSlash(rel)))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	peersWrite(t, dir, filepath.Base(rel), text, age)
+}
+
+func peersWhere(found []notchFileFound) string {
+	names := []string{}
+	for _, one := range found {
+		where := one.Place
+		if one.Dir != "" {
+			where += "/" + one.Dir
+		}
+		names = append(names, where+"/"+one.Name)
+	}
+	return strings.Join(names, " | ")
+}
+
+// The owner, 23 November 2026: "Send me the deck. It might not be called
+// deck." What is the kind of thing people ask for is named whatever it is
+// called, so that the one that is meant can be told by more than its name.
+func TestNotchFindNamesWhatMayBeMeantWhateverItIsCalled(t *testing.T) {
+	roots, desk, docs, down := peersRoots(t)
+	peersDeep(t, docs, "Pitch/Decks/Pillow v30.pdf", "deck", time.Hour)
+	peersDeep(t, docs, "Pitch/Pillow v29.pptx", "deck", 9*24*time.Hour)
+	peersDeep(t, desk, "Q3 numbers.xlsx", "numbers", 2*time.Hour)
+	peersDeep(t, down, "holiday.jpg", "picture", 30*time.Minute)
+	peersDeep(t, down, "setup.exe", "program", time.Minute)
+	peersDeep(t, down, "notes.zip", "archive", time.Minute)
+	peersDeep(t, docs, "main.go", "code", time.Minute)
+
+	// By name alone, as before: nothing here is called "deck", so only its kind speaks.
+	if got := peersWhere(notchFileFind(roots, nil, "the investor update")); got != "" {
+		t.Errorf("by name: %q", got)
+	}
+	// Wide: every document, sheet, deck, PDF and picture, the newest first. No program, archive or code.
+	found := notchFileFindWide(roots, nil, "the investor update", true)
+	if got := peersWhere(found); got != "downloads/holiday.jpg | documents/Pitch/Decks/Pillow v30.pdf | desktop/Q3 numbers.xlsx | documents/Pitch/Pillow v29.pptx" {
+		t.Errorf("wide: %q", got)
+	}
+	for _, one := range found {
+		if one.Score != 0 {
+			t.Errorf("%s has a score of %d for words that are in no name", one.Name, one.Score)
+		}
+	}
+	// With words that do fit a name or a kind, those come first, with their score, and the rest follow.
+	found = notchFileFindWide(roots, nil, "the deck", true)
+	if got := peersWhere(found); got != "documents/Pitch/Decks/Pillow v30.pdf | documents/Pitch/Pillow v29.pptx | downloads/holiday.jpg | desktop/Q3 numbers.xlsx" {
+		t.Errorf("the deck: %q", got)
+	}
+	if found[0].Score == 0 || found[1].Score == 0 || found[2].Score != 0 {
+		t.Errorf("scores: %d %d %d", found[0].Score, found[1].Score, found[2].Score)
+	}
+	if found[0].Dir != "Pitch/Decks" || found[0].Kind != "pdf" {
+		t.Errorf("first: %+v", found[0])
+	}
+	// No words at all, wide: still the newest of what people ask for.
+	if got := len(notchFileFindWide(roots, nil, "", true)); got != 4 {
+		t.Errorf("no words: %d", got)
+	}
+}
+
+func TestNotchFindGoesTwoFoldersDownAndNoFurther(t *testing.T) {
+	roots, _, docs, _ := peersRoots(t)
+	peersDeep(t, docs, "report.pdf", "x", time.Hour)
+	peersDeep(t, docs, "One/report one.pdf", "x", time.Hour)
+	peersDeep(t, docs, "One/Two/report two.pdf", "x", time.Hour)
+	peersDeep(t, docs, "One/Two/Three/report three.pdf", "x", time.Hour)
+	// Not into what nobody keeps their own files in, what is hidden, what is private, or what is a link.
+	peersDeep(t, docs, "node_modules/report dep.pdf", "x", time.Hour)
+	peersDeep(t, docs, ".cache/report hidden.pdf", "x", time.Hour)
+	// In a folder that is private by its name, a file whose own name says nothing of the kind.
+	peersDeep(t, docs, "passwords/report plain.pdf", "x", time.Hour)
+	elsewhere := t.TempDir()
+	peersDeep(t, elsewhere, "report elsewhere.pdf", "x", time.Hour)
+	if err := os.Symlink(elsewhere, filepath.Join(docs, "Linked")); err != nil {
+		t.Skip("no links here")
+	}
+	names := map[string]bool{}
+	for _, one := range notchFileFindWide(roots, nil, "the report", true) {
+		names[one.Name] = true
+	}
+	for _, want := range []string{"report.pdf", "report one.pdf", "report two.pdf"} {
+		if !names[want] {
+			t.Errorf("%q was not found", want)
+		}
+	}
+	for _, not := range []string{"report three.pdf", "report dep.pdf", "report hidden.pdf", "report plain.pdf", "report elsewhere.pdf"} {
+		if names[not] {
+			t.Errorf("%q was named", not)
+		}
+	}
+	// A blocked folder is not gone into.
+	blocked := func(path string) bool { return strings.HasSuffix(path, "One") }
+	for _, one := range notchFileFindWide(roots, blocked, "the report", true) {
+		if one.Dir != "" {
+			t.Errorf("a blocked folder was gone into: %s/%s", one.Dir, one.Name)
+		}
+	}
+}
+
+func TestNotchFindWideNamesNoMoreThanItsMost(t *testing.T) {
+	roots, desk, _, _ := peersRoots(t)
+	for n := 0; n < notchFindWide+25; n++ {
+		peersWrite(t, desk, "paper "+strings.Repeat("i", n%7)+string(rune('a'+n%26))+string(rune('a'+n/26))+".pdf", "x", time.Duration(n)*time.Minute)
+	}
+	if got := len(notchFileFindWide(roots, nil, "anything", true)); got != notchFindWide {
+		t.Errorf("named %d", got)
+	}
+}
+
+func TestNotchFileOpensFromAFolderBelowThePlace(t *testing.T) {
+	roots, _, docs, _ := peersRoots(t)
+	peersDeep(t, docs, "Pitch/Decks/Pillow v30.pdf", "the deck", time.Hour)
+	peersDeep(t, docs, "Pitch/passwords/list.pdf", "secret", time.Hour)
+	peersDeep(t, docs, "One/Two/Three/deep.pdf", "deep", time.Hour)
+	bytes, kind, err := notchFileOpenIn(roots, nil, "documents", "Pitch/Decks", "Pillow v30.pdf")
+	if err != nil || string(bytes) != "the deck" || kind != "pdf" {
+		t.Fatalf("open: %q %q %v", bytes, kind, err)
+	}
+	// At the top it is as it was.
+	if _, _, err := notchFileOpen(roots, nil, "documents", "Pillow v30.pdf"); err == nil {
+		t.Errorf("a file of a folder below was opened as if it lay at the top")
+	}
+	elsewhere := t.TempDir()
+	peersDeep(t, elsewhere, "outside.pdf", "outside", time.Hour)
+	linked := os.Symlink(elsewhere, filepath.Join(docs, "Linked")) == nil
+	for _, sub := range []string{"..", "Pitch/..", "Pitch/../..", "/etc", `Pitch\Decks`, "Pitch//Decks", "./Pitch", "Pitch/passwords", "One/Two/Three", ".hidden", "No such"} {
+		if _, _, err := notchFileOpenIn(roots, nil, "documents", sub, "Pillow v30.pdf"); err == nil {
+			t.Errorf("opened through %q", sub)
+		}
+	}
+	if _, _, err := notchFileOpenIn(roots, nil, "documents", "Pitch/passwords", "list.pdf"); err == nil {
+		t.Errorf("a file in a private folder was opened")
+	}
+	if _, _, err := notchFileOpenIn(roots, nil, "documents", "One/Two/Three", "deep.pdf"); err == nil {
+		t.Errorf("a file three folders down was opened")
+	}
+	if linked {
+		if _, _, err := notchFileOpenIn(roots, nil, "documents", "Linked", "outside.pdf"); err == nil {
+			t.Errorf("a file was opened through a link to somewhere else")
+		}
+	}
+	// A blocked folder on the way.
+	blocked := func(path string) bool { return strings.HasSuffix(path, "Pitch") }
+	if _, _, err := notchFileOpenIn(roots, blocked, "documents", "Pitch/Decks", "Pillow v30.pdf"); err == nil {
+		t.Errorf("a file below a blocked folder was opened")
+	}
+}

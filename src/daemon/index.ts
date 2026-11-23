@@ -177,7 +177,7 @@ import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchCallDeps, notchNoticeDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
 import { notchPeerWork } from "./notch-peers.ts";
-import { notchDayOneDeps, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
+import { notchDayOneDeps, notchFileKnown, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
 import type { NotchSettingsPage } from "../notch/prefs.ts";
 
@@ -4775,16 +4775,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             find: async (words) => {
               for (const sidecar of sidecarManager.getConnectedSidecars()) {
                 try {
-                  const found = appFound(await sidecarManager.dispatchRPC(sidecar.id, 'notch.find', { words }, { initial: 8000, max: 8000 }));
+                  // The ones that fit by name, and the ones that were changed last and may be meant whatever they are called.
+                  const found = appFound(await sidecarManager.dispatchRPC(sidecar.id, 'notch.find', { words, wide: true }, { initial: 8000, max: 8000 }));
                   if (found) return found;
                 } catch { /* this one cannot look */ }
               }
               return null;
             },
-            open: async (place, name) => {
+            // Which of them is meant: one small question to the model, about names and kinds and dates. It is the
+            // assistant's own work, not something the owner asked for just now, so it waits behind what they did ask.
+            think: (messages, signal) => runWithOrigin('background', async () =>
+              (await agentService.getLLMManager().chatTier('medium', 'notch_peer_file', messages, { max_tokens: 60, temperature: 0, ...(signal ? { signal } : {}) })).content),
+            known: (place, name) => notchFileKnown(getDb(), place, name),
+            open: async (place, name, dir) => {
               for (const sidecar of sidecarManager.getConnectedSidecars()) {
                 try {
-                  const answer = await sidecarManager.dispatchRPC(sidecar.id, 'notch.file', { place, name }, { initial: 15_000, max: 15_000 }) as
+                  const answer = await sidecarManager.dispatchRPC(sidecar.id, 'notch.file', { place, name, ...(dir ? { dir } : {}) }, { initial: 15_000, max: 15_000 }) as
                     { opened?: unknown; _binary?: { data?: unknown } } | null;
                   const data = answer?.opened === true ? answer._binary?.data : null;
                   if (typeof data === 'string' && data.length > 0 && data.length <= 24 * 1024 * 1024) return new Uint8Array(Buffer.from(data, 'base64'));

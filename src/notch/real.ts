@@ -55,6 +55,7 @@ import { attachNotchPeople } from './people.ts';
 import type { NotchPeople } from './people.ts';
 import type { PeerLink } from '../peers/link.ts';
 import type { PeerSetupLike } from '../peers/setup.ts';
+import type { PeerFileFound } from './people-files.ts';
 import { PeerStore } from '../peers/store.ts';
 import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
@@ -224,9 +225,13 @@ export interface NotchRealDeps {
     files?: {
       dir: string;
       save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null>;
-      /** Looks on the person's computer for the files that fit some words, and takes one from its folder (./people-files.ts). */
-      find?: (words: string) => Promise<{ place: 'desktop' | 'documents' | 'downloads'; name: string; kind: string; size: number }[] | null>;
-      open?: (place: 'desktop' | 'documents' | 'downloads', name: string) => Promise<Uint8Array | null>;
+      /** Looks on the person's computer for the files that may be meant by some words, and takes one from its folder (./people-files.ts). */
+      find?: (words: string) => Promise<PeerFileFound[] | null>;
+      open?: (place: PeerFileFound['place'], name: string, dir: string) => Promise<Uint8Array | null>;
+      /** One bounded question to the model: which of the files is meant. */
+      think?: (messages: { role: 'system' | 'user'; content: string }[], signal?: AbortSignal) => Promise<string>;
+      /** The line that is remembered about a file the owner once had read. */
+      known?: (place: PeerFileFound['place'], name: string) => string | null;
     };
     noClock?: boolean;
   };
