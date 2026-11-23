@@ -412,9 +412,11 @@ colleague called it. So a name is only one of the things a file is told by.
 51. **The one who asks learns nothing from the looking.** Not what was found, and not that
     nothing was. Only the owner's yes or no comes back, and a no reads the same whatever was
     found. Nobody can find out from afar which files a laptop holds.
-52. **A wrong file is not put up for a yes.** When words that name a file were said, more than
-    half of them must be in the name: "the Acme contract" does not offer a Northwind contract.
-    Only when nothing but a kind was said ("the latest deck") is the kind enough.
+52. **A wrong file is not put up as found.** By its name a file fits only when more than half of
+    the words that name it are in the name: "the Acme contract" is not found in a Northwind
+    contract. What the model picks without the name saying so is put up as "I think that is",
+    never as "I found", and it is told that a file about another company, person or project
+    than the one asked for does not fit.
 53. **What would never be handed over is never named**: a file that is private by its name, a
     shortcut, a folder, an empty file, one that is kept online only, anything in a blocked folder.
 54. **An offer skips "Take it?" only for an asking this machine made, of that person, that is
