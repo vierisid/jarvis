@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PeerHost, canHost, hostAddress, hostEnv, hostFailure, peerLoginName, signInByForm, tunnelFailure } from './host.ts';
+import { PeerHost, canHost, hostAddress, hostEnv, hostFailure, hostIdent, peerLoginName, signInByForm, tunnelFailure } from './host.ts';
 import { engineArchiveEntry, engineArchiveName, fetchEngine, installedEnginePath } from './install.ts';
 import { fakeSource } from './testing/fake-source.ts';
 import { zipEntries } from './zip.ts';
@@ -15,6 +15,13 @@ const stubborn = (dir: string): number => Number(readFileSync(join(dir, 'deploy'
 const until = async (what: () => boolean, ms = 4000): Promise<boolean> => { const end = Date.now() + ms; while (Date.now() < end) { if (what()) return true; await Bun.sleep(20); } return what(); };
 const env = { PATH: process.env.PATH, HOME: '/brain/home', ANTHROPIC_API_KEY: 'sk-secret', JARVIS_AUTH_TOKEN: 'token' };
 const unix = process.platform !== 'win32';
+/** The start time of a program, as `ps` words it. */
+const lstartOf = async (pid: number): Promise<string | null> => {
+  const ps = Bun.spawn(['ps', '-o', 'lstart=', '-p', String(pid)], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' });
+  return (await new Response(ps.stdout).text()).trim() || null;
+};
+/** Which program a number is, as the watcher writes it down: the system's count where there is one, the start time elsewhere. */
+const identOf = async (pid: number): Promise<string | null> => (existsSync('/proc/self/stat') ? hostIdent(pid) : lstartOf(pid));
 
 describe('whether this machine can host', () => {
   test('only with the source named and its script there, and not on Windows itself', () => {
@@ -135,9 +142,10 @@ describe.if(unix)('the organisation\'s server', () => {
     const dir = source();
     const data = join(dir, 'deploy', 'ngrok', 'data');
     // An earlier start, left running with nobody watching it: in a group of its own, and written down.
-    const old = Bun.spawn(['bash', '-c', 'set -m; mkdir -p "$2"; NGROK_DOMAIN=northwind.ngrok-free.app "$1" start </dev/null >>"$2/start.log" 2>&1 & pid=$!; printf "%s\\n%s\\n" "$pid" "$(ps -o lstart= -p $pid)" > "$2/start.pid"; echo $pid', 'old', join(dir, 'deploy', 'ngrok', 'test-env.sh'), data],
+    const old = Bun.spawn(['bash', '-c', 'set -m; mkdir -p "$2"; NGROK_DOMAIN=northwind.ngrok-free.app "$1" start </dev/null >>"$2/start.log" 2>&1 & echo $!', 'old', join(dir, 'deploy', 'ngrok', 'test-env.sh'), data],
       { env: { PATH: process.env.PATH ?? '', HOME: '/brain/home' }, stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' });
     const oldPid = Number((await new Response(old.stdout).text()).trim());
+    writeFileSync(join(data, 'start.pid'), `${oldPid}\n${await identOf(oldPid)}\n`);
     expect(await until(() => existsSync(join(dir, 'deploy', 'ngrok', 'child.pid')))).toBe(true);
     const oldChild = stubborn(dir);
     expect(alive(oldPid) && alive(oldChild)).toBe(true);
@@ -152,17 +160,44 @@ describe.if(unix)('the organisation\'s server', () => {
     rmSync(join(dir, 'deploy', 'ngrok', 'stopped'), { force: true });
     const bystander = Bun.spawn(['sleep', '120'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
     try {
-      writeFileSync(join(data, 'start.pid'), `${bystander.pid}\nMon Jan  1 00:00:00 2001\n`);
-      const again = new PeerHost({ source: dir, env, log: (line) => logged.push(line) });
-      expect((await again.start()).ok).toBe(true);
-      await Bun.sleep(300);
-      expect(alive(bystander.pid)).toBe(true);
-      expect(logged.filter((line) => line.includes('left running')).length).toBe(1);
-      await again.stop();
+      // Another count, another start time, and a start time as `ps` words it where the count is what is kept.
+      const others = ['ticks 1', 'Mon Jan  1 00:00:00 2001', (await lstartOf(bystander.pid)) ?? 'Tue Jan  2 00:00:00 2001'];
+      for (const other of process.platform === 'linux' ? others : others.slice(0, 2)) {
+        rmSync(join(dir, 'deploy', 'ngrok', 'stopped'), { force: true });
+        writeFileSync(join(data, 'start.pid'), `${bystander.pid}\n${other}\n`);
+        const again = new PeerHost({ source: dir, env, log: (line) => logged.push(line) });
+        expect((await again.start()).ok).toBe(true);
+        await Bun.sleep(300);
+        expect(alive(bystander.pid)).toBe(true);
+        expect(logged.filter((line) => line.includes('left running')).length).toBe(1);
+        await again.stop();
+      }
     } finally {
       bystander.kill();
     }
-  }, 60_000);
+  }, 90_000);
+
+  test('which program the script is, is written down by a count the clock of the day cannot move', async () => {
+    const dir = source();
+    const host = new PeerHost({ source: dir, env });
+    expect((await host.start('northwind.ngrok-free.app')).ok).toBe(true);
+    try {
+      const [pid, ident] = readFileSync(join(dir, 'deploy', 'ngrok', 'data', 'start.pid'), 'utf8').split('\n');
+      expect(alive(Number(pid))).toBe(true);
+      // The watcher writes what the brain reads: otherwise the next start would not know its own script.
+      expect(ident ?? null).toBe(await identOf(Number(pid)));
+      if (process.platform === 'linux') {
+        // On 23 November 2026 the start time `ps` gives for a running script moved by four minutes,
+        // with the clock, on the machine this runs on. The count since the machine was switched on does not.
+        expect(ident).toMatch(/^ticks \d+$/);
+        expect(hostIdent(Number(pid))).toBe(ident!);
+        expect(hostIdent(Number(pid))).toBe(hostIdent(Number(pid)));
+      }
+    } finally {
+      await host.stop();
+    }
+    expect(hostIdent(2 ** 30)).toBeNull();
+  }, 30_000);
 
   test('a server whose brain is gone is gone too', async () => {
     const dir = source();

@@ -287,9 +287,14 @@ server stops.
     - The script runs in a group of its own. A Ctrl-C in the brain's terminal does not reach it,
       and after the script has had ten seconds to go out in its own way, the watcher ends
       whatever is left of the group.
-    - Which program a start is, by its number and its start time, is written down beside its
-      logs. The next start ends it first when it is still that program, and touches nothing when
-      it is not.
+    - Which program a start is, by its number and the moment it was started, is written down
+      beside its logs. The next start ends it first when it is still that program, and touches
+      nothing when it is not.
+    - That moment is read where the clock of the day cannot move it: on Linux the system's own
+      count since it was switched on, not the start time `ps` works out from the clock. On a
+      machine whose clock is corrected under running programs the same script read four
+      minutes earlier than when it was written down (23 November 2026), and would not have
+      been known again.
 37. **What the scripts get is made name by name**: the allowlist every child gets, the person's
     real home (the tunnel program keeps its account there), and two addresses. Pinned in
     `src/peers/host.test.ts`.

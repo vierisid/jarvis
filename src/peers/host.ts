@@ -130,18 +130,33 @@ export function hostEnv(base: Record<string, string | undefined>, more: HostEnvM
  *   - The watcher lets the script go out in its own way first (it stops its
  *     three programs in order), for ten seconds, and then ends whatever is
  *     left of the group. It only ever signals the program it started: the
- *     same number at the same start time.
+ *     same number, started at the same moment.
+ *   - That moment is read where the clock cannot move it. On Linux `ps`
+ *     works a start time out from the clock of the day, so the same program
+ *     reads differently after the clock is set: on 23 November 2026 a
+ *     running script read four minutes earlier than when it was written
+ *     down, on a machine whose clock is corrected under it. The system's
+ *     own count since it was switched on does not move. `hostIdent` reads
+ *     the same thing for the brain.
  */
 const WATCHED = [
   'set -m',
   'exec 3<&0',
+  'ident_of() {',
+  '  if [ -r /proc/self/stat ]; then',
+  '    t="$(sed \'s/^.*) //\' "/proc/$1/stat" 2>/dev/null | cut -d\' \' -f20)"',
+  '    [ -n "$t" ] && printf \'ticks %s\' "$t"',
+  '  else',
+  '    ps -o lstart= -p "$1" 2>/dev/null',
+  '  fi',
+  '}',
   '"$1" start </dev/null >>"$2" 2>&1 &',
   'script=$!',
-  'ident="$(ps -o lstart= -p "$script" 2>/dev/null)"',
+  'ident="$(ident_of "$script")"',
   'printf \'%s\\n%s\\n\' "$script" "$ident" > "$3"',
   '{',
   '  cat <&3 >/dev/null',
-  '  if [ -n "$ident" ] && [ "$(ps -o lstart= -p "$script" 2>/dev/null)" = "$ident" ]; then',
+  '  if [ -n "$ident" ] && [ "$(ident_of "$script")" = "$ident" ]; then',
   '    kill -TERM "$script" 2>/dev/null',
   '    n=0',
   '    while kill -0 "$script" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done',
@@ -151,6 +166,20 @@ const WATCHED = [
   '} </dev/null >/dev/null 2>&1 &',
   'wait "$script"',
 ].join('\n');
+
+/**
+ * Which program a number is, where the system keeps a count that the clock
+ * of the day cannot move: when it was started, counted from when the
+ * machine was switched on. Null where there is no such count (a Mac), and
+ * when no program has that number.
+ */
+export function hostIdent(pid: number): string | null {
+  let stat: string;
+  try { stat = readFileSync(`/proc/${pid}/stat`, 'utf8'); } catch { return null; }
+  // After the name, which may have blanks and brackets of its own: the twentieth word.
+  const started = stat.slice(stat.lastIndexOf(') ') + 2).split(' ')[19];
+  return started && /^\d+$/.test(started) ? `ticks ${started}` : null;
+}
 
 export interface HostChild {
   stdout: ReadableStream<Uint8Array>;
@@ -368,8 +397,10 @@ export class PeerHost {
     const [first, ident] = text.split('\n');
     const pid = Number(first);
     if (!Number.isInteger(pid) || pid < 2 || !ident?.trim()) return;
-    const now = await this.short(['ps', '-o', 'lstart=', '-p', String(pid)], source, this.env(), 5000).catch(() => null);
-    if (!now || now.out.trim() !== ident.trim()) return;
+    // Read as the watcher wrote it: the system's own count where there is one, the start time elsewhere.
+    const now = existsSync('/proc/self/stat') ? hostIdent(pid)
+      : (await this.short(['ps', '-o', 'lstart=', '-p', String(pid)], source, this.env(), 5000).catch(() => null))?.out ?? null;
+    if (!now || now.trim() !== ident.trim()) return;
     this.options.log?.('[peers] a server that an earlier brain left running is stopped first');
     try { process.kill(pid, 'SIGTERM'); } catch { return; }
     const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
