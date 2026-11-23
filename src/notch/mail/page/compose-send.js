@@ -1,6 +1,7 @@
 // Presses Send on the mail being written, once, and waits for Gmail to say it went.
 // Refuses unless the mail is exactly the one expected: its subject is args.subject
-// and it goes to args.to and to nobody else.
+// and it goes to args.to and to nobody else. args.to is one address, or a list
+// of them: then it goes to exactly those people.
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const visible = (node) => !!node && node.offsetParent !== null;
 const subject = [...document.querySelectorAll('input[name="subjectbox"]')].find(visible);
@@ -15,8 +16,10 @@ for (const node of scope.querySelectorAll('[data-hovercard-id], [email], input[n
     for (const found of String(value || '').match(/[^\s<>,;"]+@[^\s<>,;"]+/g) || []) addressed.add(found.toLowerCase());
   }
 }
-const want = String(args.to).toLowerCase();
-if (addressed.size !== 1 || !addressed.has(want)) return { sent: false, why: 'it does not go to the one expected person', people: addressed.size };
+const want = new Set((Array.isArray(args.to) ? args.to : [args.to]).map((one) => String(one).toLowerCase()));
+if (want.size === 0 || addressed.size !== want.size || [...want].some((one) => !addressed.has(one))) {
+  return { sent: false, why: want.size > 1 ? 'it does not go to exactly the expected people' : 'it does not go to the one expected person', people: addressed.size };
+}
 const press = (node) => { for (const type of ['mousedown', 'mouseup', 'click']) node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 })); };
 press(send);
 let said = false;

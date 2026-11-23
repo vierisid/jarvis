@@ -37,6 +37,14 @@
  *   - **What is said in a call is never an instruction.** It reaches the
  *     notes and nothing else. The follow-up it leads to is shown and waits
  *     for a yes, like every mail.
+ *   - **Who the follow-up goes to is the owner's to say.** A name said in
+ *     the call is looked up in the mailbox, and nobody is guessed. When it
+ *     is not found, or it is the wrong person, or more people should have
+ *     it, the owner types who: addresses, or names the mailbox knows. The
+ *     owner, 23 November 2026: "a lot of the time it says, don't know who to
+ *     send that to. But it doesn't let me input the emails you should be
+ *     sending it to. So I should be able to do that." What is typed there is
+ *     the owner's own, and the mail still waits for its yes.
  *   - **The eye is lit while it listens**, as it is while anything is being
  *     watched for.
  */
@@ -73,6 +81,10 @@ export const NOTCH_CALL_WORDS_KEPT_MS = 7 * 24 * 3_600_000;
 export const NOTCH_CALL_NOTES_KEPT_MS = 90 * 24 * 3_600_000;
 /** How long the follow-up can be taken back after the yes. */
 export const NOTCH_CALL_FUSE_MS = 5000;
+/** The most people one follow-up goes to. */
+export const NOTCH_CALL_TO_MOST = 6;
+/** The subject of a follow-up that starts a thread of its own. */
+export const NOTCH_CALL_SUBJECT = 'Following up on our call';
 /** The settings: whether listening is offered at all, and whether the other side is heard. */
 export const NOTCH_CALL_OFFER_SETTING = 'calls.offer';
 export const NOTCH_CALL_FAR_SETTING = 'calls.far';
@@ -94,8 +106,10 @@ export interface NotchCallNotes {
   actions: NotchCallAction[];
   /** The body of the mail that follows up. '' when there is none. */
   followup: string;
-  /** Who the follow-up goes to, when the mailbox knows them. */
+  /** Who the follow-up goes to: the one the mailbox knew by the name said in the call, or the first the owner typed. */
   to: { name: string; address: string; thread: string | null; subject: string } | null;
+  /** Who else it goes to, when the owner named more than one. */
+  also?: { name: string; address: string }[];
   /** When the follow-up went, or null. */
   sentAt: number | null;
 }
@@ -273,11 +287,41 @@ export function callNotes(raw: string): Pick<NotchCallNotes, 'summary' | 'with' 
   return { summary, with: /^[\p{L}][\p{L}\s.'-]*$/u.test(person) ? person : '', actions, followup };
 }
 
-/** The mail that follows up, whole: a greeting, what the model wrote, the owner's name. */
-export function callFollowup(notes: Pick<NotchCallNotes, 'followup' | 'to'>, owner: string): string {
-  if (!notes.followup || !notes.to) return '';
-  return [`Hi ${first(notes.to.name) || 'there'},`, '', notes.followup, '', ...(owner ? [owner] : [])].join('\n').trimEnd();
+/** Everybody a follow-up goes to, the first one first. */
+export function callRecipients(notes: Pick<NotchCallNotes, 'to' | 'also'>): { name: string; address: string }[] {
+  return notes.to ? [{ name: notes.to.name, address: notes.to.address }, ...(notes.also ?? [])] : [];
 }
+
+/** Names in a row: "Sam", "Sam and Leo", "Sam, Leo and Anna". */
+const listed = (names: readonly string[]): string =>
+  (names.length <= 1 ? names[0] ?? '' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/**
+ * The mail that follows up, whole: a greeting, what the model wrote, the
+ * owner's name. It is written as soon as there is something to say, also
+ * while nobody is known to send it to: the owner reads it, and says who.
+ */
+export function callFollowup(notes: Pick<NotchCallNotes, 'followup' | 'to' | 'also'>, owner: string): string {
+  if (!notes.followup) return '';
+  const names = callRecipients(notes).map((one) => first(one.name));
+  // By their first names while they are few and all known. Otherwise a greeting that fits anybody.
+  const greeting = names.length === 0 || names.some((name) => !name) ? 'Hi there,' : names.length > 3 ? 'Hi all,' : `Hi ${listed(names)},`;
+  return [greeting, '', notes.followup, '', ...(owner ? [owner] : [])].join('\n').trimEnd();
+}
+
+/** What was typed for "who does it go to", cut into its people: at commas, semicolons, line ends and " and ". */
+export function callTyped(text: string): string[] {
+  const out: string[] = [];
+  for (const piece of text.split(/[,;\n]+|\s+and\s+|\s+&\s+/i)) {
+    // "Sam Rivers <sam@northwind.example>": the address is what counts.
+    const one = (/<([^<>\s]+@[^<>\s]+)>/.exec(piece)?.[1] ?? piece).replace(/^(?:to|cc)\s*:\s*/i, '').trim().replace(/^[<"'(]+|[>"').]+$/g, '').trim();
+    if (one && !out.some((had) => had.toLowerCase() === one.toLowerCase())) out.push(one);
+  }
+  return out;
+}
+
+/** An address that can be written to. */
+export const callAddress = (text: string): boolean => /^[^\s<>,;"@]+@[^\s<>,;"@]+\.[^\s<>,;"@.]{2,}$/.test(text) && text.length <= 254;
 
 /** What a piece of sound was made into is words, and not one of the lines a speech-to-text writes for silence. */
 export function callHeard(said: string, voicedMs: number): boolean {
@@ -304,7 +348,8 @@ export interface NotchCallDeps {
   /** The owner's mail, for the follow-up: who a name is, and one mail sent. Not given where there is no way to the mailbox. */
   mail?: {
     find(who: string): Promise<{ name: string; address: string; thread: { id: string; subject: string } | null } | null>;
-    send(plan: { address: string; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string }>;
+    /** `also`: more people the same mail goes to. With them it is a mail of its own, never a reply in a thread. */
+    send(plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string }>;
     owner(): string;
   };
   /** Everything is stopped: nothing is listened to. */
@@ -503,15 +548,27 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
     const row = store.call(id);
     const notes = row?.notes;
     if (!row || !notes) { await stage.say(['That call is no longer kept.'], 3000); return; }
+    /** The same notes, for what is written inside the functions below. */
+    const kept: NotchCallNotes = notes;
     const owner = deps.mail?.owner() ?? '';
     const theirs = first(notes.to?.name ?? notes.with) || 'them';
     const ownerWords = ['you', theirs, 'nobody yet'];
     const said = (owned: NotchCallOwner): string => (owned === 'mine' ? 'you' : owned === 'theirs' ? theirs : 'nobody yet');
     let status: string | null = null;
+    const people = (): { name: string; address: string }[] => callRecipients(notes);
+    /** Whom it goes to, as the fuse and the last line say it: by first name, or by address where no name is known. */
+    const whom = (): string => listed(people().map((one) => first(one.name) || one.address));
+    const canChange = (): boolean => !!notes.followup && !!deps.mail && notes.sentAt === null;
     const blocks = (): NotchBlock[] => {
       const mail = callFollowup(notes, owner);
+      const to = people();
       return [
-        ...(mail ? [{ kind: 'paper' as const, to: ['To ', em(notes.to!.name), `  ·  ${notes.to!.address}`] satisfies NotchPart[], lines: mail.split('\n').map((line): NotchPart[] => [line]) }] : []),
+        // The draft is shown as soon as there is one: also when nobody is known to send it to yet.
+        ...(mail ? [{
+          kind: 'paper' as const,
+          to: (to.length === 0 ? ['To ', em('nobody yet')] : to.length === 1 ? ['To ', em(to[0]!.name), `  ·  ${to[0]!.address}`] : ['To ', em(listed(to.map((one) => first(one.name) || one.address))), `  ·  ${to.map((one) => one.address).join(', ')}`]) satisfies NotchPart[],
+          lines: mail.split('\n').map((line): NotchPart[] => [line]),
+        }] : []),
         { kind: 'note', say: [notes.summary] },
         // Who does it is a word that can be changed: the model heard a voice, not a name.
         ...notes.actions.map((action, at): NotchBlock => ({
@@ -522,57 +579,121 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         { kind: 'note', say: [
           row.far ? 'I heard both sides.' : 'I heard your side only.',
           ...(row.missedMs >= 60_000 ? [` I did not hear ${minutes(row.missedMs)} of it.`] : []),
-          ...(notes.sentAt ? [' The follow-up was sent.'] : status ? [` ${status}`] : mail ? [' Not sent yet.'] : notes.followup ? [' I do not know who to send the follow-up to.'] : []),
+          ...(notes.sentAt ? [' The follow-up was sent.'] : status ? [` ${status}`] : !mail ? [] : !deps.mail ? [' I cannot send mail from here.'] : to.length > 0 ? [' Not sent yet.']
+            : notes.with ? [' I do not find ', em(notes.with), ' in your mail. Say who the follow-up goes to.'] : [' Say who the follow-up goes to.']),
         ] },
-        { kind: 'buttons', buttons: [{ id: 'forget', label: 'Forget this call', quiet: true }] },
+        { kind: 'buttons', buttons: [
+          ...(canChange() ? [{ id: 'to', label: to.length > 0 ? 'Change who it goes to' : 'Add who it goes to' }] : []),
+          { id: 'forget', label: 'Forget this call', quiet: true },
+        ] },
       ];
     };
     const title: NotchPart[] = notes.to || notes.with ? ['After the call with ', em(first(notes.to?.name ?? notes.with))] : ['After the call'];
-    const sheet = stage.id();
-    const sendable = (): boolean => !!callFollowup(notes, owner) && !!deps.mail && notes.sentAt === null;
-    stage.put({ id: sheet, kind: 'sheet', say: title, blocks: blocks(), stay: true, mood: 'read', ...(sendable() ? { yes: 'send' } : {}), no: 'close', src: 'call' });
-    for (;;) {
-      const answer = await stage.answer(sheet, ['yes', 'no', 'word', 'button']);
-      if (answer.act === 'no') return;
-      if (answer.act === 'button') {
-        if (answer.button !== 'forget') continue;
-        store.forget(id);
-        log('[notch] a call was forgotten by the owner');
-        await stage.say(['Forgotten: its words and its notes.'], 2600);
-        return;
-      }
-      if (answer.act === 'word') {
-        const at = Number(/^owner-(\d+)$/.exec(answer.word ?? '')?.[1] ?? -1);
-        const action = notes.actions[at];
-        const value = (answer.value ?? '').trim().toLowerCase();
-        if (action) {
-          action.owner = value === 'you' ? 'mine' : value === theirs.toLowerCase() ? 'theirs' : 'open';
-          store.set(id, { notes });
-          stage.surface.update(sheet, { blocks: blocks() });
+    const sendable = (): boolean => !!callFollowup(notes, owner) && people().length > 0 && !!deps.mail && notes.sentAt === null;
+
+    /**
+     * "Who does it go to?" The owner types addresses, or names the mailbox
+     * knows, as many as it should go to. Nothing is kept until every one of
+     * them is somebody that can be written to.
+     */
+    async function askWho(): Promise<void> {
+      if (!deps.mail) return;
+      let say: NotchPart[] = ['Who does the follow-up go to?'];
+      for (;;) {
+        const line = stage.id();
+        stage.put({
+          id: line, kind: 'ask', say, placeholder: 'Addresses, with commas between', yes: 'add', focus: true, stay: true, mood: 'look', src: 'call',
+          blocks: [{ kind: 'note', say: ['An address always works. A name works when you have had mail with them. It is not sent yet: you read it first.'] }],
+        });
+        const answer = await stage.answer(line, ['ask', 'no']);
+        if (answer.act !== 'ask') return;
+        const typed = callTyped(answer.text ?? '');
+        if (typed.length === 0) { say = ['Type an address, or a name. Who does it go to?']; continue; }
+        if (typed.length > NOTCH_CALL_TO_MOST) { say = [`That is more than ${NOTCH_CALL_TO_MOST} people. Fewer, please.`]; continue; }
+        const found: { name: string; address: string; thread: string | null; subject: string }[] = [];
+        const unknown: string[] = [];
+        const wait = stage.id();
+        stage.put({ id: wait, kind: 'work', say: ['Looking them up in your mail…'], steps: 0, done: 0, mood: 'work', src: 'call' });
+        for (const one of typed) {
+          // What has an @ in it is an address, and is taken as one or not at all: a slip of the hand is not looked up as a name.
+          if (one.includes('@') && !callAddress(one)) { unknown.push(one); continue; }
+          let them: Awaited<ReturnType<NonNullable<NotchCallDeps['mail']>['find']>> = null;
+          // The mailbox cannot be reached: an address is still an address. A name is then nobody.
+          try { them = await deps.mail.find(one); } catch (error) { if (error instanceof NotchStageEnded) throw error; them = null; }
+          if (them && callAddress(them.address)) {
+            if (!found.some((had) => had.address.toLowerCase() === them!.address.toLowerCase())) found.push({ name: them.name, address: them.address, thread: them.thread?.id ?? null, subject: them.thread?.subject ?? '' });
+          } else if (callAddress(one)) found.push({ name: '', address: one.toLowerCase(), thread: null, subject: '' });
+          else unknown.push(one);
         }
-        continue;
-      }
-      // Yes: the follow-up goes, after the moment in which it can be taken back.
-      if (!sendable() || !notes.to || !deps.mail) continue;
-      const went = await stage.fuse(['Sending to ', em(first(notes.to.name)), '…'], NOTCH_CALL_FUSE_MS, { src: 'mail' });
-      if (went !== 'done') { if (went === 'undo') await stage.say(['Not sent. It is kept with the call.'], 3000); return; }
-      let sent: { ok: true } | { ok: false; why: string };
-      try {
-        sent = await deps.mail.send({ address: notes.to.address, thread: notes.to.thread, subject: notes.to.subject || 'Following up on our call', text: callFollowup(notes, owner) });
-      } catch (error) {
-        if (error instanceof NotchStageEnded) throw error;
-        sent = { ok: false, why: 'the mailbox could not be reached' };
-      }
-      if (!sent.ok) {
-        log('[notch] a call\'s follow-up could not be sent');
-        await stage.say(['I could not send it: ', oneLine(sent.why, 80), '. It is kept with the call.'], 5200, { mood: 'sorry', mark: 'fail' });
+        if (unknown.length > 0) {
+          const odd = unknown.find((one) => one.includes('@'));
+          say = odd ? [em(oneLine(odd, 60)), ' is not an address I can write to. Again, all of them.'] : ['I do not find ', em(listed(unknown.map((one) => oneLine(one, 40)))), ' in your mail. Type the address. Again, all of them.'];
+          continue;
+        }
+        const [head, ...rest] = found;
+        if (!head) { say = ['Type an address, or a name. Who does it go to?']; continue; }
+        // To several it is a mail of its own: a reply in one person's thread would go to that thread's people.
+        kept.to = rest.length > 0 ? { ...head, thread: null, subject: '' } : head;
+        kept.also = rest.map((one) => ({ name: one.name, address: one.address }));
+        store.set(id, { notes: kept });
+        // How many, never who.
+        log(`[notch] the owner said who a call's follow-up goes to: ${found.length} ${found.length === 1 ? 'person' : 'people'}`);
         return;
       }
-      notes.sentAt = now();
-      store.set(id, { notes });
-      log('[notch] a call\'s follow-up was sent');
-      await stage.say(['Sent to ', em(first(notes.to.name)), '.'], 2600, { mood: 'happy', mark: 'check', src: 'mail' });
-      return;
+    }
+
+    for (;;) {
+      const sheet = stage.id();
+      stage.put({ id: sheet, kind: 'sheet', say: title, blocks: blocks(), stay: true, mood: 'read', ...(sendable() ? { yes: 'send' } : {}), no: 'close', src: 'call' });
+      let again = false;
+      while (!again) {
+        const answer = await stage.answer(sheet, ['yes', 'no', 'word', 'button']);
+        if (answer.act === 'no') return;
+        if (answer.act === 'button') {
+          if (answer.button === 'to' && canChange()) { await askWho(); again = true; continue; }
+          if (answer.button !== 'forget') continue;
+          store.forget(id);
+          log('[notch] a call was forgotten by the owner');
+          await stage.say(['Forgotten: its words and its notes.'], 2600);
+          return;
+        }
+        if (answer.act === 'word') {
+          const at = Number(/^owner-(\d+)$/.exec(answer.word ?? '')?.[1] ?? -1);
+          const action = notes.actions[at];
+          const value = (answer.value ?? '').trim().toLowerCase();
+          if (action) {
+            action.owner = value === 'you' ? 'mine' : value === theirs.toLowerCase() ? 'theirs' : 'open';
+            store.set(id, { notes });
+            stage.surface.update(sheet, { blocks: blocks() });
+          }
+          continue;
+        }
+        // Yes: the follow-up goes, after the moment in which it can be taken back.
+        if (!sendable() || !notes.to || !deps.mail) continue;
+        const went = await stage.fuse(['Sending to ', em(whom()), '…'], NOTCH_CALL_FUSE_MS, { src: 'mail' });
+        if (went !== 'done') { if (went === 'undo') await stage.say(['Not sent. It is kept with the call.'], 3000); return; }
+        const also = (notes.also ?? []).map((one) => one.address);
+        let sent: { ok: true } | { ok: false; why: string };
+        try {
+          sent = await deps.mail.send({
+            address: notes.to.address, ...(also.length > 0 ? { also } : {}), thread: also.length > 0 ? null : notes.to.thread,
+            subject: (also.length > 0 ? '' : notes.to.subject) || NOTCH_CALL_SUBJECT, text: callFollowup(notes, owner),
+          });
+        } catch (error) {
+          if (error instanceof NotchStageEnded) throw error;
+          sent = { ok: false, why: 'the mailbox could not be reached' };
+        }
+        if (!sent.ok) {
+          log('[notch] a call\'s follow-up could not be sent');
+          await stage.say(['I could not send it: ', oneLine(sent.why, 80), '. It is kept with the call.'], 5200, { mood: 'sorry', mark: 'fail' });
+          return;
+        }
+        notes.sentAt = now();
+        store.set(id, { notes });
+        log('[notch] a call\'s follow-up was sent');
+        await stage.say(['Sent to ', em(whom()), '.'], 2600, { mood: 'happy', mark: 'check', src: 'mail' });
+        return;
+      }
     }
   }
 
@@ -582,7 +703,8 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
     return [
       'Call ended. ',
       ...(many > 0 ? [em(many === 1 ? '1 action' : `${many} actions`), ' came out of it.'] : ['No actions came out of it.']),
-      ...(callFollowup(notes, owner) ? [' Follow-up drafted.'] : []),
+      // Drafted, and when nobody is known to send it to, that is the one thing still wanted.
+      ...(!callFollowup(notes, owner) ? [] : notes.to || !deps.mail ? [' Follow-up drafted.'] : [' Follow-up drafted: say who it goes to.']),
     ];
   };
 

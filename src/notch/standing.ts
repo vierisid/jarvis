@@ -162,8 +162,8 @@ export interface StandingMail {
   onRead(listener: (threads: MailThread[]) => void): void;
   /** Who a name or an address is. Null when the mailbox holds nobody of that name. Throws when the mailbox cannot be reached. */
   find(who: string): Promise<StandingPerson | null>;
-  /** Sends one short mail: in the thread when there is one, as a new mail when there is none. */
-  send(plan: { address: string; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string }>;
+  /** Sends one short mail: in the thread when there is one, as a new mail when there is none. `also`: more people it goes to, as a new mail. */
+  send(plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string }>;
   /** Looks at the top of the mailbox now, so that an answer that has just come is heard of before the next step. */
   look(): Promise<void>;
   /** The owner's first name, for signing. '' when it is not known yet. */

@@ -559,7 +559,8 @@ describe('a call that is listened to, put together', () => {
     around('pc', { event_type: 'notch.around', payload: { call: false } });
     await pass(15_000);
     expect(asked.at(-1)).toMatchObject({ on: false });
-    expect(said()).toBe('Call ended. 2 actions came out of it.');
+    // There is no way to the mailbox here: the follow-up is drafted all the same, to be read on the sheet.
+    expect(said()).toBe('Call ended. 2 actions came out of it. Follow-up drafted.');
     expect(pushed.filter((message) => message.type === 'act' && message.eye !== undefined).at(-1)).toMatchObject({ eye: false });
     await answer('yes');
     expect(said()).toBe('After the call with Sam');

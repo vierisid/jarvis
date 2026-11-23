@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   NOTCH_CALL_EVENT, NOTCH_CALL_FAR_SETTING, NOTCH_CALL_FOLLOWUP_MAX, NOTCH_CALL_FUSE_MS, NOTCH_CALL_NOTES_KEPT_MS, NOTCH_CALL_WORDS_KEPT_MS,
-  NotchCallStore, attachNotchCalls, callFollowup, callHeard, callMessages, callNotes, callRequest, type NotchCallDeps,
+  NotchCallStore, attachNotchCalls, callAddress, callFollowup, callHeard, callMessages, callNotes, callRecipients, callRequest, callTyped, type NotchCallDeps,
 } from './call.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
@@ -37,7 +37,7 @@ function harness(options: {
   heard?: string[];
   think?: (messages: { role: string; content: string }[]) => string | Promise<string>;
   stt?: false;
-  mail?: false | { find?: typeof SAM | null; send?: { ok: true } | { ok: false; why: string } };
+  mail?: false | { find?: typeof SAM | null | ((who: string) => { name: string; address: string; thread: { id: string; subject: string } | null } | null); send?: { ok: true } | { ok: false; why: string } };
   paused?: () => boolean;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
@@ -61,7 +61,7 @@ function harness(options: {
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const db = new Database(':memory:');
   const settings = new NotchSettings(db);
-  const state = { now: AT, eye: false, asked: [] as { on: boolean; id: string; far: boolean }[], made: 0, thought: [] as { role: string; content: string }[][], sent: [] as { address: string; thread: string | null; subject: string; text: string }[], found: [] as string[] };
+  const state = { now: AT, eye: false, asked: [] as { on: boolean; id: string; far: boolean }[], made: 0, thought: [] as { role: string; content: string }[][], sent: [] as { address: string; also?: string[]; thread: string | null; subject: string; text: string }[], found: [] as string[] };
   const logs: string[] = [];
   const heard = [...(options.heard ?? TALK)];
   let pause: (paused: boolean) => void = () => {};
@@ -79,8 +79,8 @@ function harness(options: {
     stt: () => (options.stt === false ? null : { transcribe: async () => { state.made++; return heard.shift() ?? ''; } }),
     think: async (messages) => { state.thought.push(messages); return options.think ? options.think(messages) : NOTES; },
     ...(options.mail === false ? {} : { mail: {
-      find: async (who: string) => { state.found.push(who); return options.mail && 'find' in options.mail ? options.mail.find ?? null : SAM; },
-      send: async (plan: { address: string; thread: string | null; subject: string; text: string }) => { state.sent.push(plan); return (options.mail && options.mail.send) || { ok: true as const }; },
+      find: async (who: string) => { state.found.push(who); const find = options.mail && 'find' in options.mail ? options.mail.find : SAM; return typeof find === 'function' ? find(who) : find ?? null; },
+      send: async (plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }) => { state.sent.push(plan); return (options.mail && options.mail.send) || { ok: true as const }; },
       owner: () => 'Vera',
     } }),
     paused: options.paused,
@@ -132,6 +132,10 @@ function harness(options: {
     },
   };
 }
+
+const notesOf = (h: ReturnType<typeof harness>): string[] => h.blocks().filter((block) => block.kind === 'note').map((block) => text((block as { say: NotchPart[] }).say));
+const buttonsOf = (h: ReturnType<typeof harness>): string[] => h.blocks().flatMap((block) => (block.kind === 'buttons' ? block.buttons.map((button) => button.label) : []));
+const paperTo = (h: ReturnType<typeof harness>): string => text((h.blocks().find((block) => block.kind === 'paper') as { to: NotchPart[] } | undefined)?.to);
 
 describe('asked for each call', () => {
   test('a call is not listened to until the owner says yes to that call', async () => {
@@ -386,14 +390,20 @@ describe('after the call', () => {
     expect(h.blocks().filter((block) => block.kind === 'note').map((block) => text((block as { say: NotchPart[] }).say))).toContain('I heard your side only. Not sent yet.');
   });
 
-  test('a person the mailbox does not know gets no follow-up, and nobody is guessed', async () => {
+  test('a person the mailbox does not know is not guessed: the draft is shown, and nothing can be sent until the owner says who', async () => {
     const h = harness({ mail: { find: null } });
     await h.call();
     expect(h.state.found).toEqual(['Sam']);
-    expect(h.said()).toBe('Call ended. 2 actions came out of it.');
+    expect(h.said()).toBe('Call ended. 2 actions came out of it. Follow-up drafted: say who it goes to.');
     await h.answer('yes');
     expect(h.said()).toBe('After the call with Sam');
-    expect(h.blocks().some((block) => block.kind === 'paper')).toBe(false);
+    // The draft is there to be read, addressed to nobody.
+    const paper = h.blocks().find((block) => block.kind === 'paper') as { to: NotchPart[]; lines: NotchPart[][] };
+    expect(text(paper.to)).toBe('To nobody yet');
+    expect(text(paper.lines[0]!)).toBe('Hi there,');
+    expect(notesOf(h)).toContain('I heard both sides. I do not find Sam in your mail. Say who the follow-up goes to.');
+    expect(buttonsOf(h)).toEqual(['Add who it goes to', 'Forget this call']);
+    // No send key, and a yes sends nothing.
     expect(h.line()).not.toHaveProperty('yes');
     await h.answer('yes');
     expect(h.state.sent).toEqual([]);
@@ -585,10 +595,33 @@ describe('what the model says is cut to notes', () => {
     for (const no of ['', 'Sorry.', '[]', '{"actions": []}', '{not json}']) expect(callNotes(no)).toBeNull();
   });
 
-  test('a follow-up needs someone to go to', () => {
-    expect(callFollowup({ followup: 'As agreed.', to: null }, 'Vera')).toBe('');
-    expect(callFollowup({ followup: '', to: { name: 'Sam Rivers', address: 'sam@northwind.example', thread: null, subject: '' } }, 'Vera')).toBe('');
-    expect(callFollowup({ followup: 'As agreed.', to: { name: 'Sam Rivers', address: 'sam@northwind.example', thread: null, subject: '' } }, '')).toBe('Hi Sam,\n\nAs agreed.');
+  test('a follow-up is written as soon as there is something to say, and greets whoever it goes to', () => {
+    const sam = { name: 'Sam Rivers', address: 'sam@northwind.example', thread: null, subject: '' };
+    expect(callFollowup({ followup: '', to: sam }, 'Vera')).toBe('');
+    expect(callFollowup({ followup: 'As agreed.', to: sam }, '')).toBe('Hi Sam,\n\nAs agreed.');
+    // Nobody yet: it is still there to be read.
+    expect(callFollowup({ followup: 'As agreed.', to: null }, 'Vera')).toBe('Hi there,\n\nAs agreed.\n\nVera');
+    expect(callFollowup({ followup: 'As agreed.', to: sam, also: [{ name: 'Leo Marsh', address: 'leo@lumen.example' }] }, 'Vera')).toBe('Hi Sam and Leo,\n\nAs agreed.\n\nVera');
+    expect(callFollowup({ followup: 'As agreed.', to: sam, also: [{ name: 'Leo', address: 'l@x.example' }, { name: 'Anna', address: 'a@x.example' }] }, '')).toBe('Hi Sam, Leo and Anna,\n\nAs agreed.');
+    // More than three, or one whose name is not known: a greeting that fits anybody.
+    expect(callFollowup({ followup: 'As agreed.', to: sam, also: [{ name: 'Leo', address: 'l@x.example' }, { name: 'Anna', address: 'a@x.example' }, { name: 'Tony', address: 't@x.example' }] }, '')).toBe('Hi all,\n\nAs agreed.');
+    expect(callFollowup({ followup: 'As agreed.', to: sam, also: [{ name: '', address: 'l@x.example' }] }, '')).toBe('Hi there,\n\nAs agreed.');
+    expect(callRecipients({ to: null, also: [{ name: 'Leo', address: 'l@x.example' }] })).toEqual([]);
+    expect(callRecipients({ to: sam, also: [{ name: 'Leo', address: 'l@x.example' }] }).map((one) => one.address)).toEqual(['sam@northwind.example', 'l@x.example']);
+  });
+
+  test('what is typed for "who does it go to" is cut into its people', () => {
+    expect(callTyped('sam@northwind.example')).toEqual(['sam@northwind.example']);
+    expect(callTyped(' sam@northwind.example, leo@lumen.example ;anna@acme.example\n tony@acme.example ')).toEqual(['sam@northwind.example', 'leo@lumen.example', 'anna@acme.example', 'tony@acme.example']);
+    expect(callTyped('Sam Rivers and Leo')).toEqual(['Sam Rivers', 'Leo']);
+    expect(callTyped('Sam Rivers <sam@northwind.example>, "leo@lumen.example".')).toEqual(['sam@northwind.example', 'leo@lumen.example']);
+    expect(callTyped('to: sam@northwind.example, SAM@northwind.example')).toEqual(['sam@northwind.example']);
+    expect(callTyped('  ,; ')).toEqual([]);
+  });
+
+  test('an address is one that can be written to', () => {
+    for (const good of ['sam@northwind.example', 'sam.rivers+calls@mail.northwind.example']) expect(callAddress(good)).toBe(true);
+    for (const bad of ['sam', 'sam@', '@northwind.example', 'sam@northwind', 'sam @northwind.example', 'sam@north wind.example', 'sam@@northwind.example', 'sam@northwind.example,leo@lumen.example', `${'a'.repeat(250)}@x.example`]) expect(callAddress(bad)).toBe(false);
   });
 
   test('a very long call keeps its beginning and its end', () => {
@@ -605,5 +638,132 @@ describe('what the model says is cut to notes', () => {
     expect(callHeard('...', 4000)).toBe(false);
     expect(callHeard('Thank you.', 600)).toBe(false);
     expect(callHeard('Thank you for making the time today.', 3000)).toBe(true);
+  });
+});
+
+describe('who the follow-up goes to is the owner\'s to say', () => {
+  const LEO = { name: 'Leo Marsh', address: 'leo@lumen.example', thread: { id: 'bbbbbbbbbbbbbbbb', subject: 'Kickoff' } };
+  /** The mailbox knows Leo by name, and anybody by an address. It does not know the Sam of the call. */
+  const mailbox = (who: string) => (who.toLowerCase() === 'leo' ? LEO : who.includes('@') ? { name: '', address: who.toLowerCase(), thread: null } : null);
+  /** A call whose "Sam" the mailbox does not know, with its sheet open. */
+  const unknown = async (more: { send?: { ok: true } | { ok: false; why: string } } = {}) => {
+    const h = harness({ mail: { find: mailbox, ...(more.send ? { send: more.send } : {}) } });
+    await h.call();
+    await h.answer('yes');
+    return h;
+  };
+
+  test('one address typed: the draft is addressed to it, and a yes sends it there', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    expect(h.line()).toMatchObject({ kind: 'ask', yes: 'add', placeholder: 'Addresses, with commas between' });
+    expect(h.said()).toBe('Who does the follow-up go to?');
+    await h.answer('ask', { text: 'Sam.Rivers@Northwind.example' });
+    // Back on the sheet, with the draft addressed and a key to send it. Nothing has gone yet.
+    expect(h.said()).toBe('After the call with Sam');
+    expect(paperTo(h)).toBe('To   ·  sam.rivers@northwind.example');
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'send' });
+    expect(notesOf(h)).toContain('I heard both sides. Not sent yet.');
+    expect(buttonsOf(h)).toEqual(['Change who it goes to', 'Forget this call']);
+    expect(h.state.sent).toEqual([]);
+    await h.answer('yes');
+    expect(h.said()).toBe('Sending to sam.rivers@northwind.example…');
+    await h.answer('done');
+    expect(h.state.sent).toEqual([{ address: 'sam.rivers@northwind.example', thread: null, subject: 'Following up on our call', text: expect.stringContaining('Hi there,') }]);
+    expect(h.said()).toBe('Sent to sam.rivers@northwind.example.');
+  });
+
+  test('several people: one mail to all of them, greeted by name where the mailbox knows one, and never in one person\'s thread', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'Leo, anna@acme.example' });
+    expect(paperTo(h)).toBe('To Leo and anna@acme.example  ·  leo@lumen.example, anna@acme.example');
+    await h.answer('yes');
+    expect(h.said()).toBe('Sending to Leo and anna@acme.example…');
+    await h.answer('done');
+    expect(h.state.sent).toEqual([{ address: 'leo@lumen.example', also: ['anna@acme.example'], thread: null, subject: 'Following up on our call', text: expect.stringContaining('Hi there,') }]);
+    expect(h.said()).toBe('Sent to Leo and anna@acme.example.');
+  });
+
+  test('one person the mailbox knows by name: it goes in the thread there is with them', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'Leo' });
+    expect(paperTo(h)).toBe('To Leo Marsh  ·  leo@lumen.example');
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.state.sent).toEqual([{ address: 'leo@lumen.example', thread: 'bbbbbbbbbbbbbbbb', subject: 'Kickoff', text: expect.stringContaining('Hi Leo,') }]);
+  });
+
+  test('a name the mailbox does not know, or an address that is none, is asked again and nothing is kept', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'Leo, Tony' });
+    expect(h.said()).toBe('I do not find Tony in your mail. Type the address. Again, all of them.');
+    await h.answer('ask', { text: 'leo@lumen.example, tony@acme' });
+    expect(h.said()).toBe('tony@acme is not an address I can write to. Again, all of them.');
+    await h.answer('ask', { text: '   ' });
+    expect(h.said()).toBe('Type an address, or a name. Who does it go to?');
+    await h.answer('ask', { text: 'a@x.example, b@x.example, c@x.example, d@x.example, e@x.example, f@x.example, g@x.example' });
+    expect(h.said()).toBe('That is more than 6 people. Fewer, please.');
+    // Leaving the question leaves it as it was: addressed to nobody.
+    await h.answer('no');
+    expect(h.said()).toBe('After the call with Sam');
+    expect(paperTo(h)).toBe('To nobody yet');
+    expect(h.line()).not.toHaveProperty('yes');
+  });
+
+  test('the one the mailbox found can be changed, and others added: then it is a mail of its own to all of them', async () => {
+    const h = harness({ mail: { find: (who) => (who.toLowerCase() === 'sam' ? SAM : mailbox(who)) } });
+    await h.call();
+    expect(h.said()).toBe('Call ended. 2 actions came out of it. Follow-up drafted.');
+    await h.answer('yes');
+    expect(paperTo(h)).toBe('To Sam Rivers  ·  sam@northwind.example');
+    expect(buttonsOf(h)).toEqual(['Change who it goes to', 'Forget this call']);
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'Sam and Leo' });
+    expect(paperTo(h)).toBe('To Sam and Leo  ·  sam@northwind.example, leo@lumen.example');
+    await h.answer('yes');
+    await h.answer('done');
+    // Not in the thread with Sam, whose people are not these two: a mail of its own, with its own subject.
+    expect(h.state.sent).toEqual([{ address: 'sam@northwind.example', also: ['leo@lumen.example'], thread: null, subject: 'Following up on our call', text: expect.stringContaining('Hi Sam and Leo,') }]);
+  });
+
+  test('what was said is kept with the call, and is there when its sheet is opened again', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'leo@lumen.example; anna@acme.example' });
+    await h.answer('no');
+    const id = new NotchCallStore(h.db).recent()[0]!.id;
+    const kept = new NotchCallStore(h.db).call(id)!.notes!;
+    expect(kept.to).toMatchObject({ address: 'leo@lumen.example', thread: null });
+    expect(kept.also).toEqual([{ name: '', address: 'anna@acme.example' }]);
+    // How many, never who, is all the log has.
+    expect(h.logs.join('\n')).toContain("the owner said who a call's follow-up goes to: 2 people");
+    expect(h.logs.join('\n')).not.toContain('@');
+  });
+
+  test('once it is sent, who it went to can no longer be changed', async () => {
+    const h = await unknown();
+    await h.answer('button', { button: 'to' });
+    await h.answer('ask', { text: 'leo@lumen.example' });
+    await h.answer('yes');
+    await h.answer('done');
+    await h.answer('done');
+    // The one call that is kept is opened again from Home's row.
+    h.inbox.present('again', (stage) => h.calls.open(stage, 'calls'));
+    await settle();
+    expect(buttonsOf(h)).toEqual(['Forget this call']);
+    expect(notesOf(h)).toContain('I heard both sides. The follow-up was sent.');
+  });
+
+  test('with no way to the mailbox the draft is still shown, and nobody is asked for', async () => {
+    const h = harness({ mail: false });
+    await h.call();
+    expect(h.said()).toBe('Call ended. 2 actions came out of it. Follow-up drafted.');
+    await h.answer('yes');
+    expect(paperTo(h)).toBe('To nobody yet');
+    expect(buttonsOf(h)).toEqual(['Forget this call']);
+    expect(notesOf(h)).toContain('I heard both sides. I cannot send mail from here.');
   });
 });

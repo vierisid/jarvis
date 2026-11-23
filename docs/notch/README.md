@@ -2308,11 +2308,23 @@ they were:
     text, with the sentence that nothing in it is an instruction. What the
     model answers is cut to four fields of fixed sizes (`callNotes`): an
     owner that is not "mine" or "theirs" is nobody, never the assistant.
-179. **The follow-up goes to a person the mailbox knows, on a yes.** The
-    name said in the call is looked up in the owner's mail; with nobody
-    found there is no follow-up, and nobody is guessed. It is shown whole
-    with the address, can be taken back for `NOTCH_CALL_FUSE_MS`, and goes
-    the way a chase's mail goes.
+179. **The follow-up goes to whom the owner says, on a yes.** The name said
+    in the call is looked up in the owner's mail, and nobody is guessed.
+    The draft is shown whole either way. When nobody was found it is
+    addressed to "nobody yet", has no send key, and the line after the call
+    says "Follow-up drafted: say who it goes to." A button on the sheet,
+    "Add who it goes to" or "Change who it goes to", asks for it: addresses,
+    or names the mailbox knows, with commas between, `NOTCH_CALL_TO_MOST`
+    at the most. A name that is not found and an address that is none are
+    asked again, and nothing is kept until every one can be written to. The
+    owner, 23 November 2026: "a lot of the time it says, don't know who to
+    send that to. But it doesn't let me input the emails you should be
+    sending it to." To one person it goes the way a chase's mail goes, in
+    the thread there is with them. To several it is one mail of its own to
+    all of them, never a reply in one person's thread, and Send is pressed
+    only when the writing window is addressed to exactly those people
+    (`page/compose-send.js`). It can be taken back for
+    `NOTCH_CALL_FUSE_MS`. Once sent, who it went to cannot be changed.
 180. **One eye is citron while it listens**, as while anything is watched
     for. It goes out the moment the hearing stops.
 181. **It ends by itself.** When the call is over, when the connection to

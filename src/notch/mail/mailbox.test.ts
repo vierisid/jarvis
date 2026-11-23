@@ -188,6 +188,22 @@ describe('writing a new mail to one person', () => {
     expect(await browserMailbox(gone.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the tab left (an address) for elsewhere' });
   });
 
+  test('a mail to several people the owner named goes to exactly those, and Send is told so', async () => {
+    const { page, calls } = writing();
+    expect(await browserMailbox(page, new MailTabTurn()).write({ ...plan, also: ['Anna@Acme.example', 'leo@lumen.example', 'tony@acme.example'] })).toEqual({ ok: true });
+    // Each of them once, in the address that opens the window.
+    expect(String(calls[0]!.args).startsWith('/mail/u/0/?view=cm&fs=1&tf=1&to=leo%40lumen.example,anna%40acme.example,tony%40acme.example&su=The%20contract')).toBe(true);
+    expect(calls[2]!.args).toEqual({ subject: 'The contract', to: ['leo@lumen.example', 'anna@acme.example', 'tony@acme.example'] });
+  });
+
+  test('one of several that is not an address, or too many of them, is no mail at all', async () => {
+    for (const also of [['Anna'], ['anna@acme.example, tony@acme.example'], ['a@x.example', 'b@x.example', 'c@x.example', 'd@x.example', 'e@x.example', 'f@x.example']]) {
+      const { page, names } = writing();
+      expect((await browserMailbox(page, new MailTabTurn()).write({ ...plan, also })).ok).toBe(false);
+      expect(names()).toEqual([]);
+    }
+  });
+
   test('what is not one mail to one person is refused before the tab is touched', async () => {
     for (const bad of [{ ...plan, to: 'leo@lumen.example, anna@lumen.example' }, { ...plan, to: 'Leo' }, { ...plan, subject: ' ' }, { ...plan, text: '' }, { ...plan, text: 'x'.repeat(901) }]) {
       const { page, names } = writing();

@@ -53,9 +53,17 @@ export interface MailReplySession {
 /** A new mail to one person. Short: it travels in the address that opens Gmail's writing window. */
 export interface MailNewPlan {
   to: string;
+  /**
+   * More people the same mail goes to, each of them named by the owner. The
+   * follow-up to a call is the one mail that has them (src/notch/call.ts).
+   */
+  also?: string[];
   subject: string;
   text: string;
 }
+
+/** The most people a new mail goes to. */
+export const MAIL_NEW_TO_MOST = 6;
 
 /** The longest a new mail's words may be. */
 export const MAIL_NEW_TEXT_MAX = 900;
@@ -131,14 +139,17 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
     search: async (query, pages = 1) => (await gmailSearch(page, query, { pages, step: reading })).map((row) => listed(row)),
     write: (plan) => turn.take(async () => {
       try {
-        if (!/^[^\s<>,;"]+@[^\s<>,;"]+$/.test(plan.to) || !plan.subject.trim() || !plan.text.trim() || plan.text.length > MAIL_NEW_TEXT_MAX) {
+        // Everybody it goes to, each once. One of them that is not an address makes it no mail at all.
+        const people = [...new Set([plan.to, ...(plan.also ?? [])].map((one) => one.trim().toLowerCase()))];
+        if (people.length > MAIL_NEW_TO_MOST || people.some((one) => !/^[^\s<>,;"]+@[^\s<>,;"]+$/.test(one)) || !plan.subject.trim() || !plan.text.trim() || plan.text.length > MAIL_NEW_TEXT_MAX) {
           return { ok: false, why: 'the mail is not one that can be sent this way' };
         }
         const part = encodeURIComponent;
-        await page.go('mail', `/mail/u/0/?view=cm&fs=1&tf=1&to=${part(plan.to)}&su=${part(plan.subject)}&body=${part(plan.text)}`);
+        await page.go('mail', `/mail/u/0/?view=cm&fs=1&tf=1&to=${people.map(part).join(',')}&su=${part(plan.subject)}&body=${part(plan.text)}`);
         const window = await page.run<{ subject?: number | null; body?: number | null; send?: boolean }>('shape-compose', { wait: 9000 });
         if (window?.subject !== plan.subject.length || !window.body || !window.send) return { ok: false, why: 'the writing window did not open as expected' };
-        const sent = await page.run<{ sent?: boolean; why?: string }>('compose-send', { subject: plan.subject, to: plan.to });
+        // Send is told exactly whom this mail may go to: that one person, or those people and nobody else.
+        const sent = await page.run<{ sent?: boolean; why?: string }>('compose-send', { subject: plan.subject, to: people.length === 1 ? people[0] : people });
         // The writing window is left: the tab goes back to the list for whoever reads next.
         await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
         return sent?.sent ? { ok: true } : { ok: false, why: typeof sent?.why === 'string' && sent.why ? sent.why.slice(0, 200) : 'Gmail did not say it was sent' };

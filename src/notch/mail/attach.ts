@@ -112,11 +112,13 @@ export const NUDGE_UNSURE = 'Gmail did not confirm it went. Look in the thread b
 
 export async function sendNudge(
   box: Pick<Mailbox, 'reply' | 'write'>,
-  plan: { address: string; thread: string | null; subject: string; text: string },
+  plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string },
   now: () => number,
   log: (line: string) => void,
 ): Promise<MailStep> {
-  if (plan.thread) {
+  const also = plan.also ?? [];
+  // To several people it is a mail of its own: a thread has its own people, and they are not these.
+  if (plan.thread && also.length === 0) {
     const since = now();
     let pressed = false;
     const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
@@ -137,7 +139,7 @@ export async function sendNudge(
     // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
     log('[notch] a nudge could not be written in its thread, so it goes as a new mail');
   }
-  return box.write({ to: plan.address, subject: plan.subject, text: plan.text });
+  return box.write({ to: plan.address, ...(also.length > 0 ? { also } : {}), subject: plan.subject, text: plan.text });
 }
 
 export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): NotchMailLayer {

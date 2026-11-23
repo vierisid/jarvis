@@ -120,6 +120,14 @@ describe('a nudge is sent once', () => {
   const plan = { address: 'sam@northwind.example', thread: 'T1', subject: 'The contract', text: 'Any news?' };
   const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, () => {});
 
+  test('to several people it is a mail of its own, never a reply in one person\'s thread', async () => {
+    const written: unknown[] = [];
+    const b = { did: [] as string[], reply: async () => { b.did.push('reply'); return { ok: true as const }; }, write: async (mail: unknown) => { b.did.push('new mail'); written.push(mail); return { ok: true as const }; } };
+    expect(await sendNudge(b as never, { ...plan, also: ['leo@lumen.example'] }, () => NOW, () => {})).toEqual({ ok: true });
+    expect(b.did).toEqual(['new mail']);
+    expect(written).toEqual([{ to: 'sam@northwind.example', also: ['leo@lumen.example'], subject: 'The contract', text: 'Any news?' }]);
+  });
+
   test('Gmail says it went: it is sent, whatever the thread shows yet, and no new mail follows', async () => {
     const b = box({ sent: async () => false });
     expect(await send(b)).toEqual({ ok: true });
