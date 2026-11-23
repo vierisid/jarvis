@@ -19,7 +19,12 @@ start)
     echo "ERROR:  ERR_NGROK_320" >&2; echo "test-env: ngrok exited (log: somewhere)" >&2; exit 1
   fi
   if [ -f "$HERE/no-tunnel-program" ]; then echo "test-env: ngrok is not installed" >&2; exit 1; fi
-  trap 'echo stopped > "$HERE/stopped"; exit 130' INT TERM
+  # A program of its own that does not go when it is asked to, as the real one's proxy did not.
+  ( trap '' TERM INT; exec sleep 600 ) &
+  echo $! > "$HERE/child.pid"
+  # On its way out it says a word first, as the real one does. With nobody left to say it to, that
+  # word used to end it before it had stopped anything.
+  trap 'trap - EXIT INT TERM; echo; echo "test-env: stopping"; echo stopped > "$HERE/stopped"; exit 130' INT TERM
   echo "test-env: starting the server"
   echo
   echo "Server is up: https://$NGROK_DOMAIN"

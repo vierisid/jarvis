@@ -280,7 +280,16 @@ server stops.
     target from a fixed list. No model writes any of them.
 36. **The server lives only as long as the brain.** It is started through a watcher that ends it
     when the brain's end of a pipe closes. A brain that is killed leaves no server and no open
-    tunnel.
+    tunnel. Three things make that hold (23 November 2026, after a proxy was left behind and
+    held the server's port all morning):
+    - The script writes to a file, not to the brain. It says a word on its way out, and into a
+      pipe whose other end is gone that word ended it before it had stopped anything.
+    - The script runs in a group of its own. A Ctrl-C in the brain's terminal does not reach it,
+      and after the script has had ten seconds to go out in its own way, the watcher ends
+      whatever is left of the group.
+    - Which program a start is, by its number and its start time, is written down beside its
+      logs. The next start ends it first when it is still that program, and touches nothing when
+      it is not.
 37. **What the scripts get is made name by name**: the allowlist every child gets, the person's
     real home (the tunnel program keeps its account there), and two addresses. Pinned in
     `src/peers/host.test.ts`.

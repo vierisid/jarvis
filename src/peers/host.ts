@@ -22,7 +22,14 @@
  *
  *   - The server lives only as long as the brain. It is started through a
  *     small watcher that ends it when the brain's end of a pipe closes, so a
- *     brain that falls leaves no server and no open tunnel behind.
+ *     brain that falls leaves no server and no open tunnel behind. On 23
+ *     November 2026 one piece did stay behind and held the server's port:
+ *     the script says a word on its way out, the brain it said it to was
+ *     gone, and the script died of that before it had stopped its own
+ *     children. So the script now writes to a file, which is always there;
+ *     it runs in a group of its own, which the watcher ends whole after the
+ *     script has had its own way out; and what a start leaves behind is
+ *     written down, so that the next start can end it.
  *   - A password is made by the server's own tool, passes through here once,
  *     and is written nowhere: not in a log, not in the store.
  *   - What runs gets an environment made name by name, as the engine does
@@ -45,6 +52,9 @@ const HOST_SETTINGS = join('deploy', 'ngrok', '.env');
 const HOST_DATA = join('deploy', 'ngrok', 'data');
 const HOST_BUILDS = join('deploy', 'ngrok', 'dist');
 const HOST_BUILDER = join('packages', 'connector-claude-code');
+/** What a start says, and which program it is: both beside the script's own logs. */
+const HOST_LOG = join(HOST_DATA, 'start.log');
+const HOST_RECORD = join(HOST_DATA, 'start.pid');
 
 /** The order the other systems' engines are built in: the ones a guest is most likely to sit at come first. */
 export const HOST_BUILD_ORDER: readonly EngineTarget[] = ['darwin-arm64', 'windows-x64', 'linux-x64', 'darwin-x64', 'linux-arm64'];
@@ -53,6 +63,8 @@ export const HOST_BUILD_ORDER: readonly EngineTarget[] = ['darwin-arm64', 'windo
 export const HOST_START_MS = 5 * 60_000;
 /** How long they have to go down by themselves before they are made to. */
 export const HOST_STOP_MS = 12_000;
+/** How often what a start has written is looked at. */
+export const HOST_LOOK_MS = 150;
 export const HOST_ACCOUNT_MS = 60_000;
 /** A build fetches the runtime for its system the first time. */
 export const HOST_BUILD_MS = 10 * 60_000;
@@ -105,12 +117,38 @@ export function hostEnv(base: Record<string, string | undefined>, more: HostEnvM
 /**
  * Starts the script and ends it when this end of its input closes: when the
  * brain says so, and when the brain is gone. The script itself reads nothing.
+ *
+ * $1 is the script, $2 the file it writes to, $3 the file that says which
+ * program it is.
+ *
+ *   - `set -m` gives the script a group of its own. A Ctrl-C in the brain's
+ *     terminal does not reach it, and everything it starts can be ended as
+ *     one.
+ *   - It writes to a file. A pipe to the brain breaks when the brain is
+ *     gone, and the script's first word on its way out would then end it
+ *     before it had stopped the server, the proxy and the tunnel.
+ *   - The watcher lets the script go out in its own way first (it stops its
+ *     three programs in order), for ten seconds, and then ends whatever is
+ *     left of the group. It only ever signals the program it started: the
+ *     same number at the same start time.
  */
 const WATCHED = [
+  'set -m',
   'exec 3<&0',
-  '"$1" start </dev/null &',
+  '"$1" start </dev/null >>"$2" 2>&1 &',
   'script=$!',
-  '{ cat <&3 >/dev/null; kill -TERM "$script" 2>/dev/null; } &',
+  'ident="$(ps -o lstart= -p "$script" 2>/dev/null)"',
+  'printf \'%s\\n%s\\n\' "$script" "$ident" > "$3"',
+  '{',
+  '  cat <&3 >/dev/null',
+  '  if [ -n "$ident" ] && [ "$(ps -o lstart= -p "$script" 2>/dev/null)" = "$ident" ]; then',
+  '    kill -TERM "$script" 2>/dev/null',
+  '    n=0',
+  '    while kill -0 "$script" 2>/dev/null && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done',
+  '  fi',
+  '  kill -KILL -- "-$script" 2>/dev/null',
+  '  rm -f "$3"',
+  '} </dev/null >/dev/null 2>&1 &',
   'wait "$script"',
 ].join('\n');
 
@@ -185,6 +223,8 @@ export function hostFailure(said: string): Extract<HostStarted, { ok: false }> {
   const missing = /^test-env: (\S+) is not installed$/m.exec(said)?.[1];
   if (missing) return { ok: false, why: 'tools', missing };
   if (/^test-env: something already answers on port/m.test(said)) return { ok: false, why: 'busy' };
+  // One of its own programs could not have its port: something holds it.
+  if (/EADDRINUSE|address already in use|Is port \d+ in use/i.test(said)) return { ok: false, why: 'busy' };
   if (/^test-env: ngrok (exited|did not answer)/m.test(said)) return { ok: false, why: 'tunnel', ...tunnelFailure(said) };
   if (/is not a host name/.test(said)) return { ok: false, why: 'address' };
   return { ok: false, why: 'failed' };
@@ -249,20 +289,27 @@ export class PeerHost {
       host = new URL(typed).hostname;
     }
     this.set('starting');
-    const child = this.run(['bash', '-c', WATCHED, 'host', join(source, HOST_SCRIPT)], { cwd: source, env: this.env(host ? { domain: host } : {}), input: true });
+    try { mkdirSync(join(source, HOST_DATA), { recursive: true }); } catch { /* the start then says why it cannot write */ }
+    // A script that a brain before this one left running holds the server's ports: it is ended first.
+    await this.sweep();
+    const logFile = join(source, HOST_LOG);
+    let from = 0;
+    try { from = statSync(logFile).size; } catch { from = 0; }
+    /** What this start has written so far: the script's own sentences, and nothing of a person. */
+    const written = (): string => {
+      try { return readFileSync(logFile).subarray(from).toString('utf8').slice(-20_000); } catch { return ''; }
+    };
+    const child = this.run(['bash', '-c', WATCHED, 'host', join(source, HOST_SCRIPT), logFile, join(source, HOST_RECORD)], { cwd: source, env: this.env(host ? { domain: host } : {}), input: true });
     this.child = child;
-    let said = '';
+    // The watcher itself says nothing. Its pipes are read to their end all the same, so that they never fill.
+    void readPipe(child.stdout, () => { /* nothing is expected */ }).catch(() => { /* its end */ });
+    void readPipe(child.stderr, () => { /* nothing is expected */ }).catch(() => { /* its end */ });
     let up: (address: string | null) => void = () => { /* set below */ };
     const came = new Promise<string | null>((resolve) => { up = resolve; });
-    let rest = '';
-    void readPipe(child.stdout, (text) => {
-      rest += text;
-      const found = /^Server is up: (https:\/\/\S+)$/m.exec(rest);
+    const looking = setInterval(() => {
+      const found = /^Server is up: (https:\/\/\S+)$/m.exec(written());
       if (found) up(found[1]!);
-      if (rest.length > 20_000) rest = rest.slice(-4000);
-    }).catch(() => { /* the same as its end */ });
-    // The script's own sentences only: the server writes to files, and nothing of a person passes here.
-    void readPipe(child.stderr, (text) => { said = (said + text).slice(-4000); }).catch(() => { /* nothing to read any more */ });
+    }, HOST_LOOK_MS);
     const timer = setTimeout(() => up(null), this.options.startMs ?? HOST_START_MS);
     void child.exited.then(() => {
       up(null);
@@ -270,6 +317,7 @@ export class PeerHost {
     });
     const address = await came;
     clearTimeout(timer);
+    clearInterval(looking);
     if (address && this.child === child) {
       this.set('on');
       this.options.log?.('[peers] the organisation\'s server is on');
@@ -277,12 +325,20 @@ export class PeerHost {
     }
     // It did not come up. Whatever is left of it is ended.
     await this.end(child);
+    const said = written();
     let failure = hostFailure(said);
+    if (failure.why === 'failed' && /^test-env: the (proxy|server) exited/m.test(said)) {
+      // One of the script's own programs went at once. Its log says whether its port was taken.
+      const which = /^test-env: the (proxy|server) exited/m.exec(said)![1]!;
+      let tail = '';
+      try { tail = readFileSync(join(source, HOST_DATA, `${which}.log`), 'utf8').slice(-4000); } catch { /* it wrote none */ }
+      if (/EADDRINUSE|address already in use|Is port \d+ in use/i.test(tail)) failure = { ok: false, why: 'busy' };
+    }
     if (failure.why === 'tunnel') {
       // The tunnel program's own words are in its log: more of them than the script passes on.
-      let written = '';
-      try { written = readFileSync(join(source, HOST_DATA, 'ngrok.log'), 'utf8').slice(-16_000); } catch { /* it wrote none */ }
-      failure = { ...failure, ...tunnelFailure(written), ...tunnelFailure(said) };
+      let tunnel = '';
+      try { tunnel = readFileSync(join(source, HOST_DATA, 'ngrok.log'), 'utf8').slice(-16_000); } catch { /* it wrote none */ }
+      failure = { ...failure, ...tunnelFailure(tunnel), ...tunnelFailure(said) };
     }
     // What this start alone made is taken away, so that another address can be typed: the settings, and the
     // database that was made for them. The logs stay: they are how a failure is understood afterwards.
@@ -295,6 +351,31 @@ export class PeerHost {
     // The number only: an account's name is said on the notch and written nowhere.
     this.options.log?.(`[peers] the organisation's server did not start (${failure.why}${failure.code ? `, ERR_NGROK_${failure.code}` : ''})`);
     return failure;
+  }
+
+  /**
+   * Ends a script that an earlier brain left running. Only the program that
+   * was written down is touched: the same number, started at the same time.
+   * When that program is gone its number may be somebody else's by now, and
+   * nothing is signalled.
+   */
+  private async sweep(): Promise<void> {
+    const { source } = this.options;
+    const record = join(source, HOST_RECORD);
+    let text: string;
+    try { text = readFileSync(record, 'utf8'); } catch { return; }
+    rmSync(record, { force: true });
+    const [first, ident] = text.split('\n');
+    const pid = Number(first);
+    if (!Number.isInteger(pid) || pid < 2 || !ident?.trim()) return;
+    const now = await this.short(['ps', '-o', 'lstart=', '-p', String(pid)], source, this.env(), 5000).catch(() => null);
+    if (!now || now.out.trim() !== ident.trim()) return;
+    this.options.log?.('[peers] a server that an earlier brain left running is stopped first');
+    try { process.kill(pid, 'SIGTERM'); } catch { return; }
+    const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (let tries = 0; tries < 80 && alive(); tries++) await new Promise((resolve) => setTimeout(resolve, 100));
+    // What it started and did not stop goes with it: the script has a group of its own.
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* nothing was left */ }
   }
 
   private async end(child: HostChild): Promise<void> {

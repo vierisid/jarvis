@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PeerHost, canHost, hostAddress, hostEnv, hostFailure, peerLoginName, signInByForm, tunnelFailure } from './host.ts';
@@ -8,6 +8,10 @@ import { fakeSource } from './testing/fake-source.ts';
 import { zipEntries } from './zip.ts';
 
 const source = fakeSource;
+/** Whether a program is still there. */
+const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** The stubborn program the stand-in script starts and never stops by itself. */
+const stubborn = (dir: string): number => Number(readFileSync(join(dir, 'deploy', 'ngrok', 'child.pid'), 'utf8').trim());
 const until = async (what: () => boolean, ms = 4000): Promise<boolean> => { const end = Date.now() + ms; while (Date.now() < end) { if (what()) return true; await Bun.sleep(20); } return what(); };
 const env = { PATH: process.env.PATH, HOME: '/brain/home', ANTHROPIC_API_KEY: 'sk-secret', JARVIS_AUTH_TOKEN: 'token' };
 const unix = process.platform !== 'win32';
@@ -57,6 +61,8 @@ describe('what the scripts are given', () => {
     expect(tunnelFailure('ERR_NGROK_108\nlater\nERR_NGROK_320')).toEqual({ code: '320' });
     expect(hostFailure('test-env: ngrok did not answer at https://x/health\n')).toEqual({ ok: false, why: 'tunnel' });
     expect(hostFailure('anything else')).toEqual({ ok: false, why: 'failed' });
+    // One of its own programs could not have its port.
+    expect(hostFailure('error: Failed to start server. Is port 8788 in use?\n code: "EADDRINUSE"\ntest-env: the proxy exited (log: /x/proxy.log)\n')).toEqual({ ok: false, why: 'busy' });
   });
 });
 
@@ -87,6 +93,76 @@ describe.if(unix)('the organisation\'s server', () => {
     expect(await host.start()).toEqual({ ok: true, address: 'https://northwind.ngrok-free.app' });
     await host.stop();
   });
+
+  test('stopping ends everything the script started, also what it did not stop itself', async () => {
+    const dir = source();
+    const host = new PeerHost({ source: dir, env });
+    expect((await host.start('northwind.ngrok-free.app')).ok).toBe(true);
+    const left = stubborn(dir);
+    expect(alive(left)).toBe(true);
+    await host.stop();
+    expect(existsSync(join(dir, 'deploy', 'ngrok', 'stopped'))).toBe(true);
+    // Asked to go, it did not. It is ended with the rest of the script's group.
+    expect(await until(() => !alive(left), 15_000)).toBe(true);
+    // Nothing is written down as still running.
+    expect(await until(() => !existsSync(join(dir, 'deploy', 'ngrok', 'data', 'start.pid')), 5000)).toBe(true);
+  }, 30_000);
+
+  test('a brain that is killed leaves nothing of the server behind', async () => {
+    const dir = source();
+    // The brain, as a program of its own: it starts the server, says so, and is then killed outright.
+    const brain = Bun.spawn([process.execPath, '-e', `
+      const { PeerHost } = await import(${JSON.stringify(join(import.meta.dir, 'host.ts'))});
+      const host = new PeerHost({ source: ${JSON.stringify(dir)}, env: { PATH: process.env.PATH, HOME: '/brain/home' } });
+      const started = await host.start('northwind.ngrok-free.app');
+      console.log(started.ok ? 'up' : 'failed');
+      await new Promise(() => {});
+    `], { stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' });
+    const reader = brain.stdout.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first.trim()).toBe('up');
+    const left = stubborn(dir);
+    expect(alive(left)).toBe(true);
+    brain.kill('SIGKILL');
+    await brain.exited;
+    // The script goes out in its own way although nobody is left to hear its last word: on 23 November
+    // 2026 that word, said into a pipe whose other end was gone, ended it before it had stopped anything.
+    expect(await until(() => existsSync(join(dir, 'deploy', 'ngrok', 'stopped')), 15_000)).toBe(true);
+    expect(await until(() => !alive(left), 15_000)).toBe(true);
+  }, 40_000);
+
+  test('a script an earlier brain left running is ended by the next start, and no other program is touched', async () => {
+    const dir = source();
+    const data = join(dir, 'deploy', 'ngrok', 'data');
+    // An earlier start, left running with nobody watching it: in a group of its own, and written down.
+    const old = Bun.spawn(['bash', '-c', 'set -m; mkdir -p "$2"; NGROK_DOMAIN=northwind.ngrok-free.app "$1" start </dev/null >>"$2/start.log" 2>&1 & pid=$!; printf "%s\\n%s\\n" "$pid" "$(ps -o lstart= -p $pid)" > "$2/start.pid"; echo $pid', 'old', join(dir, 'deploy', 'ngrok', 'test-env.sh'), data],
+      { env: { PATH: process.env.PATH ?? '', HOME: '/brain/home' }, stdout: 'pipe', stderr: 'ignore', stdin: 'ignore' });
+    const oldPid = Number((await new Response(old.stdout).text()).trim());
+    expect(await until(() => existsSync(join(dir, 'deploy', 'ngrok', 'child.pid')))).toBe(true);
+    const oldChild = stubborn(dir);
+    expect(alive(oldPid) && alive(oldChild)).toBe(true);
+    const logged: string[] = [];
+    const host = new PeerHost({ source: dir, env, log: (line) => logged.push(line) });
+    expect((await host.start()).ok).toBe(true);
+    expect(logged).toContain('[peers] a server that an earlier brain left running is stopped first');
+    expect(alive(oldPid)).toBe(false);
+    expect(await until(() => !alive(oldChild), 10_000)).toBe(true);
+    await host.stop();
+    // What is written down but is another program by now (the same number, another start time) is left alone.
+    rmSync(join(dir, 'deploy', 'ngrok', 'stopped'), { force: true });
+    const bystander = Bun.spawn(['sleep', '120'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    try {
+      writeFileSync(join(data, 'start.pid'), `${bystander.pid}\nMon Jan  1 00:00:00 2001\n`);
+      const again = new PeerHost({ source: dir, env, log: (line) => logged.push(line) });
+      expect((await again.start()).ok).toBe(true);
+      await Bun.sleep(300);
+      expect(alive(bystander.pid)).toBe(true);
+      expect(logged.filter((line) => line.includes('left running')).length).toBe(1);
+      await again.stop();
+    } finally {
+      bystander.kill();
+    }
+  }, 60_000);
 
   test('a server whose brain is gone is gone too', async () => {
     const dir = source();
