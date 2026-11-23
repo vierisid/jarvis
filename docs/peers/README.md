@@ -605,6 +605,52 @@ time in its own calendar, filled in, to save there.
 - An answer that comes after the asker's line has left arrives as news. An asking for one time
   that is never answered waits.
 
+## The rule per person (23 November)
+
+The owner: "build I7". The prototype: the rule is a word on a person's row ("asks every time"),
+and after five yeses in a row Pillow offers: "Let me answer those myself?"
+
+On a person's row in the organisation: "Connected by a code. Asks you every time." with a button
+"Answer without asking". Or said: "let Leo have answers without asking", "ask me every time for
+Leo". With the rule, a thing Leo asks to find out is answered with no question, and the owner is
+told after: "I answered Leo by myself: What changed in the last deck. Read what went?"
+
+### Rules
+
+90. **The rule is the engine's own**, for tasks from that contact, and it is read from the
+    engine each time it is shown or used. Nothing here answers the engine's questions in the
+    owner's place: the engine takes no answer that comes sooner than a person can read, and
+    that is not worked round. A rule that cannot be read counts as "asks every time".
+91. **A change of the rule is asked once, by the engine, in the notch's words.** The engine asks
+    before any rule changes. That question is put on the notch as one line, and only the
+    owner's own answer goes back. A question about another person's rule is closed.
+92. **"Without asking" is for a thing to find out, and for nothing else.** A thing to do is
+    asked about as always ("Do it, where you can watch?"), and what was done is shown before
+    it goes, although the engine would let both through. So is a request too long to be read
+    whole. A file is asked about as always.
+93. **What went without a question is shown after, whole, with the way back.** "I answered Leo
+    by myself", the question and the answer on one sheet, and "Ask me every time again" on it.
+94. **Whatever does not go as the rule says is put to the owner.** A question the engine asks
+    after all, an answer it will not send, a slow engine: the request is then on the notch like
+    any other. A request never waits unseen for the engine.
+95. **It is offered once, after five in a row.** Five requests from one person that were sent as
+    they were found, with no no in between. The offer is the change itself, so it is one
+    question. A no to it is an answer: it is not offered for that person again.
+96. **A no starts the count again**: a no to the request, a no to what was found, a stop.
+97. **The notch is never blank while the engine is asked for the rule**, and gives up with the
+    same words as for any other wait on the engine.
+
+### Where it stops
+
+- One rule for a person, not one for each kind of thing. The prototype's "Stripe numbers without
+  asking" needs requests told apart by what they are about, and that is not built. So "without
+  asking" means every thing that person asks to find out.
+- The answer is found by reading, on the owner's laptop, by the background agent. With the
+  rule nobody sees it before it goes. That is what the rule is.
+- The rules are on the organisation's sheet on the notch. They are not in the dashboard's
+  Settings.
+- Run against the real engine in the rehearsal. Not run on two people's machines.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of

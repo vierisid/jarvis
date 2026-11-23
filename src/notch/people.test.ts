@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NotchInbox } from './inbox.ts';
-import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
+import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, NOTCH_PEOPLE_TRUST_AFTER, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
 import type { NotchPeopleStep } from './people.ts';
 import { NOTCH_TIME_ASKS_AN_HOUR, peerTimeCalendarUrl, peerTimeMinutes } from './people-time.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
@@ -156,6 +156,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     inbox, link, store, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
     ...(more.engineWaitMs ? { engineWaitMs: more.engineWaitMs } : {}),
     ...(more.stepMs ? { stepMs: more.stepMs } : {}),
+    // An engine that does not answer is not waited for here.
+    ruleWaitMs: 1,
     // Read in one zone whatever the machine's own, so that the days and hours below are the same everywhere.
     time: { zone: 'UTC', waitMs: more.timeWaitMs ?? 3000, calendar: async () => { timeState.reads++; if (timeState.hold) await timeState.hold; return timeState.events; } },
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
@@ -2887,5 +2889,186 @@ describe('a time that is free for two people', () => {
       { kind: 'time-ask', id, minutes: 30, free: Array.from({ length: 91 }, (_, n) => good + n * 30) }, { kind: 'time-ask', id, minutes: 30, free: ['Thursday'] },
       { kind: 'time-fit', of: id, fits: [good, good + 30, good + 60, good + 90] }, { kind: 'time-want', id, at: 12, minutes: 30 }, { kind: 'time-want', id, at: good, minutes: 600 }, { kind: 'time-yes', of: 'nope' },
     ]) expect(read(bad)).toBeNull();
+  });
+});
+
+describe('the rule per person', () => {
+  /** Leo has said that Sam gets answers without asking. */
+  const trusted = async () => {
+    const { sam, leo } = await joined();
+    await leo.open();
+    await leo.button('rule0');
+    await leo.pick(0);
+    await leo.done();
+    await leo.no();
+    return { sam, leo };
+  };
+  const cycle = async (sam: ReturnType<typeof side>, leo: ReturnType<typeof side>, words = 'what changed in the last deck'): Promise<void> => {
+    await sam.say(`ask Leo's Pillow ${words}`);
+    await sam.done();
+    await sam.done();
+  };
+  const back = async (sam: ReturnType<typeof side>): Promise<void> => { await sam.people.tick(); await settle(); if (!sam.said()) await sam.tap(); };
+
+  test('it is a word on the person\'s row, and the button says what it would become', async () => {
+    const { leo } = await joined();
+    await leo.open();
+    expect(leo.blocks()).toContain('Connected by a code. Asks you every time.');
+    // On the row itself, beside Remove.
+    expect(leo.blocks()).toContain('"id":"rule0","label":"Answer without asking"');
+    expect(leo.blocks()).toContain('"id":"remove0"');
+  });
+
+  test('changing it is asked once, by the engine\'s own question in these words, and only a yes changes it', async () => {
+    const { leo } = await joined();
+    await leo.open();
+    await leo.button('rule0');
+    expect(leo.said()).toBe('Let Sam have answers from this laptop without asking you? I tell you after each one. Files, and anything done here: I still ask.');
+    expect(leo.options()).toEqual(['Without asking', 'Keep asking me']);
+    expect(leo.engine.taskRules.size).toBe(0);
+    await leo.pick(1);
+    expect(leo.said()).toBe('I keep asking you, every time.');
+    expect(leo.engine.taskRules.size).toBe(0);
+    await leo.done();
+    // Back on the sheet, as it was.
+    expect(leo.blocks()).toContain('Asks you every time.');
+    await leo.button('rule0');
+    await leo.pick(0);
+    expect(leo.said()).toBe('Sam now gets answers without asking. I tell you after each one. Files, and anything done here: I still ask.');
+    // The engine keeps the rule: tasks from Sam are let through, and their result is sent without its check.
+    expect(leo.engine.taskRules.get(SAM)).toEqual({ effect: 'allow', resultCheck: false });
+    await leo.done();
+    expect(leo.blocks()).toContain('Connected by a code. Gets answers without asking.');
+    expect(leo.blocks()).toContain('Ask me every time');
+  });
+
+  test('with it, a thing to find out is answered without a question, and the owner is told after, with what went', async () => {
+    const { sam, leo } = await trusted();
+    await cycle(sam, leo);
+    for (let round = 0; round < 4; round++) await settle();
+    // Nothing was asked on Leo's notch. It was found and sent.
+    expect(leo.worked).toEqual([{ from: 'Sam', words: 'What changed in the last deck' }]);
+    expect(leo.logs.join('\n')).toContain('a request was answered without asking');
+    await back(sam);
+    expect(sam.said()).toBe("Leo's Pillow: Three slides changed: pricing, the roadmap and the team page.");
+    // Leo hears of it after, and can read exactly what went.
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('I answered Sam by myself: What changed in the last deck. Read what went?');
+    await leo.yes();
+    expect(leo.kind()).toBe('sheet');
+    expect(leo.blocks()).toContain('Three slides changed: pricing, the roadmap and the team page.');
+    expect(leo.blocks()).toContain('What changed in the last deck');
+    // And the way back is on that sheet.
+    expect(leo.buttons()).toEqual(['asks']);
+    await leo.button('asks');
+    expect(leo.said()).toBe('Ask you every time again, before Sam gets an answer?');
+    await leo.pick(0);
+    expect(leo.said()).toBe('I ask you every time again, before Sam gets anything.');
+    expect(leo.engine.taskRules.size).toBe(0);
+  });
+
+  test('with it, a thing to DO is still asked about, and what was done is still shown before it goes', async () => {
+    const { sam, leo } = await trusted();
+    leo.state.doing = async (act) => { const said = await act.step({ n: 1, say: 'On this computer, run: systemctl restart app', exact: ['x'], way: 'line' }); return said === 'go' ? { ok: true as const, answer: 'The server is up again.' } : { ok: false as const }; };
+    await cycle(sam, leo, 'to restart the server');
+    for (let round = 0; round < 3; round++) await settle();
+    // The engine would let it through. This laptop asks all the same: a rule for answers is not a rule for actions.
+    expect(leo.said()).toBe('Sam asks me: Restart the server. Do it, where you can watch?');
+    expect(leo.worked).toEqual([]);
+    await leo.pick(0);
+    expect(leo.said()).toBe('For Sam, step 1: On this computer, run: systemctl restart app…');
+    await leo.done();
+    expect(leo.said()).toBe('For Sam: The server is up again. Send only that?');
+    expect(sam.engine.inbox.filter((item) => item.kind === 'task_result').length).toBe(0);
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing left this laptop.');
+  });
+
+  test('with it, a no to a thing to do touches nothing', async () => {
+    const { sam, leo } = await trusted();
+    await cycle(sam, leo, 'to restart the server');
+    for (let round = 0; round < 3; round++) await settle();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing was touched.');
+    expect(leo.worked).toEqual([]);
+  });
+
+  test('with it, what cannot be found is said to both, and nothing is sent in its place', async () => {
+    const { sam, leo } = await trusted();
+    leo.state.answer = { ok: false };
+    await cycle(sam, leo);
+    for (let round = 0; round < 4; round++) await settle();
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('I could not find what Sam asked for. Sam gets nothing back.');
+    await back(sam);
+    expect(sam.said()).toContain("Leo's Pillow");
+    expect(sam.said()).not.toContain('Three slides');
+  });
+
+  test('a rule that lets requests begin but checks the answer still shows the answer first', async () => {
+    const { sam, leo } = await joined();
+    // Not one that is set here: the engine can hold it all the same.
+    leo.engine.taskRules.set(SAM, { effect: 'allow', resultCheck: true });
+    await leo.open();
+    expect(leo.blocks()).toContain('Starts without asking, and you see the answer first.');
+    await leo.no();
+    await cycle(sam, leo);
+    for (let round = 0; round < 3; round++) await settle();
+    // Not answered alone: the owner is asked here, and sees what goes.
+    expect(leo.said()).toBe('Sam asks me: What changed in the last deck. Do it here?');
+    await leo.pick(0);
+    expect(leo.said()).toBe('For Sam: Three slides changed: pricing, the roadmap and the team page. Send only that?');
+  });
+
+  test('after five in a row that were sent as found, it is offered once; a no is an answer, and it is not offered again', async () => {
+    const { sam, leo } = await joined();
+    for (let n = 1; n <= NOTCH_PEOPLE_TRUST_AFTER; n++) {
+      await cycle(sam, leo);
+      await leo.pick(0);
+      await leo.pick(0);
+      expect(leo.said()).toBe('Sent. Only that left this laptop.');
+      await leo.done();
+      if (n < NOTCH_PEOPLE_TRUST_AFTER) expect(leo.line()).toBeNull();
+    }
+    expect(leo.said()).toBe('That is 5 times in a row you sent Sam what I found. Let Sam have answers from this laptop without asking you? I tell you after each one. Files, and anything done here: I still ask.');
+    expect(leo.options()).toEqual(['Without asking', 'Keep asking me']);
+    await leo.pick(1);
+    expect(leo.said()).toBe('I keep asking you, every time.');
+    expect(leo.engine.taskRules.size).toBe(0);
+    await leo.done();
+    // The sixth, and nothing is offered.
+    await cycle(sam, leo);
+    await leo.pick(0);
+    await leo.pick(0);
+    await leo.done();
+    expect(leo.line()).toBeNull();
+  });
+
+  test('a no in between starts the count again', async () => {
+    const { sam, leo } = await joined();
+    for (let n = 1; n <= NOTCH_PEOPLE_TRUST_AFTER - 1; n++) { await cycle(sam, leo); await leo.pick(0); await leo.pick(0); await leo.done(); }
+    await cycle(sam, leo);
+    await leo.pick(1);
+    await leo.done();
+    await cycle(sam, leo);
+    await leo.pick(0);
+    await leo.pick(0);
+    await leo.done();
+    // Four, a no, and one: not five in a row.
+    expect(leo.line()).toBeNull();
+  });
+
+  test('said: "let Leo have answers without asking", "ask me every time for Leo"', async () => {
+    const { sam } = await joined();
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const said of ['let Leo have answers without asking', "Let Leo's Pillow get answers without asking me.", 'answer Leo yourself', "answer Leo's questions without asking", 'stop asking me for Leo', 'please answer Leo without asking me'])
+      expect(routes(said)).toBe('Let Leo have answers without asking.');
+    for (const said of ['ask me every time for Leo', 'always ask me before answering Leo', "Leo's Pillow asks every time", 'Leo should ask me every time'])
+      expect(routes(said)).toBe('Ask me every time for Leo.');
+    // A word to Leo is still a word to Leo, and nobody else's rule is touched.
+    expect(routes('ask Leo every time')).toBe('Ask Leo: Every time');
+    expect(routes('let Tony have answers without asking') ?? '').not.toContain('without asking.');
+    expect(await sam.say('let Leo have answers without asking')).toBe(true);
+    expect(sam.said()).toBe('Let Leo have answers from this laptop without asking you? I tell you after each one. Files, and anything done here: I still ask.');
   });
 });

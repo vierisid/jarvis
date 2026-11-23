@@ -108,6 +108,22 @@ export const NOTCH_PEOPLE_FOLLOW_MS = 5000;
  */
 export const NOTCH_PEOPLE_STEP_MS = 5000;
 
+/**
+ * How somebody's requests are taken on this laptop. `asks`: the owner is
+ * asked every time, and sees what goes. `answers`: a thing to find out is
+ * answered without asking, and the owner is told after. `shows`: it is
+ * begun without asking, and the owner sees the answer before it goes.
+ * `never`: nothing of theirs is taken up. Only the first two are set here.
+ */
+export type NotchPeopleRule = 'asks' | 'answers' | 'shows' | 'never';
+export const NOTCH_PEOPLE_RULE_WORDS: Record<NotchPeopleRule, string> = {
+  asks: 'Asks you every time', answers: 'Gets answers without asking', shows: 'Starts without asking, and you see the answer first', never: 'Is never answered',
+};
+/** How long the engine has to say what its rule for somebody is, when a request of theirs arrives. After that the request is put to the owner. */
+export const NOTCH_PEOPLE_RULE_WAIT_MS = 1500;
+/** After how many requests in a row that were sent what was found the owner is offered to let that person have answers without asking. */
+export const NOTCH_PEOPLE_TRUST_AFTER = 5;
+
 /** One step of a thing that is done for somebody, as it is shown before it is taken (src/daemon/notch-peers.ts). */
 export interface NotchPeopleStep {
   /** Which step it is, from one. */
@@ -189,6 +205,8 @@ export interface NotchPeopleDeps {
   engineWaitMs?: number;
   /** How long a step of a thing that is done stands before it is taken. For tests; NOTCH_PEOPLE_STEP_MS otherwise. */
   stepMs?: number;
+  /** How long the engine has to say what its rule for a person is before a request of theirs is put to the owner. For tests; NOTCH_PEOPLE_RULE_WAIT_MS otherwise. */
+  ruleWaitMs?: number;
   /** For tests: no timer of its own. `tick` is then called by hand. */
   noClock?: boolean;
 }
@@ -854,6 +872,72 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await stage.say(['I could not remove ', em(who.name), ' now.'], 3000, { mood: 'sorry' });
   }
 
+  // --- the rule per person ---
+
+  /**
+   * How somebody's requests are taken on this laptop, as the engine keeps it
+   * for tasks from that contact. Read from the engine each time: it is the
+   * engine that lets a request through or asks, and what is shown here must
+   * be what it does. A rule that cannot be read counts as "asks".
+   */
+  async function ruleOf(who: PeerPerson): Promise<NotchPeopleRule> {
+    const text = await link.call('policy', { action: 'show', contact: who.id }, {}, 8000).then((result) => result.text, () => '');
+    const found = /^- task: (allow|ask|deny)(?:, (result checked by the user|result sent without check))?/m.exec(text);
+    if (!found || found[1] === 'ask') return 'asks';
+    if (found[1] === 'deny') return 'never';
+    return found[2] === 'result sent without check' ? 'answers' : 'shows';
+  }
+
+  /** How many requests in a row somebody was sent what was found. Back to nought with every no. */
+  const streak = (id: string, to?: number): number => {
+    if (to !== undefined) store.setMeta(`streak:${id}`, to > 0 ? String(to) : null);
+    return Number(store.meta(`streak:${id}`) ?? '0') || 0;
+  };
+
+  /**
+   * Changes the rule for one person. The engine keeps it, and asks before
+   * it changes: that question is put on the notch, once, in these words,
+   * and only the owner's own answer goes back. `why` is said first when it
+   * is Pillow that proposes it. True: changed. False: the owner said no.
+   * Null: nothing was decided.
+   */
+  async function setRule(stage: NotchStage, who: PeerPerson, to: 'answers' | 'asks', why: NotchPart[] = []): Promise<boolean | null> {
+    const waiting = watch(stage);
+    waiting.line(['One moment…']);
+    waiting.within(engineWait);
+    let said: boolean | null = null;
+    const args = to === 'answers' ? { action: 'set', contact: who.id, kind: 'task', effect: 'allow', resultCheck: false } : { action: 'remove', contact: who.id, kind: 'task' };
+    const text = await Promise.race([
+      link.call('policy', args, {
+        rule: async (decision) => {
+          waiting.reached();
+          if (waiting.over()) return null;
+          // Only the change that was asked for, for this person. Any other question about a rule is closed.
+          if (!/^collab: change a permission\?/.test(decision.message) || !(decision.message.includes(who.id) || decision.message.includes(who.name))) return null;
+          const answer = to === 'answers'
+            ? await stage.choose([...why, 'Let ', em(who.name), ' have answers from this laptop without asking you? I tell you after each one. Files, and anything done here: I still ask.'], ['Without asking', 'Keep asking me'], { who: who.name, mood: 'look' })
+            : await stage.choose(['Ask you every time again, before ', em(who.name), ' gets an answer?'], ['Ask me every time', 'Leave it'], { who: who.name, mood: 'look' });
+          if (answer.act !== 'pick') return null;
+          said = answer.index === 0;
+          if (said) waiting.line(['One moment…']);
+          return { choice: said ? 'confirm' : 'reject' };
+        },
+      }, 60_000).then((result) => result.text, () => ''),
+      waiting.gone,
+    ]);
+    if (said && /^Applied after the user confirmed\b/.test(text)) {
+      streak(who.id, 0);
+      log(`[peers] the rule for one person was changed: ${to}`);
+      await stage.say(to === 'answers' ? [em(who.name), ' now gets answers without asking. I tell you after each one. Files, and anything done here: I still ask.'] : ['I ask you every time again, before ', em(who.name), ' gets anything.'], 4200, { mark: 'check', who: who.name });
+      return true;
+    }
+    if (said === false) { await stage.say(to === 'answers' ? ['I keep asking you, every time.'] : ['Left as it is.'], 2400, { who: who.name }); return false; }
+    // It was that already: said as it is.
+    if (/^Nothing to change\b/.test(text)) { await stage.say(to === 'answers' ? [em(who.name), ' gets answers without asking already.'] : ['I ask you every time for ', em(who.name), ' already.'], 2800, { who: who.name }); return true; }
+    if (said && !stage.ended()) await stage.say(['I could not change that now.'], 3000, { mood: 'sorry' });
+    return null;
+  }
+
   /** Leaving: the one thing here that is asked twice, because it takes something away. */
   async function leave(stage: NotchStage): Promise<boolean> {
     if (!setup) return false;
@@ -936,12 +1020,19 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       }
       const hosting = setup?.hosting();
       const hosts = !!hosting?.address;
+      // How each of them is taken, as the engine has it now.
+      const rules = account.signedIn ? await Promise.all(people.map((one) => (one.own ? Promise.resolve<NotchPeopleRule>('asks') : ruleOf(one)))) : people.map((): NotchPeopleRule => 'asks');
       const id = stage.id();
       stage.put({
         id, kind: 'sheet', say: org ? [em(org), ', your organisation'] : ['Your organisation'], mood: 'look',
         blocks: [
           { kind: 'row', lead: 'You', say: ['This laptop'], small: 'You say yes or no to what is asked of it.' },
-          ...people.map((one, at): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : 'Connected by a code. Asks you every time.', buttons: [{ id: `remove${at}`, label: 'Remove', quiet: true }] })),
+          ...people.map((one, at): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : `Connected by a code. ${NOTCH_PEOPLE_RULE_WORDS[rules[at] ?? 'asks']}.`,
+            buttons: [
+              // The rule is a word, and the button says what it would become.
+              ...(one.own || !account.signedIn ? [] : [{ id: `rule${at}`, label: rules[at] === 'asks' ? 'Answer without asking' : 'Ask me every time', quiet: true }]),
+              { id: `remove${at}`, label: 'Remove', quiet: true },
+            ] })),
           ...(hosts ? [{ kind: 'row' as const, lead: 'S', say: ['Its server, on this laptop'], small: hosting!.state === 'on' ? `On, at ${hostOf(hosting!.address)}.` : hosting!.state === 'starting' ? 'Starting.' : 'Off. Nobody reaches anybody until it is on.' }] : []),
           ...(account.signedIn ? [] : [{ kind: 'note' as const, say: ['You are signed out. Nothing goes out and nothing comes in until you sign in.'] }]),
           { kind: 'buttons', buttons: [
@@ -964,6 +1055,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (answer.button === 'invite') { if (hosts) await inviteAsHost(stage); else await invite(stage); continue; }
       if (answer.button === 'join') { await join(stage); continue; }
       if (answer.button === 'server') { await server(stage); continue; }
+      const ruled = /^rule(\d+)$/.exec(answer.button ?? '')?.[1];
+      if (ruled !== undefined && people[Number(ruled)]) { await setRule(stage, people[Number(ruled)]!, rules[Number(ruled)] === 'asks' ? 'answers' : 'asks'); continue; }
       const out = /^remove(\d+)$/.exec(answer.button ?? '')?.[1];
       if (out !== undefined && people[Number(out)]) { await removePerson(stage, people[Number(out)]!); continue; }
       if (answer.button === 'leave') { if (await leave(stage)) return; continue; }
@@ -1082,6 +1175,24 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         const named = /\.[a-z0-9]{2,5}$/i.test(what);
         if (!named && (NO_GIFT.test(what) || NO_GIFT_LAST.test(what) || /^(?:it|this|that|these|those|them|one)$/i.test(what) || !(GIVE_FILE.test(found[1]!) || FILE_WORD.test(what)))) continue;
         return { person: one, file: what };
+      }
+    }
+    return null;
+  }
+
+  /** The rule for one person, when it is said: whose, and what it is to be. */
+  function ruled(text: string): { person: PeerPerson; to: 'answers' | 'asks' } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').replace(new RegExp(`^${LEAD}`, 'iu'), '');
+    for (const one of others().slice().sort((a, b) => b.name.length - a.name.length)) {
+      const first = one.name.split(' ')[0]!;
+      const alone = others().filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const them = `${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?`;
+        const answers = [`(?:let|allow)\\s+${them}\\s+(?:have|get)\\s+answers\\s+without\\s+asking(?:\\s+me)?`, `answer\\s+${them}(?:(?:'s|’s)\\s+questions)?\\s+(?:yourself|by yourself|without\\s+asking(?:\\s+me)?)`,
+          `(?:do not|don't|stop)\\s+ask(?:ing)?\\s+me\\s+(?:for|about|before\\s+(?:you\\s+)?answer(?:ing)?)\\s+${them}`];
+        const asks = [`(?:always\\s+)?ask\\s+me\\s+(?:every\\s+time\\s+)?(?:for|about|before\\s+(?:you\\s+)?answer(?:ing)?)\\s+${them}(?:\\s+every\\s+time)?`, `${them}\\s+(?:asks|should ask|must ask)\\s+(?:me\\s+)?every\\s+time`];
+        if (answers.some((one) => new RegExp(`^${one}$`, 'iu').test(said))) return { person: one, to: 'answers' };
+        if (asks.some((one) => new RegExp(`^${one}$`, 'iu').test(said))) return { person: one, to: 'asks' };
       }
     }
     return null;
@@ -1206,6 +1317,14 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
     if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
+    }
+    // The rule for one person, said: "let Leo have answers without asking", "ask me every time for Leo".
+    const rule = ruled(text);
+    if (rule) {
+      return {
+        did: rule.to === 'answers' ? `Let ${rule.person.name} have answers without asking.` : `Ask me every time for ${rule.person.name}.`,
+        run: () => { inbox.present('people-rule', async (stage) => { await setRule(stage, rule.person, rule.to); }); },
+      };
     }
     // A time with somebody: the two calendars are compared, and neither person sees the other's.
     const when = timed(text);
@@ -1494,6 +1613,105 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     working.set(row.id, job);
   }
 
+  /** The requests that are being answered alone, by the owner's rule for who asked. */
+  const answering = new Set<string>();
+
+  /**
+   * A request that arrived. It is put to the owner, unless the owner said,
+   * for this person, that a thing to find out is answered without asking
+   * (the engine's rule, ruleOf). A thing to do, a request too long to be
+   * read whole, and a machine that cannot do requests are always put to the
+   * owner, whatever the rule.
+   */
+  function requestArrived(taskId: string): void {
+    // Being answered alone already: it is not put on the notch beside that.
+    if (answering.has(taskId)) return;
+    const row = store.requestOf(taskId);
+    const from = row ? person(row.peer) : null;
+    if (!row || !from || row.dir !== 'in' || row.state !== 'new' || !deps.work || peerAsksToDo(row.words) || row.words.length > NOTCH_PEOPLE_REQUEST_MAX) { asked(taskId); return; }
+    answering.add(taskId);
+    const job = (async () => {
+      try {
+        // The engine usually says at once what its rule is. When it does not, the request is put to the owner
+        // as any other, and is not answered alone: a request never waits unseen for a slow engine.
+        const rule = await Promise.race([ruleOf(from), new Promise<null>((resolve) => { const timer = setTimeout(() => resolve(null), deps.ruleWaitMs ?? NOTCH_PEOPLE_RULE_WAIT_MS); (timer as { unref?: () => void }).unref?.(); })]);
+        if (rule === 'answers') await alone(taskId, row, from);
+        else { answering.delete(taskId); working.delete(taskId); asked(taskId); }
+      } catch { answering.delete(taskId); working.delete(taskId); asked(taskId); } finally { answering.delete(taskId); working.delete(taskId); }
+    })();
+    working.set(taskId, job);
+  }
+
+  /** Answers a request without asking, and tells the owner after. Whatever does not go as the rule says is put to the owner. */
+  async function alone(taskId: string, row: PeerRequestRow, from: PeerPerson): Promise<void> {
+    const ended = (): void => { if (row.item) { store.done(row.item); void link.seen(row.item); } };
+    // The engine lets it through by its own rule, so no question is expected. One that comes all the same has
+    // nobody to answer it and is closed: the request then waits for the owner like any other.
+    const opened = await link.open(taskId, {});
+    if (opened === 'gone' || opened === 'declined') { store.requestState(taskId, 'no'); ended(); return; }
+    if (opened !== 'running') { later(taskId); return; }
+    if (!store.requestState(taskId, 'working')) return;
+    let done: { ok: true; answer: string } | { ok: false } = { ok: false };
+    try { done = await deps.work!({ from: from.name, words: row.words }); } catch { done = { ok: false }; }
+    const answer = done.ok ? peopleLines(done.answer, NOTCH_PEOPLE_ANSWER_MAX).join('\n') : '';
+    if (!answer) {
+      if (store.requestState(taskId, 'no')) {
+        void link.refuse(taskId);
+        ended();
+        news(`people:could-not:${taskId}`, ['I could not find what ', em(from.name), ' asked for.'], ['I could not find what ', em(from.name), ' asked for. ', em(from.name), ' gets nothing back.'], { who: from.name });
+      }
+      return;
+    }
+    // Taken back while it was being found: it has ended, and what was found goes nowhere.
+    if (!store.requestState(taskId, 'ready', answer)) return;
+    const finished = await link.finish(taskId, answer, {});
+    if (finished === 'sent') {
+      store.requestState(taskId, 'done');
+      ended();
+      log('[peers] a request was answered without asking, by the owner\'s rule for that person');
+      toldAfter(taskId, from, row.words, answer);
+      return;
+    }
+    if (finished === 'gone') { store.requestState(taskId, 'no'); ended(); return; }
+    // The engine asked about the answer after all, or it could not go: the owner decides it, on the notch.
+    later(taskId);
+  }
+
+  /** Puts a request on the notch once the work that is answering it alone has let go of it. */
+  function later(taskId: string): void {
+    const timer = setTimeout(() => { if (!answering.has(taskId)) asked(taskId); }, 0);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
+  /** "I answered Sam by myself: ... Read what went?" What left without a question is shown after, whole, with the way back. */
+  function toldAfter(taskId: string, from: PeerPerson, words: string, answer: string): void {
+    const key = `alone:${taskId}`;
+    store.take(key, from.id);
+    const asking = peerPlain(words, 61);
+    inbox.add({
+      id: `people:${key}`, subject: `people:${key}`, class: 'person', speaks: true,
+      title: () => ['I answered ', em(from.name), ' by myself.'],
+      check: () => store.got(key)?.done !== true,
+      play: async (stage) => {
+        const first = await stage.offer(['I answered ', em(from.name), ' by myself: ', asking.length > 60 ? `${asking.slice(0, 59)}…` : asking, /[.?!…]$/.test(asking) ? '' : '.', ' Read what went?'], 'read', { who: from.name, mood: 'look' });
+        store.done(key);
+        if (first.act !== 'yes') return 'settled';
+        const id = stage.id();
+        stage.put({
+          id, kind: 'sheet', say: ['What ', em(from.name), ' got'], who: from.name, mood: 'look', stay: true, no: 'close',
+          blocks: [
+            { kind: 'note', say: [em(from.name), ' asked: ', peerPlain(words, 300)] },
+            { kind: 'paper', lines: answer.split('\n').map((line) => [line]) },
+            { kind: 'buttons', buttons: [{ id: 'asks', label: 'Ask me every time again' }] },
+          ],
+        });
+        const said = await stage.answer(id, ['button', 'no', 'yes']).catch(() => null);
+        if (said?.act === 'button' && said.button === 'asks') await setRule(stage, from, 'asks');
+        return 'settled';
+      },
+    });
+  }
+
   /** The item for a request that arrived. It plays from wherever the request stands. */
   function asked(taskId: string): void {
     const first = store.requestOf(taskId);
@@ -1514,15 +1732,30 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           let row = store.requestOf(taskId);
           if (!row) return 'settled';
           if (row.state === 'new') {
+            // The engine lets this person's requests through without its question (the owner's rule). What is
+            // still asked about, a thing to do above all, is then asked about here, before anything begins.
+            // The notch says that it waits, and for how long at the most, before the engine is asked anything.
             const waiting = watch(stage);
             waiting.line(['Opening what ', em(from.name), ' asks…']);
             waiting.within(engineWait);
+            const rule = await Promise.race([ruleOf(from), waiting.gone]);
+            if (rule === 'stop') return 'waits';
+            if (rule === 'late') { await stage.say(['I cannot take that up right now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+            if (rule === 'answers' || rule === 'shows') {
+              const said = await approve(stage, from, row, waiting)();
+              if (!said) return 'waits';
+              if (said.choice === 'decline') {
+                store.requestState(taskId, 'no'); ended(); streak(from.id, 0); void link.refuse(taskId);
+                await stage.say(['Told ', em(from.name), ' no. Nothing was touched.'], 3000, { who: from.name });
+                return 'settled';
+              }
+            }
             const opened = await Promise.race([link.open(taskId, { request: approve(stage, from, row, waiting) }), waiting.gone]);
             // Esc while it opens is not now. What the engine asks later is closed, and the request stays to be opened again.
             if (opened === 'closed' || opened === 'stop') return 'waits';
             if (opened === 'failed' || opened === 'late') { await stage.say(['I cannot take that up right now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
             if (opened === 'gone') { store.requestState(taskId, 'no'); ended(); await stage.say([em(from.name), ' took it back.'], 2400, { who: from.name }); return 'settled'; }
-            if (opened === 'declined') { store.requestState(taskId, 'no'); ended(); await stage.say(['Told ', em(from.name), ' no. Nothing was touched.'], 3000, { who: from.name }); return 'settled'; }
+            if (opened === 'declined') { store.requestState(taskId, 'no'); ended(); streak(from.id, 0); await stage.say(['Told ', em(from.name), ' no. Nothing was touched.'], 3000, { who: from.name }); return 'settled'; }
             store.requestState(taskId, 'working');
             begin(row, from);
           }
@@ -1541,6 +1774,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
             /** Stopped by the person, or at a step that is never taken: no further step, and nothing of it is sent, whatever comes later. */
             const stopIt = async (never?: NotchPeopleStep): Promise<'settled'> => {
               stops.get(taskId)?.abort();
+              streak(from.id, 0);
               for (const waiting of stepsOf.get(taskId) ?? []) waiting.settle('stop');
               stepsOf.delete(taskId);
               store.requestState(taskId, 'no'); ended(); void link.refuse(taskId);
@@ -1584,15 +1818,38 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
             return 'settled';
           }
           if (row?.state !== 'ready' || !row.answer) return 'settled';
+          // By the owner's rule the engine sends this person's answers without its question. What reached the
+          // notch all the same (a thing that was done, above all) is shown here before it goes.
           const sending = watch(stage);
           sending.line(['Getting it ready for ', em(from.name), '…']);
           sending.within(engineWait);
+          const ruleNow = await Promise.race([ruleOf(from), sending.gone]);
+          if (ruleNow === 'stop') return 'waits';
+          if (ruleNow === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+          if (ruleNow === 'answers') {
+            const said = await sendOnly(stage, from, row.answer, sending)();
+            if (!said) return 'waits';
+            if (said.choice !== 'send') {
+              store.requestState(taskId, 'no'); ended(); streak(from.id, 0); void link.refuse(taskId);
+              await stage.say(['Told ', em(from.name), ' no. Nothing left this laptop.'], 3000, { who: from.name });
+              return 'settled';
+            }
+          }
           const finished = await Promise.race([link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer, sending) }), sending.gone]);
           if (finished === 'closed' || finished === 'stop') return 'waits';
           if (finished === 'failed' || finished === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
           if (finished === 'sent') {
             store.requestState(taskId, 'done'); ended(); takenOf.delete(taskId);
             await stage.say(peerAsksToDo(row.words) ? ['Done. Told ', em(from.name), '. Only that left this laptop.'] : ['Sent. Only that left this laptop.'], 3200, { mark: 'check', who: from.name });
+            // After five in a row that were sent as they were found: the offer to let this person have answers
+            // without asking. Offered once. A no to it is an answer, and it is not offered again.
+            if (!peerAsksToDo(row.words)) {
+              const run = streak(from.id, streak(from.id) + 1);
+              if (run >= NOTCH_PEOPLE_TRUST_AFTER && store.meta(`trust-no:${from.id}`) === null && (await ruleOf(from)) === 'asks') {
+                const set = await setRule(stage, from, 'answers', [`That is ${run} times in a row you sent `, em(from.name), ' what I found. ']);
+                if (set === false) store.setMeta(`trust-no:${from.id}`, '1');
+              }
+            }
             return 'settled';
           }
           store.requestState(taskId, 'no');
@@ -1601,6 +1858,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           // The engine was started anew since the yes: it does not hold the request any more, and nothing can be sent for it.
           if (finished === 'lost') { await stage.say(['I lost hold of what ', em(from.name), ' asked when I was started anew. Nothing was sent.'], 3600, { mood: 'sorry', who: from.name }); return 'settled'; }
           // Kept back, or closed too often to be asked again: the other side is told no, with nothing of this machine's.
+          streak(from.id, 0);
           void link.refuse(taskId);
           await stage.say(['Told ', em(from.name), ' no. Nothing left this laptop.'], 3000, { who: from.name });
           return 'settled';
@@ -1735,7 +1993,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         // Kept as what can be read, line by line: the words that are shown are the words that are worked on.
         // One longer than can be read here is kept a little past the limit, so that it is known to be too long.
         store.request({ id: item.task, dir: 'in', peer: item.from, words: peopleLines(item.text, NOTCH_PEOPLE_REQUEST_MAX + 200).join('\n'), item: item.id });
-        asked(item.task);
+        requestArrived(item.task);
         continue;
       }
       const { words, note } = peerNoteRead(item.text);

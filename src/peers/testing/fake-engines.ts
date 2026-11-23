@@ -90,6 +90,8 @@ export class FakeEngine implements PeerEngineLike {
   readonly sent: { to: string; text: string; replyTo: string | null; itemId: string }[] = [];
   /** The devices whose requests were allowed for good: a standing rule, which only the person may make. */
   readonly alwaysAllowed: string[] = [];
+  /** The rule for tasks from one contact, when it has one of its own. Otherwise: ask, and the result is checked. */
+  readonly taskRules = new Map<string, { effect: 'allow' | 'ask' | 'deny'; resultCheck: boolean }>();
   /** Every tool call, for a test to look at. */
   readonly calls: { tool: string; args: Record<string, unknown> }[] = [];
   /** Whoever answers its dialogs: a link's `dialog`. Without one, every dialog is closed. */
@@ -155,10 +157,32 @@ export class FakeEngine implements PeerEngineLike {
     if (tool === 'task_update') return this.taskUpdate(args);
     if (tool === 'task_control') return this.taskControl(args);
     if (tool === 'contacts') return this.contactsTool(args);
+    if (tool === 'policy') return this.policyTool(args);
     return refused('unknown_tool', tool);
   }
 
   /** Removing a contact, as the engine does it: its own yes or no first, then the link is gone on both sides. */
+  /** The engine's rules, for tasks from one contact: show, set and remove. A change is confirmed in a dialog. */
+  private async policyTool(args: Record<string, unknown>): Promise<EngineToolResult> {
+    const target = typeof args.contact === 'string' ? this.find(args.contact) : undefined;
+    if (!target) return refused('contact_not_found', 'No contact matches.');
+    const said = (rule: { effect: string; resultCheck: boolean }): string => `${rule.effect}${rule.effect !== 'deny' ? (rule.resultCheck ? ', result checked by the user' : ', result sent without check') : ''}`;
+    const now = this.taskRules.get(target.deviceId);
+    const label = `"${target.localName ?? target.deviceId}" (device ${target.deviceId})`;
+    if (args.action === 'show') return ok(`Effective policy for ${label}:\n- message: allow (from the default rule)\n- task: ${said(now ?? { effect: 'ask', resultCheck: true })} (from the ${now ? 'contact' : 'default'} rule)`);
+    if (args.kind !== 'task' || (args.action !== 'set' && args.action !== 'remove')) return refused('usage', 'the stand-in keeps rules for tasks');
+    const next = args.action === 'remove' ? null : { effect: args.effect as 'allow' | 'ask' | 'deny', resultCheck: args.resultCheck !== false };
+    const what = next ? `Change the policy for tasks from ${label}. Currently: ${said(now ?? { effect: 'ask', resultCheck: true })}. New: ${said(next)}.` : `Remove the policy rule for tasks from ${label}. Currently: ${said(now ?? { effect: 'ask', resultCheck: true })}. Then the default applies.`;
+    if ((!next && !now) || (next && now && next.effect === now.effect && next.resultCheck === now.resultCheck)) return ok(`Nothing to change: "${what.slice(0, 64)}".`);
+    const loosens = !!next && next.effect === 'allow';
+    const answer = await this.ask('form', `collab: change a permission? Proposed by the agent; confirm only if you asked for it.\n${loosens ? 'Warning: tasks from this contact would start without asking you.\n' : ''}${what}`,
+      { choice: choice(loosens ? 'Decision (read the warning)' : 'Decision', [['confirm', loosens ? 'Confirm the change despite the warning' : 'Confirm the change'], ['reject', 'Reject']]) }, { tool: 'policy', args });
+    if (!answer) return ok(`The user closed the dialog; nothing changed: "${what.slice(0, 64)}".`);
+    if (answer.choice !== 'confirm') return ok(`The user rejected the change: "${what.slice(0, 64)}".`);
+    if (next) this.taskRules.set(target.deviceId, next); else this.taskRules.delete(target.deviceId);
+    return ok(`Applied after the user confirmed: "${what.slice(0, 64)}".`);
+  }
+
   private async contactsTool(args: Record<string, unknown>): Promise<EngineToolResult> {
     if (args.action !== 'remove') return refused('usage', 'unknown action');
     const target = this.find(String(args.contact ?? ''));
@@ -293,8 +317,22 @@ export class FakeEngine implements PeerEngineLike {
     const from = this.named(task.from);
     if (task.status === 'running') return ok(`Task ${task.taskId} from ${from} is running (already open in this session). Handle: ${task.taskId}.`);
     if (task.status !== 'submitted') return ok('That task request already ended (expired or cancelled) before it was opened; nothing to do.');
-    task.status = 'awaiting_approval';
     task.opened = true;
+    // A rule of its own for this contact: let through without the question, or never taken up.
+    const rule = this.taskRules.get(task.from);
+    if (rule?.effect === 'deny') {
+      task.status = 'declined';
+      task.outcome = { kind: 'task_declined', taskId: task.taskId };
+      this.follow(task, task.from, 'task_declined', {});
+      return ok(`Task ${task.taskId} from ${from} was declined by this device's policy; the sender was told. Do not work on it.`);
+    }
+    if (rule?.effect === 'allow') {
+      task.status = 'running';
+      task.resultCheck = rule.resultCheck;
+      task.updatedAt = this.server.now();
+      return ok(`Task ${task.taskId} from ${from} is running. Handle: ${task.taskId}.\n${task.resultCheck ? 'The user checks everything that leaves this task (questions, result) before it is sent; progress updates carry no text.' : 'Results go to the sender without a check by the user.'}`);
+    }
+    task.status = 'awaiting_approval';
     const name = this.contacts.get(task.from)?.localName ?? 'device';
     const answer = await this.ask('form',
       `collab: task from '${name}' (device ${task.from.slice(0, 8)}.., verified)\nTitle: '${task.title.slice(0, 40)}'\nFull request: /tmp/collab-review/request.txt\nApprove this task request?\nTask from "${name}" (device ${task.from}). The instructions have ${task.instructions.length} characters.`,
