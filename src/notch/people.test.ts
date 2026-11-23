@@ -72,6 +72,7 @@ class FakeSetup implements PeerSetupLike {
     this.accounts.set(name.toLowerCase(), `pw-${name.toLowerCase()}-73`);
     return { ok: true, password: `pw-${name.toLowerCase()}-73` };
   }
+  async newPassword(name: string): Promise<HostAccount> { this.calls.push(`newPassword ${name}`); return { ok: true, password: `pw-new-${name.toLowerCase()}-58` }; }
   async signIn(page: string, login: string, password: string): Promise<boolean> { this.calls.push(`signIn ${new URL(page).host} ${login} ${password}`); return this.signInWorks; }
   async join(address: string): Promise<SetupJoined> {
     this.calls.push(`join ${address}`);
@@ -1499,7 +1500,11 @@ describe('getting in: making an organisation on this machine', () => {
     await sam.button('invite');
     expect(sam.said()).toBe('Who do you invite?');
     await sam.type('Leo');
-    expect(sam.said()).toBe('Someone called Leo has an account here already. Another name.');
+    // Somebody of that name is in already: a new password for them, or another name.
+    expect(sam.said()).toBe('Someone called Leo is in this organisation already. Give them a new password?');
+    expect(sam.options()).toEqual(['New password', 'Another name']);
+    await sam.pick(1);
+    expect(sam.said()).toBe('Another name, then. Who do you invite?');
     await sam.type('Leo Rossi');
     expect(sam.kind()).toBe('sheet');
     expect(sam.said()).toBe('For Leo Rossi: three things');
@@ -1508,6 +1513,25 @@ describe('getting in: making an organisation on this machine', () => {
     expect(sam.logs.join('\n')).not.toContain('pw-leo');
     await sam.button('code');
     expect(sam.said()).toContain('Read them this code: ');
+  });
+
+  test('somebody whose laptop was set up anew is given a new password under their own name', async () => {
+    const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
+    await sam.open();
+    await sam.type('Northwind');
+    await sam.type('Sam');
+    await sam.type('collab.invalid');
+    await signedIn(sam);
+    await sam.done();
+    sam.setup.accounts.set('leo', 'x');
+    await sam.button('invite');
+    await sam.type('Leo');
+    await sam.pick(0);
+    expect(sam.setup.calls).toContain('newPassword Leo');
+    expect(sam.said()).toBe('For Leo: three things');
+    const blocks = sam.blocks();
+    for (const thing of ['collab.invalid', '"leo"', 'pw-new-leo-58']) expect(blocks).toContain(thing);
+    expect(sam.logs.join('\n')).not.toContain('pw-new');
   });
 
   test('with the server off, nobody can be invited, and the notch says to start it', async () => {
@@ -2067,5 +2091,41 @@ describe('a file that arrived is held by the notch', () => {
     const { leo } = await sent({ holds: false });
     if (!leo.said()) await leo.tap();
     expect(leo.said()).toBe('deck.pdf from Sam is in your Downloads.');
+  });
+});
+
+describe('taking somebody out of the organisation', () => {
+  test('is asked once, in the engine\'s own question, and then they are gone on both sides', async () => {
+    const { sam, leo } = await joined();
+    await sam.open();
+    expect(sam.blocks()).toContain('"id":"remove0","label":"Remove"');
+    await sam.button('remove0');
+    expect(sam.said()).toBe('Remove Leo from your organisation? To talk again you connect with a new code.');
+    expect(sam.options()).toEqual(['Remove', 'Keep']);
+    await sam.pick(1);
+    // Kept: nothing changed, and the sheet is back.
+    expect(sam.engine.contacts.has(LEO)).toBe(true);
+    expect(sam.kind()).toBe('sheet');
+    await sam.button('remove0');
+    await sam.pick(0);
+    expect(sam.said()).toBe('Leo is no longer in your organisation.');
+    expect(sam.engine.contacts.has(LEO)).toBe(false);
+    expect(leo.engine.contacts.has(SAM)).toBe(false);
+    expect(sam.people.names()).toEqual([]);
+    expect(await sam.say('tell Leo hello')).toBe(false);
+  });
+
+  test('only the engine\'s question about that very laptop is put to the person', async () => {
+    const { sam } = await joined();
+    // The engine asks about another device than the one whose row was pressed.
+    const real = sam.engine.call.bind(sam.engine);
+    sam.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 2 });
+    sam.engine.call = (tool, args) => real(tool, tool === 'contacts' ? { ...args, contact: ANNA } : args);
+    await sam.refresh();
+    await sam.open();
+    await sam.button('remove0');
+    // No question was shown for it, and nobody was removed.
+    expect(sam.everShown()).not.toContain('from your organisation?');
+    expect(sam.engine.contacts.size).toBe(2);
   });
 });

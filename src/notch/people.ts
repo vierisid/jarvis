@@ -393,6 +393,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (!/^Connected with\b/.test(text)) {
       if (/^The user did not enter a code/.test(text)) return false;
       const code = engineErrorCode(text);
+      // The engine's own word for why, and nothing else of what it said: so that a failed connecting can be understood afterwards.
+      log(`[notch] connecting ended without a connection (${code ?? 'no reason given'})`);
       if (code === 'not_connected' || code === 'not_logged_in') await stage.say(['I have no line to the server now. Try again in a moment.'], 3200, { mood: 'sorry' });
       else await stage.say(opener ? ['That did not connect. Make a new code and try again.'] : ['That did not connect. Ask for a new code and try again.'], 3600, { mood: 'sorry' });
       return false;
@@ -688,7 +690,16 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const made = await meanwhile(stage, ['Making their account…'], setup.account(one));
       if (made.ok) { name = one; password = made.password; break; }
       if (made.why !== 'taken') { await stage.say(['I could not make the account now.'], 3200, { mood: 'sorry' }); return; }
-      say = ['Someone called ', em(one), ' has an account here already. Another name.'];
+      // They are in already: a laptop that was set up anew, most often. A new password lets them in again, and
+      // the old one stops working. Or it is somebody else of the same name.
+      const again = await stage.choose(['Someone called ', em(one), ' is in this organisation already. Give them a new password?'], ['New password', 'Another name']);
+      if (again.act !== 'pick') return;
+      if (again.index === 0) {
+        const fresh = await meanwhile(stage, ['Making a new password…'], setup.newPassword(one));
+        if (!fresh.ok) { await stage.say(['I could not make a new password now.'], 3200, { mood: 'sorry' }); return; }
+        name = one; password = fresh.password; break;
+      }
+      say = ['Another name, then. Who do you invite?'];
     }
     const ready = setup.built();
     const id = stage.id();
@@ -720,6 +731,41 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await meanwhile(stage, ['Stopping the server…'], setup.stopHost());
     inbox.refresh();
     await stage.say(['The server is off.'], 2400, { mark: 'check' });
+  }
+
+  /**
+   * Takes somebody out of the organisation. It takes something away, so it
+   * is asked: the question is the engine's own, put on the notch, and only
+   * when it is about this very laptop. After it the two connect with a new
+   * code before anything crosses again. Needed for a laptop that was set up
+   * anew: its old self stays listed, and would be told things nobody gets.
+   */
+  async function removePerson(stage: NotchStage, who: PeerPerson): Promise<void> {
+    const waiting = watch(stage);
+    waiting.line(['One moment…']);
+    waiting.within(engineWait);
+    let said: boolean | null = null;
+    const text = await Promise.race([
+      link.call('contacts', { action: 'remove', contact: who.id }, {
+        confirm: async (decision) => {
+          waiting.reached();
+          if (waiting.over()) return null;
+          if (!/^collab: remove this contact\?/.test(decision.message) || !decision.message.includes(who.id)) return null;
+          const answer = await stage.choose(['Remove ', em(who.name), ' from your organisation? To talk again you connect with a new code.'], ['Remove', 'Keep'], { who: who.name });
+          if (answer.act !== 'pick') return null;
+          said = answer.index === 0;
+          if (said) waiting.line(['Removing ', em(who.name), '…']);
+          return { choice: said ? 'yes' : 'no' };
+        },
+      }, 60_000).then((result) => result.text, () => ''),
+      waiting.gone,
+    ]);
+    await link.refresh();
+    inbox.refresh();
+    if (said && !others().some((one) => one.id === who.id)) { await stage.say([em(who.name), ' is no longer in your organisation.'], 3000, { mark: 'check' }); return; }
+    // Kept, stopped, or the question never came to be answered and the engine says nothing changed: nothing to add.
+    if (said === false || text === 'stop' || stage.ended() || /^The user kept the contact/.test(text)) return;
+    await stage.say(['I could not remove ', em(who.name), ' now.'], 3000, { mood: 'sorry' });
   }
 
   /** Leaving: the one thing here that is asked twice, because it takes something away. */
@@ -809,7 +855,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         id, kind: 'sheet', say: org ? [em(org), ', your organisation'] : ['Your organisation'], mood: 'look',
         blocks: [
           { kind: 'row', lead: 'You', say: ['This laptop'], small: 'You say yes or no to what is asked of it.' },
-          ...people.map((one): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : 'Connected by a code. Asks you every time.' })),
+          ...people.map((one, at): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : 'Connected by a code. Asks you every time.', buttons: [{ id: `remove${at}`, label: 'Remove', quiet: true }] })),
           ...(hosts ? [{ kind: 'row' as const, lead: 'S', say: ['Its server, on this laptop'], small: hosting!.state === 'on' ? `On, at ${hostOf(hosting!.address)}.` : hosting!.state === 'starting' ? 'Starting.' : 'Off. Nobody reaches anybody until it is on.' }] : []),
           ...(account.signedIn ? [] : [{ kind: 'note' as const, say: ['You are signed out. Nothing goes out and nothing comes in until you sign in.'] }]),
           { kind: 'buttons', buttons: [
@@ -832,6 +878,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (answer.button === 'invite') { if (hosts) await inviteAsHost(stage); else await invite(stage); continue; }
       if (answer.button === 'join') { await join(stage); continue; }
       if (answer.button === 'server') { await server(stage); continue; }
+      const out = /^remove(\d+)$/.exec(answer.button ?? '')?.[1];
+      if (out !== undefined && people[Number(out)]) { await removePerson(stage, people[Number(out)]!); continue; }
       if (answer.button === 'leave') { if (await leave(stage)) return; continue; }
       return;
     }

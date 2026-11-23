@@ -67,6 +67,8 @@ export interface PeerSetupLike {
   myAccount(name: string): Promise<HostAccount>;
   /** Makes an account for somebody who is invited. */
   account(name: string): Promise<HostAccount>;
+  /** Gives somebody who is in the organisation already a new password: their laptop was set up anew. */
+  newPassword(name: string): Promise<HostAccount>;
   /** Signs in at this machine's own server with a password it just made. No browser. */
   signIn(page: string, login: string, password: string): Promise<boolean>;
   /** Takes the engine from an organisation's server and starts it. */
@@ -253,6 +255,10 @@ export class PeerSetup implements PeerSetupLike {
 
   account(name: string): Promise<HostAccount> {
     return this.peerHost ? this.peerHost.account(name) : Promise.resolve({ ok: false, why: 'failed' });
+  }
+
+  newPassword(name: string): Promise<HostAccount> {
+    return this.peerHost ? this.peerHost.newPassword(name) : Promise.resolve({ ok: false, why: 'failed' });
   }
 
   signIn(page: string, login: string, password: string): Promise<boolean> {

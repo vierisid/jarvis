@@ -154,7 +154,21 @@ export class FakeEngine implements PeerEngineLike {
     if (tool === 'open_task') return this.openTask(args);
     if (tool === 'task_update') return this.taskUpdate(args);
     if (tool === 'task_control') return this.taskControl(args);
+    if (tool === 'contacts') return this.contactsTool(args);
     return refused('unknown_tool', tool);
+  }
+
+  /** Removing a contact, as the engine does it: its own yes or no first, then the link is gone on both sides. */
+  private async contactsTool(args: Record<string, unknown>): Promise<EngineToolResult> {
+    if (args.action !== 'remove') return refused('usage', 'unknown action');
+    const target = this.find(String(args.contact ?? ''));
+    if (!target) return refused('contact_not_found', 'No contact matches.');
+    const answer = await this.ask('form', `collab: remove this contact?\nDevice: ${target.deviceId} (verified)\nCurrent local name: "${target.localName ?? '(none)'}"\nRemoving it means connecting again with a new code before you can exchange anything.`,
+      { choice: choice('Decision', [['yes', 'Remove the contact'], ['no', 'Keep it']]) }, { tool: 'contacts', args });
+    if (answer?.choice !== 'yes') return ok('The user kept the contact; nothing changed.');
+    this.contacts.delete(target.deviceId);
+    this.server.engine(target.deviceId)?.contacts.delete(this.id);
+    return ok(`Removed "${target.localName ?? target.deviceId}" (device ${target.deviceId}). The server removed the link too: nothing more can be sent between the two devices. Connecting again needs a new code.`);
   }
 
   private async accountTool(args: Record<string, unknown>): Promise<EngineToolResult> {

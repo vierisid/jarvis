@@ -263,6 +263,12 @@ things once: the address, the name, the password. Then the code, as before.
 `<address>/plugin/collab-plugin-<system>.zip`, checked, put in place and started. Then the
 sign-in page opens in the person's own browser, and the code is typed, as before.
 
+**Remove somebody.** Each person's row in the organisation's sheet has "Remove". It is asked
+once, in the engine's own question, and only when that question is about that very laptop. After
+it the two connect with a new code before anything crosses again. It is how a laptop that was
+set up anew is taken out as its old self: the host then invites the person again under the same
+name, and "New password" lets them back in.
+
 **Leave.** Asked once, because it takes something away. The engine's folder is set aside as
 `peers/engine.left-<time>`, not deleted, and the engine starts again with nothing. A host's
 server stops.
