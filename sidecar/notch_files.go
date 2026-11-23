@@ -495,9 +495,8 @@ func notchFileOpenIn(roots map[string][]string, blocked func(dir string) bool, p
 func makeNotchFilesHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		started := time.Now()
-		places := notchFilesLook(notchFileRootsHere(), func(dir string) bool {
-			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
-		})
+		// Made for this look: the blocked list is read once, not once for every file (blockedPathCheck).
+		places := notchFilesLook(notchFileRootsHere(), blockedPathCheck(cfg.Filesystem.BlockedPaths))
 		// Counts, never a name.
 		total := 0
 		for _, place := range places {
@@ -516,9 +515,7 @@ func makeNotchFileHandler(cfg *SidecarConfig) RPCHandler {
 		name, _ := params["name"].(string)
 		// A folder below the place, for a file that was found there (notch.find).
 		sub, _ := params["dir"].(string)
-		bytes, kind, err := notchFileOpenIn(notchFileRootsHere(), func(dir string) bool {
-			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
-		}, place, sub, name)
+		bytes, kind, err := notchFileOpenIn(notchFileRootsHere(), blockedPathCheck(cfg.Filesystem.BlockedPaths), place, sub, name)
 		if err != nil {
 			// Why, never which.
 			logNotchFile(place, "", 0, err.Error())

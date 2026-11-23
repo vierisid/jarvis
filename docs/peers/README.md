@@ -444,6 +444,13 @@ colleague called it. So a name is only one of the things a file is told by.
     private by its name, a link to somewhere else, or the kind nobody keeps their own files in
     (`node_modules` and the like). A file is taken from a folder below only through real folders
     of that place.
+61. **A look is quick, and a look that is not answered is said.** The desktop app asks for every
+    file whether it lies in a blocked place. The blocked list is read once for a look, not once
+    more for every file: read for every file, a look through two thousand files took 46 seconds
+    on a Windows machine, where the brain waits 8, and nothing said why (23 November 2026; it
+    read as folders that could not be reached). Read once, the same look takes about a second
+    there. The app writes down how long a look took, and the brain writes down a look it got no
+    answer to, with how long it waited.
 
 ### Where it stops
 

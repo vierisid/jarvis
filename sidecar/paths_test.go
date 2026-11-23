@@ -104,6 +104,96 @@ func TestIsBlockedPathCaseFolding(t *testing.T) {
 	}
 }
 
+// One check, asked about many paths, says for each what isBlockedPath says.
+func TestBlockedPathCheckAnswersAsIsBlockedPath(t *testing.T) {
+	base := t.TempDir()
+	secret := filepath.Join(base, "secret")
+	if err := os.MkdirAll(filepath.Join(secret, "deep"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "open", "folder"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	list := []string{secret, "", filepath.Join(base, "open", "one.key"), "  ", filepath.Join(base, "not-there-yet")}
+	check := blockedPathCheck(list)
+	blocked := 0
+	for _, path := range []string{
+		base, secret, filepath.Join(secret, "key"), filepath.Join(secret, "deep", "key"), secret + "x", filepath.Join(secret, "..", "secret", "key"),
+		filepath.Join(base, "open"), filepath.Join(base, "open", "folder"), filepath.Join(base, "open", "one.key"), filepath.Join(base, "open", "one.keys"),
+		filepath.Join(base, "not-there-yet"), filepath.Join(base, "not-there-yet", "file"), filepath.Join(base, "elsewhere", "file"), secret + string(filepath.Separator),
+	} {
+		got, want := check(path), isBlockedPath(path, list)
+		if got != want {
+			t.Errorf("%q: the check says %v, isBlockedPath says %v", path, got, want)
+		}
+		if got {
+			blocked++
+		}
+	}
+	if blocked != 8 {
+		t.Errorf("8 of the 14 paths are blocked, the check blocked %d", blocked)
+	}
+	if blockedPathCheck(nil)("/anything") || blockedPathCheck([]string{"", "  "})("/anything") {
+		t.Error("an empty list blocks nothing")
+	}
+	// A blank entry is not a path. Read as one it is the folder the program runs in, and all that is in it.
+	here, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockedPathCheck([]string{"", "  "})(filepath.Join(here, "file")) || isBlockedPath(filepath.Join(here, "file"), []string{""}) {
+		t.Error("a blank entry must not block the folder the program runs in")
+	}
+}
+
+// The blocked list is read when the check is made, and not again for each
+// path. On 23 November 2026 it was read again for every file of a look: 46
+// seconds for two thousand files on a Windows machine, where the brain waits
+// eight. A check is therefore made anew for each look, and this is what that
+// means: what a blocked entry leads to is taken as it was when the look began.
+func TestBlockedPathCheckReadsTheListOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs privileges on Windows")
+	}
+	base := t.TempDir()
+	vault := filepath.Join(base, "vault")
+	if err := os.MkdirAll(vault, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// The blocked entry is a name that leads nowhere yet.
+	entry := filepath.Join(base, "entry")
+	list := []string{entry}
+	before := blockedPathCheck(list)
+	if before(filepath.Join(vault, "key")) {
+		t.Fatal("nothing leads to the vault yet")
+	}
+	// Now it leads to the vault.
+	if err := os.Symlink(vault, entry); err != nil {
+		t.Fatal(err)
+	}
+	if before(filepath.Join(vault, "key")) {
+		t.Error("the check made before reads the list again for each path: that is the 46 seconds")
+	}
+	if !blockedPathCheck(list)(filepath.Join(vault, "key")) {
+		t.Error("a check made now must see where the entry leads now")
+	}
+	if !isBlockedPath(filepath.Join(vault, "key"), list) {
+		t.Error("isBlockedPath reads the list at each call")
+	}
+	// The path that is asked about is still followed at each call.
+	alias := filepath.Join(base, "alias")
+	late := blockedPathCheck([]string{vault})
+	if err := os.Symlink(filepath.Join(vault, "key"), alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vault, "key"), []byte("k"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !late(alias) {
+		t.Error("a link made after the check, to a blocked file, must still be blocked")
+	}
+}
+
 func TestIsBlockedPathIgnoresBlankEntries(t *testing.T) {
 	if isBlockedPath("/anything", []string{"", "  "}) {
 		t.Error("blank entries must not block everything")

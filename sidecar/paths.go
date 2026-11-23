@@ -96,6 +96,42 @@ func resolveExistingPrefix(abs string) string {
 	return filepath.Join(resolveExistingPrefix(dir), base)
 }
 
+// blockedPathCheck is isBlockedPath for many paths in a row: the same answer
+// for each, with the blocked list made canonical once and not once more for
+// every path that is asked about.
+//
+// Making one path canonical walks it folder by folder on the disk. A look
+// through a person's folders asks about every file in them, and asked the
+// whole list again for each: thirty entries, 16 ms a file on the owner's
+// Windows machine, 46 seconds for the two thousand files of his desktop,
+// documents and downloads (23 November 2026). The brain waits eight. Without
+// the check the same look took 92 ms.
+//
+// Make it anew for each look, never once for the life of the program: a
+// blocked entry that is a link, or that comes into being later, is read as
+// it is when the look begins.
+func blockedPathCheck(blockedPaths []string) func(filePath string) bool {
+	roots := make([]string, 0, len(blockedPaths))
+	for _, bp := range blockedPaths {
+		if strings.TrimSpace(bp) == "" {
+			continue
+		}
+		roots = append(roots, canonicalPath(bp))
+	}
+	return func(filePath string) bool {
+		if len(roots) == 0 {
+			return false
+		}
+		target := canonicalPath(filePath)
+		for _, root := range roots {
+			if pathWithin(target, root) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // pathWithin reports whether target is root itself or lies inside it. Both
 // arguments must already be canonical. A plain prefix compare would also
 // match "/home/u/.sshfoo" against "/home/u/.ssh"; this does not.

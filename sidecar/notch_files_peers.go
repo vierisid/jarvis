@@ -324,9 +324,9 @@ func makeNotchFindHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		words, _ := params["words"].(string)
 		wide, _ := params["wide"].(bool)
-		found := notchFileFindWide(notchFileRootsHere(), func(dir string) bool {
-			return isBlockedPath(dir, cfg.Filesystem.BlockedPaths)
-		}, words, wide)
+		started := time.Now()
+		// Made for this look: the blocked list is read once, not once for every file (blockedPathCheck).
+		found := notchFileFindWide(notchFileRootsHere(), blockedPathCheck(cfg.Filesystem.BlockedPaths), words, wide)
 		if !wide && len(found) > notchFindNamed {
 			found = found[:notchFindNamed]
 		}
@@ -337,7 +337,7 @@ func makeNotchFindHandler(cfg *SidecarConfig) RPCHandler {
 			}
 		}
 		// How many, never which, and never what was asked for.
-		log.Printf("[notch] a file was looked up: %d fit by name, %d named in all", fit, len(found))
+		log.Printf("[notch] a file was looked up: %d fit by name, %d named in all, in %d ms", fit, len(found), time.Since(started).Milliseconds())
 		return &RPCResult{Result: map[string]any{"found": found}}, nil
 	}
 }
@@ -535,6 +535,7 @@ func notchDownloadsHere(roots map[string][]string, blocked func(dir string) bool
 // which name. {step: "drop", id} lets one go.
 func makeNotchSaveHandler(cfg *SidecarConfig) RPCHandler {
 	saves := newNotchSaves()
+	// Read anew at each call: it is asked about a folder or two, not about every file.
 	blocked := func(dir string) bool { return isBlockedPath(dir, cfg.Filesystem.BlockedPaths) }
 	refused := func(why string) (*RPCResult, error) {
 		// Why, never which.

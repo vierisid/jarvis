@@ -304,19 +304,7 @@ func makeRunCommandHandler(cfg *SidecarConfig) RPCHandler {
 // "/home/u/.ssh/id_rsa", a symlink pointing into it, and "C:\USERS\U\.SSH",
 // while leaving "/home/u/.sshfoo" alone.
 func isBlockedPath(filePath string, blockedPaths []string) bool {
-	if len(blockedPaths) == 0 {
-		return false
-	}
-	target := canonicalPath(filePath)
-	for _, bp := range blockedPaths {
-		if strings.TrimSpace(bp) == "" {
-			continue
-		}
-		if pathWithin(target, canonicalPath(bp)) {
-			return true
-		}
-	}
-	return false
+	return blockedPathCheck(blockedPaths)(filePath)
 }
 
 func makeReadFileHandler(cfg *SidecarConfig) RPCHandler {

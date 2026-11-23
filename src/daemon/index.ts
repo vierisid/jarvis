@@ -4774,11 +4774,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // that knows where its files are, and taken from its folder only after the person's yes.
             find: async (words) => {
               for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                const began = performance.now();
                 try {
                   // The ones that fit by name, and the ones that were changed last and may be meant whatever they are called.
                   const found = appFound(await sidecarManager.dispatchRPC(sidecar.id, 'notch.find', { words, wide: true }, { initial: 8000, max: 8000 }));
                   if (found) return found;
-                } catch { /* this one cannot look */ }
+                  console.log('[notch] a look for a file was answered by the desktop app in a way that is not a list of files');
+                } catch (error) {
+                  // Said, with how long it took: on 23 November 2026 the app's look took 46 seconds where 8 are waited,
+                  // nothing said so, and it read as folders that could not be reached. The kind of error only.
+                  console.log(`[notch] the desktop app did not answer a look for a file, after ${Math.round(performance.now() - began)} ms (${error instanceof Error ? error.name : 'error'})`);
+                }
               }
               return null;
             },
@@ -4984,10 +4990,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // said to be not reached.
           files: async () => {
             for (const sidecar of sidecarManager.getConnectedSidecars()) {
+              const began = performance.now();
               try {
                 const places = notchFilePlaces(await sidecarManager.dispatchRPC(sidecar.id, 'notch.files', {}, { initial: 8000, max: 8000 }));
                 if (places) return places;
-              } catch { /* this one cannot tell */ }
+              } catch (error) {
+                console.log(`[notch] the desktop app did not answer the look at the three folders, after ${Math.round(performance.now() - began)} ms (${error instanceof Error ? error.name : 'error'})`);
+              }
             }
             return null;
           },
