@@ -452,6 +452,30 @@ colleague called it. So a name is only one of the things a file is told by.
     there. The app writes down how long a look took, and the brain writes down a look it got no
     answer to, with how long it waited.
 
+### A file of one's own, by saying which (23 November)
+
+The owner: "send your own file via voice". "Send Leo the deck", "share the Acme contract with
+Leo", "send the deck on my desktop to Leo's laptop". The laptop is looked through as it is when
+somebody asks for a file (rules 56 to 61), and what is found is offered as a dropped file is
+(rules 44 to 49): the other side is asked "Take it?", and nothing of the file crosses before.
+
+62. **Saying it is the yes.** One file that is clearly meant goes with no question. The line says
+    which file and from which folder ("Offering Leo the file Pillow v30.pdf, in your Documents,
+    in Pitch › Decks, 4.2 MB…"), and it can be taken back while it burns.
+63. **A file that was picked burns longer than one that was dropped**: five seconds, not three.
+    A dropped file was in the owner's hand. A picked one they see named for the first time.
+64. **Two or three that may be meant are put up to pick from.** That is the answer to "which",
+    not a second question. "None of these" sends nothing.
+65. **Nothing is offered in place of what was not found.** Not the newest file, and not the
+    nearest. The notch says it found none, or that the one it found is too large to be taken
+    from its folder, and asks for a drop.
+66. **Only a file is looked for.** "Send Leo my regards", "send Leo my number", "send Leo 50
+    dollars", a mail, a message, a link and another way to reach them ("by email", "on Slack")
+    are not this. With "send", "share" and "forward" anything else is taken for a file ("send
+    Leo the tax return"). With "give", "pass" and "hand" only what is named as one ("give Leo
+    the Q3 numbers", not "give Leo a hand").
+67. **It goes to one person.** "Send Leo and Anna the deck" is not sent to the first of them.
+
 ### Where it stops
 
 - A file is found on the desktop, in the documents and in the downloads, two folders deep. It is
@@ -466,8 +490,8 @@ colleague called it. So a name is only one of the things a file is told by.
 - The sender's brain has to be on when the yes comes. Its pieces start again from the first after
   a restart.
 - It is slow by design of the channel: about 14 MB a minute at best.
-- A file of one's own is sent by dropping it on the notch. It cannot be named by voice yet ("send
-  Leo the deck on my desktop"). A file of somebody else's can be asked for by voice.
+- More than one person cannot be named for a file ("send Leo and Anna the deck"): it goes to
+  nobody, and the words are taken as any other.
 - An offer that is never answered waits. It is not taken back by itself.
 
 ## Limits

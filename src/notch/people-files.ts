@@ -114,6 +114,12 @@ export const fileSize = (bytes: number): string =>
 
 /** The largest file that is taken from its folder to be sent: what the desktop app hands over (sidecar/notch_files.go). */
 export const NOTCH_FILE_HAND_MAX = 16 * 1024 * 1024;
+/**
+ * How long a file that was picked from a folder by its description can be
+ * taken back. Longer than for a file the owner dropped (NOTCH_FILE_FUSE_MS):
+ * that one was in their hand, this one they see named for the first time.
+ */
+export const NOTCH_FILE_PICKED_FUSE_MS = 5000;
 /** How long, after "Another file", a file sent to that person counts as the answer to what they asked for. */
 export const NOTCH_FILE_SHOW_MS = 15 * 60_000;
 
@@ -247,6 +253,8 @@ export interface NotchPeopleFiles {
   send(to: PeerPerson, file: { name: string; bytes: Uint8Array }): void;
   /** Asks a person's Pillow for a file of theirs, in words. */
   want(to: PeerPerson, what: string): void;
+  /** Offers a person a file of the owner's own that was named in words: "send Leo the deck". */
+  give(to: PeerPerson, what: string): void;
   /** Takes in a note about a file that arrived. */
   note(item: PeerItem, from: PeerPerson, note: PeerFileNote, words: string): Promise<void>;
   /** After the brain was started anew: what was on its way goes on. */
@@ -317,7 +325,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
    * line says that one file goes, stays until it has gone, and their Pillow
    * does not ask them again.
    */
-  async function offer(stage: NotchStage, to: PeerPerson, file: { name: string; bytes: Uint8Array }, more: { want?: string } = {}): Promise<void> {
+  async function offer(stage: NotchStage, to: PeerPerson, file: { name: string; bytes: Uint8Array }, more: { want?: string; where?: string } = {}): Promise<void> {
     const name = peerFileName(file.name);
     const size = file.bytes.length;
     // The owner said "Another file" to what this person asked for, and this is the one they show.
@@ -326,7 +334,9 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
     {
       if (size < 1) { await stage.say([em(name), ' is empty.'], 2600); return; }
       if (size > PEER_FILE_MAX) { await stage.say([em(name), ` is larger than I can send yet: ${Math.round(PEER_FILE_MAX / (1024 * 1024))} MB is the most.`], 3600, { mood: 'sorry' }); return; }
-      const went = await stage.fuse(want ? ['Sending ', em(to.name), ' ', em(name), `, ${fileSize(size)}, and nothing else…`] : ['Offering ', em(to.name), ' the file ', em(name), `, ${fileSize(size)}…`], NOTCH_FILE_FUSE_MS, { mood: 'work' });
+      // `where`: it was picked from a folder by what was said, so the line says which folder, and burns longer.
+      const went = await stage.fuse(want ? ['Sending ', em(to.name), ' ', em(name), `, ${fileSize(size)}, and nothing else…`]
+        : ['Offering ', em(to.name), ' the file ', em(name), `, ${more.where ? `${more.where}, ` : ''}${fileSize(size)}…`], more.where && !want ? NOTCH_FILE_PICKED_FUSE_MS : NOTCH_FILE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
       // Nobody saw the line burn: what nobody may have seen does not go out.
       if (went === 'lost') return;
@@ -512,6 +522,63 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
     });
   }
 
+  /**
+   * "Send Leo the deck": a file of the owner's own, named in words. It is
+   * looked for on this laptop as a file somebody asks for is, and offered as
+   * a dropped one is. Saying it is the yes. One file that is clearly meant
+   * goes with its moment to take it back, and the line says which file and
+   * from where. Two or three that may be meant are put up to pick from:
+   * that is the answer to "which", not a second question.
+   */
+  function give(to: PeerPerson, what: string): void {
+    inbox.present('people-give', async (stage) => {
+      const drop: NotchPart[] = ['Drop it on me, and pick ', em(`Send to ${to.name}`), '.'];
+      if (!deps.find) { await stage.say(['I cannot look through the files on this laptop right now.'], 3400, { mood: 'sorry' }); return; }
+      const line = stage.id();
+      const working = (say: NotchPart[]): void => { stage.put({ id: line, kind: 'work', say, steps: 0, done: 0, mood: 'work', who: to.name }); };
+      working(['Looking for ', em(what), '…']);
+      // Esc while it looks stops it: nothing was taken from a folder, and nothing was said to anybody.
+      const stopped = stage.answer(line, ['stop', 'no']).then(() => 'stopped' as const, () => 'stopped' as const);
+      const looked = await Promise.race([stopped, (async () => {
+        const found = await deps.find!(what).catch(() => null);
+        if (!found) return null;
+        const all = found.filter((one) => one.size > 0);
+        return { all, ...await meant(what, all.filter((one) => one.size <= NOTCH_FILE_HAND_MAX)) };
+      })()]);
+      if (looked === 'stopped') { await stage.say(['Stopped. Nothing was sent.'], 2000); return; }
+      if (!looked) { await stage.say(['I cannot look through the files on this laptop right now. ', ...drop], 4200, { mood: 'sorry' }); return; }
+
+      const sendIt = async (one: PeerFileFound): Promise<void> => {
+        working(['Taking ', em(one.name), ' from its folder…']);
+        const bytes = deps.open ? await deps.open(one.place, one.name, one.dir).catch(() => null) : null;
+        if (!bytes || bytes.length < 1) { await stage.say(['I could not take ', em(one.name), ' from its folder. ', ...drop], 4600, { mood: 'sorry' }); return; }
+        await offer(stage, to, { name: one.name, bytes }, { where: fileWhere(one) });
+      };
+      const { all, picks } = looked;
+      if (picks.length === 1) { await sendIt(picks[0]!); return; }
+      if (picks.length > 1) {
+        const sheet = stage.id();
+        stage.put({
+          id: sheet, kind: 'sheet', say: ['Which one goes to ', em(to.name), '?'], who: to.name, mood: 'look', stay: true, no: 'not now',
+          blocks: [
+            ...picks.map((one, at): NotchBlock => ({ kind: 'row', id: `pick${at}`, go: true, lead: KIND[one.kind] ?? 'File', say: [one.name], small: cap(`${fileWhere(one)}, changed ${fileWhen(one.changed, now())}, ${fileSize(one.size)}`) })),
+            { kind: 'note', say: ['One file is offered to ', em(to.name), ': the one you pick.'] },
+            { kind: 'buttons', buttons: [{ id: 'none', label: 'None of these' }] },
+          ],
+        });
+        const answer = await stage.answer(sheet, ['go', 'button', 'no']);
+        const at = answer.act === 'go' ? /^pick(\d+)$/.exec(answer.row ?? '')?.[1] : undefined;
+        const one = at !== undefined ? picks[Number(at)] : undefined;
+        if (one) { await sendIt(one); return; }
+        if (answer.act === 'button' && answer.button === 'none') await stage.say(['Nothing was sent. ', ...drop], 4200, { who: to.name });
+        return;
+      }
+      // None. One whose name fits and that is too large to be taken is said, so that the owner knows why.
+      const large = all.find((one) => one.size > NOTCH_FILE_HAND_MAX && one.score >= NOTCH_FILE_NAMED);
+      await stage.say(large ? [em(large.name), ` is ${fileSize(large.size)}: larger than I can take from its folder. `, ...drop] : ['I do not find a file like that on this laptop. ', ...drop], 4800, { mood: large ? 'sorry' : 'confused' });
+    });
+  }
+
   /** Sends the pieces of a file that was taken, one after the other. */
   function pump(row: PeerFileRow): void {
     if (pumping.has(row.id)) return;
@@ -693,7 +760,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
   }
 
   return {
-    send, want, note, restore,
+    send, want, give, note, restore,
     idle: async () => { while (pumping.size) await Promise.all([...pumping.values()]); },
   };
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NotchInbox } from './inbox.ts';
 import { NOTCH_PEOPLE_ASK_WAIT_MS, attachNotchPeople, peopleName, peopleOptions } from './people.ts';
-import { fileChoiceMessages, fileChoiceRead, fileWhen, fileWhere } from './people-files.ts';
+import { NOTCH_FILE_FUSE_MS, NOTCH_FILE_PICKED_FUSE_MS, fileChoiceMessages, fileChoiceRead, fileWhen, fileWhere } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -2327,5 +2327,136 @@ describe('which file is meant, when it is asked for by what it is', () => {
     expect(fileWhen(0, AT_FILES)).toBe('at a time I do not know');
     // A file dated after now (another machine's clock) is of today, not of the future.
     expect(fileWhen(AT_FILES + DAY, AT_FILES)).toBe('today');
+  });
+});
+
+describe('a file of one\'s own, sent to somebody by saying which', () => {
+  const DAY = 86_400_000;
+  const bytesOf = (size: number, fill: number): Uint8Array => new Uint8Array(size).fill(fill);
+  const V30 = { place: 'documents' as const, dir: 'Pitch/Decks', name: 'Pillow v30.pdf', kind: 'pdf', size: 4_400_000, changed: AT_FILES - DAY, score: 3 };
+  const V29 = { place: 'documents' as const, dir: 'Pitch', name: 'Pillow v29.pptx', kind: 'slides', size: 6_100_000, changed: AT_FILES - 9 * DAY, score: 3 };
+  // As the desktop app scores them for "the deck": the two decks by their kind, the sheet not at all.
+  const NUMBERS = { place: 'desktop' as const, dir: '', name: 'Q3 numbers.xlsx', kind: 'sheet', size: 300_000, changed: AT_FILES - 2 * DAY, score: 0 };
+  const HOLIDAY = { place: 'downloads' as const, dir: '', name: 'holiday.jpg', kind: 'picture', size: 900_000, changed: AT_FILES - 3_600_000, score: 0 };
+  const crossing = async (sam: ReturnType<typeof side>, leo: ReturnType<typeof side>): Promise<void> => {
+    for (let round = 0; round < 6; round++) { await settle(); await sam.people.filesIdle(); await leo.people.filesIdle(); await leo.people.look(); await sam.people.look(); }
+    await settle();
+  };
+  /** Sam says it. Sam's laptop has these files, and the model answers this. */
+  const saying = async (sentence: string, more: { thinks?: string | Error | null; found?: PeerFileFound[] | null } = {}) => {
+    const { sam, leo } = await joined();
+    sam.fileState.found = more.found === undefined ? [V30, V29, NUMBERS, HOLIDAY] : more.found;
+    sam.fileState.thinks = more.thinks === undefined ? '{"fits":[1]}' : more.thinks;
+    sam.fileState.onDisk.set('Pitch/Decks/Pillow v30.pdf', bytesOf(5000, 30));
+    sam.fileState.onDisk.set('Pitch/Pillow v29.pptx', bytesOf(5000, 29));
+    sam.fileState.onDisk.set('Q3 numbers.xlsx', bytesOf(5000, 3));
+    const routed = await sam.say(sentence);
+    await settle();
+    return { sam, leo, routed };
+  };
+
+  test('"send Leo the deck" finds the deck on this laptop, says which file and from where, and offers it', async () => {
+    const { sam, leo, routed } = await saying('send Leo the deck');
+    expect(routed).toBe(true);
+    expect(sam.lookedFor).toEqual(['the deck']);
+    // It goes with a moment to take it back, and the line says which file was picked and where it lay.
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Offering Leo the file Pillow v30.pdf, in your Documents, in Pitch › Decks, 5 KB…');
+    // A file that was picked for the owner burns longer than one they dropped.
+    expect((sam.line() as { ms?: number }).ms).toBe(NOTCH_FILE_PICKED_FUSE_MS);
+    expect(NOTCH_FILE_PICKED_FUSE_MS).toBeGreaterThan(NOTCH_FILE_FUSE_MS);
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo. It goes when Leo takes it.');
+    await sam.done();
+    // On the other side it is a file like any other: asked about, and taken.
+    expect(leo.said()).toBe('Sam sends you a file: Pillow v30.pdf, 5 KB. Take it?');
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.saved.map((one) => one.name)).toEqual(['Pillow v30.pdf']);
+    // The one from the folder it was found in.
+    expect(leo.saved[0]!.bytes[0]).toBe(30);
+  });
+
+  test('taking it back sends nothing, and nothing is said to the other', async () => {
+    const { sam, leo } = await saying('send Leo the deck');
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(leo.engine.inbox.length).toBe(0);
+    expect(readdirSync(sam.filesDir)).toEqual([]);
+  });
+
+  test('a file whose name was said goes without the model being asked', async () => {
+    const { sam } = await saying('send Leo Pillow v30.pdf', { found: [{ ...V30, score: 43 }, V29], thinks: '{"fits":[2]}' });
+    expect(sam.thought).toEqual([]);
+    expect(sam.said()).toBe('Offering Leo the file Pillow v30.pdf, in your Documents, in Pitch › Decks, 5 KB…');
+  });
+
+  test('two that may be meant are put up to pick from, and the one that is picked is offered', async () => {
+    const { sam, leo } = await saying('send Leo the deck', { thinks: '{"fits":[1,2]}' });
+    expect(sam.kind()).toBe('sheet');
+    expect(sam.said()).toBe('Which one goes to Leo?');
+    const rows = ((sam.line() as { blocks: { kind: string; say?: unknown }[] }).blocks).filter((block) => block.kind === 'row').map((row) => JSON.stringify(row.say));
+    expect(rows).toEqual(['["Pillow v30.pdf"]', '["Pillow v29.pptx"]']);
+    expect(sam.buttons()).toEqual(['none']);
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.answer('go', { row: 'pick1' });
+    expect(sam.said()).toBe('Offering Leo the file Pillow v29.pptx, in your Documents, in Pitch, 5 KB…');
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam sends you a file: Pillow v29.pptx, 5 KB. Take it?');
+  });
+
+  test('"None of these" sends nothing', async () => {
+    const { sam, leo } = await saying('send Leo the deck', { thinks: '{"fits":[1,2]}' });
+    await sam.button('none');
+    expect(sam.said()).toBe('Nothing was sent. Drop it on me, and pick Send to Leo.');
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('nothing that fits is said so, and nothing is offered in its place', async () => {
+    const none = await saying('send Leo the tax return', { thinks: '{"fits":[]}', found: [V30, HOLIDAY] });
+    expect(none.sam.said()).toBe('I do not find a file like that on this laptop. Drop it on me, and pick Send to Leo.');
+    expect(none.leo.engine.inbox.length).toBe(0);
+    // A laptop that cannot be looked through.
+    const blind = await saying('send Leo the deck', { found: null });
+    expect(blind.sam.said()).toBe('I cannot look through the files on this laptop right now. Drop it on me, and pick Send to Leo.');
+    // One that is named and too large to be taken from its folder.
+    const large = await saying('send Leo the Q3 numbers', { thinks: '{"fits":[]}', found: [{ ...NUMBERS, score: 23, size: 17 * 1024 * 1024 }] });
+    expect(large.sam.said()).toBe('Q3 numbers.xlsx is 17.0 MB: larger than I can take from its folder. Drop it on me, and pick Send to Leo.');
+  });
+
+  test('a file that cannot be taken from its folder is said so', async () => {
+    const { sam, leo } = await saying('send Leo the Q3 numbers', { thinks: '{"fits":[1]}', found: [{ ...NUMBERS, name: 'Q3 final.xlsx' }] });
+    expect(sam.said()).toBe('I could not take Q3 final.xlsx from its folder. Drop it on me, and pick Send to Leo.');
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('which sentences are a file of one\'s own for somebody, and which are not', async () => {
+    const { sam } = await joined();
+    sam.fileState.found = [];
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const [said, what] of [
+      ['send Leo the deck', 'the deck'], ['Send the deck to Leo.', 'the deck'], ['can you send Leo the Q3 numbers', 'the Q3 numbers'],
+      ['share the Acme contract with Leo', 'the Acme contract'], ['give Leo budget.xlsx', 'budget.xlsx'], ['please forward the invoice for Northwind to Leo', 'the invoice for Northwind'],
+      ["send Leo's Pillow the deck", 'the deck'], ["send the deck on my desktop to Leo's laptop", 'the deck on my desktop'], ['send Leos pc my slides', 'my slides'],
+      // Said with "send": a file, though no word in it says so. And a name that ends as a file's does, whatever it begins with.
+      ['send Leo the tax return', 'the tax return'], ['share the roadmap with Leo', 'the roadmap'], ['forward my CV to Leo', 'my CV'], ['send Leo address list.xlsx', 'address list.xlsx'],
+      ['give Leo the Q3 numbers', 'the Q3 numbers'],
+    ] as const) expect(routes(said)).toBe(`Send Leo a file of mine: ${what}`);
+    // A file of theirs that is to come here stays what it was.
+    expect(routes("send me the deck from Leo's laptop")).toBe("Ask Leo's Pillow for a file: the deck");
+    expect(routes("ask Leo's Pillow to send me the deck")).toBe("Ask Leo's Pillow for a file: the deck");
+    expect(routes('ask Leo to send me the deck')).toBe("Ask Leo's Pillow for a file: the deck");
+    // Not a file, another way to reach them, more than one person, or nobody of the organisation: not this.
+    for (const said of ['send Leo my regards', 'give Leo a call', 'send Leo a message that I am late', 'send Leo an email with the deck', 'send Leo the deck by email',
+      'send the deck to Leo on Slack', 'send Leo and Anna the deck', 'send the deck to Leo and Anna', 'send Tony the deck', 'send it to Leo', 'send Leo a link to the deck',
+      "send Leo's deck", 'give Leo a hand with the deck', 'send Leo my number', 'send Leo 50 dollars', 'send Leo $50', 'send Leo the wifi password', 'share my location with Leo',
+      'give Leo the tax return', 'pass Leo the word', 'send Leo the deck via Slack', 'send Leo the deck on WhatsApp', 'give Leo access to the repo', 'send Leo a calendar invite', 'send Leo the address of the restaurant', 'send Leo this']) {
+      expect(routes(said) ?? '').not.toContain('a file of mine');
+    }
+    // A word to somebody is still a word.
+    expect(routes('tell Leo the deck is ready')).toBe('Tell Leo: The deck is ready');
   });
 });

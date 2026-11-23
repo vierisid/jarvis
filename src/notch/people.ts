@@ -954,6 +954,58 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   /** What somebody is asked "for" that is no file: "ask Leo's Pillow for an update". */
   const NO_FILE = /^(?:(?:an?|some|the|his|her|their|your)\s+)?(?:help|advice|feedback|update|answer|opinion|thoughts|views?|status|summary|time|permission|access|input|review|approval|confirmation|eta|hand|favou?r)\b/i;
 
+  /** Verbs that hand a thing of one's own to somebody. */
+  const GIVE = '(?:send|give|share|forward|pass|hand)';
+  /** What is sent to somebody and is no file: a word, a mail, a link, a number, money. */
+  const NO_GIFT = /^(?:(?:an?|the|my|some|this|that|our|his|her|their)\s+)?(?:(?:quick|short|calendar|meeting|zoom|meet|teams|new|little)\s+)?(?:e-?mails?|mails?|messages?|texts?|sms|dm|notes?\s+(?:that|saying|to say|about)|reminders?|invites?|invitations?|links?|urls?|regards|love|thanks|thank you|word|call|ring|hand|hug|heads[- ]up|update|nudge|ping|hello|hi|greetings|apolog(?:y|ies)|congratulations|congrats|answer|reply|news|address|(?:phone\s+)?number\b(?!s)|phone|password|passcode|code|pin|login|credentials|key|token|access|location|details|info|information|dates?|time|price|money|payment|cash|[$€£]|\d+(?:[.,]\d+)?\s*(?:dollars?|euros?|pounds?|bucks|usd|eur|gbp|k\b))/i;
+  /** The same, where the word that says so comes last: "the wifi password", "my phone number", "the door code". */
+  const NO_GIFT_LAST = /\b(?:password|passcode|number|address|code|pin|login|credentials|location|link|url|invite|invitation|message|e-?mail|mail|regards|details|info)$/i;
+  /** Verbs that are said of files more than of anything else. With the others the thing itself has to be named as a file. */
+  const GIVE_FILE = /^(?:send|share|forward)$/i;
+
+  /**
+   * A file of the owner's own that is to go to somebody: to whom, and which
+   * one, in their words.
+   *
+   *   "send Leo the deck"                    "send the deck to Leo"
+   *   "share the Acme contract with Leo"     "give Leo's Pillow budget.xlsx"
+   *
+   * Not what is no file: "send Leo my regards", "give Leo a call", "send
+   * Leo my number", a mail, a message, a link, money, or another way to
+   * reach them. With "send", "share" and "forward" anything else is taken
+   * for a file ("send Leo the tax return"); with "give", "pass" and "hand"
+   * only what is named as one.
+   */
+  function handed(text: string): { person: PeerPerson; file: string } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
+    const people = others().slice().sort((a, b) => b.name.length - a.name.length);
+    for (const one of people) {
+      const first = one.name.split(' ')[0]!;
+      const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        // Them, or their laptop: "Leo", "Leo's Pillow", "Leos laptop".
+        const them = `(?<![\\p{L}\\p{N}])${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?(?![\\p{L}\\p{N}'’])`;
+        const found = new RegExp(`^${LEAD}(${GIVE})\\s+${them}\\s+(.+)$`, 'iu').exec(said)
+          ?? new RegExp(`^${LEAD}(${GIVE})\\s+(.+?)\\s+(?:to|with)\\s+${them}$`, 'iu').exec(said);
+        const what = found?.[2]?.replace(/\s+(?:for me|please)$/i, '').trim();
+        if (!found || !what) continue;
+        // "Send Leo and Anna the deck": more than one person is meant. It does not go to the first of them.
+        if (/^(?:and|or|&|\+|,)(?:\s|$)/i.test(what) || /\s(?:and|or|&)$/i.test(what)) return null;
+        // "By email", "on Slack": another way to reach them was named. Not this one.
+        if (/\b(?:by|via|on|over|through|per|in)\s+(?:slack|e-?mail|mail|whatsapp|telegram|teams|discord|sms|text|linkedin|signal|imessage|messenger)\b/i.test(what)) return null;
+        // A file on somebody else's laptop is not one of the owner's own.
+        if (new RegExp(`(?:'s|’s|s)?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what) && people.some((other) => new RegExp(`(?<![\\p{L}\\p{N}])${escaped(other.name.split(' ')[0]!)}(?:'s|’s|s|')?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what))) return null;
+        // A name that ends as a file's does is a file, whatever it begins with. Otherwise: not a thing that is
+        // no file, and either named as a file or said with a verb that is said of files ("send Leo the tax
+        // return"). "Give Leo a hand" and "pass Leo the word" stay what they are.
+        const named = /\.[a-z0-9]{2,5}$/i.test(what);
+        if (!named && (NO_GIFT.test(what) || NO_GIFT_LAST.test(what) || /^(?:it|this|that|these|those|them|one)$/i.test(what) || !(GIVE_FILE.test(found[1]!) || FILE_WORD.test(what)))) continue;
+        return { person: one, file: what };
+      }
+    }
+    return null;
+  }
+
   /** What is wanted, when words ask for a thing to be brought: "get me the Q3 numbers" gives "the Q3 numbers". */
   function brought(words: string): string | null {
     const found = new RegExp(`^${LEAD}(?:${BRING}(?:\\s+(?:me|us))?|${HAND}\\s+(?:me|us)|i\\s+(?:need|want)|i(?:'d| would)\\s+like)\\s+(.+)$`, 'iu').exec(words);
@@ -1041,6 +1093,12 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
     if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
+    }
+    // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
+    const mine = files ? handed(text) : null;
+    if (mine) {
+      const file = peerPlain(mine.file, PEER_FILE_WHAT_MAX);
+      if (file) return { did: `Send ${mine.person.name} a file of mine: ${file}`, run: () => files!.give(mine.person, file) };
     }
     // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
     const wanted = requested(text);
