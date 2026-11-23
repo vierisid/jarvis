@@ -100,6 +100,35 @@ export const NOTCH_PEOPLE_REQUEST_MAX = 2000;
 export const NOTCH_PEOPLE_ANSWER_MAX = 4000;
 /** How often an answer is looked for while a request is out. */
 export const NOTCH_PEOPLE_FOLLOW_MS = 5000;
+/**
+ * How long a step of something that is done for somebody else stands on the
+ * notch before it is taken. Esc in that time stops the whole of it.
+ */
+export const NOTCH_PEOPLE_STEP_MS = 5000;
+
+/** One step of a thing that is done for somebody, as it is shown before it is taken (src/daemon/notch-peers.ts). */
+export interface NotchPeopleStep {
+  /** Which step it is, from one. */
+  n: number;
+  /** What will be done, in one line, whole. */
+  say: string;
+  /** The exact action, line by line. */
+  exact: string[];
+  /** `line`: read on one line, and taken when its time is up. `sheet`: read on a sheet, and taken on a yes. `never`: not taken. */
+  way: 'line' | 'sheet' | 'never';
+  why?: string;
+}
+
+/** Why a step is not taken for somebody else, as it is said. */
+const NOTCH_PEOPLE_NEVER: Record<string, string> = {
+  deletes: "That would delete something. I do not delete on somebody else's word.",
+  pays: "That would pay for something. I do not pay on somebody else's word.",
+  sends: "That would send something to somebody. I do not send on somebody else's word.",
+  installs: "That would install or remove software. I do not do that on somebody else's word.",
+  settings: "That would change a setting. I do not do that on somebody else's word.",
+  unreadable: 'I cannot show that step whole here, so I do not take it.',
+  too_many: 'That is more steps than I take for somebody else.',
+};
 
 export interface NotchPeopleDeps {
   inbox: NotchInbox;
@@ -113,7 +142,17 @@ export interface NotchPeopleDeps {
    * Without it nothing can be done here, and a request that was said yes to
    * ends with a no.
    */
-  work?: (request: { from: string; words: string }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  work?: (request: {
+    from: string;
+    words: string;
+    /**
+     * Set for a request that asks for something to be done (peerAsksToDo),
+     * after a yes that was a yes to that. Every step that changes anything
+     * is put to the owner through `step` before it is taken, and `signal`
+     * is their stop.
+     */
+    act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> };
+  }) => Promise<{ ok: true; answer: string } | { ok: false }>;
   /** Getting in: the engine put in place, and the server for whoever makes an organisation (src/peers/setup.ts). */
   setup?: PeerSetupLike;
   /**
@@ -140,6 +179,8 @@ export interface NotchPeopleDeps {
   now?: () => number;
   /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
   engineWaitMs?: number;
+  /** How long a step of a thing that is done stands before it is taken. For tests; NOTCH_PEOPLE_STEP_MS otherwise. */
+  stepMs?: number;
   /** For tests: no timer of its own. `tick` is then called by hand. */
   noClock?: boolean;
 }
@@ -212,6 +253,29 @@ interface Addressed { person: PeerPerson; verb: string; words: string }
 const MACHINE = '(?:jarvis|pillow|laptop|computer|machine|mac|pc)';
 
 /** Text for a sheet: line by line, each made readable, cut to `max` in all. */
+/** How a request begins when it asks for something to be found out, not done. */
+const PEER_KNOW = /^(?:what|which|who|whom|whose|when|where|why|how|is|are|was|were|am|do|does|did|has|have|had|can|could|will|would|should|may|might|whether|if|tell|say|find|look|check|see|verify|confirm|summari[sz]e|sum|list|show|give|get|fetch|read|count|compare|explain|describe|search|name|report|review|let|any|anything)\b/i;
+/** Words that only lead up to it. */
+const PEER_POLITE = /^(?:(?:please|kindly|hey|hi|ok|okay|can you|could you|would you|will you|i need you to|i want you to|i would like you to|i'd like you to)[,\s]+)+/i;
+
+/**
+ * Whether a request from somebody asks for a thing to be DONE on this
+ * laptop ("restart the server", "export October payouts from Revenue
+ * 2026") and not for a thing to be found out ("what changed in the last
+ * deck"). It decides what the owner is asked and what the work may do, so
+ * it is decided here, by rule, from the words the owner is shown, and never
+ * by a model and never by the one who asks.
+ *
+ * A request that begins as a question, or ends with a question mark, is
+ * never a thing to do: one that is taken for a question by mistake can only
+ * read, which is the safe way to be wrong.
+ */
+export function peerAsksToDo(words: string): boolean {
+  const said = words.trim().replace(/\s+/g, ' ').replace(PEER_POLITE, '');
+  if (!said || /[?][\s"')\]]*$/.test(said)) return false;
+  return !PEER_KNOW.test(said);
+}
+
 export function peopleLines(text: string, max: number): string[] {
   const lines: string[] = [];
   let left = max;
@@ -1078,7 +1142,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const theirs = `${to.name}'s ${NOTCH_NAME}`;
     inbox.present('people-request', async (stage) => {
       const shown = beginning(words, NOTCH_PEOPLE_GOING_MAX);
-      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!…]$/.test(shown) ? shown : `${shown}.`, ' ', em(to.name), ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      // A thing to be done there: they say yes to it, and then see every step of it on their own screen.
+      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!…]$/.test(shown) ? shown : `${shown}.`, ' ', em(to.name), peerAsksToDo(words) ? ' must say yes there, and watches.' : ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
       const sent = await meanwhile(stage, ['Sending…'], link.ask(to.id, words.slice(0, 120), words));
@@ -1248,7 +1313,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const whole = row.words.length <= NOTCH_PEOPLE_REQUEST_MAX;
       const words = peerPlain(row.words, NOTCH_PEOPLE_REQUEST_MAX);
       if (words.length <= NOTCH_PEOPLE_LINE_MAX && whole) {
-        const answer = await stage.choose([em(from.name), ' asks me: ', /[.?!]$/.test(words) ? words : `${words}.`, ' Do it here?'], ['Do it', 'No'], { who: from.name, mood: 'look' });
+        // A thing to do is asked about as one: this yes is a yes to an action, with every step shown before it is taken.
+        const answer = await stage.choose([em(from.name), ' asks me: ', /[.?!]$/.test(words) ? words : `${words}.`, peerAsksToDo(row.words) ? ' Do it, where you can watch?' : ' Do it here?'], ['Do it', 'No'], { who: from.name, mood: 'look' });
         if (answer.act !== 'pick') return null;
         waiting.line(['One moment…']);
         return answer.index === 0 ? { choice: 'allow_once', resultCheck: true } : { choice: 'decline' };
@@ -1262,6 +1328,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         blocks: [
           { kind: 'paper', lines: peopleLines(row.words, NOTCH_PEOPLE_REQUEST_MAX).map((line) => [line]) },
           ...(whole ? [] : [{ kind: 'note' as const, say: ['It goes on, and I cannot show the rest here. So I cannot do it from here.'] }]),
+          ...(whole && peerAsksToDo(row.words) ? [{ kind: 'note' as const, say: ['It is a thing to do on this laptop. I show you every step before I take it, and Esc stops it.'] }] : []),
           { kind: 'buttons', buttons: [{ id: 'no', label: 'Say no' }] },
         ],
       });
@@ -1298,18 +1365,77 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     };
   }
 
+  /** The stop of each thing that is being done for somebody. */
+  const stops = new Map<string, AbortController>();
+  /** The steps of it that wait to be shown, the next first. */
+  const stepsOf = new Map<string, { step: NotchPeopleStep; settle(said: 'go' | 'stop'): void }[]>();
+  /** Wakes the line of a thing that is being done when a step arrives for it. */
+  const stepWakers = new Map<string, () => void>();
+  /** How many steps of it were taken. */
+  const takenOf = new Map<string, number>();
+  /** " 2 steps had been taken." Nothing when none was. */
+  const taken = (id: string): string => { const n = takenOf.get(id) ?? 0; return n === 0 ? '' : ` ${n} step${n === 1 ? ' had' : 's had'} been taken.`; };
+
+  /**
+   * One step, put to the owner before it is taken. On one line it stands
+   * for five seconds and is then taken: the owner said yes to the thing
+   * being done, and watches. Esc in that time stops the whole of it. What
+   * does not fit a line is read on a sheet, and taken only on a yes.
+   * `lost`: nobody saw it, so it was neither taken nor stopped.
+   */
+  async function showStep(stage: NotchStage, from: PeerPerson, step: NotchPeopleStep): Promise<'go' | 'stop' | 'lost'> {
+    if (step.way === 'line' && step.say.length <= NOTCH_PEOPLE_LINE_MAX) {
+      const went = await stage.fuse(['For ', em(from.name), `, step ${step.n}: `, step.say, '…'], deps.stepMs ?? NOTCH_PEOPLE_STEP_MS, { mood: 'work', who: from.name });
+      return went === 'undo' ? 'stop' : went === 'lost' ? 'lost' : 'go';
+    }
+    const id = stage.id();
+    stage.put({
+      id, kind: 'sheet', say: ['For ', em(from.name), `, step ${step.n}. Take it?`], who: from.name, mood: 'look', stay: true, no: 'stop', yes: 'take it', whole: true,
+      blocks: [
+        { kind: 'paper', lines: step.exact.map((line) => [line]) },
+        { kind: 'note', say: ['Above is exactly what will be done.'] },
+        { kind: 'buttons', buttons: [{ id: 'stop', label: 'Stop it' }] },
+      ],
+    });
+    try {
+      const answer = await stage.answer(id, ['yes', 'no', 'button']);
+      return answer.act === 'yes' ? 'go' : 'stop';
+    } catch { return 'lost'; }
+  }
+
   /** Begins the work on a request that was said yes to. */
   function begin(row: PeerRequestRow, from: PeerPerson): void {
+    const doing = peerAsksToDo(row.words);
+    // A thing to do can be stopped, and each of its steps waits here until the owner has seen it.
+    const stop = doing ? new AbortController() : null;
+    if (stop) stops.set(row.id, stop);
+    const act = stop ? {
+      signal: stop.signal,
+      step: (step: NotchPeopleStep): Promise<'go' | 'stop'> => new Promise((resolve) => {
+        if (stop.signal.aborted) { resolve('stop'); return; }
+        stepsOf.set(row.id, [...(stepsOf.get(row.id) ?? []), { step, settle: resolve }]);
+        stepWakers.get(row.id)?.();
+        // Its line left the notch meanwhile: it comes back, so that the step is seen before it is taken.
+        if (!onNotch.has(row.id)) asked(row.id);
+      }),
+    } : null;
     const job = (async () => {
       let done: { ok: true; answer: string } | { ok: false } = { ok: false };
-      try { if (deps.work) done = await deps.work({ from: from.name, words: row.words }); } catch { done = { ok: false }; }
+      try { if (deps.work) done = await deps.work({ from: from.name, words: row.words, ...(act ? { act } : {}) }); } catch { done = { ok: false }; }
+      // Whatever still waits to be shown is not taken: the work that asked for it is over.
+      for (const waiting of stepsOf.get(row.id) ?? []) waiting.settle('stop');
+      stepsOf.delete(row.id);
+      stops.delete(row.id);
       // What goes is what is shown, so it is made into what can be shown here and now: readable lines, cut to size.
       const answer = done.ok ? peopleLines(done.answer, NOTCH_PEOPLE_ANSWER_MAX).join('\n') : '';
       // It was stopped, or taken back, while it was being found: it has ended, and what was found goes nowhere.
       if (answer && !store.requestState(row.id, 'ready', answer)) return;
       if (!answer && store.requestState(row.id, 'no')) {
         void link.refuse(row.id);
-        if (!onNotch.has(row.id)) news(`people:could-not:${row.id}`, ['I could not find what ', em(from.name), ' asked for.'], ['I could not find what ', em(from.name), ' asked for. ', em(from.name), ' gets nothing back.'], { who: from.name });
+        if (!onNotch.has(row.id)) {
+          news(`people:could-not:${row.id}`, doing ? ['I could not do what ', em(from.name), ' asked.'] : ['I could not find what ', em(from.name), ' asked for.'],
+            doing ? ['I could not do what ', em(from.name), ' asked. ', em(from.name), ' is told no.', taken(row.id)] : ['I could not find what ', em(from.name), ' asked for. ', em(from.name), ' gets nothing back.'], { who: from.name });
+        }
       }
       // Its line left the notch meanwhile: it comes back with what was found.
       if (answer && !onNotch.has(row.id)) asked(row.id);
@@ -1327,7 +1453,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       id: `people:req:${taskId}`, subject: `people:req:${taskId}`, class: 'person', speaks: true,
       title: () => {
         const row = store.requestOf(taskId);
-        return row?.state === 'ready' ? ['The answer for ', em(from.name), ' is ready.'] : row?.state === 'working' ? ['Finding the answer for ', em(from.name), '.'] : [em(from.name), ' asks me: ', short(first.words)];
+        return row?.state === 'ready' ? ['The answer for ', em(from.name), ' is ready.'] : row?.state === 'working' ? (peerAsksToDo(first.words) ? ['Doing what ', em(from.name), ' asked.'] : ['Finding the answer for ', em(from.name), '.']) : [em(from.name), ' asks me: ', short(first.words)];
       },
       check: () => { const row = store.requestOf(taskId); return !!row && row.state !== 'done' && row.state !== 'no'; },
       play: async (stage) => {
@@ -1360,20 +1486,52 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
               await stage.say(told ? ['I was stopped in the middle of what ', em(from.name), ' asked. I told ', em(from.name), ' no.'] : ['I was stopped in the middle of what ', em(from.name), ' asked. Nothing was sent.'], 3600, { mood: 'sorry' });
               return 'settled';
             }
-            const waitId = stage.id();
-            stage.put({ id: waitId, kind: 'work', say: ['Finding the answer for ', em(from.name), '…'], steps: 0, done: 0, mood: 'work', who: from.name });
-            const stopped = stage.answer(waitId, ['stop', 'no']).then(() => 'stop' as const, () => 'left' as const);
-            const how = await Promise.race([job.then(() => 'found' as const), stopped]);
-            if (how === 'left') return 'waits';
-            if (how === 'stop') {
-              // Stopped by the person: nothing of it is sent, whatever is found later.
+            const doing = peerAsksToDo(row.words);
+            /** Stopped by the person, or at a step that is never taken: no further step, and nothing of it is sent, whatever comes later. */
+            const stopIt = async (never?: NotchPeopleStep): Promise<'settled'> => {
+              stops.get(taskId)?.abort();
+              for (const waiting of stepsOf.get(taskId) ?? []) waiting.settle('stop');
+              stepsOf.delete(taskId);
               store.requestState(taskId, 'no'); ended(); void link.refuse(taskId);
-              await stage.say(['Stopped. Told ', em(from.name), ' no. Nothing left this laptop.'], 3200, { who: from.name });
+              const before = !doing ? ' Nothing left this laptop.' : taken(taskId) || ' Nothing was touched.';
+              takenOf.delete(taskId);
+              await stage.say(never ? [NOTCH_PEOPLE_NEVER[never.why ?? ''] ?? 'That is a step I do not take for somebody else.', ' Told ', em(from.name), ' no.', before] : ['Stopped. Told ', em(from.name), ' no.', before],
+                never ? 5600 : 3200, { who: from.name, ...(never ? { mood: 'sorry' as const } : {}) });
               return 'settled';
+            };
+            for (;;) {
+              const waitId = stage.id();
+              const n = takenOf.get(taskId) ?? 0;
+              stage.put({
+                id: waitId, kind: 'work', mood: 'work', who: from.name, steps: 0, done: 0,
+                say: doing ? ['Doing it for ', em(from.name), n === 0 ? '…' : `. ${n} step${n === 1 ? '' : 's'} taken…`] : ['Finding the answer for ', em(from.name), '…'],
+              });
+              const stopped = stage.answer(waitId, ['stop', 'no']).then(() => 'stop' as const, () => 'left' as const);
+              const stepped = new Promise<'step'>((resolve) => { if ((stepsOf.get(taskId) ?? []).length > 0) resolve('step'); else stepWakers.set(taskId, () => resolve('step')); });
+              const how = await Promise.race([job.then(() => 'found' as const), stopped, stepped]);
+              stepWakers.delete(taskId);
+              if (how === 'left') return 'waits';
+              if (how === 'stop') return stopIt();
+              if (how === 'found') break;
+              const next = (stepsOf.get(taskId) ?? [])[0];
+              if (!next) continue;
+              if (next.step.way === 'never') return stopIt(next.step);
+              const said = await showStep(stage, from, next.step);
+              // Nobody saw it: it is neither taken nor stopped. It waits with its line.
+              if (said === 'lost') return 'waits';
+              stepsOf.set(taskId, (stepsOf.get(taskId) ?? []).filter((one) => one !== next));
+              if (said === 'stop') { next.settle('stop'); return stopIt(); }
+              takenOf.set(taskId, n + 1);
+              next.settle('go');
             }
           }
           row = store.requestOf(taskId);
-          if (row?.state === 'no') { ended(); await stage.say(['I could not find that. ', em(from.name), ' gets nothing back.'], 3200, { mood: 'sorry', who: from.name }); return 'settled'; }
+          if (row?.state === 'no') {
+            ended();
+            await stage.say(peerAsksToDo(row.words) ? ['I could not do that. ', em(from.name), ' is told no.', taken(taskId)] : ['I could not find that. ', em(from.name), ' gets nothing back.'], 3200, { mood: 'sorry', who: from.name });
+            takenOf.delete(taskId);
+            return 'settled';
+          }
           if (row?.state !== 'ready' || !row.answer) return 'settled';
           const sending = watch(stage);
           sending.line(['Getting it ready for ', em(from.name), '…']);
@@ -1381,7 +1539,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           const finished = await Promise.race([link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer, sending) }), sending.gone]);
           if (finished === 'closed' || finished === 'stop') return 'waits';
           if (finished === 'failed' || finished === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
-          if (finished === 'sent') { store.requestState(taskId, 'done'); ended(); await stage.say(['Sent. Only that left this laptop.'], 3200, { mark: 'check', who: from.name }); return 'settled'; }
+          if (finished === 'sent') {
+            store.requestState(taskId, 'done'); ended(); takenOf.delete(taskId);
+            await stage.say(peerAsksToDo(row.words) ? ['Done. Told ', em(from.name), '. Only that left this laptop.'] : ['Sent. Only that left this laptop.'], 3200, { mark: 'check', who: from.name });
+            return 'settled';
+          }
           store.requestState(taskId, 'no');
           ended();
           if (finished === 'gone') { await stage.say([em(from.name), ' took it back. Nothing was sent.'], 2800, { who: from.name }); return 'settled'; }
@@ -1404,18 +1566,20 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   function answer(row: PeerRequestRow, from: PeerPerson): void {
     const theirs = `${from.name}'s ${NOTCH_NAME}`;
     const key = `answer:${row.id}`;
+    const did = peerAsksToDo(row.words);
     store.take(key, row.peer);
     inbox.add({
       id: `people:${key}`, subject: `people:${key}`, class: 'person', speaks: true,
-      title: () => [em(theirs), ' answered.'],
+      title: () => (did ? ['Done on ', em(`${from.name}'s laptop`), '.'] : [em(theirs), ' answered.']),
       check: () => store.got(key)?.done !== true,
       play: async (stage) => {
         const lines = peopleLines(row.answer ?? '', NOTCH_PEOPLE_ANSWER_MAX);
         if (lines.length === 1 && lines[0]!.length <= NOTCH_PEOPLE_LINE_MAX) {
-          const said = await stage.offer([em(theirs), ': ', lines[0]!], 'ok', { who: from.name, mood: 'look' });
+          // A thing that was done there, with their yes and in front of them.
+          const said = await stage.offer(did ? ['Done on ', em(`${from.name}'s laptop`), ': ', lines[0]!] : [em(theirs), ': ', lines[0]!], 'ok', { who: from.name, mood: 'look' });
           if (said.act !== 'yes') return 'waits';
         } else {
-          const first = await stage.offer([em(theirs), ' answered. Read it?'], 'read', { who: from.name, mood: 'look' });
+          const first = await stage.offer(did ? ['It is done on ', em(`${from.name}'s laptop`), '. Read what was done?'] : [em(theirs), ' answered. Read it?'], 'read', { who: from.name, mood: 'look' });
           if (first.act !== 'yes') return 'waits';
           await stage.sheet([em(theirs)], [{ kind: 'note', say: ['You asked: ', peerPlain(row.words, 200)] }, { kind: 'paper', lines: lines.map((line) => [line]) }], { who: from.name });
         }
@@ -1449,9 +1613,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const theirs = `${from.name}'s`;
       const say: NotchPart[] = end.how === 'expired' ? [em(from.name), ' did not answer in time. It is closed.']
         : end.how === 'failed' && end.said ? [em(`${theirs} ${NOTCH_NAME}`), ' could not do it.']
-          : end.how === 'declined' ? [em(from.name), ' said no. Nothing left ', em(theirs), ' laptop.']
-            // It was taken up and nothing was sent: kept back there, or not found. This machine cannot tell which.
-            : ['Nothing came back from ', em(`${theirs} ${NOTCH_NAME}`), '. Nothing left ', em(theirs), ' laptop.'];
+          : end.how === 'declined' ? (peerAsksToDo(row.words) ? [em(from.name), ' said no. Nothing was touched on ', em(theirs), ' laptop.'] : [em(from.name), ' said no. Nothing left ', em(theirs), ' laptop.'])
+            // A thing to do that was taken up and did not end: stopped there, or not possible. Something may have been done.
+            : peerAsksToDo(row.words) ? ['It was not finished on ', em(theirs), ' laptop. Ask ', em(from.name), ' what was done.']
+              // It was taken up and nothing was sent: kept back there, or not found. This machine cannot tell which.
+              : ['Nothing came back from ', em(`${theirs} ${NOTCH_NAME}`), '. Nothing left ', em(theirs), ' laptop.'];
       news(`people:end:${row.id}`, say, say, { person: true, who: from.name, ms: 4200 });
     }
   }

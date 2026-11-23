@@ -242,6 +242,8 @@ export class AgentOrchestrator {
   private authorityEngine: AuthorityEngine | null = null;
   private approvalManager: ApprovalManager | null = null;
   private deferredExecutor: DeferredExecutor | null = null;
+  /** Runs the approved calls of a watched turn (setWatchedExecutor). It makes no other turn wait. */
+  private watchedExecutor: DeferredExecutor | null = null;
   private auditTrail: AuditTrail | null = null;
   private emergencyController: EmergencyController | null = null;
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
@@ -349,6 +351,17 @@ export class AgentOrchestrator {
    */
   setDeferredExecutor(executor: DeferredExecutor): void {
     this.deferredExecutor = executor;
+  }
+
+  /**
+   * For a turn that is watched step by step (`hold.watched` in
+   * processMessage): each of its calls that needs a yes waits for it here,
+   * runs when it is given, and its result goes back into the turn. Unlike
+   * setDeferredExecutor it changes no other turn: one that is not watched
+   * still gets AWAITING_APPROVAL at once and goes on.
+   */
+  setWatchedExecutor(executor: DeferredExecutor): void {
+    this.watchedExecutor = executor;
   }
 
   setAuditTrail(trail: AuditTrail): void {
@@ -951,7 +964,13 @@ export class AgentOrchestrator {
     // `llm` replaces the manager for this turn's model calls (a held client
     // refuses them itself), and `checkpoint` is asked before each tool run
     // and throws to end the turn. Passed, never stored, like `scope`.
-    hold?: { llm?: Pick<LLMManager, 'chatTier'>; checkpoint?: () => void } | null,
+    //
+    // `signal` and `watched`: a turn the person watches step by step and can
+    // stop (a colleague's request that asks for something to be done,
+    // daemon/notch-peers.ts). Each call that needs a yes waits for it and
+    // runs inside the turn, a call that is waiting when the signal goes is
+    // withdrawn, and none is ever left behind to be approved later.
+    hold?: { llm?: Pick<LLMManager, 'chatTier'>; checkpoint?: () => void; signal?: AbortSignal; watched?: boolean } | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -1043,7 +1062,7 @@ export class AgentOrchestrator {
           this.noteToolUse(ledger, tc.name, turnScope);
           // A tool call's arguments came from this turn's prompt: none runs once the turn may no longer send.
           hold?.checkpoint?.();
-          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, hold?.signal, turnTaint, turnScope, hold?.watched === true));
           messages.push({
             role: 'tool',
             content: result,
@@ -1966,6 +1985,7 @@ export class AgentOrchestrator {
     signal: AbortSignal | undefined,
     taint: Set<string>,
     scope: TurnToolScope | null,
+    watched = false,
   ): Promise<string | ContentBlock[]> {
     // Enter the turn's taint set for the duration of the call so noteTaint,
     // getEffectiveProfile and any sub-agent spawned by the tool see it.
@@ -1983,13 +2003,14 @@ export class AgentOrchestrator {
     // unknown tool name: a call that cannot run is not a governance decision.
     if (toolCall.argumentsError !== undefined) return malformedArgumentsResult(toolCall);
     return withTurnScopeId(scope?.id, () =>
-      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope)));
+      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope, watched)));
   }
 
   private async executeToolInner(
     toolCall: LLMToolCall,
     signal: AbortSignal | undefined,
     scope: TurnToolScope | null,
+    watched = false,
   ): Promise<string | ContentBlock[]> {
     signal?.throwIfAborted();
     // The caller's dispatch fence, before the gate (#1155): a channel turn
@@ -2204,7 +2225,9 @@ export class AgentOrchestrator {
         // from there to the conversation tier), instead of being executed
         // detached on approval and broadcast as a raw notification.
         // Deferred mode is the fallback when no executor is wired.
-        const inline = this.deferredExecutor !== null;
+        // A watched turn waits too, with the executor that is kept for it.
+        const executor = this.deferredExecutor ?? (watched ? this.watchedExecutor : null);
+        const inline = executor !== null;
         const request = this.approvalManager.createRequest({
           agentId: primary.id,
           agentName: this.auditAgentName(primary.agent.role.name),
@@ -2259,7 +2282,7 @@ export class AgentOrchestrator {
          * a per-message nonce; those three must never be handed one.
          */
         const runApproved = async (): Promise<string | ContentBlock[]> => {
-          const receipt = await this.deferredExecutor!.executeApprovedWithReceipt(request.id, 'inline-gate');
+          const receipt = await executor!.executeApprovedWithReceipt(request.id, 'inline-gate');
           // Held by screen awareness (#1314 follow-up): nothing ran, and the
           // card is pending again for the person, not a result for the model.
           if (receipt.held) {
@@ -2336,7 +2359,9 @@ export class AgentOrchestrator {
             // not handed on, so a later click cannot run the action of a task
             // the person stopped (Q-08). A deny only lands while the request
             // is still pending; an approve that won the race runs below.
-            const withdrawn = signal?.aborted ? this.approvalManager.deny(request.id, 'task-cancelled') : null;
+            // A watched turn's call is withdrawn when nobody decided it in time, too: it is a step of
+            // something the person watches, and is never left to be approved after that has ended.
+            const withdrawn = signal?.aborted || watched ? this.approvalManager.deny(request.id, 'task-cancelled') : null;
             if (withdrawn) {
               this.onApprovalWithdrawn?.(withdrawn);
               return `[APPROVAL WITHDRAWN] The task was cancelled, so the approval request for ${toolCall.name} was withdrawn and nothing was run.`;

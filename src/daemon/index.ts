@@ -145,7 +145,7 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { NOTCH_DECIDER, applyApprovalDecision, channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
-import { approvalHeldByAwareness } from "../authority/approval-provenance.ts";
+import { approvalHeldByAwareness, approvalIsWatched } from "../authority/approval-provenance.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
 import { recordChatFailure } from "../failures/chat.ts";
@@ -4754,7 +4754,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         busy: () => notchDemo?.running() != null,
         // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
         ...(peerLink && peerSetupNow ? { peers: {
-          db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent),
+          db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent, { decide: (action, requestId) => applyApprovalDecision(action, requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }) }),
           // A file from somebody in the organisation: kept in the brain's own folder while it crosses, then put in the person's Downloads.
           files: {
             dir: path.join(dataDir, 'peers', 'files'),
@@ -5345,6 +5345,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // and not marked as notified, so it is if awareness comes back soon.
           if (approvalHeldByAwareness(req)) continue;
           notifiedApprovalIds.add(req.id);
+          // A step of a job the owner watches on the notch: it is asked there, with the job, and by no toast.
+          if (approvalIsWatched(req)) continue;
           if (notchTells) continue;
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
           // Approve/Deny only when the toast can show the full request.
@@ -6540,6 +6542,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approvalManager,
         auditTrail,
         emergencyController,
+        // For a colleague's request that the owner watches being done (daemon/notch-peers.ts): its steps run inside the turn.
+        watchedExecutor: deferredExecutor,
         onApprovalNeeded: (request) => {
           approvalDelivery.deliver(request).catch(err =>
             console.error('[Daemon] Background approval delivery error:', err)

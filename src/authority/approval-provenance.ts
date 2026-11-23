@@ -13,12 +13,19 @@ import { isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
  * awareness is back on it is approvable again. Every other approval is
  * unaffected.
  *
+ * `watched`: raised by a turn the owner watches step by step (a colleague's
+ * request that asks for something to be done, daemon/notch-peers.ts). It is
+ * a step of that job: it is put to the owner by whoever shows the job, in
+ * its place among the other steps, and by no other surface. Shown as a card
+ * of its own it could be approved by somebody who does not see what it is a
+ * step of, or after the job was stopped.
+ *
  * Carried in AsyncLocalStorage like the LLM origin (src/llm/origin.ts): the
  * background agent sets it around the whole turn, and every request created
  * inside it (the authority gate, a sub-agent's gate, request_approval) is
  * marked without each layer passing it on.
  */
-export type ApprovalProvenance = 'screen';
+export type ApprovalProvenance = 'screen' | 'watched';
 
 const store = new AsyncLocalStorage<ApprovalProvenance>();
 
@@ -34,6 +41,11 @@ export function runWithoutApprovalProvenance<T>(fn: () => T): T {
 
 export function currentApprovalProvenance(): ApprovalProvenance | null {
   return store.getStore() ?? null;
+}
+
+/** Whether this request is a step of something the owner watches being done: shown there, and nowhere else. */
+export function approvalIsWatched(request: { provenance?: string | null }): boolean {
+  return request.provenance === 'watched';
 }
 
 /** What a person is told about a held screen-derived approval. */

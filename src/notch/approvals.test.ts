@@ -4,6 +4,7 @@
  * that runs is a stand-in, and it counts its runs.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { runWithApprovalProvenance } from '../authority/approval-provenance.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { ApprovalManager, type ApprovalPrincipal, type ApprovalRequest } from '../authority/approval.ts';
 import { approvalToast } from '../authority/approval-delivery.ts';
@@ -156,6 +157,19 @@ describe('one line, one yes', () => {
     await h.answer('yes');
     await h.answer('done');
     expect(h.runs).toHaveLength(1);
+  });
+
+  test('a step of something the owner watches being done is not a line of its own here', async () => {
+    const h = harness();
+    // As the background agent files it for a colleague's request that is done step by step (daemon/notch-peers.ts).
+    const step = runWithApprovalProvenance('watched', () => h.ask({ mode: 'inline' }));
+    expect(step.provenance).toBe('watched');
+    const other = h.ask();
+    await h.sync();
+    // It is put to the owner with the job it is a step of (people.ts). Here it could be said yes to after the job was stopped.
+    expect(h.inbox.has(h.notch.itemId(step.id))).toBe(false);
+    expect(h.inbox.has(h.notch.itemId(other.id))).toBe(true);
+    expect(h.approvals.getRequest(step.id)!.status).toBe('pending');
   });
 
   test('a fuse nobody saw burn out approves nothing', async () => {

@@ -22,6 +22,7 @@ import type { ResearchQueue } from './research-queue.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
+import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { loadRole } from '../roles/loader.ts';
@@ -61,6 +62,28 @@ export interface BackgroundTurnOptions {
    * own: nothing of it enters the history later background turns re-send.
    */
   outside?: string;
+  /**
+   * The owner said yes to something being DONE, and watches it step by step
+   * (a colleague's request, src/daemon/notch-peers.ts). Three things differ
+   * from every other background turn:
+   *
+   *   - Each call that needs a yes is handed to `step`, and to no other
+   *     surface. Whoever shows it decides it through the product's one
+   *     decision function.
+   *   - The turn waits for that decision, and the call's result goes back
+   *     into it. So a job of several steps can be done, one after the other.
+   *   - `signal` stops it: no further model call and no further tool run,
+   *     and a step that is waiting is withdrawn. Nothing it asked for is
+   *     left behind to be approved later.
+   *
+   * Only together with `outside`: such a turn is somebody else's words.
+   */
+  watched?: { signal: AbortSignal; step: (request: ApprovalRequest) => void };
+}
+
+/** A watched turn was stopped by the person who watches it. */
+export class WatchedTurnStopped extends Error {
+  constructor() { super('The watched turn was stopped.'); this.name = 'WatchedTurnStopped'; }
 }
 
 const BG_CDP_PORT = 9223;
@@ -78,7 +101,7 @@ export class BackgroundAgentService implements Service, IAgentService {
   private authorityEngine: AuthorityEngine | null = null;
   private authorityProfile: AuthorityProfile | null = null;
   /** Approval requests created by the turn in flight / the last finished turn. */
-  private currentTurn: { approvalIds: string[] } = { approvalIds: [] };
+  private currentTurn: { approvalIds: string[]; step?: (request: ApprovalRequest) => void } = { approvalIds: [] };
   private lastTurn: { approvalIds: string[] } = { approvalIds: [] };
   /** Turns run strictly one after another on this chain. */
   private turnChain: Promise<void> = Promise.resolve();
@@ -119,6 +142,8 @@ export class BackgroundAgentService implements Service, IAgentService {
     auditTrail: AuditTrail;
     emergencyController: EmergencyController;
     onApprovalNeeded: (request: ApprovalRequest) => void;
+    /** Runs the approved steps of a watched turn (BackgroundTurnOptions.watched). No other turn waits for it. */
+    watchedExecutor?: DeferredExecutor;
   }): void {
     this.authorityEngine = opts.engine;
     this.authorityProfile = opts.profile;
@@ -127,8 +152,12 @@ export class BackgroundAgentService implements Service, IAgentService {
     this.orchestrator.setApprovalManager(opts.approvalManager);
     this.orchestrator.setAuditTrail(opts.auditTrail);
     this.orchestrator.setEmergencyController(opts.emergencyController);
+    if (opts.watchedExecutor) this.orchestrator.setWatchedExecutor(opts.watchedExecutor);
     this.orchestrator.setApprovalCallback((request) => {
       this.currentTurn.approvalIds.push(request.id);
+      // A watched turn's step belongs to whoever watches it. It is shown there and nowhere else: on the
+      // dashboard or in a chat it could be approved by somebody who does not see the job it is a step of.
+      if (this.currentTurn.step) { this.currentTurn.step(request); return; }
       opts.onApprovalNeeded(request);
     });
   }
@@ -253,12 +282,24 @@ export class BackgroundAgentService implements Service, IAgentService {
       // A screen-derived turn queued behind others starts only if awareness is still on.
       if (options.screenDerived && !awarenessHistoryVisible()) throw new AwarenessHeldError();
       this.busy = true;
-      this.currentTurn = { approvalIds: [] };
+      // Watched only as somebody else's words, on a thread of its own: never as a turn of the agent's own history.
+      const watched = options.outside && !options.screenDerived ? options.watched ?? null : null;
+      this.currentTurn = { approvalIds: [], ...(watched ? { step: watched.step } : {}) };
       try {
+        // Stopped before its turn came: nothing of it begins.
+        if (watched?.signal.aborted) throw new WatchedTurnStopped();
         const systemPrompt = this.buildSystemPromptParts(channel);
         const hold = options.screenDerived ? {
           llm: awarenessHeldLlm(this.llmManager, held),
           checkpoint: () => { if (!awarenessHistoryVisible()) { held.held = true; throw new AwarenessHeldError(); } },
+        } : watched ? {
+          // Once it is stopped the model is not asked again: a stop that only kept tools from running would
+          // still let the turn end in words, and those words would be taken for what was done.
+          llm: { chatTier: ((...args: Parameters<LLMManager['chatTier']>) => { if (watched.signal.aborted) throw new WatchedTurnStopped(); return this.llmManager.chatTier(...args); }) as LLMManager['chatTier'] },
+          // Asked before each tool run. The signal also reaches the wait for a step's yes, and the tool itself.
+          checkpoint: () => { if (watched.signal.aborted) throw new WatchedTurnStopped(); },
+          signal: watched.signal,
+          watched: true,
         } : null;
         // Own empty thread: read, never written, so the primary history keeps none of it.
         const thread = options.screenDerived ? { history: [] } : options.outside ? { history: [], untrustedSources: [options.outside] } : null;
@@ -268,8 +309,13 @@ export class BackgroundAgentService implements Service, IAgentService {
         // Every approval a screen-derived turn raises is marked so at creation:
         // it is held while screen awareness is off (#1314 follow-up).
         const turn = () => runWithOrigin('background', () =>
-          options.screenDerived ? runWithApprovalProvenance('screen', runTurn) : runWithoutApprovalProvenance(runTurn));
-        return await runWithAdmission(admission, turn);
+          options.screenDerived ? runWithApprovalProvenance('screen', runTurn)
+            // Each step of a watched turn is marked as one: no other surface shows it as a card of its own.
+            : watched ? runWithApprovalProvenance('watched', runTurn) : runWithoutApprovalProvenance(runTurn));
+        const said = await runWithAdmission(admission, turn);
+        // Stopped while its last words were being written: they are not an answer.
+        if (watched?.signal.aborted) throw new WatchedTurnStopped();
+        return said;
       } catch (err) {
         // A refused admission is not an answer. Returned as text it would be
         // spoken as an error "fix", broadcast as a reaction, or recorded as a
@@ -277,6 +323,8 @@ export class BackgroundAgentService implements Service, IAgentService {
         if (err instanceof BackgroundThrottled) throw err;
         // Nor is a turn the awareness switch stopped, however the refusal surfaced.
         if (err instanceof AwarenessHeldError || held.held) throw new AwarenessHeldError();
+        // Nor one its watcher stopped: an abort raised from inside a tool or a wait is the same stop.
+        if (err instanceof WatchedTurnStopped || options.watched?.signal.aborted) throw new WatchedTurnStopped();
         console.error('[BackgroundAgent] Message error:', err);
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       } finally {

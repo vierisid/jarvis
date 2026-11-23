@@ -47,6 +47,7 @@
 import { approvalIntentParts, boundedApprovalLabel, toastColumns, toastLookAlike } from '../authority/approval-delivery.ts';
 import { approvalDashboardOnly, approvalIntentFromContext, approvalNeedsClick, executionState } from '../authority/approval.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
+import { approvalIsWatched } from '../authority/approval-provenance.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
@@ -662,6 +663,9 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     const ids = new Set(pending.map((request) => request.id));
     // Oldest first, so the count's order is the order they were asked in.
     for (const request of [...pending].sort((a, b) => a.created_at - b.created_at)) {
+      // A step of something the owner watches being done is shown with that job, in its place (people.ts).
+      // As a line of its own here it could be said yes to after the job was stopped, or twice.
+      if (approvalIsWatched(request)) continue;
       if (known.has(request.id)) continue;
       known.add(request.id);
       arrive(request, false);

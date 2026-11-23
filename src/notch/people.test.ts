@@ -4,7 +4,8 @@ import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NotchInbox } from './inbox.ts';
-import { NOTCH_PEOPLE_ASK_WAIT_MS, attachNotchPeople, peopleName, peopleOptions } from './people.ts';
+import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
+import type { NotchPeopleStep } from './people.ts';
 import { NOTCH_FILE_FUSE_MS, NOTCH_FILE_PICKED_FUSE_MS, fileChoiceMessages, fileChoiceRead, fileWhen, fileWhere } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
@@ -90,7 +91,7 @@ class FakeSetup implements PeerSetupLike {
   onChange(listener: () => void): void { this.listeners.push(listener); }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -133,17 +134,31 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   engine.notice = link.notice;
   const store = new PeerStore(new Database(':memory:'), () => server.now());
   const opened: string[] = [];
-  const state: { canOpen: boolean; answer: { ok: true; answer: string } | { ok: false } | Promise<{ ok: true; answer: string } | { ok: false }> } = {
+  const state: {
+    canOpen: boolean;
+    answer: { ok: true; answer: string } | { ok: false } | Promise<{ ok: true; answer: string } | { ok: false }>;
+    /** How a thing that is to be done is done here: it puts its steps through `act`, as the daemon's work does. */
+    doing?: (act: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  } = {
     canOpen: more.canOpen ?? true,
     answer: { ok: true, answer: 'Three slides changed: pricing, the roadmap and the team page.' },
   };
   /** Every request that was really worked on here. */
   const worked: { from: string; words: string }[] = [];
+  /** For each of them: whether it was handed over as a thing to be done. */
+  const acted: boolean[] = [];
   const make = () => attachNotchPeople({
     inbox, link, store, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
     ...(more.engineWaitMs ? { engineWaitMs: more.engineWaitMs } : {}),
+    ...(more.stepMs ? { stepMs: more.stepMs } : {}),
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
-    ...(more.noWork ? {} : { work: async (request: { from: string; words: string }) => { worked.push(request); return state.answer; } }),
+    ...(more.noWork ? {} : {
+      work: async (request: { from: string; words: string; act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> } }) => {
+        worked.push({ from: request.from, words: request.words });
+        acted.push(request.act !== undefined);
+        return request.act && state.doing ? state.doing(request.act) : state.answer;
+      },
+    }),
     ...(setup ? { setup } : {}),
     files: {
       dir: filesDir, paceMs: 0, retryMs: 0,
@@ -160,7 +175,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, make,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make,
     saved, filesDir, fileState, lookedFor, held, thought,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
@@ -190,10 +205,10 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
 }
 
 /** Two people, signed in and joined, each with a name for the other. */
-async function joined(more: { org?: string } = {}) {
+async function joined(more: { org?: string; stepMs?: number } = {}) {
   const server = new FakeServer();
   const sam = side(server, SAM, 'sam');
-  const leo = side(server, LEO, 'leo');
+  const leo = side(server, LEO, 'leo', more.stepMs ? { stepMs: more.stepMs } : {});
   sam.engine.signedIn = true;
   leo.engine.signedIn = true;
   sam.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
@@ -2458,5 +2473,196 @@ describe('a file of one\'s own, sent to somebody by saying which', () => {
     }
     // A word to somebody is still a word.
     expect(routes('tell Leo the deck is ready')).toBe('Tell Leo: The deck is ready');
+  });
+});
+
+describe('something done on their laptop, while they watch', () => {
+  type Act = { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> };
+  const RESTART: NotchPeopleStep = { n: 1, say: 'On this computer, in ~/app, run: systemctl restart app', exact: ['On this computer, in ~/app, run: systemctl restart app'], way: 'line' };
+  const CHECK: NotchPeopleStep = { n: 2, say: 'On this computer, in ~/app, run: curl -s localhost:3000/health', exact: ['On this computer, in ~/app, run: curl -s localhost:3000/health'], way: 'line' };
+  /** What became of each step that was put up, in order. */
+  const job = (steps: NotchPeopleStep[], answer = 'The server was restarted and answers again.') => {
+    const went: string[] = [];
+    let stopped = false;
+    const doing = async (act: Act) => {
+      act.signal.addEventListener('abort', () => { stopped = true; });
+      for (const step of steps) {
+        const said = await act.step(step);
+        went.push(`${step.n}:${said}`);
+        if (said === 'stop') return { ok: false as const };
+      }
+      return { ok: true as const, answer };
+    };
+    return { doing, went, stopped: () => stopped };
+  };
+  /** Sam asks for it, and Leo has said "Do it". */
+  const begun = async (steps: NotchPeopleStep[], words = 'restart the server') => {
+    const { sam, leo } = await joined();
+    const work = job(steps);
+    leo.state.doing = work.doing;
+    expect(await sam.say(`ask Leo's Pillow to ${words}`)).toBe(true);
+    const asking = sam.said();
+    await sam.done();
+    await sam.done();
+    const question = leo.said();
+    await leo.pick(0);
+    return { sam, leo, work, asking, question };
+  };
+
+  test('a thing to do is told from a thing to find out, by rule, from the words', () => {
+    for (const said of ['restart the server', 'Restart the server.', 'export October payouts from Revenue 2026', 'please run the tests', 'can you open the staging page in Chrome',
+      'to restart the server', 'create a file called notes.txt on the desktop', 'update the price in the Q3 sheet to 59']) expect(peerAsksToDo(said)).toBe(true);
+    for (const said of ['what changed in the last deck', 'What changed in the last deck?', 'is the server up', 'how many invoices are open', 'check whether the build passed',
+      'find the Q3 number', 'tell me who signed the contract', 'summarise the last call', 'can the server take more load', 'restart the server?', 'list the open pull requests', '', '   ']) expect(peerAsksToDo(said)).toBe(false);
+  });
+
+  test('both are told that it is a thing to do, and the yes is a yes to that', async () => {
+    const { leo, work, asking, question } = await begun([RESTART]);
+    expect(asking).toBe("Asking Leo's Pillow: Restart the server. Leo must say yes there, and watches.");
+    expect(question).toBe('Sam asks me: Restart the server. Do it, where you can watch?');
+    // Handed over as a thing to be done, with the owner's stop and a way to put each step to them.
+    expect(leo.acted).toEqual([true]);
+    expect(work.went).toEqual([]);
+  });
+
+  test('a thing to find out is still only read', async () => {
+    const { sam, leo } = await joined();
+    leo.state.doing = job([RESTART]).doing;
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam asks me: What changed in the last deck. Do it here?');
+    await leo.pick(0);
+    expect(leo.acted).toEqual([false]);
+    expect(leo.said()).toBe('For Sam: Three slides changed: pricing, the roadmap and the team page. Send only that?');
+  });
+
+  test('each step is shown before it is taken, and is taken when its time is up', async () => {
+    const { sam, leo, work } = await begun([RESTART, CHECK]);
+    // The first step is on the notch, whole, and has not been taken.
+    expect(leo.kind()).toBe('send');
+    expect(leo.said()).toBe('For Sam, step 1: On this computer, in ~/app, run: systemctl restart app…');
+    expect((leo.line() as { ms?: number }).ms).toBe(NOTCH_PEOPLE_STEP_MS);
+    expect(work.went).toEqual([]);
+    await leo.done();
+    expect(work.went).toEqual(['1:go']);
+    expect(leo.said()).toBe('For Sam, step 2: On this computer, in ~/app, run: curl -s localhost:3000/health…');
+    await leo.done();
+    expect(work.went).toEqual(['1:go', '2:go']);
+    // What was done is shown before it goes, like any answer.
+    expect(leo.said()).toBe('For Sam: The server was restarted and answers again. Send only that?');
+    expect(sam.engine.inbox.length).toBe(0);
+    await leo.pick(0);
+    expect(leo.said()).toBe('Done. Told Sam. Only that left this laptop.');
+    await leo.done();
+    await sam.people.tick();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Done on Leo's laptop: The server was restarted and answers again.");
+  });
+
+  test('Esc on a step stops the whole of it: that step is not taken, and none after it', async () => {
+    const { sam, leo, work } = await begun([RESTART, CHECK]);
+    await leo.done();
+    expect(leo.said()).toBe('For Sam, step 2: On this computer, in ~/app, run: curl -s localhost:3000/health…');
+    await leo.answer('undo');
+    expect(work.went).toEqual(['1:go', '2:stop']);
+    expect(work.stopped()).toBe(true);
+    expect(leo.said()).toBe('Stopped. Told Sam no. 1 step had been taken.');
+    await leo.done();
+    await sam.people.tick();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    // Something may have been done there. It is not said that nothing was.
+    expect(sam.said()).toBe("It was not finished on Leo's laptop. Ask Leo what was done.");
+  });
+
+  test('Esc before the first step: nothing was touched', async () => {
+    const { leo, work } = await begun([RESTART]);
+    await leo.answer('undo');
+    expect(work.went).toEqual(['1:stop']);
+    expect(leo.said()).toBe('Stopped. Told Sam no. Nothing was touched.');
+  });
+
+  test('a step nobody saw is neither taken nor stopped', async () => {
+    // The page goes away while the step stands: no word that its time ran out, and none that it was stopped.
+    const { sam, leo } = await joined({ stepMs: 40 });
+    const work = job([RESTART]);
+    leo.state.doing = work.doing;
+    await sam.say("ask Leo's Pillow to restart the server");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('For Sam, step 1: On this computer, in ~/app, run: systemctl restart app…');
+    await Bun.sleep(40 + 1500 + 200);
+    await settle();
+    expect(work.went).toEqual([]);
+    // It waits with its line, and is shown again when the line is.
+    expect(leo.count()).toBe(1);
+    await leo.tap();
+    expect(leo.said()).toBe('For Sam, step 1: On this computer, in ~/app, run: systemctl restart app…');
+    await leo.done();
+    expect(work.went).toEqual(['1:go']);
+  }, 15_000);
+
+  test('a step that does not fit a line is read on a sheet, and taken only on a yes', async () => {
+    const long = `On this computer, run: ${'python3 scripts/export.py --month october --out exports/october.csv '.repeat(3)}`.trim();
+    const { leo, work } = await begun([{ n: 1, say: long, exact: [long, 'in ~/revenue'], way: 'sheet' }]);
+    expect(leo.kind()).toBe('sheet');
+    expect(leo.said()).toBe('For Sam, step 1. Take it?');
+    expect(leo.blocks()).toContain('in ~/revenue');
+    expect(leo.buttons()).toEqual(['stop']);
+    expect(work.went).toEqual([]);
+    await leo.yes();
+    expect(work.went).toEqual(['1:go']);
+    // And the button stops it.
+    const other = await begun([{ n: 1, say: long, exact: [long], way: 'sheet' }]);
+    await other.leo.button('stop');
+    expect(other.work.went).toEqual(['1:stop']);
+    expect(other.leo.said()).toBe('Stopped. Told Sam no. Nothing was touched.');
+  });
+
+  test('what deletes, pays, sends, installs or cannot be shown is never taken, and the job ends there', async () => {
+    for (const [why, said] of [
+      ['deletes', "That would delete something. I do not delete on somebody else's word. Told Sam no. 1 step had been taken."],
+      ['pays', "That would pay for something. I do not pay on somebody else's word. Told Sam no. 1 step had been taken."],
+      ['sends', "That would send something to somebody. I do not send on somebody else's word. Told Sam no. 1 step had been taken."],
+      ['installs', "That would install or remove software. I do not do that on somebody else's word. Told Sam no. 1 step had been taken."],
+      ['unreadable', 'I cannot show that step whole here, so I do not take it. Told Sam no. 1 step had been taken.'],
+      ['too_many', 'That is more steps than I take for somebody else. Told Sam no. 1 step had been taken.'],
+    ] as const) {
+      const { leo, work } = await begun([RESTART, { n: 2, say: 'On this computer, run: rm -rf ~/app/data', exact: ['rm -rf ~/app/data'], way: 'never', why }, CHECK]);
+      await leo.done();
+      // It was never put up for a yes or for its time to run out.
+      expect(leo.said()).toBe(said);
+      expect(work.went).toEqual(['1:go', '2:stop']);
+      expect(work.stopped()).toBe(true);
+    }
+  });
+
+  test('a no at the first question touches nothing, and says so on both sides', async () => {
+    const { sam, leo } = await joined();
+    leo.state.doing = job([RESTART]).doing;
+    await sam.say("ask Leo's Pillow to restart the server");
+    await sam.done();
+    await sam.done();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam no. Nothing was touched.');
+    expect(leo.worked).toEqual([]);
+    await leo.done();
+    await sam.people.tick();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo said no. Nothing was touched on Leo's laptop.");
+  });
+
+  test('a thing that could not be done is told as that', async () => {
+    const { sam, leo } = await joined();
+    leo.state.doing = async () => ({ ok: false as const });
+    await sam.say("ask Leo's Pillow to restart the server");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('I could not do that. Sam is told no.');
   });
 });

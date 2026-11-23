@@ -174,13 +174,14 @@ Leo's computer". Only the name of somebody this machine is joined with makes it 
     (`whole` on the sheet's line, `src/notch/protocol.ts`). The same holds for a long request.
 19. **What cannot be read whole cannot be said yes to here.** A request longer than 2,000
     characters is shown as far as it goes, says that it goes on, and has only its no.
-20. **A request is done by reading.** It runs as one turn of the background agent. The request
-    itself is quoted inside the product's marks for outside content; the sentences around it
-    are the owner's. The turn starts tainted, so everything that changes the machine, sends,
-    pays or starts another agent stops for an approval of its own, from the first step: the yes
-    on the notch was a yes to an answer, not to an action. It runs on a thread of its own, so
-    nothing of it is in the conversation with the owner or in what later turns are sent, and
-    nothing is learned from it.
+20. **A request to find something out is done by reading.** It runs as one turn of the
+    background agent. The request itself is quoted inside the product's marks for outside
+    content; the sentences around it are the owner's. Everything that changes the machine,
+    sends, pays or starts another agent stops for an approval of its own, from the first step:
+    the yes on the notch was a yes to an answer, not to an action. It runs on a thread of its
+    own, so nothing of it is in the conversation with the owner or in what later turns are
+    sent, and nothing is learned from it. A request to have something DONE is another yes and
+    another turn: rules 68 to 79.
 21. **A failure is not an answer.** When the agent fails, returns nothing, or is held, nothing is
     sent but the end of the request.
 22. **Stopped means nothing goes.** Stop on the work line, a no on what was found, three times
@@ -475,6 +476,67 @@ somebody asks for a file (rules 56 to 61), and what is found is offered as a dro
     Leo the tax return"). With "give", "pass" and "hand" only what is named as one ("give Leo
     the Q3 numbers", not "give Leo a hand").
 67. **It goes to one person.** "Send Leo and Anna the deck" is not sent to the first of them.
+
+## Something done on their laptop, while they watch (23 November)
+
+The owner: "build I-10, something done on their laptop while they watch." The prototype's scene:
+"Leo asks me to restart the server here. Do it, where you can watch?" One yes, then every step
+on the owner's own notch, and Esc stops it.
+
+"Ask Leo's Pillow to restart the server." Leo's notch: "Sam asks me: Restart the server. Do it,
+where you can watch?" On his yes: "For Sam, step 1: On this computer, in ~/app, run: systemctl
+restart app…" stands for five seconds and is then taken. So for each step. Then "For Sam: The
+server was restarted and answers again. Send only that?", and Sam hears "Done on Leo's laptop:
+The server was restarted and answers again."
+
+### Rules
+
+68. **What is a thing to do is decided by rule, on the laptop it is to be done on**
+    (`peerAsksToDo`): from the words its owner is shown, never by a model and never by the one
+    who asks. A request that begins as a question, or ends with a question mark, is never a
+    thing to do. One that is taken for a question by mistake can only read: that is the safe
+    way to be wrong.
+69. **The yes is a yes to an action, and says so.** "Do it, where you can watch?", not "Do it
+    here?". The asker's line says so too: "... must say yes there, and watches."
+70. **Every step that changes anything is shown before it is taken**, in the words the product
+    writes for an approval: the exact command, the exact action. Never the model's own account
+    of what it is about to do.
+71. **A step on one line is taken when its five seconds are up.** The owner said yes to the
+    thing being done, and watches: a key for each step would be a second question. A step that
+    does not fit a line is read on a sheet and taken only on a yes.
+72. **A step nobody saw is neither taken nor stopped.** When no page says that its time ran out,
+    it waits with its line. Left for two minutes it is withdrawn, and the job ends.
+73. **Esc stops the whole of it**: that step is not taken, none after it is, the model is not
+    asked again, and what it had written is not an answer. The owner hears how many steps had
+    been taken. The asker hears that it was not finished, never that nothing was done.
+74. **Some things are never done on a colleague's word**, whatever the owner said to the
+    request: what deletes, what pays, what sends something to somebody, what installs or
+    removes software, what changes a setting, a step that cannot be shown whole, and a
+    thirteenth step. The step is not put up. The job ends there, and the owner is told why.
+75. **A step belongs to the job it is a step of.** It is marked as one (`watched`), and no other
+    surface shows it as a card of its own: not the notch's list of approvals, not a toast, not
+    a chat. There it could be said yes to after the job was stopped.
+76. **Nothing is left behind.** A step that is waiting when the job is stopped, or that nobody
+    decided in time, is withdrawn. A watched turn never leaves an approval to be given later.
+77. **No other turn is changed.** A request to find something out, and every turn of the
+    background agent's own, still gets "awaiting approval" at once and goes on, and its
+    approvals go where they always went.
+78. **What was done is shown before it goes**, like any answer (rule 18).
+79. **What the owner's own settings refuse stays refused.** A step is only ever a call that
+    would have asked. A call the Authority settings deny is denied here too.
+
+### Where it stops
+
+- Which steps a real model takes for a request has not been run: the tests script the model,
+  and the rehearsal stands in for the whole of the work. That each step is shown, waits, runs
+  on its go and is stopped by Esc is tested against the real gate and the real executor.
+- Deleting is told from the kind of the call and from the command's words (`rm`, `del`, `git
+  clean` and the like). A command can delete in ways its words do not show.
+- The model is not interrupted in the middle of one answer. After a stop it is not asked again.
+- A step in an app on the screen is read on a sheet and needs a yes. Pillow's drawn pointer does
+  not show where it acts.
+- The asker cannot tell a stop from a failure. Both read "It was not finished".
+- Twelve steps at the most.
 
 ### Where it stops
 
