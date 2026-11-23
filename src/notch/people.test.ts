@@ -108,7 +108,18 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   /** Files that arrived whole and were put where the person finds them. */
   const saved: { name: string; bytes: Uint8Array }[] = [];
   const filesDir = mkdtempSync(join(tmpdir(), 'people-files-'));
-  const fileState = { canSave: true };
+  const fileState: {
+    canSave: boolean;
+    /** What a look on this laptop finds. Null: it cannot look. */
+    found: { place: 'desktop' | 'documents' | 'downloads'; name: string; kind: string; size: number }[] | null;
+    /** The files that can be taken from their folders, by name. */
+    onDisk: Map<string, Uint8Array>;
+    /** Whether the notch takes a file that arrived, to be asked about. */
+    holds: boolean;
+  } = { canSave: true, found: [], onDisk: new Map(), holds: false };
+  /** What was looked for on this laptop, and what the notch was handed to hold. */
+  const lookedFor: string[] = [];
+  const held: { name: string; from: string; place: string | null; size: number }[] = [];
   engine.dialog = link.dialog;
   engine.notice = link.notice;
   const store = new PeerStore(new Database(':memory:'), () => server.now());
@@ -125,7 +136,13 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
     ...(more.noWork ? {} : { work: async (request: { from: string; words: string }) => { worked.push(request); return state.answer; } }),
     ...(setup ? { setup } : {}),
-    files: { dir: filesDir, paceMs: 0, retryMs: 0, save: async (name, bytes) => { if (!fileState.canSave) return null; saved.push({ name, bytes }); return { place: 'Downloads', name }; } },
+    files: {
+      dir: filesDir, paceMs: 0, retryMs: 0,
+      save: async (name, bytes) => { if (!fileState.canSave) return null; saved.push({ name, bytes }); return { place: 'Downloads', name }; },
+      find: async (words) => { lookedFor.push(words); return fileState.found; },
+      open: async (_place, name) => fileState.onDisk.get(name) ?? null,
+      arrived: (file) => { if (!fileState.holds) return false; held.push({ name: file.name, from: file.from, place: file.place, size: file.bytes.length }); return true; },
+    },
   });
   const people = make();
   const line = (): NotchLine | null => surface.current().line;
@@ -133,7 +150,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
     engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, make,
-    saved, filesDir, fileState,
+    saved, filesDir, fileState, lookedFor, held,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
     /** The sheet's or the line's blocks, as text. */
@@ -1237,9 +1254,43 @@ describe('which words are for the organisation', () => {
   test('what is asked of their Pillow or their laptop is a request, not a word to the person', async () => {
     const { sam } = await joined();
     expect(sam.people.route("ask Leo's Pillow what changed in the last deck")?.did).toBe("Ask Leo's Pillow: What changed in the last deck");
-    expect(sam.people.route("Ask Leo's Jarvis to find the Q3 numbers.")?.did).toBe("Ask Leo's Pillow: Find the Q3 numbers");
-    expect(sam.people.route("get me the Q3 numbers from Leo's laptop")?.did).toBe("Ask Leo's Pillow: Get me the Q3 numbers");
     expect(sam.people.route("check the disk space on Leo's computer")?.did).toBe("Ask Leo's Pillow: Check the disk space");
+    // Their laptop may be named anywhere in the sentence, and as speech is written down.
+    for (const [said, did] of [
+      ["can you ask Leo's pillow to restart the server", "Ask Leo's Pillow: Restart the server"],
+      ['on Leos laptop, check whether the build is green', "Ask Leo's Pillow: Check whether the build is green"],
+      ["Can you go on Leo's PC and check the disk space?", "Ask Leo's Pillow: Check the disk space"],
+      ['i want Leo’s Pillow to tell me what changed in the deck', "Ask Leo's Pillow: Tell me what changed in the deck"],
+      ["ask Leo's Pillow for an update on the release", "Ask Leo's Pillow: An update on the release"],
+      ["find out on Leo's laptop why the build fails", "Ask Leo's Pillow: Find out why the build fails"],
+    ] as const) expect(sam.people.route(said)?.did).toBe(did);
+    expect(sam.people.route("ask Leo's Pillow")?.did).toBe("Ask Leo's Pillow something.");
+    // Not a laptop of somebody else whose name only ends like theirs.
+    expect(sam.people.route("restart the server on Cleo's laptop")).toBeNull();
+  });
+
+  test('a thing to be brought from their laptop is a file that is asked for', async () => {
+    const { sam } = await joined();
+    for (const [said, what] of [
+      ["get me the Q3 numbers from Leo's laptop", 'the Q3 numbers'],
+      ["Ask Leo's Jarvis to find the Q3 numbers.", 'the Q3 numbers'],
+      ["ask Leo's Pillow for the latest deck", 'the latest deck'],
+      ["can you retrieve budget 2026.xlsx from Leos pc", 'budget 2026.xlsx'],
+      ["Can you go on Leo's laptop and fetch me the Northwind contract?", 'the Northwind contract'],
+      ["ask Leo's Pillow to send me the pitch deck", 'the pitch deck'],
+      ["I need the Q3 numbers from Leo's laptop", 'the Q3 numbers'],
+      ["look on Leo's laptop for the contract", 'the contract'],
+      // No laptop named, and the thing is named as a file.
+      ['get the latest deck from Leo', 'the latest deck'],
+      ['can you fetch me budget.xlsx from Leo', 'budget.xlsx'],
+      ['ask Leo to send me the Q3 report', 'the Q3 report'],
+      ['ask Leo for the signed contract', 'the signed contract'],
+    ] as const) expect(sam.people.route(said)?.did).toBe(`Ask Leo's Pillow for a file: ${what}`);
+    // A word to Leo himself stays one.
+    expect(sam.people.route('ask Leo for his view on pricing')?.did).toBe('Ask Leo: For his view on pricing');
+    expect(sam.people.route('get an answer from Leo')).toBeNull();
+    // Something to send to somebody else is a thing to do there, not a file for me.
+    expect(sam.people.route("ask Leo's Pillow to send Anna the invite")?.did).toBe("Ask Leo's Pillow: Send Anna the invite");
     expect(sam.people.route("get me the Q3 numbers from Marco's laptop")).toBeNull();
     expect(sam.people.route("ask Leo's brother what he thinks")?.did).toBeUndefined();
   });
@@ -1289,7 +1340,12 @@ describe('a name', () => {
 
 describe('getting in: making an organisation on this machine', () => {
   /** The automatic sign-in waits as long as a line takes to be read. */
-  const signedIn = async (): Promise<void> => { await new Promise((resolve) => setTimeout(resolve, 650)); await settle(); };
+  const signedIn = async (who?: { said(): string }): Promise<void> => {
+    // As long as that takes, and then until the notch has said how it ended: a loaded machine is slower than a clock.
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    for (let tries = 0; tries < 80 && who && !/is made\.|could not sign you in|^Your server is on\.$/.test(who.said()); tries++) await new Promise((resolve) => setTimeout(resolve, 50));
+    await settle();
+  };
 
   test('with no engine yet, Home offers to make one where a server can run, and to join one where it cannot', async () => {
     const sam = side(new FakeServer(), SAM, 'sam', { setup: {} });
@@ -1316,7 +1372,7 @@ describe('getting in: making an organisation on this machine', () => {
     expect(sam.said()).toBe('That is not an address like name.ngrok-free.app. Again.');
     expect(sam.setup.calls).toEqual([]);
     await sam.type('Collab.invalid');
-    await signedIn();
+    await signedIn(sam);
     expect(sam.setup.calls).toEqual(['host https://collab.invalid', 'myAccount Sam', 'signIn collab.invalid sam pw-mine-91']);
     expect(sam.said()).toBe('Northwind is made. Its server is on, at collab.invalid.');
     // No question about the server and no page in a browser: making it was the yes.
@@ -1380,7 +1436,7 @@ describe('getting in: making an organisation on this machine', () => {
     await sam.type('Sam');
     // The tunnel is at one address, and the engine asks about another (collab.invalid).
     await sam.type('northwind.ngrok-free.app');
-    await signedIn();
+    await signedIn(sam);
     expect(sam.said()).toBe('The server is on, but I could not sign you in at it. Open your organisation and try again.');
     expect(sam.engine.signedIn).toBe(false);
     expect(sam.setup.calls.some((call) => call.startsWith('signIn'))).toBe(false);
@@ -1411,7 +1467,7 @@ describe('getting in: making an organisation on this machine', () => {
     await sam.type('Northwind');
     await sam.type('Sam');
     await sam.type('collab.invalid');
-    await signedIn();
+    await signedIn(sam);
     await sam.done();
     await sam.no();
     sam.inbox.present('server', (stage) => sam.people.server(stage));
@@ -1436,7 +1492,7 @@ describe('getting in: making an organisation on this machine', () => {
     await sam.type('Northwind');
     await sam.type('Sam');
     await sam.type('collab.invalid');
-    await signedIn();
+    await signedIn(sam);
     await sam.done();
     sam.setup.accounts.set('leo', 'x');
     sam.setup.ready5 = ['linux-x64', 'darwin-arm64'];
@@ -1460,7 +1516,7 @@ describe('getting in: making an organisation on this machine', () => {
     await sam.type('Northwind');
     await sam.type('Sam');
     await sam.type('collab.invalid');
-    await signedIn();
+    await signedIn(sam);
     await sam.done();
     await sam.setup.stopHost();
     await sam.button('invite');
@@ -1775,7 +1831,241 @@ describe('a file from one Pillow to another', () => {
     expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: PEER_FILE_MAX + 1, parts: 174, sha: 'a'.repeat(64) })).note).toBeNull();
     expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: 'not-an-id', name: 'a.txt', size: 10, parts: 1, sha: 'a'.repeat(64) })).note).toBeNull();
     expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: 10, parts: 1, sha: 'short' })).note).toBeNull();
+    // An offer that says it answers an asking, and names none that can be one.
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: 10, parts: 1, sha: 'a'.repeat(64), want: 'not-an-id' })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file', id: crypto.randomUUID(), name: 'a.txt', size: 10, parts: 1, sha: 'a'.repeat(64), want: crypto.randomUUID() })).note).toMatchObject({ kind: 'file', name: 'a.txt' });
+    // An asking is its id and a few readable words, and nothing else.
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-want', id: crypto.randomUUID(), what: '  the Q3\u0007 numbers  ' })).note).toMatchObject({ kind: 'file-want', what: 'the Q3 numbers' });
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-want', id: crypto.randomUUID(), what: '   ' })).note).toBeNull();
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-want', id: 'nope', what: 'the deck' })).note).toBeNull();
+    expect((peerNoteRead(peerNoteText('x', { kind: 'file-want', id: crypto.randomUUID(), what: 'w'.repeat(500) })).note as { what: string }).what.length).toBe(120);
+    expect(peerNoteRead(peerNoteText('x', { kind: 'file-want-no', of: 'nope' })).note).toBeNull();
     expect(peerNoteRead(peerNoteText('x', { kind: 'file-part', of: crypto.randomUUID(), n: -1 })).note).toBeNull();
     expect(peerNoteRead(peerNoteText('x', { kind: 'file-part', of: crypto.randomUUID(), n: 100_000 })).note).toBeNull();
+  });
+});
+
+describe('asking for a file from somebody else\'s laptop', () => {
+  const bytesOf = (size: number): Uint8Array => { const bytes = new Uint8Array(size); for (let n = 0; n < size; n++) bytes[n] = (n * 17 + (n >> 7)) % 256; return bytes; };
+  const NUMBERS = { place: 'documents' as const, name: 'Q3 numbers.xlsx', kind: 'sheet', size: 184_320 };
+  const crossing = async (sam: ReturnType<typeof side>, leo: ReturnType<typeof side>): Promise<void> => {
+    for (let round = 0; round < 6; round++) { await settle(); await leo.people.filesIdle(); await sam.people.filesIdle(); await sam.people.look(); await leo.people.look(); }
+    await settle();
+  };
+  /** Sam has asked Leo's Pillow for the Q3 numbers, and Leo's notch is about to say so. */
+  const asked = async (more: { found?: typeof NUMBERS[] | null; onDisk?: boolean } = {}) => {
+    const { server, sam, leo } = await joined();
+    const bytes = bytesOf(NUMBERS.size);
+    leo.fileState.found = more.found === undefined ? [NUMBERS] : more.found;
+    if (more.onDisk !== false) leo.fileState.onDisk.set(NUMBERS.name, bytes);
+    expect(await sam.say("get me the Q3 numbers from Leo's laptop")).toBe(true);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe("Asking Leo's Pillow for the Q3 numbers. Leo must say yes there.");
+    await sam.done();
+    expect(sam.said()).toBe("Asked Leo's Pillow. I will tell you what Leo does.");
+    await sam.done();
+    return { server, sam, leo, bytes };
+  };
+
+  test('the asking can be taken back, and then nothing was asked', async () => {
+    const { sam, leo } = await joined();
+    await sam.say("get me the Q3 numbers from Leo's laptop");
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was asked.');
+    expect(leo.engine.inbox.length).toBe(0);
+    expect(leo.lookedFor).toEqual([]);
+  });
+
+  test('their Pillow finds it, they say yes there, and it arrives without another question here', async () => {
+    const { sam, leo, bytes } = await asked();
+    // What crossed is the asking in words. Nothing was looked for before Leo's notch had the line.
+    const asking = peerNoteRead(leo.engine.inbox[0]!.payload.text as string);
+    expect(asking.words).toBe('Can you send me a file: the Q3 numbers? I asked from my Pillow.');
+    expect(asking.note).toMatchObject({ kind: 'file-want', what: 'the Q3 numbers' });
+    expect(leo.lookedFor).toEqual(['the Q3 numbers']);
+    expect(leo.said()).toBe('Sam asks for the Q3 numbers. I found Q3 numbers.xlsx in your Documents, 180 KB. Send only that?');
+    expect(leo.options()).toEqual(['Send it', 'Another file', 'No']);
+    // Nothing has gone back to the one who asked: not what was found, not that anything was.
+    expect(sam.engine.inbox.length).toBe(0);
+    await leo.pick(0);
+    expect(leo.kind()).toBe('send');
+    expect(leo.said()).toBe('Sending Sam Q3 numbers.xlsx, 180 KB, and nothing else…');
+    await leo.done();
+    await crossing(sam, leo);
+    // On Leo's notch the file's own line stayed until it had gone.
+    expect(leo.said()).toBe('Sent. One file left this laptop, nothing else.');
+    // Sam was never asked "Take it?": the asking was the yes.
+    expect(sam.everShown()).not.toContain('Take it?');
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
+    expect(Buffer.from(sam.saved[0]!.bytes).equals(Buffer.from(bytes))).toBe(true);
+    expect(sam.everShown()).toContain('is sending');
+    // One file left Leo's laptop, and the news of it is not said twice there.
+    await leo.done();
+    expect(leo.count()).toBe(0);
+    expect(leo.everShown()).not.toContain('Sam has ');
+  });
+
+  test('a no there is all the asker hears', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(2);
+    expect(leo.said()).toBe('Told Sam no. Nothing left this laptop.');
+    await leo.done();
+    await crossing(sam, leo);
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo said no. Nothing left Leo's laptop.");
+    expect(sam.saved).toEqual([]);
+    // The no says nothing about what is on the laptop: it is the same whatever was found.
+    const said = peerNoteRead(sam.engine.inbox[0]!.payload.text as string);
+    expect(said.words).toBe('No, I cannot send that.');
+  });
+
+  test('when nothing fits, the owner is told, and the asker is told nothing until the owner answers', async () => {
+    const { sam, leo } = await asked({ found: [] });
+    expect(leo.said()).toBe('Sam asks for the Q3 numbers. I do not find a file like that on this laptop.');
+    expect(leo.options()).toEqual(['Another file', 'No']);
+    expect(sam.engine.inbox.length).toBe(0);
+    await leo.pick(1);
+    await leo.done();
+    await crossing(sam, leo);
+    if (!sam.said()) await sam.tap();
+    // The same words as for a no to a file that was found.
+    expect(sam.said()).toBe("Leo said no. Nothing left Leo's laptop.");
+    expect(peerNoteRead(sam.engine.inbox[0]!.payload.text as string).words).toBe('No, I cannot send that.');
+  });
+
+  test('a laptop that cannot be looked through says so to its owner', async () => {
+    const { leo } = await asked({ found: null });
+    expect(leo.said()).toBe('Sam asks for the Q3 numbers. I cannot look through the files on this laptop right now.');
+    expect(leo.options()).toEqual(['Another file', 'No']);
+  });
+
+  test('a file too large to be taken from its folder is not offered for a yes', async () => {
+    const { leo } = await asked({ found: [{ ...NUMBERS, size: 20 * 1024 * 1024 }] });
+    expect(leo.said()).toBe('Sam asks for the Q3 numbers. I found Q3 numbers.xlsx, but at 20.0 MB it is larger than I can take from its folder.');
+    expect(leo.options()).toEqual(['Another file', 'No']);
+  });
+
+  test('"Another file" sends nothing; the file the owner then sends is the answer, and is not asked about', async () => {
+    const { sam, leo } = await asked();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Show me which. Drop it on me, and pick Send to Sam.');
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.engine.inbox.length).toBe(0);
+    expect(sam.saved).toEqual([]);
+    // Leo drops the right one and sends it to Sam.
+    const right = bytesOf(5000);
+    expect(leo.people.sendFile(SAM, { name: 'Q3 numbers final.xlsx', bytes: right })).toBe(true);
+    await settle();
+    expect(leo.said()).toBe('Sending Sam Q3 numbers final.xlsx, 5 KB, and nothing else…');
+    await leo.done();
+    await crossing(sam, leo);
+    expect(leo.said()).toBe('Sent. One file left this laptop, nothing else.');
+    expect(sam.everShown()).not.toContain('Take it?');
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers final.xlsx']);
+    // Only that one file answers the asking: the next file to Sam is an offer like any other.
+    await leo.done();
+    leo.people.sendFile(SAM, { name: 'something else.pdf', bytes: bytesOf(3000) });
+    await settle();
+    expect(leo.said()).toBe('Offering Sam the file something else.pdf, 3 KB…');
+  });
+
+  test('a file that cannot be taken from its folder is asked for by a drop', async () => {
+    const { sam, leo } = await asked({ onDisk: false });
+    await leo.pick(0);
+    expect(leo.said()).toBe('I could not take Q3 numbers.xlsx from its folder. Drop it on me, and pick Send to Sam.');
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.engine.inbox.length).toBe(0);
+  });
+
+  test('not now leaves the asking waiting, and nothing is said to the asker', async () => {
+    const { sam, leo } = await asked();
+    await leo.no();
+    await crossing(sam, leo);
+    expect(leo.count()).toBe(1);
+    expect(sam.engine.inbox.length).toBe(0);
+  });
+
+  test('an offer that claims to answer an asking nobody made is asked about like any other', async () => {
+    const { sam, leo } = await joined();
+    // Leo's Pillow says "the file you asked for". Sam asked for nothing.
+    leo.fileState.found = [];
+    const bytes = bytesOf(3000);
+    const sha = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    await leo.link.tell(SAM, peerNoteText('The file you asked for: gift.pdf, 3 KB.', { kind: 'file', id: crypto.randomUUID(), name: 'gift.pdf', size: 3000, parts: 1, sha, want: crypto.randomUUID() }));
+    await sam.people.look();
+    await settle();
+    expect(sam.said()).toBe('Leo sends you a file: gift.pdf, 3 KB. Take it?');
+    expect(sam.saved).toEqual([]);
+  });
+
+  test('an asking is answered only by the one it was asked of', async () => {
+    const { server, sam, leo } = await asked();
+    const anna = side(server, ANNA, 'anna');
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(SAM, { deviceId: SAM, localName: 'Sam', ownDevice: null, serverDisplayName: 'sam-laptop', createdAt: 1 });
+    sam.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 1 });
+    await anna.refresh();
+    await sam.refresh();
+    const want = (peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note as { id: string }).id;
+    const bytes = bytesOf(3000);
+    const sha = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
+    // Anna answers Sam's asking of Leo with a file of her own, and with a no.
+    await anna.link.tell(SAM, peerNoteText('The file you asked for: other.pdf, 3 KB.', { kind: 'file', id: crypto.randomUUID(), name: 'other.pdf', size: 3000, parts: 1, sha, want }));
+    await anna.link.tell(SAM, peerNoteText('No, I cannot send that.', { kind: 'file-want-no', of: want }));
+    await sam.people.look();
+    await settle();
+    // Her file is an offer like any other, and her no is nobody's no.
+    expect(sam.said()).toBe('Anna sends you a file: other.pdf, 3 KB. Take it?');
+    expect(sam.everShown()).not.toContain('said no');
+    // Leo's own yes still answers it.
+    await sam.no();
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
+  });
+});
+
+describe('a file that arrived is held by the notch', () => {
+  const bytesOf = (size: number): Uint8Array => new Uint8Array(size).fill(9);
+  const sent = async (more: { holds?: boolean; canSave?: boolean } = {}) => {
+    const { sam, leo } = await joined();
+    leo.fileState.holds = more.holds ?? true;
+    leo.fileState.canSave = more.canSave ?? true;
+    sam.people.sendFile(LEO, { name: 'deck.pdf', bytes: bytesOf(4000) });
+    await settle();
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    await leo.done();
+    for (let round = 0; round < 6; round++) { await settle(); await sam.people.filesIdle(); await leo.people.look(); await sam.people.look(); }
+    await settle();
+    return { sam, leo };
+  };
+
+  test('it is handed to the notch with where it was put, and the notch says the rest', async () => {
+    const { sam, leo } = await sent();
+    expect(leo.held).toEqual([{ name: 'deck.pdf', from: 'Sam', place: 'Downloads', size: 4000 }]);
+    // The notch's own card says where it is: no second line of news for the same file.
+    expect(leo.count()).toBe(0);
+    expect(leo.everShown()).not.toContain('is in your');
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo has deck.pdf.');
+  });
+
+  test('one that could not be put in a folder is still held, and the sender is told it arrived', async () => {
+    const { sam, leo } = await sent({ canSave: false });
+    expect(leo.saved).toEqual([]);
+    expect(leo.held).toEqual([{ name: 'deck.pdf', from: 'Sam', place: null, size: 4000 }]);
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo has deck.pdf.');
+  });
+
+  test('one the notch does not take is said in a line, as before', async () => {
+    const { leo } = await sent({ holds: false });
+    if (!leo.said()) await leo.tap();
+    expect(leo.said()).toBe('deck.pdf from Sam is in your Downloads.');
   });
 });

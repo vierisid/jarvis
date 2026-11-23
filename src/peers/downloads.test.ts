@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveDownload } from './downloads.ts';
+import { createHash } from 'node:crypto';
+import { APP_SAVE_PART, appFound, saveDownload, saveThroughApp } from './downloads.ts';
+import type { AppRpc } from './downloads.ts';
 
 const dir = (): string => mkdtempSync(join(tmpdir(), 'peers-downloads-'));
 const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
@@ -47,5 +49,77 @@ describe('a file that arrived is saved', () => {
     const root = dir();
     writeFileSync(join(root, 'not-a-folder'), '');
     expect(saveDownload(join(root, 'not-a-folder'), 'deck.pdf', bytes('x'))).toBeNull();
+  });
+});
+
+describe('saving through the desktop app', () => {
+  /** A stand-in for the app's command: it notes what it was asked and puts the pieces together. */
+  function app(more: { refuseAt?: 'begin' | 'part' | 'end'; throwAt?: 'part'; savedAs?: string } = {}) {
+    const steps: string[] = [];
+    const pieces: Buffer[] = [];
+    let size = 0;
+    let name = '';
+    let endSha = '';
+    const rpc: AppRpc = async (method, params) => {
+      const step = String(params.step);
+      steps.push(`${method} ${step}`);
+      if (more.refuseAt === step) return { saved: false, why: 'no' };
+      if (more.throwAt === step) throw new Error('the line broke');
+      if (step === 'begin') { name = String(params.name); size = Number(params.size); return { id: 'abcdef0123456789abcdef01' }; }
+      if (step === 'part') { pieces.push(Buffer.from(String(params.data), 'base64')); return { taken: true }; }
+      if (step === 'end') { endSha = String(params.sha); return { saved: true, name: more.savedAs ?? name, place: 'downloads' }; }
+      return { dropped: true };
+    };
+    return { rpc, steps, pieces, get: () => ({ size, name, endSha, whole: Buffer.concat(pieces) }) };
+  }
+  const data = (size: number): Uint8Array => { const out = new Uint8Array(size); for (let n = 0; n < size; n++) out[n] = (n * 13) % 251; return out; };
+
+  test('hands it over in pieces, with its size first and what it adds up to last', async () => {
+    const it = app({ savedAs: 'deck (2).pdf' });
+    const whole = data(APP_SAVE_PART * 2 + 700);
+    // The name the app chose is the one that is told: something of that name was there already.
+    expect(await saveThroughApp(it.rpc, '../deck.pdf', whole)).toEqual({ name: 'deck (2).pdf' });
+    expect(it.steps).toEqual(['notch.save begin', 'notch.save part', 'notch.save part', 'notch.save part', 'notch.save end']);
+    expect(it.get().name).toBe('deck.pdf');
+    expect(it.get().size).toBe(whole.length);
+    expect(it.pieces.map((one) => one.length)).toEqual([APP_SAVE_PART, APP_SAVE_PART, 700]);
+    expect(it.get().whole.equals(Buffer.from(whole))).toBe(true);
+    expect(it.get().endSha).toBe(createHash('sha256').update(whole).digest('hex'));
+  });
+
+  test('says so when the app does not save it', async () => {
+    for (const refuseAt of ['begin', 'part', 'end'] as const) expect(await saveThroughApp(app({ refuseAt }).rpc, 'deck.pdf', data(1000))).toBeNull();
+    // An app from before this does not know the command at all.
+    await expect(saveThroughApp(async () => { throw new Error('unknown method'); }, 'deck.pdf', data(1000))).rejects.toThrow();
+    // The line broke in the middle: the app is told to let go of what it has.
+    const broke = app({ throwAt: 'part' });
+    expect(await saveThroughApp(broke.rpc, 'deck.pdf', data(1000))).toBeNull();
+    expect(broke.steps).toEqual(['notch.save begin', 'notch.save part', 'notch.save drop']);
+    // A name that comes back odd is made readable like any other.
+    expect(await saveThroughApp(app({ savedAs: '..\\..\\x<y>.pdf' }).rpc, 'deck.pdf', data(1000))).toEqual({ name: 'xy.pdf' });
+  });
+});
+
+describe('what the desktop app found', () => {
+  test('is taken field by field', () => {
+    expect(appFound({ found: [{ place: 'documents', name: 'Q3 numbers.xlsx', kind: 'sheet', size: 184320, changed: 5 }, { place: 'desktop', name: 'Deck, November.pdf', kind: 'pdf', size: 10 }] }))
+      .toEqual([{ place: 'documents', name: 'Q3 numbers.xlsx', kind: 'sheet', size: 184320 }, { place: 'desktop', name: 'Deck, November.pdf', kind: 'pdf', size: 10 }]);
+    expect(appFound({ found: [] })).toEqual([]);
+    expect(appFound(null)).toBeNull();
+    expect(appFound({ places: [] })).toBeNull();
+  });
+
+  test('nothing that is not a plain name in one of the three places', () => {
+    expect(appFound({ found: [
+      { place: 'system', name: 'hosts', kind: 'other', size: 10 },
+      { place: 'desktop', name: '../secret.txt', kind: 'document', size: 10 },
+      { place: 'desktop', name: 'a\\b.txt', kind: 'document', size: 10 },
+      { place: 'desktop', name: 'line\nbreak.txt', kind: 'document', size: 10 },
+      { place: 'desktop', name: '', kind: 'document', size: 10 },
+      { place: 'desktop', name: 'empty.txt', kind: 'document', size: 0 },
+      { place: 'desktop', name: 'no size.txt', kind: 'document' },
+      { place: 'desktop', name: 7, kind: 'document', size: 10 },
+      'not a file',
+    ] })).toEqual([]);
   });
 });

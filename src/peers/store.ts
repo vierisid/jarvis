@@ -75,6 +75,22 @@ export interface PeerFileRow {
   item: string | null;
 }
 
+/** open: waits for its answer. show: the owner will show which file. done, no: over. */
+export type PeerWantState = 'open' | 'show' | 'done' | 'no';
+
+export interface PeerWantRow {
+  id: string;
+  dir: 'in' | 'out';
+  /** The device that is asked, or that asks. */
+  peer: string;
+  /** What is asked for, in the asker's words. */
+  what: string;
+  state: PeerWantState;
+  at: number;
+  /** The message the asking arrived as. */
+  item: string | null;
+}
+
 export class PeerStore {
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
@@ -82,6 +98,7 @@ export class PeerStore {
       id TEXT PRIMARY KEY, to_id TEXT NOT NULL, kind TEXT NOT NULL, words TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '[]',
       sent_at INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'sent', answer TEXT, nudged_at INTEGER, first_id TEXT)`);
     db.run('CREATE TABLE IF NOT EXISTS notch_peer_got (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, at INTEGER NOT NULL, done INTEGER NOT NULL DEFAULT 0)');
+    db.run('CREATE TABLE IF NOT EXISTS notch_peer_wants (id TEXT PRIMARY KEY, dir TEXT NOT NULL, peer TEXT NOT NULL, what TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, item TEXT)');
     db.run(`CREATE TABLE IF NOT EXISTS notch_peer_files (
       id TEXT PRIMARY KEY, dir TEXT NOT NULL, peer TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, parts INTEGER NOT NULL,
       sha TEXT NOT NULL, state TEXT NOT NULL, at INTEGER NOT NULL, item TEXT)`);
@@ -115,6 +132,34 @@ export class PeerStore {
   /** The files that are on their way: offered, or coming piece by piece. */
   openFiles(dir: 'in' | 'out'): PeerFileRow[] {
     return this.db.query("SELECT id, dir, peer, name, size, parts, sha, state, at, item FROM notch_peer_files WHERE dir = ? AND state IN ('offered', 'going') ORDER BY at").all(dir) as PeerFileRow[];
+  }
+
+  // --- files that are asked for ---
+
+  /** Notes that a file was asked for: by this machine (`out`) or of it (`in`). */
+  want(row: { id: string; dir: 'in' | 'out'; peer: string; what: string; item?: string }): void {
+    this.db.run('INSERT OR IGNORE INTO notch_peer_wants (id, dir, peer, what, state, at, item) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [row.id, row.dir, row.peer, row.what, 'open', this.now(), row.item ?? null]);
+  }
+
+  wantOf(id: string): PeerWantRow | null {
+    return this.db.query('SELECT id, dir, peer, what, state, at, item FROM notch_peer_wants WHERE id = ?').get(id) as PeerWantRow | null;
+  }
+
+  /** Moves an asking on, from one of the states it may be in. False when it was in none of them. */
+  wantState(id: string, state: PeerWantState, from: PeerWantState[]): boolean {
+    const marks = from.map(() => '?').join(', ');
+    return this.db.run(`UPDATE notch_peer_wants SET state = ?, at = ? WHERE id = ? AND state IN (${marks})`, [state, this.now(), id, ...from]).changes > 0;
+  }
+
+  /** What is still asked: waiting for an answer, or for the owner to show which file. */
+  openWants(dir: 'in' | 'out'): PeerWantRow[] {
+    return this.db.query("SELECT id, dir, peer, what, state, at, item FROM notch_peer_wants WHERE dir = ? AND state IN ('open', 'show') ORDER BY at").all(dir) as PeerWantRow[];
+  }
+
+  /** The newest asking of this person's for which the owner said they would show the file, since `since`. */
+  wantToShow(peer: string, since: number): PeerWantRow | null {
+    return this.db.query("SELECT id, dir, peer, what, state, at, item FROM notch_peer_wants WHERE dir = 'in' AND peer = ? AND state = 'show' AND at >= ? ORDER BY at DESC LIMIT 1").get(peer, since) as PeerWantRow | null;
   }
 
   /** A small thing to remember, by name. Null when there is none. */

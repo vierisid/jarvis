@@ -52,6 +52,7 @@
  */
 import type { NotchInbox } from './inbox.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
+import type { PeerFileFound } from './people-files.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -60,7 +61,7 @@ import { peerLoginName } from '../peers/host.ts';
 import { ENGINE_TARGET_SAID, peerServerAddress } from '../peers/install.ts';
 import { PEER_READ_MS, engineErrorCode } from '../peers/link.ts';
 import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerRequest, PeerSent } from '../peers/link.ts';
-import { PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
+import { PEER_FILE_WHAT_MAX, PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
 import type { PeerNote } from '../peers/notes.ts';
 import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
@@ -120,7 +121,17 @@ export interface NotchPeopleDeps {
    * to keep one in while it crosses, and how one that arrived is put where
    * the person finds it. Without it no file is offered and none is taken.
    */
-  files?: { dir: string; save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null>; paceMs?: number; retryMs?: number };
+  files?: {
+    dir: string;
+    save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null>;
+    /** Hands a file that arrived to the notch, to be held like a dropped one. True when it was taken. */
+    arrived?: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => boolean;
+    /** Looks on this laptop for the files that fit some words. Null when it cannot look. */
+    find?: (words: string) => Promise<PeerFileFound[] | null>;
+    /** Takes one of them from its folder. */
+    open?: (place: PeerFileFound['place'], name: string) => Promise<Uint8Array | null>;
+    paceMs?: number; retryMs?: number;
+  };
   log?: (line: string) => void;
   now?: () => number;
   /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
@@ -252,7 +263,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
 
   /** Files, when this brain was given somewhere to keep and to put them. */
   const files = deps.files ? attachNotchPeopleFiles({
-    inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log,
+    inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log, now,
+    ...(deps.files.arrived ? { arrived: deps.files.arrived } : {}), ...(deps.files.find ? { find: deps.files.find } : {}), ...(deps.files.open ? { open: deps.files.open } : {}),
     news: (id, say, more) => news(id, say, say, { person: true, ms: 4200, ...(more?.who ? { who: more.who } : {}) }),
     ...(deps.files.paceMs !== undefined ? { paceMs: deps.files.paceMs } : {}), ...(deps.files.retryMs !== undefined ? { retryMs: deps.files.retryMs } : {}),
   }) : null;
@@ -879,23 +891,79 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     });
   }
 
+  /** Words that only lead up to what is said. */
+  const LEAD = "(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you|would you|will you|i want you to|i need you to|i would like you to|i'd like you to)[,\\s]+)*";
+  /** Verbs that ask for a thing to be brought here, and verbs that ask for it to be handed to me. */
+  const BRING = '(?:get|fetch|grab|retrieve|bring|download|pull|copy|find)';
+  const HAND = '(?:send|give|share|forward|pass|show)';
+  /** A word that says the thing is a file. Needed when no laptop is named: "get the deck from Leo". */
+  const FILE_WORD = /\b(?:files?|decks?|slides|presentations?|documents?|docs?|pdfs?|spreadsheets?|sheets?|numbers|reports?|contracts?|invoices?|pictures?|photos?|images?|screenshots?|recordings?|videos?|drafts?|proposals?|budgets?|notes|exports?)\b|\.[a-z0-9]{2,5}$/i;
+  /** What somebody is asked "for" that is no file: "ask Leo's Pillow for an update". */
+  const NO_FILE = /^(?:(?:an?|some|the|his|her|their|your)\s+)?(?:help|advice|feedback|update|answer|opinion|thoughts|views?|status|summary|time|permission|access|input|review|approval|confirmation|eta|hand|favou?r)\b/i;
+
+  /** What is wanted, when words ask for a thing to be brought: "get me the Q3 numbers" gives "the Q3 numbers". */
+  function brought(words: string): string | null {
+    const found = new RegExp(`^${LEAD}(?:${BRING}(?:\\s+(?:me|us))?|${HAND}\\s+(?:me|us)|i\\s+(?:need|want)|i(?:'d| would)\\s+like)\\s+(.+)$`, 'iu').exec(words);
+    if (!found) return null;
+    const what = found[1]!.replace(/\s+(?:for me|to me|please)$/i, '').trim();
+    // "Find out why ...", "get it restarted": a thing to do there, not a thing to bring here.
+    if (!what || /^(?:out|what|how|why|when|where|whether|if|who|that|to|it)\b/i.test(what)) return null;
+    return what;
+  }
+
   /**
-   * "Ask Leo's Pillow what changed in the last deck", "get me the Q3 numbers
-   * from Leo's laptop": whose machine is asked, and for what.
+   * What is asked of somebody's laptop, or of their Pillow: whose, what, and
+   * whether a file is asked for.
+   *
+   *   "ask Leo's Pillow what changed in the last deck"     something to do there
+   *   "restart the server on Leo's laptop"                 something to do there
+   *   "get me the Q3 numbers from Leo's laptop"            a file: "the Q3 numbers"
+   *   "ask Leo's Pillow for the latest deck"               a file: "the latest deck"
+   *   "can you go on Leos pc and fetch budget.xlsx"        a file: "budget.xlsx"
+   *
+   * Their laptop may be named anywhere in the sentence, and as speech is
+   * written down: "Leos laptop", "Leo laptop". The owner, 22 November 2026:
+   * "if i ask can you perform a certyain action in someone elses pillow it
+   * fails to understand".
    */
-  function requested(text: string): { person: PeerPerson; words: string } | null {
-    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!]+$/, '');
-    const lead = '(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you|would you)[,\\s]+)*';
+  function requested(text: string): { person: PeerPerson; words: string; file: string | null } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
     const people = others().slice().sort((a, b) => b.name.length - a.name.length);
     for (const one of people) {
       const first = one.name.split(' ')[0]!;
       const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
       for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
-        const theirs = `${escaped(name)}(?:'s|\u2019s)\\s+${MACHINE}`;
-        const direct = new RegExp(`^${lead}(?:ask|tell|get|have)\\s+${theirs}(?![\\p{L}\\p{N}])[\\s,:]*(?:to\\s+|for\\s+)?(.+)$`, 'iu').exec(said);
-        if (direct) return { person: one, words: direct[1]!.trim() };
-        const from = new RegExp(`^${lead}(.+?)\\s+(?:from|on)\\s+${theirs}$`, 'iu').exec(said);
-        if (from) return { person: one, words: from[1]!.trim() };
+        const theirs = `(?<![\\p{L}\\p{N}])${escaped(name)}(?:'s|’s|s|')?\\s+${MACHINE}(?![\\p{L}\\p{N}])`;
+        const found = new RegExp(`^(.*?)(?:\\b(?:from|on|in|at|off|of|to|into|onto|inside|through|via|using|with)\\s+)?${theirs}(.*)$`, 'iu').exec(said);
+        if (!found) continue;
+        let before = found[1]!.trim().replace(/[,;:]+$/, '').trim().replace(new RegExp(`^${LEAD}`, 'iu'), '').trim();
+        let after = found[2]!.trim().replace(/^[,;:]+/, '').trim();
+        // What stands before it and only points at the laptop is not part of what is asked.
+        if (/^(?:ask|tell|have|get|make|let|go|look|check|search|open|log|hop|jump|connect|use|i want|i need|i'd like|i would like)?(?:\s+(?:on|in|at|into|to|onto))?$/i.test(before)) before = '';
+        const askedFor = !before && /^for\s+/i.test(after);
+        after = after.replace(/^(?:(?:and|then|to|please|for)\b[,\s]*)+/i, '').trim();
+        const words = [before, after].filter(Boolean).join(' ').trim();
+        const file = askedFor ? (NO_FILE.test(after) ? null : after) : brought(words);
+        return { person: one, words, file };
+      }
+    }
+    return null;
+  }
+
+  /** "Get the deck from Leo", "ask Leo to send me the Q3 numbers": a file of theirs, with no laptop named. */
+  function fromPerson(text: string): { person: PeerPerson; file: string } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
+    const people = others().slice().sort((a, b) => b.name.length - a.name.length);
+    for (const one of people) {
+      const first = one.name.split(' ')[0]!;
+      const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const them = `(?<![\\p{L}\\p{N}])${escaped(name)}(?![\\p{L}\\p{N}'’])`;
+        const found = new RegExp(`^${LEAD}${BRING}(?:\\s+(?:me|us))?\\s+(.+?)\\s+from\\s+${them}$`, 'iu').exec(said)
+          ?? new RegExp(`^${LEAD}ask\\s+${them}\\s+(?:for|to\\s+(?:send|give|share|forward|pass)\\s+(?:me|us))\\s+(.+)$`, 'iu').exec(said);
+        const what = found?.[1]?.replace(/\s+(?:for me|to me|with me|please)$/i, '').trim();
+        // Only when the thing is named as a file: "ask Leo for his view" is a word to Leo.
+        if (what && FILE_WORD.test(what)) return { person: one, file: what };
       }
     }
     return null;
@@ -924,9 +992,18 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
     const wanted = requested(text);
     if (wanted) {
+      const theirs = `${wanted.person.name}'s ${NOTCH_NAME}`;
+      // A file of theirs: their Pillow looks for it, and they say there whether it goes.
+      const file = wanted.file && files ? peerPlain(wanted.file, PEER_FILE_WHAT_MAX) : '';
+      if (file) return { did: `Ask ${theirs} for a file: ${file}`, run: () => files!.want(wanted.person, file) };
       const asked = cap(peerPlain(wanted.words, NOTCH_PEOPLE_SAY_MAX));
-      if (!asked) return null;
-      return { did: `Ask ${wanted.person.name}'s ${NOTCH_NAME}: ${asked}`, run: () => request(wanted.person, asked) };
+      if (!asked) return { did: `Ask ${theirs} something.`, run: () => { inbox.present('people-what', (stage) => stage.say(['Ask ', em(theirs), ' what? Say it after the name.'], 3200, { mood: 'confused' })); } };
+      return { did: `Ask ${theirs}: ${asked}`, run: () => request(wanted.person, asked) };
+    }
+    const theirs = files ? fromPerson(text) : null;
+    if (theirs) {
+      const file = peerPlain(theirs.file, PEER_FILE_WHAT_MAX);
+      if (file) return { did: `Ask ${theirs.person.name}'s ${NOTCH_NAME} for a file: ${file}`, run: () => files!.want(theirs.person, file) };
     }
     const to = addressed(text);
     if (!to) return null;

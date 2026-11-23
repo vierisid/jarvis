@@ -188,7 +188,7 @@ import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
 import { NotchSurface } from "../notch/surface.ts";
 import { notchEnabled } from "../notch/switch.ts";
-import { downloadsFolder, saveDownload } from "../peers/downloads.ts";
+import { appFound, downloadsFolder, saveDownload, saveThroughApp } from "../peers/downloads.ts";
 import { PeerLink } from "../peers/link.ts";
 import { PeerSetup } from "../peers/setup.ts";
 import { PeerStore } from "../peers/store.ts";
@@ -4758,7 +4758,40 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // A file from somebody in the organisation: kept in the brain's own folder while it crosses, then put in the person's Downloads.
           files: {
             dir: path.join(dataDir, 'peers', 'files'),
-            save: async (name, bytes) => { const saved = saveDownload(await downloadsFolder(), name, bytes); return saved ? { place: 'Downloads', name: saved.name } : null; },
+            save: async (name, bytes) => {
+              // The desktop app first: it is the program the person gave leave to touch their folders, on every
+              // system. On a Mac the brain's own writing into Downloads is turned down by macOS.
+              for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                const put = await saveThroughApp((method, params) => sidecarManager.dispatchRPC(sidecar.id, method, params, { initial: 30_000, max: 30_000 }), name, bytes).catch(() => null);
+                if (put) return { place: 'Downloads', name: put.name };
+              }
+              // No app that can: the brain's own hand, which works where the system lets it.
+              const saved = saveDownload(await downloadsFolder(), name, bytes);
+              if (!saved) console.log('[notch] a file that arrived could not be put in the downloads, by the desktop app or by the brain');
+              return saved ? { place: 'Downloads', name: saved.name } : null;
+            },
+            // A file somebody asks for: looked up by name on the person's own computer, which is the only one
+            // that knows where its files are, and taken from its folder only after the person's yes.
+            find: async (words) => {
+              for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                try {
+                  const found = appFound(await sidecarManager.dispatchRPC(sidecar.id, 'notch.find', { words }, { initial: 8000, max: 8000 }));
+                  if (found) return found;
+                } catch { /* this one cannot look */ }
+              }
+              return null;
+            },
+            open: async (place, name) => {
+              for (const sidecar of sidecarManager.getConnectedSidecars()) {
+                try {
+                  const answer = await sidecarManager.dispatchRPC(sidecar.id, 'notch.file', { place, name }, { initial: 15_000, max: 15_000 }) as
+                    { opened?: unknown; _binary?: { data?: unknown } } | null;
+                  const data = answer?.opened === true ? answer._binary?.data : null;
+                  if (typeof data === 'string' && data.length > 0 && data.length <= 24 * 1024 * 1024) return new Uint8Array(Buffer.from(data, 'base64'));
+                } catch { /* this one cannot hand it over */ }
+              }
+              return null;
+            },
           },
         } } : {}),
         approvalManager,

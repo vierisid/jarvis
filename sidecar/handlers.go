@@ -175,6 +175,11 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		if caps[CapFilesystem] {
 			registry["notch.files"] = notchOnly(notch, "notch.files", makeNotchFilesHandler(cfg))
 			registry["notch.file"] = notchOnly(notch, "notch.file", makeNotchFileHandler(cfg))
+			// Files between people's Jarvises: one looked up by what it is
+			// called, and one that arrived put into the downloads
+			// (notch_files_peers.go).
+			registry["notch.find"] = notchOnly(notch, "notch.find", makeNotchFindHandler(cfg))
+			registry["notch.save"] = notchOnly(notch, "notch.save", makeNotchSaveHandler(cfg))
 		}
 	}
 

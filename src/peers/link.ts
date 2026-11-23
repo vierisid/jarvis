@@ -338,7 +338,10 @@ export class PeerLink {
   private readonly now: () => number;
 
   constructor(private readonly options: PeerLinkOptions = {}) {
-    this.now = options.now ?? Date.now;
+    // How long a line has been up is measured on a clock that only goes forward. The clock on the wall can be
+    // set back under a running program (a laptop that wakes, a time service that corrects it), and a yes the
+    // person gave after reading would then count as given too soon, be asked again, and be closed.
+    this.now = options.now ?? (() => performance.now());
   }
 
   /** The engine this link speaks through. Its dialogs, notices and states are given to the three methods below. */

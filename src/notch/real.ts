@@ -221,7 +221,13 @@ export interface NotchRealDeps {
     /** Getting in: the engine put in place, and the server for whoever makes an organisation. */
     setup?: PeerSetupLike;
     /** Files between Pillows: where one is kept while it crosses, and how one that arrived is saved (./people-files.ts). */
-    files?: { dir: string; save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null> };
+    files?: {
+      dir: string;
+      save(name: string, bytes: Uint8Array): Promise<{ place: string; name: string } | null>;
+      /** Looks on the person's computer for the files that fit some words, and takes one from its folder (./people-files.ts). */
+      find?: (words: string) => Promise<{ place: 'desktop' | 'documents' | 'downloads'; name: string; kind: string; size: number }[] | null>;
+      open?: (place: 'desktop' | 'documents' | 'downloads', name: string) => Promise<Uint8Array | null>;
+    };
     noClock?: boolean;
   };
   /**
@@ -478,7 +484,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
-      ...(deps.peers.files ? { files: deps.peers.files } : {}),
+      // A file that arrived is held by the notch like one that was dropped on it, with the same card.
+      ...(deps.peers.files ? { files: { ...deps.peers.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => drop?.arrived(file) ?? false } } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
     });
   }

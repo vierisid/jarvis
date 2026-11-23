@@ -194,10 +194,24 @@ func notchFileName(name string) string {
 // notchFilesIn looks at the top of one folder. The folder not being there is
 // not an error: the place is simply not reached.
 func notchFilesIn(place, dir string, blocked func(path string) bool) notchFilePlace {
+	out, seen := notchFilesAll(place, dir, blocked)
+	if len(seen) > notchFilesNamed {
+		seen = seen[:notchFilesNamed]
+	}
+	if seen != nil {
+		out.Recent = seen
+	}
+	return out
+}
+
+// notchFilesAll is the same look with every name it saw, the newest first:
+// for looking a file up by its name (notch_files_peers.go). Nothing but
+// notchFilesIn's few leave this program from here.
+func notchFilesAll(place, dir string, blocked func(path string) bool) (notchFilePlace, []notchFileSeen) {
 	out := notchFilePlace{Place: place, Kinds: map[string]int{}, Recent: []notchFileSeen{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return out
+		return out, nil
 	}
 	out.Reached = true
 	seen := make([]notchFileSeen, 0, 64)
@@ -237,11 +251,7 @@ func notchFilesIn(place, dir string, blocked func(path string) bool) notchFilePl
 		seen = append(seen, notchFileSeen{Name: notchFileName(name), Kind: kind, Changed: changed, Size: size, Private: kind != "folder" && notchFilePrivate(name)})
 	}
 	sort.SliceStable(seen, func(i, j int) bool { return seen[i].Changed > seen[j].Changed })
-	if len(seen) > notchFilesNamed {
-		seen = seen[:notchFilesNamed]
-	}
-	out.Recent = seen
-	return out
+	return out, seen
 }
 
 // platformNotchKnownFolders asks the system itself where the person's

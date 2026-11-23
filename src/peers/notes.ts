@@ -37,7 +37,16 @@ export type PeerNote =
    * pieces it would come, and what its bytes add up to (SHA-256). Nothing of
    * the file itself: that follows only after a yes.
    */
-  | { kind: 'file'; id: string; name: string; size: number; parts: number; sha: string }
+  | { kind: 'file'; id: string; name: string; size: number; parts: number; sha: string; want?: string }
+  /**
+   * A file is asked for, in words ("the Q3 numbers"). The other Pillow looks
+   * for it and asks its owner, there, whether it may go. An offer that
+   * answers it carries its id as `want`, and is then not asked about again:
+   * the asking was the yes.
+   */
+  | { kind: 'file-want'; id: string; what: string }
+  /** The owner there said no to what was asked for (`of` is the asking's id). */
+  | { kind: 'file-want-no'; of: string }
   /** What became of an offer (`of` is its id): taken, turned down, arrived whole, or not whole. */
   | { kind: 'file-yes' | 'file-no' | 'file-got' | 'file-lost'; of: string }
   /** One piece of a file that was taken, the `n`th from nought. The message's words are the piece, in base64. */
@@ -51,6 +60,8 @@ export const PEER_ORG_MAX = 60;
 export const PEER_FILE_MAX = 25 * 1024 * 1024;
 export const PEER_FILE_PART = 144 * 1024;
 export const PEER_FILE_NAME_MAX = 120;
+/** The longest description of a file that is asked for. */
+export const PEER_FILE_WHAT_MAX = 120;
 
 /** In how many pieces a file of this size comes. */
 export const peerFileParts = (size: number): number => Math.ceil(size / PEER_FILE_PART);
@@ -111,7 +122,19 @@ function checked(raw: unknown): PeerNote | null {
     if (!of || typeof note.name !== 'string' || typeof size !== 'number' || !Number.isInteger(size) || size < 1 || size > PEER_FILE_MAX) return null;
     // The pieces follow from the size. An offer that says otherwise is not one.
     if (note.parts !== peerFileParts(size) || typeof note.sha !== 'string' || !/^[0-9a-f]{64}$/.test(note.sha)) return null;
-    return { kind: 'file', id: of, name: peerFileName(note.name), size, parts: note.parts, sha: note.sha };
+    const want = note.want === undefined ? null : id(note.want);
+    // An offer that says it answers an asking, and names none that can be one, is not an offer.
+    if (note.want !== undefined && !want) return null;
+    return { kind: 'file', id: of, name: peerFileName(note.name), size, parts: note.parts, sha: note.sha, ...(want ? { want } : {}) };
+  }
+  if (note.kind === 'file-want') {
+    const of = id(note.id);
+    const what = typeof note.what === 'string' ? peerPlain(note.what, PEER_FILE_WHAT_MAX) : '';
+    return of && what ? { kind: 'file-want', id: of, what } : null;
+  }
+  if (note.kind === 'file-want-no') {
+    const of = id(note.of);
+    return of ? { kind: 'file-want-no', of } : null;
   }
   if (note.kind === 'file-yes' || note.kind === 'file-no' || note.kind === 'file-got' || note.kind === 'file-lost') {
     const of = id(note.of);

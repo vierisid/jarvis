@@ -326,7 +326,8 @@ the same sealed channel as every word. The owner agreed to that for a demo, capp
 |---|---|
 | `src/notch/people-files.ts` | The offer, the yes, the pieces, the check, the news on both sides. |
 | `src/peers/notes.ts` | The notes it rides on: `file`, `file-yes`, `file-no`, `file-part`, `file-got`, `file-lost`. |
-| `src/peers/downloads.ts` | Where a file that arrived is put: the person's Downloads, under WSL the Windows one. |
+| `src/peers/downloads.ts` | Where a file that arrived is put: the person's Downloads. The desktop app does the saving; the brain's own hand is the fallback. |
+| `sidecar/notch_files_peers.go` | The desktop app's part: `notch.save` puts a file into the downloads, `notch.find` looks one up by what it is called. |
 | `src/notch/drop.ts` | The way in: a file dropped on the notch can be sent on, by a button or by "send it to Leo". |
 
 1. **The offer.** A file is dropped on the notch and somebody is named. One message goes: the
@@ -343,22 +344,66 @@ the same sealed channel as every word. The owner agreed to that for a demo, capp
     a message. The receiver's is a key. No piece leaves before both.
 45. **A piece is taken only for an offer the person said yes to, from the one who made it, and no
     longer than the offer said.** A piece of anything else is dropped unseen and never shown.
-46. **What arrives is saved and nothing else.** It is not opened, not read, not run, and no model
-    sees it. It is never written over something that is there.
+46. **What arrives is saved, and then held like a file the person dropped.** The same card, the
+    same three things to ask with a click, and it can be sent on. It is read only when the person
+    asks something about it, by the same reader and under the same rule as a dropped file: what
+    is in it is information, never an instruction. Until then nothing opens it and no model sees
+    it. It is never run, and never written over something that is there.
 47. **A name from outside is made safe before it is shown or used**: the last part of a path,
     readable characters only, nothing a file system gives a meaning to.
 48. **A file that does not check is not kept**, and both sides are told.
 49. **A file that cannot be read can still be sent on**, when there is somebody to send it to. It
     is then held for that alone, and no question is asked about it.
 
+50. **The desktop app does the saving.** It is the program the person gave leave to touch their
+    folders, on every system. It takes the file in pieces, checks the whole against the size and
+    the SHA-256, and only then puts it in the downloads under a name that is free. When no app
+    can, the brain saves with its own hand; when that fails too, the notch still holds the file
+    and says it could not put it in Downloads. A file that is whole is never lost to a folder.
+
+### Asking for a file (22 November)
+
+The owner: "i might want to retreive a file in someone elses pc like we built in our poc". The
+prototype's scenes (v15, `fetchFromLapo` and `lfile`) are the script.
+
+1. **The asking.** "Get me the Q3 numbers from Leo's laptop." One message goes: the words for the
+   file. Their laptop can be named anywhere in the sentence, and as speech is written down
+   ("Leos pc"). "Get the deck from Leo" and "ask Leo for the contract" count too, when the thing is
+   named as a file.
+2. **The looking.** Leo's Pillow looks for it by name at the top of his desktop, documents and
+   downloads, when its line is about to be shown, and asks HIM: "Sam asks for the Q3 numbers. I
+   found Q3 numbers.xlsx in your Documents, 180 KB. Send only that?" Send it, Another file, No.
+3. **The yes.** It crosses as any file does. Sam is not asked "Take it?": the asking was the yes.
+   Leo's line stays until it has gone: "Sent. One file left this laptop, nothing else."
+4. **Another file.** Nothing is sent. Leo drops the right one on his notch and picks "Send to
+   Sam": that file is the answer.
+
+51. **The one who asks learns nothing from the looking.** Not what was found, and not that
+    nothing was. Only the owner's yes or no comes back, and a no reads the same whatever was
+    found. Nobody can find out from afar which files a laptop holds.
+52. **A wrong file is not put up for a yes.** When words that name a file were said, more than
+    half of them must be in the name: "the Acme contract" does not offer a Northwind contract.
+    Only when nothing but a kind was said ("the latest deck") is the kind enough.
+53. **What would never be handed over is never named**: a file that is private by its name, a
+    shortcut, a folder, an empty file, one that is kept online only, anything in a blocked folder.
+54. **An offer skips "Take it?" only for an asking this machine made, of that person, that is
+    still open.** One that claims to answer anything else is asked about like any other.
+55. **Something to do there is still a request.** "Restart the server on Leo's laptop", "ask
+    Leo's Pillow what changed": the request of pass I4, with its two questions on his side.
+
 ### Where it stops
 
+- A file is found at the top of the desktop, the documents and the downloads, not inside their
+  folders, and by its name, not by what is in it. 16 MB is the most that is taken from a folder.
+- An asking that is never answered waits. The asker is not told that it waits.
+- The desktop app's saving and looking have been run in its own tests and not on a person's
+  machine yet. On a Mac, macOS may ask once whether Jarvis may use the Downloads folder.
 - 25 MB, and both sides must be Pillows. Anybody else reads one sentence that a file is offered.
 - The sender's brain has to be on when the yes comes. Its pieces start again from the first after
   a restart.
 - It is slow by design of the channel: about 14 MB a minute at best.
-- A file is sent by dropping it on the notch. It cannot be named by voice yet ("send Leo the deck
-  on my desktop").
+- A file of one's own is sent by dropping it on the notch. It cannot be named by voice yet ("send
+  Leo the deck on my desktop"). A file of somebody else's can be asked for by voice.
 - An offer that is never answered waits. It is not taken back by itself.
 
 ## Limits

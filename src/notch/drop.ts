@@ -128,6 +128,8 @@ export const NOTCH_DROP_HOLD_MS = 5 * 60_000;
 export const NOTCH_DROP_MOST = 3;
 /** How long "Got it" is up before the question about it. */
 export const NOTCH_DROP_GOT_MS = 900;
+/** How long the line for a file that arrived is up: it says who it is from and where it was put. */
+export const NOTCH_DROP_ARRIVED_MS = 3200;
 /** The most the words "Drop it on me" stay, when a file is held over the notch and neither dropped nor taken away. */
 export const NOTCH_DROP_TAG_MS = 30_000;
 
@@ -144,6 +146,12 @@ export interface DropHeld {
   raw: Uint8Array;
   /** It cannot be read here, and is held only to be sent on. Why it cannot, in a sentence. */
   unread?: string;
+  /**
+   * It was not dropped: it arrived from somebody in the organisation
+   * (./people-files.ts). `place` is where it was saved, or null when it
+   * could not be saved and this is the only copy.
+   */
+  from?: { who: string; place: string | null };
 }
 
 /** Somebody a dropped file can be sent on to. */
@@ -187,7 +195,7 @@ export function dropMeta(held: DropHeld): string {
   const ext = extension(held.name).toUpperCase();
   const sort = dropSort(held);
   const what = sort === 'picture' ? 'Picture' : sort === 'sheet' ? 'Spreadsheet' : sort === 'code' ? 'Code' : ext === 'PDF' ? 'PDF' : 'Document';
-  return [what, megabytes(held.size), held.cut ? 'first part only' : ''].filter(Boolean).join(' · ');
+  return [what, megabytes(held.size), held.cut ? 'first part only' : '', held.from ? `from ${held.from.who}` : ''].filter(Boolean).join(' · ');
 }
 
 /**
@@ -264,6 +272,15 @@ export interface NotchDropped {
 export interface NotchDrop {
   /** A file arrived from the page. Comes back with whether it was taken, for the page's own record. */
   take(dropped: NotchDropped): { taken: boolean };
+  /**
+   * A file arrived from somebody in the organisation, whole and checked. It
+   * is held as a dropped file is, with the same card: the owner, 22 November
+   * 2026, wanted to "ask my pillow to perform certain actions with it like
+   * describing, summarise and more basically what you can do when you drop a
+   * file into your own pillow". True when it was taken. False when it is not
+   * a file that can be read: the caller then says where it is.
+   */
+  arrived(file: { name: string; bytes: Uint8Array; from: string; place: string | null }): boolean;
   /** Whether a file is waiting for its question. */
   holding(): boolean;
   /**
@@ -355,8 +372,11 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
     inbox.after(() => { for (const file of files) deps.send?.file(to.id, file); });
   };
 
-  /** Puts the question about what is held on the notch. A new one takes the place of the one before it. */
-  function show(): void {
+  /**
+   * Puts the question about what is held on the notch. A new one takes the place of the one before it.
+   * `arrival`: nobody dropped it just now. It comes up as anything from a person does, in its own time.
+   */
+  function show(arrival = false): void {
     const id = `drop-${++shows}`;
     item = id;
     if (timer) clearTimeout(timer);
@@ -368,17 +388,22 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
     }, holdMs);
     (timer as { unref?: () => void }).unref?.();
     inbox.add({
-      id, subject: 'drop', class: 'person', speaks: true, urgent: true, asked: true, returns: true,
-      title: () => held.length === 1 ? ['You gave me ', em(held[0]!.name), '. What do you want from it?'] : [`You gave me ${held.length} files. What do you want from them?`],
+      id, subject: 'drop', class: 'person', speaks: true, ...(arrival ? {} : { urgent: true, asked: true, returns: true }),
+      title: () => held.length === 1 ? (held[0]!.from ? [em(held[0]!.name), ' from ', em(held[0]!.from.who), ' is here. What do you want from it?'] : ['You gave me ', em(held[0]!.name), '. What do you want from it?']) : [`You gave me ${held.length} files. What do you want from them?`],
       check: () => item === id && held.length > 0,
       play: async (stage) => {
         if (unsaid) {
           const name = unsaid;
           unsaid = null;
-          await stage.say(held.length > 1 ? ['Got ', em(name), ' too.'] : ['Got ', em(name), '.'], gotMs, { mood: 'happy' });
+          const sender = held.find((one) => one.name === name)?.from;
+          // One that arrived: who it is from, and where it is now. Longer on the notch than "Got it": it names a place.
+          if (sender) await stage.say(sender.place ? ['Got ', em(name), ' from ', em(sender.who), '. It is in your ', em(sender.place), '.'] : ['Got ', em(name), ' from ', em(sender.who), '. I could not put it in your Downloads, so I am holding it.'], Math.max(gotMs, NOTCH_DROP_ARRIVED_MS), { mood: 'happy', who: sender.who });
+          else await stage.say(held.length > 1 ? ['Got ', em(name), ' too.'] : ['Got ', em(name), '.'], gotMs, { mood: 'happy' });
         }
         if (item !== id || held.length === 0) return 'settled';
-        const people = (deps.send?.to() ?? []).slice(0, 3);
+        // Not back to the one it came from.
+        const senders = new Set(held.flatMap((one) => (one.from ? [one.from.who] : [])));
+        const people = (deps.send?.to() ?? []).filter((one) => !senders.has(one.name)).slice(0, 3);
         const readable = held.filter((one) => !one.unread);
         const asks = dropSuggestions(readable);
         const line = stage.id();
@@ -411,7 +436,7 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
         const typed = answer.act === 'ask' ? (answer.text ?? '').trim() : '';
         // For somebody else: by their button, or by words that say so.
         const to = answer.act === 'button' && /^to\d$/.test(answer.button ?? '') ? people[Number(answer.button!.slice(2))] ?? null
-          : typed ? dropSendTo(typed, deps.send?.to() ?? [], readable.length === 0) : null;
+          : typed ? dropSendTo(typed, (deps.send?.to() ?? []).filter((one) => !senders.has(one.name)), readable.length === 0) : null;
         if (to) { sendOn(to); return 'settled'; }
         if (readable.length === 0) {
           // Said while this card still has the notch, and let go after: letting go takes the card away.
@@ -420,7 +445,9 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
           return 'settled';
         }
         const picked = answer.act === 'button' ? asks[Number(answer.button?.slice(3))] : undefined;
-        const question = typed || (picked ?? asks[0]!).question;
+        // The words of a click were written for a file the person dropped. For one that was sent to them they say so.
+        const sentHere = readable.every((one) => !!one.from);
+        const question = typed || (sentHere ? (picked ?? asks[0]!).question.replace(/\bI dropped\b/g, 'I was sent') : (picked ?? asks[0]!).question);
         deps.ask(question, hand());
         return 'settled';
       },
@@ -487,6 +514,29 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       show();
       try { deps.taken?.(); } catch { /* a sign, and nothing depends on it */ }
       return { taken: true };
+    },
+    arrived(file) {
+      if (stopped || deps.paused?.()) return false;
+      const name = dropName(file.name);
+      const verdict = dropVerdict(name, '', file.bytes.length);
+      // Not a file that can be read: there is nothing to ask about it here.
+      if (!verdict.ok || held.length >= NOTCH_DROP_MOST) return false;
+      let bytes = file.bytes;
+      let cut = false;
+      if (verdict.reader) {
+        const read = readDropped(verdict.reader, file.bytes);
+        if (!read) return false;
+        bytes = new TextEncoder().encode(read.text);
+        cut = read.cut;
+      }
+      const together = held.reduce((sum, one) => sum + one.file.bytes.length, 0) + bytes.length;
+      if (held.length > 0 && together > ATTACHMENT_LIMITS.turnBytes) return false;
+      // Sizes and kinds, never the name.
+      log(`[notch] a file arrived from somebody in the organisation and is held: ${file.bytes.length} bytes`);
+      held.push({ name, size: file.bytes.length, cut, raw: file.bytes, file: { kind: verdict.kind, name, mediaType: verdict.mediaType, bytes }, from: { who: file.from, place: file.place } });
+      unsaid = name;
+      show(true);
+      return true;
     },
     holding: () => held.length > 0,
     claim: () => (held.length > 0 ? hand() : []),

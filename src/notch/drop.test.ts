@@ -635,3 +635,82 @@ describe('a dropped file that is for somebody else', () => {
     expect(h.drop.holding()).toBe(false);
   });
 });
+
+describe('a file that arrived from somebody in the organisation', () => {
+  const pdf = (size = 2000): Uint8Array => new Uint8Array(size).fill(7);
+
+  test('is held like a dropped file: who it is from and where it is, then the same card', async () => {
+    const h = harness();
+    expect(h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' })).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Got Deck.pdf from Leo. It is in your Downloads.');
+    expect(h.line()).toMatchObject({ kind: 'say', who: 'Leo' });
+    await h.answer('done');
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    expect(h.cards()).toEqual(['doc | Deck.pdf | PDF · 2 KB · from Leo']);
+    expect(h.buttons()).toEqual(['- Summarise it', '- Find the numbers', '- What is missing']);
+    // A click asks about it, as for a file that was dropped: the file goes with the question.
+    await h.answer('button', { button: 'ask0' });
+    expect(h.asked.length).toBe(1);
+    // In words that fit a file that was sent, not one that was dropped.
+    expect(h.asked[0]!.text).toBe('Summarise the file I was sent: what it is, and the points that matter, in a few short lines.');
+    expect(h.asked[0]!.files.map((one) => `${one.name} ${one.bytes.length}`)).toEqual(['Deck.pdf 2000']);
+    expect(h.drop.holding()).toBe(false);
+  });
+
+  test('a question typed about it is asked with it', async () => {
+    const h = harness();
+    h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
+    await h.got();
+    await h.answer('ask', { text: 'what changed on the pricing slide?' });
+    expect(h.asked).toEqual([{ text: 'what changed on the pricing slide?', files: [expect.objectContaining({ name: 'Deck.pdf' })] }]);
+  });
+
+  test('one that could not be put in a folder is held all the same, and says so', async () => {
+    const h = harness();
+    expect(h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: null })).toBe(true);
+    await settle();
+    expect(h.said()).toBe('Got Deck.pdf from Leo. I could not put it in your Downloads, so I am holding it.');
+  });
+
+  test('it comes up as something from a person does, not as something the owner just did', async () => {
+    const h = harness({ busy: true });
+    expect(h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' })).toBe(true);
+    await settle();
+    // Something else has the notch: it waits in the count, and the mouth does not move.
+    expect(h.said()).toBe('Busy with something.');
+    expect(h.mouth()).toEqual([]);
+    expect(h.drop.holding()).toBe(true);
+  });
+
+  test('a file that cannot be read is not taken: the caller says where it is', async () => {
+    const h = harness();
+    expect(h.drop.arrived({ name: 'Site.zip', bytes: pdf(), from: 'Leo', place: 'Downloads' })).toBe(false);
+    expect(h.drop.arrived({ name: 'Empty.pdf', bytes: new Uint8Array(0), from: 'Leo', place: 'Downloads' })).toBe(false);
+    expect(h.drop.holding()).toBe(false);
+    expect(h.line()).toBeNull();
+    // While everything is stopped nothing is taken either.
+    const stopped = harness({ paused: () => true });
+    expect(stopped.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' })).toBe(false);
+  });
+
+  test('its name is made readable as a dropped file\'s is, and is in no log', async () => {
+    const h = harness();
+    h.drop.arrived({ name: 'folder/..\\Q3\u0007 numbers.csv', bytes: new TextEncoder().encode('a,b\n1,2\n'), from: 'Leo', place: 'Downloads' });
+    await settle();
+    expect(h.said()).toBe('Got Q3 numbers.csv from Leo. It is in your Downloads.');
+    expect(h.logs.join('\n')).not.toContain('numbers');
+    expect(h.logs.join('\n')).toContain('a file arrived from somebody in the organisation and is held: 8 bytes');
+  });
+
+  test('it can be sent on to somebody else like any file that is held', async () => {
+    const ANNA = { id: 'Anna000000000000000003', name: 'Anna' };
+    // Leo, who sent it, is not offered his own file back.
+    const h = harness({ people: [{ id: 'Leo0000000000000000002', name: 'Leo' }, ANNA] });
+    h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
+    await h.got();
+    expect(h.buttons()).toEqual(['- Summarise it', '- Find the numbers', '- What is missing', '- Send to Anna']);
+    await h.answer('button', { button: 'to0' });
+    expect(h.sentOn.map((one) => `${one.to} ${one.name} ${one.bytes.length}`)).toEqual([`${ANNA.id} Deck.pdf 2000`]);
+  });
+});
