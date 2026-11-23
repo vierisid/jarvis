@@ -53,6 +53,8 @@
 import type { NotchInbox } from './inbox.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
+import { attachNotchPeopleTime, isTimeNote, peerTimeMinutes } from './people-time.ts';
+import type { MailCalendarEvent } from './mail/proposer.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -155,6 +157,12 @@ export interface NotchPeopleDeps {
   }) => Promise<{ ok: true; answer: string } | { ok: false }>;
   /** Getting in: the engine put in place, and the server for whoever makes an organisation (src/peers/setup.ts). */
   setup?: PeerSetupLike;
+  /**
+   * A time that is free for two people (./people-time.ts): how the owner's
+   * calendar is read. Without it no time is looked for, and a comparing
+   * from somebody else is answered with "no calendar here".
+   */
+  time?: { calendar(from: number, to: number): Promise<MailCalendarEvent[] | null>; zone?: string; waitMs?: number };
   /**
    * Files between Pillows (./people-files.ts): a folder of the brain's own
    * to keep one in while it crosses, and how one that arrived is put where
@@ -328,6 +336,15 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (sent.why === 'down') return ['I cannot reach the others now. It was not sent.'];
     return ['That could not be sent.'];
   }
+
+  /** A time that is free for two people. Always there: without a calendar it says so, to the owner and to the one who asks. */
+  const times = attachNotchPeopleTime({
+    inbox, link, store, person, log, now,
+    calendar: (from, to) => (deps.time ? deps.time.calendar(from, to) : Promise.resolve(null)),
+    open: (url) => deps.openPage(null, url),
+    news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }),
+    ...(deps.time?.zone ? { zone: deps.time.zone } : {}), ...(deps.time?.waitMs !== undefined ? { waitMs: deps.time.waitMs } : {}),
+  });
 
   /** Files, when this brain was given somewhere to keep and to put them. */
   const files = deps.files ? attachNotchPeopleFiles({
@@ -1070,6 +1087,37 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     return null;
   }
 
+  /**
+   * A time that is wanted with somebody: with whom, and for how long.
+   *
+   *   "find a time with Leo"                "find 30 minutes with Leo this week"
+   *   "when are Leo and I both free"        "set up a meeting with Leo"
+   *   "book an hour with Leo"               "get a slot with Leo"
+   *
+   * Not a word to Leo ("ask Leo when he is free" is a question for Leo), and
+   * not more than one person.
+   */
+  function timed(text: string): { person: PeerPerson; minutes: number } | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
+    if (/^(?:(?:please|ok|okay|hey|jarvis|pillow)[,\s]+)*(?:tell|ask|message|ping|send|give|share|forward)\b/i.test(said)) return null;
+    const people = others().slice().sort((a, b) => b.name.length - a.name.length);
+    for (const one of people) {
+      const first = one.name.split(' ')[0]!;
+      const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const them = `(?<![\\p{L}\\p{N}])${escaped(name)}(?![\\p{L}\\p{N}'’])`;
+        const timeWord = '(?:time|times|slot|slots|meeting|call|catch[- ]?up|sync|chat|minutes?|mins?|hour|half an hour)';
+        const withThem = new RegExp(`\\b${timeWord}\\b.*\\bwith\\s+${them}`, 'iu').test(said) || new RegExp(`\\bwith\\s+${them}\\b.*\\b${timeWord}\\b`, 'iu').test(said);
+        const bothFree = new RegExp(`\\bwhen\\s+(?:are|am|is|can|could)\\b.*${them}.*\\b(?:free|meet|available)\\b`, 'iu').test(said);
+        if (!withThem && !bothFree) continue;
+        // "A time with Leo and Anna": more than one person. Not found between two.
+        if (new RegExp(`${them}\\s*(?:,|and\\b|&)\\s*(?!I\\b)\\p{Lu}`, 'u').test(said) || new RegExp(`\\p{Lu}[\\p{L}'’-]*\\s*(?:,|and\\b|&)\\s*${them}`, 'u').test(said.replace(/^when\s+(?:are|can|could)\s+/i, '').replace(/\b(?:I|me)\b/g, ''))) return null;
+        return { person: one, minutes: peerTimeMinutes(said) };
+      }
+    }
+    return null;
+  }
+
   /** What is wanted, when words ask for a thing to be brought: "get me the Q3 numbers" gives "the Q3 numbers". */
   function brought(words: string): string | null {
     const found = new RegExp(`^${LEAD}(?:${BRING}(?:\\s+(?:me|us))?|${HAND}\\s+(?:me|us)|i\\s+(?:need|want)|i(?:'d| would)\\s+like)\\s+(.+)$`, 'iu').exec(words);
@@ -1159,6 +1207,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
     }
+    // A time with somebody: the two calendars are compared, and neither person sees the other's.
+    const when = timed(text);
+    if (when) return { did: `Find a time with ${when.person.name}: ${when.minutes} minutes`, run: () => times.find(when.person, when.minutes) };
     // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
     const mine = files ? handed(text) : null;
     if (mine) {
@@ -1688,6 +1739,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         continue;
       }
       const { words, note } = peerNoteRead(item.text);
+      if (isTimeNote(note)) {
+        // A time that is asked for, and already on the notch or in the count, is not put there twice.
+        if (note.kind !== 'time-want' || !inbox.has(`people:time-want:${note.id}`)) await times.note(item, from, note, words);
+        continue;
+      }
       if (isFileNote(note)) {
         if (files) {
           // An offer that is already on the notch, or in the count, is not put there twice.

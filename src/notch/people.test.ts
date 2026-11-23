@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { NotchInbox } from './inbox.ts';
 import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
 import type { NotchPeopleStep } from './people.ts';
+import { NOTCH_TIME_ASKS_AN_HOUR, peerTimeCalendarUrl, peerTimeMinutes } from './people-time.ts';
+import type { MailCalendarEvent } from './mail/proposer.ts';
+import { mailFreeStarts, mailPickStarts } from './mail/slots.ts';
 import { NOTCH_FILE_FUSE_MS, NOTCH_FILE_PICKED_FUSE_MS, fileChoiceMessages, fileChoiceRead, fileWhen, fileWhere } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
@@ -91,7 +94,7 @@ class FakeSetup implements PeerSetupLike {
   onChange(listener: () => void): void { this.listeners.push(listener); }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; timeWaitMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -143,6 +146,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     canOpen: more.canOpen ?? true,
     answer: { ok: true, answer: 'Three slides changed: pricing, the roadmap and the team page.' },
   };
+  /** This side's calendar: what is in it, or null when it cannot be read. `hold` keeps a reading waiting. */
+  const timeState: { events: MailCalendarEvent[] | null; hold: Promise<void> | null; reads: number } = { events: [], hold: null, reads: 0 };
   /** Every request that was really worked on here. */
   const worked: { from: string; words: string }[] = [];
   /** For each of them: whether it was handed over as a thing to be done. */
@@ -151,6 +156,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     inbox, link, store, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
     ...(more.engineWaitMs ? { engineWaitMs: more.engineWaitMs } : {}),
     ...(more.stepMs ? { stepMs: more.stepMs } : {}),
+    // Read in one zone whatever the machine's own, so that the days and hours below are the same everywhere.
+    time: { zone: 'UTC', waitMs: more.timeWaitMs ?? 3000, calendar: async () => { timeState.reads++; if (timeState.hold) await timeState.hold; return timeState.events; } },
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
     ...(more.noWork ? {} : {
       work: async (request: { from: string; words: string; act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> } }) => {
@@ -175,7 +182,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState,
     saved, filesDir, fileState, lookedFor, held, thought,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
@@ -205,9 +212,9 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
 }
 
 /** Two people, signed in and joined, each with a name for the other. */
-async function joined(more: { org?: string; stepMs?: number } = {}) {
+async function joined(more: { org?: string; stepMs?: number; timeWaitMs?: number } = {}) {
   const server = new FakeServer();
-  const sam = side(server, SAM, 'sam');
+  const sam = side(server, SAM, 'sam', more.timeWaitMs ? { timeWaitMs: more.timeWaitMs } : {});
   const leo = side(server, LEO, 'leo', more.stepMs ? { stepMs: more.stepMs } : {});
   sam.engine.signedIn = true;
   leo.engine.signedIn = true;
@@ -2664,5 +2671,221 @@ describe('something done on their laptop, while they watch', () => {
     await sam.done();
     await leo.pick(0);
     expect(leo.said()).toBe('I could not do that. Sam is told no.');
+  });
+});
+
+describe('a time that is free for two people', () => {
+  // The test clock stands at Friday 15 January 2027, 08:00 UTC. The days looked at are Monday 18 to Friday 22.
+  const at = (day: number, hour: number, minute = 0): number => Date.UTC(2027, 0, day, hour, minute);
+  const event = (summary: string, from: number, to: number): MailCalendarEvent => ({ summary, start: new Date(from).toISOString(), end: new Date(to).toISOString() });
+  // Sam is out all Monday. Leo is busy Tuesday until three, and all Wednesday.
+  const SAM_DAYS = [event('SECRET-SAM offsite', at(18, 9), at(18, 18))];
+  const LEO_DAYS = [event('SECRET-LEO board meeting', at(19, 9), at(19, 15)), event('SECRET-LEO dentist', at(20, 9), at(20, 18))];
+  /** Sam asked for a time with Leo, and the comparing has gone. */
+  const compared = async (more: { sam?: MailCalendarEvent[] | null; leo?: MailCalendarEvent[] | null; words?: string } = {}) => {
+    const { sam, leo } = await joined();
+    sam.timeState.events = more.sam === undefined ? SAM_DAYS : more.sam;
+    leo.timeState.events = more.leo === undefined ? LEO_DAYS : more.leo;
+    const routed = await sam.say(more.words ?? 'find a time with Leo');
+    await settle();
+    return { sam, leo, routed };
+  };
+  const through = async (sam: ReturnType<typeof side>, leo: ReturnType<typeof side>): Promise<void> => {
+    for (let round = 0; round < 4; round++) { await settle(); await leo.people.look(); await sam.people.look(); }
+    await settle();
+  };
+
+  test('which starts are free, and which three of them are a choice', () => {
+    const now = at(15, 8);
+    const free = mailFreeStarts(SAM_DAYS, now, 'UTC');
+    // Not today, not the weekend, not the Monday that is taken: Tuesday to Friday, eighteen half hours each.
+    expect(free.length).toBe(4 * 18);
+    expect(free[0]).toBe(at(19, 9));
+    expect(free.at(-1)).toBe(at(22, 17, 30));
+    // An hour needs both its halves, and has to end inside the working day.
+    expect(mailFreeStarts(LEO_DAYS, now, 'UTC', 60).filter((start) => start >= at(19, 0) && start < at(20, 0))).toEqual([at(19, 15), at(19, 15, 30), at(19, 16), at(19, 16, 30), at(19, 17)]);
+    // One a day, on the first three days that have one: an afternoon, a morning, an early morning.
+    expect(mailPickStarts(free, 'UTC')).toEqual([at(19, 15), at(20, 10), at(21, 9, 30)]);
+    expect(mailPickStarts([at(19, 16, 30), at(19, 17)], 'UTC')).toEqual([at(19, 16, 30)]);
+    expect(mailPickStarts([], 'UTC')).toEqual([]);
+  });
+
+  test('the two calendars are compared by the two Pillows, and only free times cross', async () => {
+    const { sam, leo, routed } = await compared();
+    expect(routed).toBe(true);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe("Comparing calendars with Leo's Pillow. Neither of you sees the other's.");
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.done();
+    await through(sam, leo);
+    // What went to Leo's Pillow: Sam's free starts, as numbers. No word of what is in Sam's calendar.
+    const asked = peerNoteRead(leo.engine.inbox[0]!.payload.text as string);
+    expect(asked.note).toMatchObject({ kind: 'time-ask', minutes: 30 });
+    expect((asked.note as { free: number[] }).free.length).toBe(4 * 18);
+    expect(JSON.stringify(leo.engine.inbox)).not.toContain('SECRET');
+    // What came back: three starts that are free for Leo too, and nothing else of Leo's calendar.
+    const answer = peerNoteRead(sam.engine.inbox[0]!.payload.text as string);
+    expect(answer.note).toEqual({ kind: 'time-fit', of: (asked.note as { id: string }).id, fits: [at(19, 15), at(21, 10), at(22, 9, 30)].map((start) => start / 60_000) });
+    expect(JSON.stringify(sam.engine.inbox)).not.toContain('SECRET');
+    expect(sam.said()).toBe('Free for both of you. Which one do I ask Leo for?');
+    expect(sam.options()).toEqual(['Tuesday at 15:00', 'Thursday at 10:00', 'Friday at 9:30']);
+    // Leo was not asked anything. Leo is told that it was answered, and how little was said.
+    if (!leo.said()) await leo.tap();
+    expect(leo.kind()).toBe('say');
+    expect(leo.said()).toBe("Sam's Pillow asked when you are both free. I named 3 times, and nothing else of your calendar.");
+  });
+
+  test('the one that is picked is asked of the other person, who says yes there, and both are offered it in their calendar', async () => {
+    const { sam, leo } = await compared();
+    await sam.done();
+    await through(sam, leo);
+    await sam.pick(1);
+    expect(sam.said()).toBe('Asking Leo for 30 minutes, Thursday at 10:00…');
+    await sam.done();
+    expect(sam.said()).toBe('Asked Leo. I will tell you what Leo says.');
+    await sam.done();
+    await through(sam, leo);
+    if (!leo.said() || /asked when you are both free/.test(leo.said())) { if (leo.said()) await leo.done(); await leo.tap(); }
+    if (/asked when you are both free/.test(leo.said())) { await leo.done(); await leo.tap(); }
+    expect(leo.said()).toBe('Sam wants 30 min. Thursday at 10:00 is free for both. Book it?');
+    expect(leo.options()).toEqual(['Book it', 'Not then']);
+    await leo.pick(0);
+    // Pillow reads a calendar and cannot write to one: the time is offered filled in, to be saved by the person.
+    expect(leo.said()).toBe('Told Sam yes. Open it in your calendar, to save it there?');
+    await leo.yes();
+    expect(leo.opened.at(-1)).toBe('https://calendar.google.com/calendar/render?action=TEMPLATE&text=Sam&dates=20270121T100000Z/20270121T103000Z');
+    expect(leo.said()).toBe('It is open in your calendar, filled in. Press Save there.');
+    await through(sam, leo);
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo said yes: Thursday at 10:00. Open it in your calendar, to save it there?');
+    await sam.yes();
+    expect(sam.opened.at(-1)).toBe('https://calendar.google.com/calendar/render?action=TEMPLATE&text=Leo&dates=20270121T100000Z/20270121T103000Z');
+  });
+
+  test('"Not then": the asker hears it, and is offered the other times that were free for both', async () => {
+    const { sam, leo } = await compared();
+    await sam.done();
+    await through(sam, leo);
+    await sam.pick(1);
+    await sam.done();
+    await sam.done();
+    await through(sam, leo);
+    for (let tries = 0; tries < 3 && !/wants 30 min/.test(leo.said()); tries++) { if (leo.said()) await leo.done(); else await leo.tap(); }
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam not then.');
+    expect(leo.opened).toEqual([]);
+    await through(sam, leo);
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo cannot on Thursday at 10:00. Ask for another time?');
+    expect(sam.options()).toEqual(['Tuesday at 15:00', 'Friday at 9:30', 'Leave it']);
+    await sam.pick(0);
+    expect(sam.said()).toBe('Asking Leo for 30 minutes, Tuesday at 15:00…');
+  });
+
+  test('when it is asked, the calendar is read again: a time that is no longer free is said to be so', async () => {
+    const { sam, leo } = await compared();
+    await sam.done();
+    await through(sam, leo);
+    await sam.pick(1);
+    await sam.done();
+    await sam.done();
+    // Since the comparing, something was put into Leo's Thursday morning.
+    leo.timeState.events = [...LEO_DAYS, event('SECRET-LEO new call', at(21, 10), at(21, 11))];
+    await through(sam, leo);
+    for (let tries = 0; tries < 3 && !/wants 30 min/.test(leo.said()); tries++) { if (leo.said()) await leo.done(); else await leo.tap(); }
+    expect(leo.said()).toBe('Sam wants 30 min on Thursday at 10:00. Something is in your calendar then. Book it?');
+  });
+
+  test('one time that is free for both is asked for at once; none is said; and an hour is looked for as an hour', async () => {
+    // Leo has room only on Tuesday from five.
+    const busy = [event('x', at(19, 9), at(19, 17)), event('x', at(20, 9), at(20, 18)), event('x', at(21, 9), at(21, 18)), event('x', at(22, 9), at(22, 18))];
+    const one = await compared({ leo: busy });
+    await one.sam.done();
+    await through(one.sam, one.leo);
+    expect(one.sam.said()).toBe('Asking Leo for 30 minutes, Tuesday at 17:00, the one time free for both…');
+    const none = await compared({ leo: [event('x', at(18, 9), at(22, 18))] });
+    await none.sam.done();
+    await through(none.sam, none.leo);
+    expect(none.sam.said()).toBe('Nothing is free for both of you in the next seven days.');
+    const hour = await compared({ words: 'book an hour with Leo' });
+    await hour.sam.done();
+    await through(hour.sam, hour.leo);
+    expect(peerNoteRead(hour.leo.engine.inbox[0]!.payload.text as string).note).toMatchObject({ kind: 'time-ask', minutes: 60 });
+  });
+
+  test('without a calendar it is said, on whichever side it is missing', async () => {
+    const mine = await compared({ sam: null });
+    expect(mine.sam.said()).toBe('I cannot read your calendar right now. Say a time, and I ask Leo for it.');
+    expect(mine.leo.engine.inbox.length).toBe(0);
+    const theirs = await compared({ leo: null });
+    await theirs.sam.done();
+    await through(theirs.sam, theirs.leo);
+    expect(theirs.sam.said()).toBe("Leo's Pillow cannot read Leo's calendar. Say a time, and I ask Leo for it.");
+    const full = await compared({ sam: [event('x', at(18, 9), at(22, 18))] });
+    expect(full.sam.said()).toBe('You have no free half hour in the next seven days.');
+    expect(full.leo.engine.inbox.length).toBe(0);
+  });
+
+  test('taken back: nothing of the calendar leaves', async () => {
+    const { sam, leo } = await compared();
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('an answer names only times that were asked about, and only the one who was asked can give it', async () => {
+    const { sam, leo } = await compared();
+    // Leo's own Pillow never gets to answer: its reading of the calendar does not come back.
+    leo.timeState.hold = new Promise(() => { /* held */ });
+    await sam.done();
+    await settle();
+    const id = (peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note as { id: string }).id;
+    // An answer that names a time Sam never offered: Monday, when Sam is out.
+    await leo.link.tell(SAM, peerNoteText('x', { kind: 'time-fit', of: id, fits: [at(18, 10) / 60_000] }));
+    await through(sam, leo);
+    expect(sam.said()).toBe('Nothing is free for both of you in the next seven days.');
+  });
+
+  test('a calendar cannot be mapped by asking again and again', async () => {
+    const { sam, leo } = await joined();
+    leo.timeState.events = LEO_DAYS;
+    for (let n = 0; n < NOTCH_TIME_ASKS_AN_HOUR + 2; n++) {
+      await sam.link.tell(LEO, peerNoteText('x', { kind: 'time-ask', id: crypto.randomUUID(), minutes: 30, free: [at(19, 15) / 60_000, at(21, 10) / 60_000] }));
+      await through(sam, leo);
+    }
+    const answers = sam.engine.inbox.filter((item) => peerNoteRead(item.payload.text as string).note?.kind === 'time-fit');
+    expect(answers.length).toBe(NOTCH_TIME_ASKS_AN_HOUR);
+    expect(leo.logs.join('\n')).toContain('a comparing of calendars was not answered');
+  });
+
+  test('which sentences ask for a time with somebody, and for how long', async () => {
+    const { sam } = await joined();
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const said of ['find a time with Leo', 'Find time with Leo this week.', 'can you find a slot with Leo', 'set up a meeting with Leo', 'when are Leo and I both free', 'get me 30 minutes with Leo',
+      'I need a call with Leo next week', 'with Leo, find a time']) expect(routes(said)).toBe('Find a time with Leo: 30 minutes');
+    for (const said of ['book an hour with Leo', 'find 60 minutes with Leo', 'find 45 min with Leo']) expect(routes(said)).toBe('Find a time with Leo: 60 minutes');
+    // A word to Leo is a word to Leo. More than one person, or nobody of the organisation, is not this.
+    expect(routes('ask Leo when he is free')).toBe('Ask Leo: When he is free');
+    expect(routes('tell Leo I have no time today')).toBe('Tell Leo: I have no time today');
+    for (const said of ['find a time with Leo and Anna', 'find a time with Tony', 'what time is it', 'Leo was on time']) expect(routes(said) ?? '').not.toContain('Find a time');
+    expect(peerTimeMinutes('a quick call')).toBe(30);
+    expect(peerTimeMinutes('15 minutes')).toBe(30);
+    expect(peerTimeMinutes('90 min')).toBe(60);
+    expect(peerTimeCalendarUrl('Leo Rossi & co', at(21, 10), 60)).toBe('https://calendar.google.com/calendar/render?action=TEMPLATE&text=Leo%20Rossi%20%26%20co&dates=20270121T100000Z/20270121T110000Z');
+  });
+
+  test('a note about a time is checked field by field, and what does not check is no note', () => {
+    const id = crypto.randomUUID();
+    const good = at(19, 15) / 60_000;
+    const read = (note: unknown) => peerNoteRead(`x\n[[jarvis:1 ${JSON.stringify(note)}]]`).note;
+    expect(read({ kind: 'time-ask', id, minutes: 30, free: [good, good + 30] })).toEqual({ kind: 'time-ask', id, minutes: 30, free: [good, good + 30] });
+    expect(read({ kind: 'time-fit', of: id, fits: [] })).toEqual({ kind: 'time-fit', of: id, fits: [] });
+    expect(read({ kind: 'time-want', id, at: good, minutes: 60 })).toEqual({ kind: 'time-want', id, at: good, minutes: 60 });
+    for (const bad of [
+      { kind: 'time-ask', id, minutes: 45, free: [good] }, { kind: 'time-ask', id, minutes: 30, free: [] }, { kind: 'time-ask', id, minutes: 30, free: [good + 7] },
+      { kind: 'time-ask', id, minutes: 30, free: [good, good] }, { kind: 'time-ask', id, minutes: 30, free: [good + 30, good] }, { kind: 'time-ask', id: 'x', minutes: 30, free: [good] },
+      { kind: 'time-ask', id, minutes: 30, free: Array.from({ length: 91 }, (_, n) => good + n * 30) }, { kind: 'time-ask', id, minutes: 30, free: ['Thursday'] },
+      { kind: 'time-fit', of: id, fits: [good, good + 30, good + 60, good + 90] }, { kind: 'time-want', id, at: 12, minutes: 30 }, { kind: 'time-want', id, at: good, minutes: 600 }, { kind: 'time-yes', of: 'nope' },
+    ]) expect(read(bad)).toBeNull();
   });
 });

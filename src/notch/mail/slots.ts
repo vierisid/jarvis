@@ -112,6 +112,50 @@ export function mailFreeSlots(events: readonly MailCalendarEvent[], now: number,
   return found;
 }
 
+/**
+ * Every free start in the days after `now`, the earliest first, by the same
+ * rule: Monday to Friday, on the hour and the half hour, the whole of it
+ * inside the working day, not today, and with nothing else in the calendar.
+ * For finding a time that is free for two people (../people-time.ts): each
+ * side works its own out, and only the starts cross.
+ */
+export function mailFreeStarts(events: readonly MailCalendarEvent[], now: number, zone?: string, minutes = MAIL_SLOT_MINUTES): number[] {
+  const today = local(now, zone);
+  const found: number[] = [];
+  for (let ahead = 1; ahead <= MAIL_SLOT_DAYS; ahead++) {
+    const noon = local(instant(today.year, today.month, today.day, 12, 0, zone) + ahead * DAY_MS, zone);
+    if (noon.weekday === 0 || noon.weekday === 6) continue;
+    for (let minute = MAIL_SLOT_FROM * 60; minute + minutes <= MAIL_SLOT_TO * 60; minute += 30) {
+      const at = instant(noon.year, noon.month, noon.day, Math.floor(minute / 60), minute % 60, zone);
+      if (at - now < MAIL_SLOT_LEAST_AHEAD_MS || !mailSlotFree({ at, minutes }, events)) continue;
+      found.push(at);
+    }
+  }
+  return found;
+}
+
+/**
+ * Up to three of some starts, as a choice: at most one a day, on the
+ * earliest days that have one, each preferring another part of the day (an
+ * afternoon, a morning, an early morning), as mailFreeSlots picks.
+ */
+export function mailPickStarts(starts: readonly number[], zone?: string): number[] {
+  const days = new Map<string, number[]>();
+  for (const at of [...starts].sort((a, b) => a - b)) {
+    const shown = local(at, zone);
+    const key = `${shown.year}-${shown.month}-${shown.day}`;
+    days.set(key, [...(days.get(key) ?? []), at]);
+  }
+  const picked: number[] = [];
+  for (const day of days.values()) {
+    if (picked.length >= MAIL_SLOTS) break;
+    const minuteOf = (at: number): number => { const shown = local(at, zone); return shown.hour * 60 + shown.minute; };
+    const liked = LIKES[picked.length % LIKES.length]!.map((minute) => day.find((at) => minuteOf(at) === minute)).find((at) => at !== undefined);
+    picked.push(liked ?? day[0]!);
+  }
+  return picked;
+}
+
 /** A time as the notch says it: "Thursday at 15:00". */
 export function mailSlotWords(at: number, zone?: string): string {
   const day = new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long' }).format(at);

@@ -556,6 +556,55 @@ The server was restarted and answers again."
   nobody, and the words are taken as any other.
 - An offer that is never answered waits. It is not taken back by itself.
 
+## A time that is free for both (23 November)
+
+The owner: "build I5". The prototype's scene: "Comparing calendars with Leo's Jarvis. Neither of
+you sees the other's." Then one time is asked of the other person, who says "Book it".
+
+"Find a time with Leo." The asker's Pillow reads its owner's calendar and works out every free
+half hour of the next seven days. Those starts go to Leo's Pillow, which works out the same for
+Leo and answers with up to three that are free for both. The asker picks one. Leo's notch: "Sam
+wants 30 min. Thursday at 10:00 is free for both. Book it?" On his yes each side is offered the
+time in its own calendar, filled in, to save there.
+
+### Rules
+
+80. **Only free times cross, never an event.** A start is a number: whole minutes, on the hour
+    or the half hour. No title, no place, no guest, and nothing about a time that is not free.
+81. **Which times are free is read off the calendar by rule, on each side**
+    (`mailFreeStarts`): Monday to Friday, nine to six in that person's own clock, not today,
+    with nothing else in that time. No model is asked, on either side.
+82. **The comparing goes at once, with its moment to take it back.** Saying it is the yes. Taken
+    back, nothing of the calendar has left.
+83. **The other Pillow answers the comparing by itself, and says little**: up to three starts,
+    one a day, on the first days that have one. Its owner is told that it answered and how
+    many times it named. It is never asked.
+84. **A calendar cannot be mapped by asking again.** One person is answered six comparings an
+    hour. The seventh gets no answer.
+85. **An answer names only times that were asked about.** A start the asker did not offer is
+    dropped, and an answer from somebody who was not asked is nothing.
+86. **A time is asked of a person, and only that person says yes to it.** When it is asked their
+    calendar is read again: a time that is no longer free is said to be so, in the question.
+87. **Each side says a time in its own clock.** What crosses is an instant.
+88. **Pillow does not write to a calendar.** It reads one. After the two yeses each side is
+    offered Google Calendar's own page for a new entry, filled in, in the owner's own browser,
+    and the owner saves it there. The notch does not say "booked" for what it did not book.
+89. **A slow calendar holds nothing up.** A comparing is answered beside everything else that
+    arrives, and the same asking is not answered twice.
+
+### Where it stops
+
+- Reading a real calendar, on either side, has not been run for this: the tests and the
+  rehearsal give each side a calendar of their own making. The reading itself is the mail
+  layer's, and is used every day for "offer a slot".
+- Half an hour or an hour, in the next seven days, on working days, nine to six. "Next month"
+  and "on Saturday" are not looked for.
+- Two people. "A time with Leo and Anna" is not found.
+- The entry is each person's own. Nobody is invited to the other's.
+- Somebody with no calendar that Pillow can read is told so, and so is the one who asks.
+- An answer that comes after the asker's line has left arrives as news. An asking for one time
+  that is never answered waits.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of

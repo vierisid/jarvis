@@ -50,9 +50,28 @@ export type PeerNote =
   /** What became of an offer (`of` is its id): taken, turned down, arrived whole, or not whole. */
   | { kind: 'file-yes' | 'file-no' | 'file-got' | 'file-lost'; of: string }
   /** One piece of a file that was taken, the `n`th from nought. The message's words are the piece, in base64. */
-  | { kind: 'file-part'; of: string; n: number };
+  | { kind: 'file-part'; of: string; n: number }
+  /**
+   * When are we both free: the asker's own free times, each a start in whole
+   * minutes since 1970 and `minutes` long. Nothing else of a calendar: no
+   * event, no title, no place. The other Pillow answers with the few of
+   * them that are free on its side too.
+   */
+  | { kind: 'time-ask'; id: string; minutes: number; free: number[] }
+  /** The answer (`of` is the asking's id): up to three of those starts. `blind`: that side cannot read its calendar. */
+  | { kind: 'time-fit'; of: string; fits: number[]; blind?: boolean }
+  /** One time is asked for: a start in whole minutes since 1970, and how long. The person there says yes or not then. */
+  | { kind: 'time-want'; id: string; at: number; minutes: number }
+  /** The person said yes to that time, or not then (`of` is the asking's id). */
+  | { kind: 'time-yes' | 'time-no'; of: string };
 
 export const PEER_NOTE_VERSION = 1;
+/** How long a time that is looked for can be, in minutes. */
+export const PEER_TIME_MINUTES: readonly number[] = [30, 60];
+/** The most free starts one asking carries: five working days of half hours. */
+export const PEER_TIME_FREE_MAX = 90;
+/** The most starts an answer names. */
+export const PEER_TIME_FITS_MAX = 3;
 export const PEER_OPTIONS_MAX = 4;
 export const PEER_OPTION_MAX = 40;
 export const PEER_ORG_MAX = 60;
@@ -137,6 +156,34 @@ function checked(raw: unknown): PeerNote | null {
     return of ? { kind: 'file-want-no', of } : null;
   }
   if (note.kind === 'file-yes' || note.kind === 'file-no' || note.kind === 'file-got' || note.kind === 'file-lost') {
+    const of = id(note.of);
+    return of ? { kind: note.kind, of } : null;
+  }
+  // A start: whole minutes since 1970, on the hour or the half hour, in this century.
+  const start = (value: unknown): number | null => (typeof value === 'number' && Number.isInteger(value) && value % 30 === 0 && value > 26_000_000 && value < 70_000_000 ? value : null);
+  const starts = (value: unknown, most: number): number[] | null => {
+    if (!Array.isArray(value) || value.length > most) return null;
+    const out = value.map(start);
+    // In order, and none twice: a list that is not is not one this code wrote.
+    if (out.some((one, at) => one === null || (at > 0 && one <= out[at - 1]!))) return null;
+    return out as number[];
+  };
+  if (note.kind === 'time-ask') {
+    const of = id(note.id);
+    const free = starts(note.free, PEER_TIME_FREE_MAX);
+    return of && free && free.length > 0 && typeof note.minutes === 'number' && PEER_TIME_MINUTES.includes(note.minutes) ? { kind: 'time-ask', id: of, minutes: note.minutes, free } : null;
+  }
+  if (note.kind === 'time-fit') {
+    const of = id(note.of);
+    const fits = starts(note.fits, PEER_TIME_FITS_MAX);
+    return of && fits ? { kind: 'time-fit', of, fits, ...(note.blind === true ? { blind: true } : {}) } : null;
+  }
+  if (note.kind === 'time-want') {
+    const of = id(note.id);
+    const at = start(note.at);
+    return of && at !== null && typeof note.minutes === 'number' && PEER_TIME_MINUTES.includes(note.minutes) ? { kind: 'time-want', id: of, at, minutes: note.minutes } : null;
+  }
+  if (note.kind === 'time-yes' || note.kind === 'time-no') {
     const of = id(note.of);
     return of ? { kind: note.kind, of } : null;
   }

@@ -489,6 +489,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
+      // A time that is free for two people: the owner's calendar, read the way the mail layer reads it. Asked
+      // for when it is needed, so it does not matter that the mail layer is made after this.
+      time: { calendar: (from: number, to: number) => (mail ? mail.calendar(from, to) : Promise.resolve(null)) },
       // A file that arrived is held by the notch like one that was dropped on it, with the same card.
       ...(deps.peers.files ? { files: { ...deps.peers.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => drop?.arrived(file) ?? false } } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
