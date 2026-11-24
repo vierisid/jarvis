@@ -492,6 +492,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // A time that is free for two people: the owner's calendar, read the way the mail layer reads it. Asked
       // for when it is needed, so it does not matter that the mail layer is made after this.
       time: { calendar: (from: number, to: number) => (mail ? mail.calendar(from, to) : Promise.resolve(null)) },
+      // The owner's chases, for a job that changes hands. Asked for when it is needed: that part is made after this.
+      chases: () => standing,
       // The owner's agents, to send one to somebody, and to make one that somebody sent and the owner took on.
       agents: { list: () => agents?.list() ?? [], take: (sentence: string) => agents?.take(sentence) ?? false },
       // What was last circled and is still held, for "send this to Leo". Asked for when it is said: the part that holds it is made after this.

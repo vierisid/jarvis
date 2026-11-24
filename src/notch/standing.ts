@@ -170,7 +170,8 @@ export interface StandingMail {
   owner(): string;
 }
 
-export type NotchChaseState = 'on' | 'stuck' | 'done' | 'dropped';
+/** `handed`: somebody else took it, with its history (./people-jobs.ts). It is not done and not dropped, and it can come back. */
+export type NotchChaseState = 'on' | 'stuck' | 'done' | 'dropped' | 'handed';
 
 export interface NotchEye {
   id: string;
@@ -380,6 +381,25 @@ export interface NotchStanding {
    * still under way, can be taken back.
    */
   done(since: number): { id: string; at: number; text: string; small: string; undo: boolean }[];
+  /** The chases that are under way: the ones that can be handed to somebody. */
+  handable(): NotchChase[];
+  chase(id: string): NotchChase | null;
+  /** Somebody took this chase: it is theirs now, and nothing of it is sent from here. False when it was over already. */
+  hand(id: string, to: string): boolean;
+  /** A chase that was handed over comes back, with what was done meanwhile. Under way again. */
+  back(id: string, steps: { at: number; text: string }[], from: string): boolean;
+  /** Whoever took a chase ended it. */
+  closed(id: string, how: 'done' | 'dropped', by: string): boolean;
+  /**
+   * A chase somebody handed over, as one that could be started here: with
+   * its history, not started and not kept. Null when one for that person is
+   * under way here already, or everything is stopped.
+   */
+  drafted(job: { name: string; address: string; thing: ChaseAsked['thing']; about: string; day: string; steps: { at: number; text: string }[]; from: string }): NotchChase | null;
+  /** What a chase sends when it starts, as it is shown before it does. */
+  blocks(chase: NotchChase): NotchBlock[];
+  /** Starts it: its first mail goes. `ok` is whether it did. */
+  begin(chase: NotchChase): Promise<{ ok: boolean; parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry' | 'careful'; mark?: 'check' | 'fail' } }>;
   /**
    * Takes one of them back, by the id its row has: an eye is closed, a chase
    * is stopped. Comes back with what to say, or null when it is none of
@@ -723,7 +743,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       const chases = store.chases().sort((a, b) => Number(live(b)) - Number(live(a)) || b.createdAt - a.createdAt);
       const blocks: NotchBlock[] = [];
       for (const chase of chases) {
-        const tail = live(chase) ? `, by ${chase.day}.` : chase.state === 'done' ? '. Done.' : '. Dropped.';
+        const tail = live(chase) ? `, by ${chase.day}.` : chase.state === 'done' ? '. Done.' : chase.state === 'handed' ? '. With somebody else now.' : '. Dropped.';
         blocks.push({ kind: 'row', id: chase.id, say: [`${cap(chaseWhat(chase))}${tail}`], ...(live(chase) ? { buttons: [{ id: 'stop', label: 'Stop', quiet: true }] } : {}) });
         for (const done of chase.steps) blocks.push({ kind: 'row', lead: clock(done.at), say: [done.text] });
         if (chase.steps.length === 0) blocks.push({ kind: 'row', lead: clock(chase.createdAt), say: ['Just started.'] });
@@ -776,7 +796,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       return went;
     },
     done(since) {
-      const stands: Record<NotchChaseState, string> = { on: 'on it', stuck: 'stuck', done: 'done', dropped: 'stopped' };
+      const stands: Record<NotchChaseState, string> = { on: 'on it', stuck: 'stuck', done: 'done', dropped: 'stopped', handed: 'handed over' };
       return [
         ...store.eyes().filter((eye) => eye.createdAt >= since)
           .map((eye) => ({ id: `eye:${eye.id}`, at: eye.createdAt, text: `Watching for ${first(eye.name)}'s reply`, small: 'watching', undo: true })),
@@ -808,6 +828,55 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           : ['Stopped. Nothing was sent to ', em(first(chase.name)), '.'];
       }
       return null;
+    },
+    // --- a chase that changes hands (./people-jobs.ts) ---
+    handable: () => store.chases().filter(live),
+    chase: (id) => store.chase(id),
+    hand(id, to) {
+      // Only one that is under way. From then on nothing of it is sent from here.
+      if (!store.move(id, ['on', 'stuck'], 'handed', now())) return false;
+      const fresh = store.chase(id)!;
+      step(fresh, `Handed to ${to}. ${to} took it.`);
+      store.putChase(fresh);
+      deps.inbox.remove(`chase-stuck-${id}`);
+      log('[notch] a chase was handed to somebody else');
+      return true;
+    },
+    back(id, steps, from) {
+      if (!store.move(id, ['handed'], 'on', now())) return false;
+      const fresh = store.chase(id)!;
+      for (const one of steps) fresh.steps.push({ at: one.at, text: `${from}: ${one.text}` });
+      step(fresh, `Back with you, with what ${from} did.`);
+      // The next step is a whole wait away: whoever had it may have written a moment ago.
+      fresh.nextAt = now() + waitOf(fresh);
+      store.putChase(fresh);
+      log('[notch] a chase that was handed over is back');
+      return true;
+    },
+    closed(id, how, by) {
+      // Whoever took it ended it: it is over here too, and says by whom.
+      if (!store.move(id, ['handed'], how === 'done' ? 'done' : 'dropped', now())) return false;
+      const fresh = store.chase(id)!;
+      step(fresh, how === 'done' ? `Done. ${by} closed it.` : `${by} let it go.`);
+      store.putChase(fresh);
+      return true;
+    },
+    drafted(job) {
+      if (deps.paused?.() || stopped) return null;
+      // One watcher per person, as for a chase that is said.
+      if (store.chases().some((chase) => live(chase) && chase.address === job.address)) return null;
+      const day = chaseDay(job.day) || 'Friday';
+      return {
+        id: `chase-${now().toString(36)}-${++n}`, createdAt: now(), name: job.name, address: job.address, thing: job.thing, about: job.about, day,
+        byAt: chaseBy(day, now()), thread: null, subject: '', state: 'on', nudges: 0, nextAt: 0,
+        // What was done before it came here, told as the other person's, and then what happened here.
+        steps: [...job.steps.map((one) => ({ at: one.at, text: `${job.from}: ${one.text}` })), { at: now(), text: `Taken from ${job.from}.` }], updatedAt: now(),
+      };
+    },
+    blocks: (chase) => chaseBlocks(chase),
+    async begin(chase) {
+      const said = await startChase(chase);
+      return { ...said, ok: store.chase(chase.id) !== null };
     },
     stop() { stopped = true; },
   };

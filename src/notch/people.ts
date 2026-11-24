@@ -54,6 +54,9 @@ import type { NotchInbox } from './inbox.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import { attachNotchPeopleTime, isTimeNote, peerTimeMinutes } from './people-time.ts';
+import { attachNotchPeopleJobs, isJobNote } from './people-jobs.ts';
+import type { NotchJobChases, NotchPeopleJobs } from './people-jobs.ts';
+import { chaseWhat } from './standing.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
@@ -171,6 +174,11 @@ export interface NotchPeopleDeps {
      */
     act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> };
   }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  /**
+   * The owner's chases (./standing.ts), for handing one to somebody and for
+   * taking one over (./people-jobs.ts). Without it no job changes hands.
+   */
+  chases?: () => NotchJobChases | null;
   /**
    * The owner's agents (./agents.ts): which there are, to send one to
    * somebody, and the making of one that somebody sent and the owner took
@@ -374,6 +382,19 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }),
     ...(deps.time?.zone ? { zone: deps.time.zone } : {}), ...(deps.time?.waitMs !== undefined ? { waitMs: deps.time.waitMs } : {}),
   });
+
+  /**
+   * Jobs that change hands. The chases part is made after this one, so it is
+   * asked for when it is first needed, and the jobs part is made then.
+   */
+  let jobsMade: NotchPeopleJobs | null = null;
+  const jobs = (): NotchPeopleJobs | null => {
+    if (jobsMade) return jobsMade;
+    const chases = deps.chases?.() ?? null;
+    if (!chases) return null;
+    jobsMade = attachNotchPeopleJobs({ inbox, link, store, chases, person, log, now, news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }) });
+    return jobsMade;
+  };
 
   /** Files, when this brain was given somewhere to keep and to put them. */
   const files = deps.files ? attachNotchPeopleFiles({
@@ -1044,6 +1065,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
               ...(one.own || !account.signedIn ? [] : [{ id: `rule${at}`, label: rules[at] === 'asks' ? 'Answer without asking' : 'Ask me every time', quiet: true }]),
               { id: `remove${at}`, label: 'Remove', quiet: true },
             ] })),
+          // Who has what: a job that is with somebody, and one that was taken from somebody.
+          ...(jobs()?.rows() ?? []).map((row, at): NotchBlock => ({ kind: 'row', lead: row.dir === 'out' ? `To ${row.with}` : `From ${row.with}`, say: [cap(row.what)], small: row.small,
+            ...(row.dir === 'out' && row.state === 'taken' ? { buttons: [{ id: `jobback${at}`, label: 'Ask for it back', quiet: true }] } : {}) })),
           ...(hosts ? [{ kind: 'row' as const, lead: 'S', say: ['Its server, on this laptop'], small: hosting!.state === 'on' ? `On, at ${hostOf(hosting!.address)}.` : hosting!.state === 'starting' ? 'Starting.' : 'Off. Nobody reaches anybody until it is on.' }] : []),
           ...(account.signedIn ? [] : [{ kind: 'note' as const, say: ['You are signed out. Nothing goes out and nothing comes in until you sign in.'] }]),
           { kind: 'buttons', buttons: [
@@ -1066,6 +1090,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (answer.button === 'invite') { if (hosts) await inviteAsHost(stage); else await invite(stage); continue; }
       if (answer.button === 'join') { await join(stage); continue; }
       if (answer.button === 'server') { await server(stage); continue; }
+      const wanted = /^jobback(\d+)$/.exec(answer.button ?? '')?.[1];
+      const row = wanted !== undefined ? jobs()?.rows()[Number(wanted)] : undefined;
+      if (row) { jobs()!.askBack(row.id); return; }
       const ruled = /^rule(\d+)$/.exec(answer.button ?? '')?.[1];
       if (ruled !== undefined && people[Number(ruled)]) { await setRule(stage, people[Number(ruled)]!, rules[Number(ruled)] === 'asks' ? 'answers' : 'asks'); continue; }
       const out = /^remove(\d+)$/.exec(answer.button ?? '')?.[1];
@@ -1186,6 +1213,51 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         const named = /\.[a-z0-9]{2,5}$/i.test(what);
         if (!named && (NO_GIFT.test(what) || NO_GIFT_LAST.test(what) || /^(?:it|this|that|these|those|them|one)$/i.test(what) || !(GIVE_FILE.test(found[1]!) || FILE_WORD.test(what)))) continue;
         return { person: one, file: what };
+      }
+    }
+    return null;
+  }
+
+  // --- a job that changes hands ---
+
+  /**
+   * "Hand Dana's answer to Leo", "give this chase to Leo", "ask Leo for
+   * Dana's answer back". It hands over what was named, and never picks a
+   * job that was not meant: with several under way and none named, it asks.
+   */
+  function jobSaid(text: string): { did: string; run(): void } | null {
+    const mine = jobs();
+    if (!mine) return null;
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').replace(new RegExp(`^${LEAD}`, 'iu'), '');
+    for (const one of others().slice().sort((a, b) => b.name.length - a.name.length)) {
+      const firstName = one.name.split(' ')[0]!;
+      const alone = others().filter((other) => other.name.split(' ')[0]!.toLowerCase() === firstName.toLowerCase()).length === 1;
+      for (const name of alone && firstName !== one.name ? [one.name, firstName] : [one.name]) {
+        const them = `${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?`;
+        // Asking for it back.
+        const back = new RegExp(`^(?:ask\\s+${them}\\s+for\\s+(.+?)\\s+back|(?:get|take)\\s+(.+?)\\s+back\\s+from\\s+${them})$`, 'iu').exec(said);
+        if (back) {
+          const what = (back[1] ?? back[2] ?? '').toLowerCase();
+          const with_ = mine.rows().filter((row) => row.dir === 'out' && row.state === 'taken' && row.with === one.name);
+          const meant = with_.filter((row) => row.what.toLowerCase().split(/[^\p{L}\p{N}]+/u).some((word) => word.length > 2 && !/^(?:the|answer|reply|signature)$/.test(word) && what.includes(word)));
+          const row = meant.length === 1 ? meant[0]! : with_.length === 1 && /^(?:it|this|that|the job|the chase|my job)$/.test(what) ? with_[0]! : null;
+          if (row) return { did: `Ask ${one.name} for a job back: ${row.what}`, run: () => mine.askBack(row.id) };
+          return { did: 'Say what is with them.', run: () => { inbox.present('people-job', (stage) => stage.say(with_.length ? ['Which one? ', em(one.name), ' has ', em(with_.map((each) => each.what).join(', ')), '.'] : [em(one.name), ' has nothing of yours.'], 3600, { mood: 'confused' })); } };
+        }
+        // Handing one over. Only said with "hand", or with a word that says it is a job: "give Leo the deck" is a file.
+        const over = new RegExp(`^(hand|hand over|pass|give|delegate)\\s+(.+?)\\s+(?:over\\s+)?to\\s+${them}$`, 'iu').exec(said) ?? new RegExp(`^(hand|give|delegate)\\s+${them}\\s+(.+)$`, 'iu').exec(said);
+        if (!over) continue;
+        const what = over[2]!.toLowerCase().replace(/\s+over$/, '');
+        const vague = /^(?:it|this|that|this one|that one|the job|the chase|my job|my chase|this job|this chase)$/.test(what);
+        const live = mine.mine();
+        const named = live.filter((chase) => { const words = `${chase.name} ${chase.about}`.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((word) => word.length > 2 && !/^(?:the|and|for|with|from|about|this|that|our|his|her|their)$/.test(word)); return words.some((word) => new RegExp(`(?<![\\p{L}\\p{N}])${escaped(word)}(?![\\p{L}\\p{N}])`, 'iu').test(what)); });
+        // "Hand" says a job. With any other verb the words must: otherwise it is a file, a word or an agent.
+        if (!/^hand/i.test(over[1]!) && !/\b(?:job|chase)\b/.test(what) && !(named.length === 1 && /\b(?:answer|reply|signature)\b/.test(what))) continue;
+        const chase = named.length === 1 ? named[0]! : vague && live.length === 1 ? live[0]! : null;
+        if (chase) return { did: `Hand ${one.name} a job: ${chaseWhat(chase)}`, run: () => mine.hand(one, chase) };
+        // Nothing of the kind is named, and nothing says it is a job: it may be a file or an agent that is handed over.
+        if (!vague && named.length === 0 && !/\b(?:job|chase)\b/.test(what)) continue;
+        return { did: 'Say which job is meant.', run: () => { inbox.present('people-job', (stage) => stage.say(live.length ? ['Hand over what? Name it: ', em(live.map((each) => chaseWhat(each)).join(', ')), '.'] : ['Nothing is under way that I could hand over.'], 4000, { mood: 'confused' })); } };
       }
     }
     return null;
@@ -1478,6 +1550,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
     }
+    // A job that changes hands: "hand Dana's answer to Leo", "ask Leo for it back".
+    const job = jobSaid(text);
+    if (job) return job;
     // An agent of the owner's own, sent to somebody: "send Tony to Leo". Before a file is looked for under that name.
     const agent = agentShared(text);
     if (agent) {
@@ -2176,6 +2251,14 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         continue;
       }
       const { words, note } = peerNoteRead(item.text);
+      if (isJobNote(note)) {
+        const mine = jobs();
+        // A laptop that keeps no chases can take none: a job that is offered is read as words, the rest is let go.
+        if (mine) await mine.note(item, from, note);
+        else if (note.kind === 'job') message(item, from, words);
+        else { store.done(item.id); void link.seen(item.id); }
+        continue;
+      }
       if (isTimeNote(note)) {
         // A time that is asked for, and already on the notch or in the count, is not put there twice.
         if (note.kind !== 'time-want' || !inbox.has(`people:time-want:${note.id}`)) await times.note(item, from, note, words);
@@ -2245,6 +2328,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await look();
     await follow();
     for (const sent of store.unanswered(now() - NOTCH_PEOPLE_ASK_WAIT_MS)) late(sent);
+    // A job that was taken here and has ended is told to whoever gave it.
+    await jobs()?.tick().catch(() => { /* told at the next look */ });
   }
 
   if (store.openRequests('out').length) following();

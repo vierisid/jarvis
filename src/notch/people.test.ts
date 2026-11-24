@@ -8,6 +8,8 @@ import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, NOTCH_PEOPLE_TRUST_AFTE
 import type { NotchPeopleStep } from './people.ts';
 import { NOTCH_TIME_ASKS_AN_HOUR, peerTimeCalendarUrl, peerTimeMinutes } from './people-time.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
+import type { NotchJobChases } from './people-jobs.ts';
+import type { NotchChase } from './standing.ts';
 import { mailFreeStarts, mailPickStarts } from './mail/slots.ts';
 import { NOTCH_FILE_FUSE_MS, NOTCH_FILE_PICKED_FUSE_MS, fileChoiceMessages, fileChoiceRead, fileWhen, fileWhere } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
@@ -148,6 +150,28 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   };
   /** This side's calendar: what is in it, or null when it cannot be read. `hold` keeps a reading waiting. */
   const timeState: { events: MailCalendarEvent[] | null; hold: Promise<void> | null; reads: number } = { events: [], hold: null, reads: 0 };
+  /** This side's chases, as the chases part keeps them, and whether a first mail can go from here. */
+  const chaseState: { list: NotchChase[]; canBegin: boolean } = { list: [], canBegin: true };
+  const liveChase = (chase: NotchChase): boolean => chase.state === 'on' || chase.state === 'stuck';
+  const chasesFake: NotchJobChases = {
+    handable: () => chaseState.list.filter(liveChase),
+    chase: (id) => chaseState.list.find((one) => one.id === id) ?? null,
+    hand(id, to) { const one = chaseState.list.find((each) => each.id === id); if (!one || !liveChase(one)) return false; one.state = 'handed'; one.steps.push({ at: server.now(), text: `Handed to ${to}. ${to} took it.` }); return true; },
+    back(id, steps, from) { const one = chaseState.list.find((each) => each.id === id); if (!one || one.state !== 'handed') return false; one.state = 'on'; for (const step of steps) one.steps.push({ at: step.at, text: `${from}: ${step.text}` }); one.steps.push({ at: server.now(), text: `Back with you, with what ${from} did.` }); return true; },
+    closed(id, how, by) { const one = chaseState.list.find((each) => each.id === id); if (!one || one.state !== 'handed') return false; one.state = how === 'done' ? 'done' : 'dropped'; one.steps.push({ at: server.now(), text: `${by} closed it.` }); return true; },
+    drafted(job) {
+      if (chaseState.list.some((one) => liveChase(one) && one.address === job.address)) return null;
+      return { id: `chase-${handle}-${chaseState.list.length + 1}`, createdAt: server.now(), name: job.name, address: job.address, thing: job.thing, about: job.about, day: job.day || 'Friday', byAt: server.now() + 86_400_000, thread: null, subject: '', state: 'on', nudges: 0, nextAt: 0,
+        steps: [...job.steps.map((one) => ({ at: one.at, text: `${job.from}: ${one.text}` })), { at: server.now(), text: `Taken from ${job.from}.` }], updatedAt: server.now() };
+    },
+    blocks: (chase) => [{ kind: 'paper', to: ['To ', { em: chase.address }], lines: [[`Hi ${chase.name.split(' ')[0]}, where are we on ${chase.about || 'this'}?`]] }],
+    async begin(chase) {
+      if (!chaseState.canBegin) return { ok: false, parts: ['I could not send it: no mailbox here. Nothing was started.'], ms: 1, extras: { mood: 'sorry' } };
+      chase.nudges = 1; chase.steps.push({ at: server.now(), text: `Nudged ${chase.name.split(' ')[0]} by email.` }); chaseState.list.push(chase);
+      return { ok: true, parts: ['On it.'], ms: 1, extras: {} };
+    },
+    undo(id) { const one = chaseState.list.find((each) => `chase:${each.id}` === id); if (!one || !liveChase(one)) return null; one.state = 'dropped'; return ['Stopped.']; },
+  };
   /** This side's agents, the sentences of the ones it took on, and whether it can make agents at all. */
   const agentState: { mine: { name: string; sentence: string }[]; taken: string[] } = { mine: [], taken: [] };
   /** What this side last circled on its screen and still holds. */
@@ -163,6 +187,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     // An engine that does not answer is not waited for here.
     ruleWaitMs: 1,
     look: () => lookState.held,
+    chases: () => chasesFake,
     ...(more.noAgents ? {} : { agents: { list: () => agentState.mine, take: (sentence: string) => { agentState.taken.push(sentence); return true; } } }),
     // Read in one zone whatever the machine's own, so that the days and hours below are the same everywhere.
     time: { zone: 'UTC', waitMs: more.timeWaitMs ?? 3000, calendar: async () => { timeState.reads++; if (timeState.hold) await timeState.hold; return timeState.events; } },
@@ -190,7 +215,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState, chaseState,
     saved, filesDir, fileState, lookedFor, held, thought,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
@@ -3258,6 +3283,204 @@ describe('an agent, sent to somebody', () => {
     // A name that is no agent's, with no word that says agent, is a file as before.
     expect(routes('send Leo the deck')).toBe('Send Leo a file of mine: the deck');
     expect(routes('send Enzo to Leo')).toBe('Send Leo a file of mine: Enzo');
+  });
+});
+
+describe('a job that changes hands', () => {
+  const DANA = (at: number): NotchChase => ({ id: 'chase-sam-1', createdAt: at, name: 'Dana Reyes', address: 'dana@acme.example', thing: 'answer', about: 'the contract', day: 'Friday', byAt: at + 4 * 86_400_000, thread: 't1', subject: 'Contract',
+    state: 'on', nudges: 1, nextAt: at + 86_400_000, steps: [{ at, text: 'Nudged Dana by email.' }], updatedAt: at });
+  /** Sam is getting Dana's answer, and hands it to Leo. */
+  const handedOver = async (words = "hand Dana's answer to Leo") => {
+    const { sam, leo, server } = await joined();
+    sam.chaseState.list.push(DANA(server.now()));
+    const routed = await sam.say(words);
+    await settle();
+    return { sam, leo, server, routed };
+  };
+  const taken = async () => {
+    const all = await handedOver();
+    await all.sam.done();
+    await all.sam.done();
+    await all.leo.yes();
+    await all.leo.done();
+    await settle();
+    if (all.sam.said()) await all.sam.done(); else { await all.sam.tap(); await all.sam.done(); }
+    return all;
+  };
+
+  test('it is offered with its history, and stays the giver\'s until it is taken', async () => {
+    const { sam, leo, routed } = await handedOver();
+    expect(routed).toBe(true);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe("Handing Dana's answer to Leo, with its history…");
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo. It stays yours, and I stay on it, until Leo takes it.');
+    await sam.done();
+    // Nothing has changed here.
+    expect(sam.chaseState.list[0]!.state).toBe('on');
+    const offer = peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note;
+    expect(offer).toMatchObject({ kind: 'job', name: 'Dana Reyes', address: 'dana@acme.example', thing: 'answer', about: 'the contract', day: 'Friday', steps: [{ text: 'Nudged Dana by email.' }] });
+    // The other reads what was done, and what would go in THEIR name, on one sheet.
+    expect(leo.kind()).toBe('sheet');
+    expect(leo.said()).toBe("Sam hands you Dana's answer on the contract, due Friday. So far: 1 step. Take it?");
+    expect(leo.blocks()).toContain('Sam: Nudged Dana by email.');
+    expect(leo.blocks()).toContain('Hi Dana, where are we on the contract?');
+    expect(leo.blocks()).toContain('hears from you next');
+    expect(leo.buttons()).toEqual(['no']);
+    expect(leo.chaseState.list).toEqual([]);
+  });
+
+  test('taking it starts it there, with the history, and only then does it stop here', async () => {
+    const { sam, leo } = await handedOver();
+    await sam.done();
+    await sam.done();
+    await leo.yes();
+    expect(leo.said()).toBe('Yours now. Dana hears from you next. Sam knows.');
+    // Leo's own chase, with what Sam had done, and the first mail gone from Leo's mailbox.
+    expect(leo.chaseState.list.map((one) => [one.address, one.state, one.steps.map((step) => step.text)])).toEqual([['dana@acme.example', 'on', ['Sam: Nudged Dana by email.', 'Taken from Sam.', 'Nudged Dana by email.']]]);
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo took it. Dana hears from Leo now. I tell you when it is done.');
+    // One owner at a time.
+    expect(sam.chaseState.list[0]!.state).toBe('handed');
+    await sam.done();
+    // Who has what is on the organisation's sheet, with the way to ask for it back.
+    await sam.open();
+    expect(sam.blocks()).toContain('"lead":"To Leo"');
+    expect(sam.blocks()).toContain("Dana's answer");
+    expect(sam.blocks()).toContain('Leo took it. I tell you when it is done.');
+    expect(sam.blocks()).toContain('"id":"jobback0","label":"Ask for it back"');
+    await sam.no();
+    await leo.open();
+    expect(leo.blocks()).toContain('"lead":"From Sam"');
+    expect(leo.blocks()).toContain('Yours, taken from Sam, with its history.');
+  });
+
+  test('a no changes nothing, and the giver hears it', async () => {
+    const { sam, leo } = await handedOver();
+    await sam.done();
+    await sam.done();
+    await leo.button('no');
+    expect(leo.said()).toBe('Told Sam no. It stays with Sam.');
+    expect(leo.chaseState.list).toEqual([]);
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo cannot take Dana's answer. It is still yours, and I am still on it.");
+    expect(sam.chaseState.list[0]!.state).toBe('on');
+  });
+
+  test('when whoever took it is done, the giver hears it once', async () => {
+    const { sam, leo } = await taken();
+    leo.chaseState.list[0]!.state = 'done';
+    await leo.people.tick();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Done. Dana answered. Leo closed it.');
+    expect(sam.chaseState.list[0]!.state).toBe('done');
+    await sam.done();
+    // Not told a second time: nothing more is sent, and nothing more is said.
+    const sentSoFar = sam.engine.inbox.length;
+    await leo.people.tick();
+    await settle();
+    expect(sam.engine.inbox.length).toBe(sentSoFar);
+    expect(sam.line()).toBeNull();
+    expect(sam.count()).toBe(0);
+  });
+
+  test('asked for back, it comes with what was done there, and is under way here again', async () => {
+    const { sam, leo } = await taken();
+    expect(await sam.say("ask Leo for Dana's answer back")).toBe(true);
+    expect(sam.said()).toBe("Asking Leo for Dana's answer back…");
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe("Sam asks for Dana's answer back. Hand it back, with what you did?");
+    expect(leo.options()).toEqual(['Hand it back', 'Keep it']);
+    await leo.pick(0);
+    expect(leo.said()).toBe('Handed back to Sam, with what you did. It is off your list.');
+    expect(leo.chaseState.list[0]!.state).toBe('dropped');
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('It is back with you, with what Leo did. I am on it again.');
+    const mine = sam.chaseState.list[0]!;
+    expect(mine.state).toBe('on');
+    // What Leo did is in the history as Leo's, and what was Sam's own is not there twice.
+    expect(mine.steps.map((step) => step.text).filter((text) => text.startsWith('Leo: '))).toEqual(['Leo: Nudged Dana by email.']);
+  });
+
+  test('"Keep it" leaves it where it is, and the giver hears that', async () => {
+    const { sam, leo } = await taken();
+    await sam.say('get it back from Leo');
+    await sam.done();
+    await sam.done();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam you keep it.');
+    expect(leo.chaseState.list[0]!.state).toBe('on');
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo keeps Dana's answer.");
+    expect(sam.chaseState.list[0]!.state).toBe('handed');
+  });
+
+  test('it is not taken when its first mail cannot go, or when the taker is on that person already', async () => {
+    const stuck = await handedOver();
+    await stuck.sam.done();
+    await stuck.sam.done();
+    stuck.leo.chaseState.canBegin = false;
+    await stuck.leo.yes();
+    expect(stuck.leo.said()).toBe('I could not send it: no mailbox here. Nothing was started. It stays with Sam for now.');
+    await stuck.leo.done();
+    await settle();
+    // Nothing was told, and nothing changed hands.
+    expect(stuck.sam.chaseState.list[0]!.state).toBe('on');
+    expect(stuck.sam.engine.inbox.length).toBe(0);
+    const busy = await joined();
+    busy.sam.chaseState.list.push(DANA(busy.server.now()));
+    busy.leo.chaseState.list.push({ ...DANA(busy.server.now()), id: 'chase-leo-9' });
+    await busy.sam.say("hand Dana's answer to Leo");
+    await busy.sam.done();
+    await busy.sam.done();
+    expect(busy.leo.said()).toBe("Sam hands you Dana's answer. You are getting an answer from Dana already, so I cannot take it on here.");
+    expect(busy.leo.options()).toEqual(['Say no', 'Not now']);
+  });
+
+  test('an answer counts only from the one it was handed to, and a note about a job is checked', async () => {
+    const { sam, leo } = await handedOver();
+    await sam.done();
+    await sam.done();
+    const id = (peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note as { id: string }).id;
+    // Somebody who is not Leo says yes to it. (Leo's own engine, speaking for another id it was never handed.)
+    await leo.link.tell(SAM, peerNoteText('x', { kind: 'job-yes', of: crypto.randomUUID() }));
+    await settle();
+    expect(sam.chaseState.list[0]!.state).toBe('on');
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    const read = (note: unknown) => peerNoteRead(`x\n[[jarvis:1 ${JSON.stringify(note)}]]`).note;
+    const good = { kind: 'job', id, name: 'Dana Reyes', address: 'dana@acme.example', thing: 'answer', about: 'the contract', day: 'Friday', steps: [{ at: 1, text: 'Nudged Dana by email.' }] };
+    expect(read(good)).toMatchObject({ kind: 'job', address: 'dana@acme.example' });
+    for (const bad of [{ ...good, address: 'not an address' }, { ...good, address: 'a@b.example, c@d.example' }, { ...good, thing: 'money' }, { ...good, name: '' }, { ...good, steps: 'none' }, { ...good, steps: [{ at: 'x', text: 'y' }] }, { ...good, id: 'nope' }])
+      expect(read(bad)).toBeNull();
+    // More history than travels: the newest steps are kept.
+    expect((read({ ...good, steps: Array.from({ length: 20 }, (_, n) => ({ at: n, text: `step ${n}` })) }) as { steps: unknown[] }).steps.length).toBe(12);
+    expect(read({ kind: 'job-done', of: id, how: 'paid' })).toBeNull();
+  });
+
+  test('which sentences hand a job over or ask for it back, and which are something else', async () => {
+    const { sam, server } = await joined();
+    sam.chaseState.list.push(DANA(server.now()));
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const said of ["hand Dana's answer to Leo", 'hand this over to Leo', 'Hand it to Leo.', 'hand the contract job to Leo', 'give the Dana chase to Leo', "give Leo Dana's answer", 'please hand that to Leo']) expect(routes(said)).toBe("Hand Leo a job: Dana's answer");
+    // It never picks a job that was not meant.
+    sam.chaseState.list.push({ ...DANA(server.now()), id: 'chase-sam-2', name: 'Vera Lind', address: 'vera@lumen.example', about: 'the invoice' });
+    expect(routes('hand this over to Leo')).toBe('Say which job is meant.');
+    expect(routes('hand the invoice job to Leo')).toBe("Hand Leo a job: Vera's answer");
+    // A file, an agent and a word to Leo are what they were.
+    expect(routes('give Leo the deck')).toBe('Send Leo a file of mine: the deck');
+    expect(routes('hand Leo the deck')).toBe('Send Leo a file of mine: the deck');
+    expect(routes('tell Leo the contract is back')).toBe('Tell Leo: The contract is back');
+    expect(routes("ask Leo for Dana's answer back")).toBe('Say what is with them.');
   });
 });
 

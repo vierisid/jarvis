@@ -695,6 +695,48 @@ made from. On "Take it on" Leo's own notch builds it, as it builds any agent.
 - An agent that needs something set up on the taker's side (a connection, an account) is built
   and waits switched off there, as any agent would.
 
+## A job that changes hands (24 November)
+
+The prototype (handChase, lhand, jobTake, askBack): a job goes to a teammate with what was asked,
+what was done and what is left. It changes hands only when they take it.
+
+A job is a chase (docs/notch: "until it is done"): getting somebody's answer by a day, by mail.
+"Hand Dana's answer to Leo." Leo's notch: "Sam hands you Dana's answer on the contract, due
+Friday. So far: 1 step. Take it?", with the history and the mail that would go from Leo's own
+mailbox on the same sheet. Taken, Sam hears "Leo took it. Dana hears from Leo now. I tell you
+when it is done." Later: "Done. Dana answered. Leo closed it." Or Sam says "ask Leo for Dana's
+answer back".
+
+109. **It is the giver's until it is taken.** Offered, nothing changes: the giver's chase goes
+    on. A no, or no answer, changes nothing.
+110. **One owner at a time.** It stops for the giver when the other says it is taken, and it is
+    said to be taken only when the taker's first mail has gone. Handed back, it stops there
+    before the giver is told.
+111. **Nobody's mail is written in a name unseen.** What the taker's chase sends is on the sheet
+    the taker says yes to, to whom and when the one follow-up goes, as for a chase they start.
+112. **The history that travels is what the notch wrote down**, step by step, the newest twelve.
+    It arrives as text, is shown as text, and is kept as the other person's: "Sam: Nudged Dana
+    by email."
+113. **Who it is got from travels with it**: their name and their address. An address that is not
+    one is no job.
+114. **A taker who is on that person already cannot take it**, and is offered only the no.
+115. **Whoever took it tells the giver once when it ends**: done, or let go.
+116. **Asked for back, the taker chooses.** Handed back, what they did comes with it and the
+    giver's chase is under way again, a whole wait from its next step. Kept, the giver hears so.
+117. **An answer counts only from the one it was handed to.**
+118. **It hands over what was named, and never picks.** With several under way and none named
+    it asks which. Only "hand", or a word that says job, hands a job: "give Leo the deck" is a
+    file.
+
+### Where it stops
+
+- A job is a chase. Something that waits on the notch for a yes (a question, an approval) is not
+  handed over yet, and neither is a job that is only words.
+- The stand-in for the mailbox in the rehearsal writes "its first mail went" and sends nothing.
+  That the real chase code sends it from the taker's mailbox is tested with the real chase code.
+- The giver is not told when the taker's chase is stuck. Only when it ends.
+- Not run on two people's machines.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of

@@ -77,7 +77,23 @@ export type PeerNote =
    */
   | { kind: 'agent'; id: string; name: string; sentence: string }
   /** The person took it on, or not (`of` is the offer's id). */
-  | { kind: 'agent-yes' | 'agent-no'; of: string };
+  | { kind: 'agent-yes' | 'agent-no'; of: string }
+  /**
+   * A job is handed over, with its history: getting somebody's answer by a
+   * day. Who it is got from (their name and address), what is wanted and
+   * about what, the day, and what was done so far. It stays the giver's
+   * until it is taken.
+   */
+  | { kind: 'job'; id: string; name: string; address: string; thing: 'answer' | 'reply' | 'signature'; about: string; day: string; steps: { at: number; text: string }[] }
+  /** It was taken, or not (`of` is the job's id). */
+  | { kind: 'job-yes' | 'job-no'; of: string }
+  /** Whoever took it ended it: the answer came, or they let it go. */
+  | { kind: 'job-done'; of: string; how: 'done' | 'dropped' }
+  /** The giver asks for it back. */
+  | { kind: 'job-back'; of: string }
+  /** It is handed back, with what was done meanwhile. Or it is kept. */
+  | { kind: 'job-return'; of: string; steps: { at: number; text: string }[] }
+  | { kind: 'job-keep'; of: string };
 
 export const PEER_NOTE_VERSION = 1;
 /** How long a time that is looked for can be, in minutes. */
@@ -92,6 +108,11 @@ export const PEER_LOOK_APP_MAX = 40;
 /** The longest sentence of an agent that is offered: what can be read whole before it is taken on. */
 export const PEER_AGENT_SENTENCE_MAX = 200;
 export const PEER_AGENT_NAME_MAX = 24;
+/** A job that is handed over: the most steps of its history that travel, and the longest each may be. */
+export const PEER_JOB_STEPS_MAX = 12;
+export const PEER_JOB_STEP_MAX = 120;
+export const PEER_JOB_NAME_MAX = 60;
+export const PEER_JOB_ABOUT_MAX = 80;
 export const PEER_OPTIONS_MAX = 4;
 export const PEER_OPTION_MAX = 40;
 export const PEER_ORG_MAX = 60;
@@ -206,6 +227,43 @@ function checked(raw: unknown): PeerNote | null {
   if (note.kind === 'time-yes' || note.kind === 'time-no') {
     const of = id(note.of);
     return of ? { kind: note.kind, of } : null;
+  }
+  // The history of a job: when, and what, each as text and nothing else. The newest are kept when there are too many.
+  const jobSteps = (value: unknown): { at: number; text: string }[] | null => {
+    if (!Array.isArray(value)) return null;
+    const out: { at: number; text: string }[] = [];
+    for (const one of value) {
+      const step = one && typeof one === 'object' ? one as Record<string, unknown> : null;
+      const text = step && typeof step.text === 'string' ? peerPlain(step.text, PEER_JOB_STEP_MAX) : '';
+      if (!step || typeof step.at !== 'number' || !Number.isFinite(step.at) || step.at < 0 || !text) return null;
+      out.push({ at: Math.round(step.at), text });
+    }
+    return out.slice(-PEER_JOB_STEPS_MAX);
+  };
+  if (note.kind === 'job') {
+    const of = id(note.id);
+    const name = typeof note.name === 'string' ? peerPlain(note.name, PEER_JOB_NAME_MAX) : '';
+    const address = typeof note.address === 'string' ? note.address.trim() : '';
+    const about = typeof note.about === 'string' ? peerPlain(note.about, PEER_JOB_ABOUT_MAX) : '';
+    const day = typeof note.day === 'string' ? peerPlain(note.day, 20) : '';
+    const steps = jobSteps(note.steps);
+    // An address that is one, and nothing but one: it is who a mail will be written to.
+    if (!of || !name || !steps || !/^[^\s<>,;"'()\\]{1,64}@[a-z0-9](?:[a-z0-9.-]{0,180}[a-z0-9])?\.[a-z]{2,24}$/i.test(address)) return null;
+    if (note.thing !== 'answer' && note.thing !== 'reply' && note.thing !== 'signature') return null;
+    return { kind: 'job', id: of, name, address: address.toLowerCase(), thing: note.thing, about, day, steps };
+  }
+  if (note.kind === 'job-yes' || note.kind === 'job-no' || note.kind === 'job-back' || note.kind === 'job-keep') {
+    const of = id(note.of);
+    return of ? { kind: note.kind, of } : null;
+  }
+  if (note.kind === 'job-done') {
+    const of = id(note.of);
+    return of && (note.how === 'done' || note.how === 'dropped') ? { kind: 'job-done', of, how: note.how } : null;
+  }
+  if (note.kind === 'job-return') {
+    const of = id(note.of);
+    const steps = jobSteps(note.steps);
+    return of && steps ? { kind: 'job-return', of, steps } : null;
   }
   if (note.kind === 'agent') {
     const of = id(note.id);

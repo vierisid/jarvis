@@ -317,6 +317,59 @@ describe('until it is done', () => {
     expect(h.standing.rows()).toEqual([{ kind: 'row', id: 'chases', go: true, say: ['I am chasing ', { em: '1 thing' }, ' until it is done.'] }]);
   });
 
+  // A chase that changes hands (./people-jobs.ts): the prototype's "hand it over".
+  test('handed to somebody it sends nothing more from here, it can come back with what they did, or be closed by them', async () => {
+    const h = harness({ waitMs: 2 * 60_000 });
+    await started(h);
+    const mine = h.standing.handable();
+    expect(mine.map((chase) => [chase.address, chase.state])).toEqual([['sam@northwind.example', 'on']]);
+    const id = mine[0]!.id;
+    expect(h.standing.hand(id, 'Leo')).toBe(true);
+    expect(h.standing.chase(id)).toMatchObject({ state: 'handed' });
+    expect(h.standing.chase(id)!.steps.at(-1)!.text).toBe('Handed to Leo. Leo took it.');
+    // Not under way here any more: it cannot be handed twice, and it is not one that could be handed.
+    expect(h.standing.hand(id, 'Anna')).toBe(false);
+    expect(h.standing.handable()).toEqual([]);
+    // Its follow-up is due, and does not go: it is somebody else's now.
+    const before = h.sent.length;
+    h.advance(10 * 60_000);
+    await h.standing.tick();
+    expect(h.sent.length).toBe(before);
+    // Back, with what was done meanwhile, told as theirs. Under way again, and the next step is a whole wait off.
+    expect(h.standing.back(id, [{ at: h.now(), text: 'Nudged Sam by email.' }], 'Leo')).toBe(true);
+    const back = h.standing.chase(id)!;
+    expect(back.state).toBe('on');
+    expect(back.steps.slice(-2).map((step) => step.text)).toEqual(['Leo: Nudged Sam by email.', 'Back with you, with what Leo did.']);
+    expect(back.nextAt).toBe(h.now() + 2 * 60_000);
+    expect(h.standing.back(id, [], 'Leo')).toBe(false);
+    // Handed again, and this time they finish it.
+    expect(h.standing.hand(id, 'Leo')).toBe(true);
+    expect(h.standing.closed(id, 'done', 'Leo')).toBe(true);
+    expect(h.standing.chase(id)).toMatchObject({ state: 'done' });
+    expect(h.standing.chase(id)!.steps.at(-1)!.text).toBe('Done. Leo closed it.');
+    expect(h.standing.closed(id, 'done', 'Leo')).toBe(false);
+  });
+
+  test('a chase somebody handed over is taken on with its history, and starts like any other: its first mail goes from here', async () => {
+    const h = harness();
+    const job = { name: 'Dana Reyes', address: 'dana@acme.example', thing: 'answer' as const, about: 'the renewal', day: 'Friday', steps: [{ at: 5, text: 'Nudged Dana by email.' }], from: 'Sam' };
+    const draft = h.standing.drafted(job)!;
+    // Not kept, and nothing sent, until it is begun.
+    expect(h.standing.chase(draft.id)).toBeNull();
+    expect(h.sent).toEqual([]);
+    expect(draft.steps.map((step) => step.text)).toEqual(['Sam: Nudged Dana by email.', 'Taken from Sam.']);
+    // What is shown before it starts is what will go, to whom.
+    expect(JSON.stringify(h.standing.blocks(draft))).toContain('dana@acme.example');
+    expect(JSON.stringify(h.standing.blocks(draft))).toContain('A quick nudge on the renewal');
+    const begun = await h.standing.begin(draft);
+    expect(begun.ok).toBe(true);
+    expect(h.sent.map((mail) => [mail.address, mail.thread])).toEqual([['dana@acme.example', null]]);
+    expect(h.standing.chase(draft.id)).toMatchObject({ state: 'on', nudges: 1 });
+    expect(h.standing.chase(draft.id)!.steps.map((step) => step.text)).toEqual(['Sam: Nudged Dana by email.', 'Taken from Sam.', 'Nudged Dana by email.']);
+    // One watcher per person: a second one for the same address is not drafted.
+    expect(h.standing.drafted(job)).toBeNull();
+  });
+
   test('Esc sends nothing and starts nothing', async () => {
     const h = harness();
     await h.speak("Get Sam's answer by Friday");
