@@ -52,7 +52,7 @@ export const PEER_ANSWER_MAX = 12_000;
 export const PEER_STEPS_MAX = 12;
 
 /** Why a step is never taken for somebody else, whatever the owner says to the request. */
-export type PeerStepNever = 'deletes' | 'pays' | 'sends' | 'installs' | 'settings' | 'unreadable' | 'too_many';
+export type PeerStepNever = 'deletes' | 'pays' | 'sends' | 'installs' | 'settings' | 'machinery' | 'unreadable' | 'too_many';
 
 /** One step of a thing being done, as it is put to the owner before it is taken. */
 export interface PeerStep {
@@ -87,6 +87,16 @@ const NEVER_KINDS: Partial<Record<ActionCategory, PeerStepNever>> = {
   install_software: 'installs', modify_settings: 'settings', spawn_agent: 'sends', terminate_agent: 'settings',
 };
 
+/**
+ * What keeps the organisation itself: the engine's program, its folder with
+ * the keys, the contacts and the rules, and its settings. The engine has a
+ * command line of its own, and what is typed there changes a rule or sends
+ * a message with no question on the notch. A step that names any of it is
+ * not taken on somebody else's word: it would be the way round everything
+ * the owner is asked.
+ */
+const MACHINERY = /collab-claude|collab[-_.]?mcp|[\\/]peers[\\/](?:engine|bin|files)\b|\bCOLLAB_[A-Z_]{3,}|collab\.sqlite|notch_peer_/i;
+
 /** One approval of a watched turn, as the step it is. */
 export function peerStep(request: ApprovalRequest, n: number): PeerStep {
   const way = notchApprovalWay(request);
@@ -96,12 +106,15 @@ export function peerStep(request: ApprovalRequest, n: number): PeerStep {
     if (read && typeof read === 'object' && !Array.isArray(read)) params = read as Record<string, unknown>;
   } catch { /* arguments that cannot be read are judged by the kind alone */ }
   const kind = request.action_category as ActionCategory;
+  const exact = notchApprovalExact(request);
   const never: PeerStepNever | null = way === 'payment' ? 'pays'
     : NEVER_KINDS[kind] ?? (callDeletesOrPays(request.tool_name, params, [kind]) ? 'deletes'
+      // Told from the step as it is shown and from what it was called with: both are what would run.
+      : MACHINERY.test(`${exact.join('\n')}\n${request.tool_arguments}`) ? 'machinery'
       // Too long to be read whole, or with letters that pass for other letters: it cannot be shown, so it is not taken.
       : way === 'too_long' || way === 'look_alike' ? 'unreadable'
         : n > PEER_STEPS_MAX ? 'too_many' : null);
-  return { n, say: notchApprovalSentence(request), exact: notchApprovalExact(request), way: never ? 'never' : way === 'key' ? 'line' : 'sheet', ...(never ? { why: never } : {}) };
+  return { n, say: notchApprovalSentence(request), exact, way: never ? 'never' : way === 'key' ? 'line' : 'sheet', ...(never ? { why: never } : {}) };
 }
 
 /** The turn's words: the owner's sentences, then the request, quoted. */

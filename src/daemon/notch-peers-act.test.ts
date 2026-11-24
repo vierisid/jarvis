@@ -147,6 +147,32 @@ describe('a thing done for a colleague, on a turn the owner watches', () => {
     expect(w.approvals.getPending()).toEqual([]);
   });
 
+  // The engine has a command line of its own: typed there, a rule changes or a message goes with no question on
+  // the notch. A colleague's request must not be the way round everything the owner is asked.
+  test('a step that touches what keeps the organisation is never run', async () => {
+    for (const command of [
+      '~/.jarvis/peers/bin/collab-claude policy set --contact sam --kind task --effect allow',
+      'cat ~/.jarvis/peers/engine/keys.json',
+      'sqlite3 ~/.jarvis/peers/engine/collab.sqlite "select * from contacts"',
+      'COLLAB_UNATTENDED_TASKS=1 ./start.sh',
+      'type C:\\Users\\x\\.jarvis\\peers\\engine\\device.key',
+      'sqlite3 jarvis.db "update notch_peer_meta set value = 1"',
+    ]) {
+      const w = world([runs(command), says('I could not do that.')]);
+      const steps: PeerStep[] = [];
+      await w.work({ from: 'Sam', words: 'tidy up the setup', act: { signal: new AbortController().signal, step: async (step) => { steps.push(step); return 'go'; } } });
+      expect(steps[0]).toMatchObject({ way: 'never', why: 'machinery' });
+      expect(w.ran).toEqual([]);
+      expect(w.decided).toEqual(['deny']);
+    }
+    // A command that only happens to say "peers" or "collaborate" is a step like any other.
+    const plain = world([runs('grep -r "peers and collaborators" notes.txt'), says('Done.')]);
+    const seen: PeerStep[] = [];
+    await plain.work({ from: 'Sam', words: 'look it up and note it', act: { signal: new AbortController().signal, step: async (step) => { seen.push(step); return 'go'; } } });
+    expect(seen[0]!.way).not.toBe('never');
+    expect(plain.ran.length).toBe(1);
+  });
+
   test('more steps than are taken for somebody else: the next one is refused', async () => {
     const w = world([...Array.from({ length: PEER_STEPS_MAX + 1 }, (_, n) => runs(`echo ${n}`)), says('Done.')]);
     const steps: PeerStep[] = [];

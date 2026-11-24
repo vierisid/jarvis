@@ -177,6 +177,7 @@ import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchCallDeps, notchNoticeDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
 import { notchOfficeDeps } from "./notch-office.ts";
 import { notchPeerWork } from "./notch-peers.ts";
+import { gistMessages } from "../notch/drop-gist.ts";
 import { notchDayOneDeps, notchFileKnown, notchFilePlaces, notchRememberFile } from "./notch-dayone.ts";
 import { NOTCH_NAME } from "../notch/name.ts";
 import type { NotchSettingsPage } from "../notch/prefs.ts";
@@ -4752,6 +4753,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       };
       notchReal = attachNotchReal(notchSurface, {
         busy: () => notchDemo?.running() != null,
+        // What a file that arrived from somebody is, in one sentence: one small question to the model about that
+        // one file. A PDF is read to text by the product's own reader, apart from the daemon and under a deadline.
+        gist: async (file, signal) => {
+          const messages = await gistMessages(file, async (bytes) => {
+            const { decodeAttachment } = await import('../brief/attachments.ts');
+            return decodeAttachment(bytes, 'application/pdf');
+          });
+          if (!messages) return null;
+          return (await agentService.getLLMManager().chatTier('medium', 'notch_file_gist', messages, { max_tokens: 80, temperature: 0, signal })).content;
+        },
         // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
         ...(peerLink && peerSetupNow ? { peers: {
           db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent, { decide: (action, requestId) => applyApprovalDecision(action, requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }) }),

@@ -737,6 +737,82 @@ answer back".
 - The giver is not told when the taker's chase is stuck. Only when it ends.
 - Not run on two people's machines.
 
+## On a call, told to whoever writes (24 November)
+
+The prototype: "Leo is on a call. His Jarvis holds it until he is free."
+
+On a call the notch holds everything that comes by itself (docs/notch). What somebody in the
+organisation sent is held too, and until now they heard nothing: the silence read as no answer.
+
+119. **Whoever writes during a call is told so, once for the call**: "Leo is on a call. Leo's
+    Pillow holds it until Leo is free." However many things they send in it.
+120. **Only what is for the owner tells it**: a message, a question, a request, a file, a time
+    that is asked for, an agent, a job. What the two Pillows settle between themselves ("seen",
+    an answer, the pieces of a file) tells nobody anything.
+121. **When the call is over, whoever was told hears that too**, without a line: the
+    organisation's sheet stops saying "On a call" for that person.
+122. **"On a call" is all that is said.** Not with whom, not what about, and nothing of any other
+    state. A word that it is over that never comes is forgotten after three hours.
+
+## What a file that arrived is, said by itself (24 November)
+
+The prototype: "Sam sent Deck, November.pdf. I read it: pricing moves to three plans."
+
+A file that arrived from somebody was named and put in the Downloads, and what it is was one
+click away on its card. Now it is read when it arrives: "Got Deck.pdf from Leo. I read it:
+Pricing moves to three plans. It is in your Downloads." The card follows as before.
+
+123. **One bounded question to the model, about that one file**, asked when it is here: the
+    person took it, or had asked for it. The answer is one sentence, cut and cleaned, shown as
+    it is and never acted on.
+124. **The file's contents are outside text to the model**: its name and its words inside the
+    product's marks, with the sentence that nothing in them is an instruction. A picture is
+    looked at itself. Only the first part of a long file is read for this.
+125. **Nothing to say is said as nothing.** When the model cannot tell, fails, or is slow, the
+    arrival is told as before: its name and where it is. The line waits six seconds for it and
+    no longer, says that it reads meanwhile, and Esc tells it without.
+126. **Only a file that somebody sent is read by itself.** A file the owner drops waits for
+    their question, as before.
+
+## Ready for others (the plan's pass I8)
+
+What of this pass is the product's own is in place. What is not is the server, the builds and
+the one join for a firm: those are the engine's and its maker's, and nothing here stands in for
+them.
+
+127. **The engine comes back when it falls**, a little later each time it falls at once (pass
+    I1). A call made while it is down fails at once (rule 5), the notch waits for it never
+    longer than twenty seconds (rule 24), and what could not go says that it did not go.
+128. **Removing the brain's data folder removes all of the engine.** Left to itself the engine
+    keeps the key that locks its keys in the desktop's keychain on a Mac and on Linux. It is
+    told to keep it in its own folder there, as a file only its owner can read: an uninstall
+    then leaves nothing behind, and a Mac shows no window of its own about a keychain. On
+    Windows it is in that folder already, sealed by Windows. What the person set stands.
+129. **Nothing done for somebody else touches what keeps the organisation.** The engine has a
+    command line of its own, and what is typed there changes a rule or sends a message with no
+    question on the notch. A step of a colleague's request that names the engine's program,
+    its folder, its settings or its tables is never taken (rule 74), and the owner is told.
+
+### What is not the product's to do
+
+- **A server that is somebody's to run.** Today an organisation lives on its maker's laptop
+  behind a tunnel, and is down when the laptop sleeps.
+- **Engines that are signed.** Each is built on the host's machine and is not signed. Windows
+  Smart App Control refuses unsigned programs, and that is never worked round.
+- **One join for a firm.** Each pair connects by a code. The engine has the means for a firm to
+  vouch for its members, switched off, and its maker switches it on.
+
+### Where these stop
+
+- "On a call" is told to whoever writes. It is not shown to people who have not written.
+- The gist is one sentence about the first part of a file. Which sentence a real model writes
+  has not been run: the tests script it and the rehearsal stands in for it.
+- The agent's own tools are not kept from the engine's folder in general: only a step done for
+  somebody else is. Keeping every tool of the product out of that folder is not built.
+- An engine that already kept its key in a keychain (a Mac or a Linux desktop that ran it
+  without `COLLAB_KEYSTORE=file`) would not find it in its folder, and would be a new device.
+  No machine that is known to have run this did.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of

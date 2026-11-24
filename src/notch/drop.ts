@@ -23,6 +23,7 @@
  */
 import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { NotchAskFile } from './asks.ts';
+import { NOTCH_GIST_MS, NOTCH_GIST_WAIT_MS, gistRead } from './drop-gist.ts';
 import { NOTCH_DROP_READERS, readDropped, type DropReader } from './drop-read.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
@@ -152,6 +153,8 @@ export interface DropHeld {
    * could not be saved and this is the only copy.
    */
   from?: { who: string; place: string | null };
+  /** For one that arrived: what it is, in a sentence, as soon as it has been read (./drop-gist.ts). Null when nothing can be said. */
+  gist?: Promise<string | null>;
 }
 
 /** Somebody a dropped file can be sent on to. */
@@ -250,6 +253,14 @@ export interface NotchDropDeps {
    * a file is only ever read.
    */
   send?: { to(): DropPerson[]; file(to: string, file: { name: string; bytes: Uint8Array }): boolean };
+  /**
+   * What a file that arrived is, in one sentence (./drop-gist.ts): one
+   * bounded question to the model. Without it an arrival is told as it was:
+   * by its name and where it is.
+   */
+  gist?: (file: NotchAskFile, signal: AbortSignal) => Promise<string | null>;
+  /** How long the arrival's line waits for it. For tests; NOTCH_GIST_WAIT_MS otherwise. */
+  gistWaitMs?: number;
   /** Everything is stopped (Esc twice). */
   paused?: () => boolean;
   /** A file was taken, and what is wanted from it is being asked. Day one, waiting for a file, hears of it here. */
@@ -395,9 +406,20 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
         if (unsaid) {
           const name = unsaid;
           unsaid = null;
-          const sender = held.find((one) => one.name === name)?.from;
+          const arrivedOne = held.find((one) => one.name === name);
+          const sender = arrivedOne?.from;
+          // What it is, in a sentence, when it could be read by now: the prototype's "I read it: ...". The line
+          // waits for it a little, and says that it reads. Esc, or no word in time, and it is told without.
+          let gist: string | null = null;
+          if (sender && arrivedOne?.gist) {
+            const reading = stage.id();
+            stage.put({ id: reading, kind: 'work', say: ['Got ', em(name), ' from ', em(sender.who), '. Reading it…'], steps: 0, done: 0, mood: 'work', who: sender.who });
+            const skipped = stage.answer(reading, ['stop', 'no']).then(() => null, () => null);
+            gist = await Promise.race([arrivedOne.gist, skipped, stage.wait(deps.gistWaitMs ?? NOTCH_GIST_WAIT_MS).then(() => null, () => null)]);
+          }
+          const read: NotchPart[] = gist ? [' I read it: ', gist] : [];
           // One that arrived: who it is from, and where it is now. Longer on the notch than "Got it": it names a place.
-          if (sender) await stage.say(sender.place ? ['Got ', em(name), ' from ', em(sender.who), '. It is in your ', em(sender.place), '.'] : ['Got ', em(name), ' from ', em(sender.who), '. I could not put it in your Downloads, so I am holding it.'], Math.max(gotMs, NOTCH_DROP_ARRIVED_MS), { mood: 'happy', who: sender.who });
+          if (sender) await stage.say(sender.place ? ['Got ', em(name), ' from ', em(sender.who), '.', ...read, ' It is in your ', em(sender.place), '.'] : ['Got ', em(name), ' from ', em(sender.who), '. I could not put it in your Downloads, so I am holding it.'], Math.max(gotMs, NOTCH_DROP_ARRIVED_MS), { mood: 'happy', who: sender.who });
           else await stage.say(held.length > 1 ? ['Got ', em(name), ' too.'] : ['Got ', em(name), '.'], gotMs, { mood: 'happy' });
         }
         if (item !== id || held.length === 0) return 'settled';
@@ -533,7 +555,10 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       if (held.length > 0 && together > ATTACHMENT_LIMITS.turnBytes) return false;
       // Sizes and kinds, never the name.
       log(`[notch] a file arrived from somebody in the organisation and is held: ${file.bytes.length} bytes`);
-      held.push({ name, size: file.bytes.length, cut, raw: file.bytes, file: { kind: verdict.kind, name, mediaType: verdict.mediaType, bytes }, from: { who: file.from, place: file.place } });
+      const asked: NotchAskFile = { kind: verdict.kind, name, mediaType: verdict.mediaType, bytes };
+      // Read at once, beside everything else: by the time its line comes up, what it is can usually be said.
+      const gist = deps.gist ? deps.gist(asked, AbortSignal.timeout(NOTCH_GIST_MS)).then(gistRead, () => null) : undefined;
+      held.push({ name, size: file.bytes.length, cut, raw: file.bytes, file: asked, from: { who: file.from, place: file.place }, ...(gist ? { gist } : {}) });
       unsaid = name;
       show(true);
       return true;

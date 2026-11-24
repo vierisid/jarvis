@@ -14,7 +14,7 @@ import type { Database } from 'bun:sqlite';
 import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
-import type { NotchAsks, NotchAsksDeps } from './asks.ts';
+import type { NotchAskFile, NotchAsks, NotchAsksDeps } from './asks.ts';
 import { NotchLedger } from './ledger.ts';
 import { attachNotchLook, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
 import { attachNotchTalk } from './talk.ts';
@@ -72,6 +72,12 @@ import { whereQuestion } from './point.ts';
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
   busy?: () => boolean;
+  /**
+   * What a file that arrived from somebody is, in one sentence (./drop-gist.ts):
+   * one bounded question to the model. Without it an arrival is told by its
+   * name and where it is.
+   */
+  gist?: (file: NotchAskFile, signal: AbortSignal) => Promise<string | null>;
   /**
    * The back office that fits in a sheet (pass 12): the product's memory with
    * its own Forget, the keys of the machine a sheet is open on, what makes
@@ -492,6 +498,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // A time that is free for two people: the owner's calendar, read the way the mail layer reads it. Asked
       // for when it is needed, so it does not matter that the mail layer is made after this.
       time: { calendar: (from: number, to: number) => (mail ? mail.calendar(from, to) : Promise.resolve(null)) },
+      // On a call what arrives is held, and whoever sent it is told. The part that knows of calls is made after this.
+      onCall: () => around?.onCall() ?? false,
       // The owner's chases, for a job that changes hands. Asked for when it is needed: that part is made after this.
       chases: () => standing,
       // The owner's agents, to send one to somebody, and to make one that somebody sent and the owner took on.
@@ -633,6 +641,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // For somebody in the organisation: the file goes on as it was dropped (./people-files.ts).
       ...(people ? { send: { to: () => people!.fileTargets(), file: (to: string, file: { name: string; bytes: Uint8Array }) => people!.sendFile(to, file) } } : {}),
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
+      // A file that arrived from somebody is read by itself, and what it is is said with its arrival.
+      ...(deps.gist ? { gist: deps.gist } : {}),
       // On day one, the first file anyone drops is the lesson, and is asked about as any file is.
       taken: () => dayOne?.gave(),
       log,

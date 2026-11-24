@@ -122,6 +122,8 @@ export type NotchPeopleRule = 'asks' | 'answers' | 'shows' | 'never';
 export const NOTCH_PEOPLE_RULE_WORDS: Record<NotchPeopleRule, string> = {
   asks: 'Asks you every time', answers: 'Gets answers without asking', shows: 'Starts without asking, and you see the answer first', never: 'Is never answered',
 };
+/** How long somebody is taken to be on a call after their Pillow said so, when it never says that it is over. */
+export const NOTCH_PEOPLE_BUSY_MS = 3 * 3_600_000;
 /** How long the engine has to say what its rule for somebody is, when a request of theirs arrives. After that the request is put to the owner. */
 export const NOTCH_PEOPLE_RULE_WAIT_MS = 1500;
 /** After how many requests in a row that were sent what was found the owner is offered to let that person have answers without asking. */
@@ -147,6 +149,7 @@ const NOTCH_PEOPLE_NEVER: Record<string, string> = {
   sends: "That would send something to somebody. I do not send on somebody else's word.",
   installs: "That would install or remove software. I do not do that on somebody else's word.",
   settings: "That would change a setting. I do not do that on somebody else's word.",
+  machinery: "That would touch what keeps your organisation: its keys and its rules. I do not do that on somebody else's word.",
   unreadable: 'I cannot show that step whole here, so I do not take it.',
   too_many: 'That is more steps than I take for somebody else.',
 };
@@ -174,6 +177,8 @@ export interface NotchPeopleDeps {
      */
     act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> };
   }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  /** Whether the owner is on a call now (./around.ts): what arrives is then held, and whoever sent it is told so. */
+  onCall?: () => boolean;
   /**
    * The owner's chases (./standing.ts), for handing one to somebody and for
    * taking one over (./people-jobs.ts). Without it no job changes hands.
@@ -1059,7 +1064,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         id, kind: 'sheet', say: org ? [em(org), ', your organisation'] : ['Your organisation'], mood: 'look',
         blocks: [
           { kind: 'row', lead: 'You', say: ['This laptop'], small: 'You say yes or no to what is asked of it.' },
-          ...people.map((one, at): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : `Connected by a code. ${NOTCH_PEOPLE_RULE_WORDS[rules[at] ?? 'asks']}.`,
+          ...people.map((one, at): NotchBlock => ({ kind: 'row', lead: one.name.charAt(0).toUpperCase(), say: [one.name], small: one.own ? 'Your own laptop.' : `${onACall(one.id) ? `On a call. Their ${NOTCH_NAME} holds things for them.` : 'Connected by a code.'} ${NOTCH_PEOPLE_RULE_WORDS[rules[at] ?? 'asks']}.`,
             buttons: [
               // The rule is a word, and the button says what it would become.
               ...(one.own || !account.signedIn ? [] : [{ id: `rule${at}`, label: rules[at] === 'asks' ? 'Answer without asking' : 'Ask me every time', quiet: true }]),
@@ -2215,6 +2220,41 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     (followTimer as { unref?: () => void }).unref?.();
   }
 
+  /** Who was told, during this call, that the owner is on one. Each once, and each again when it is over. */
+  const toldBusy = new Set<string>();
+  /** Who is on a call, as their own Pillow said, and until when that is believed without another word. */
+  const busyUntil = new Map<string, number>();
+  const onACall = (id: string): boolean => (busyUntil.get(id) ?? 0) > now();
+
+  /**
+   * Something for the owner arrived while they are on a call. It is held,
+   * as everything is then. Whoever sent it is told, once for the call, so
+   * that the silence is not taken for an answer: "Leo is on a call. Leo's
+   * Pillow holds it until Leo is free."
+   */
+  function heldForACall(item: PeerItem, from: PeerPerson): void {
+    if (!deps.onCall?.() || toldBusy.has(from.id)) return;
+    toldBusy.add(from.id);
+    // The sentence is for a contact who is not on a Pillow.
+    void link.tell(from.id, peerNoteText(`I am on a call. My ${NOTCH_NAME} holds this until I am free.`, { kind: 'busy', why: 'call' }), { replyTo: item.id });
+    log('[peers] somebody was told that the owner is on a call');
+  }
+
+  /** The call is over: whoever was told of it is told that too. */
+  function callOver(): void {
+    if (toldBusy.size === 0 || deps.onCall?.()) return;
+    for (const id of toldBusy) void link.tell(id, peerNoteText('I am off the call.', { kind: 'free' }));
+    toldBusy.clear();
+  }
+
+  /** What arrives for the owner to see or answer, and is therefore held on a call. Not what the Pillows settle between themselves. */
+  const forTheOwner = (item: PeerItem): boolean => {
+    if (item.kind === 'task_request') return true;
+    if (item.kind !== 'message') return false;
+    const kind = peerNoteRead(item.text).note?.kind;
+    return kind === undefined || kind === 'ask' || kind === 'look' || kind === 'file' || kind === 'file-want' || kind === 'time-want' || kind === 'agent' || kind === 'job' || kind === 'job-back';
+  };
+
   async function lookNow(): Promise<void> {
     if (link.account().engine !== 'up' || !link.account().signedIn) return;
     let items: PeerItem[];
@@ -2231,6 +2271,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       // From a device that has no name here: not somebody the owner connected with. Left where it is.
       if (!from) continue;
       store.take(item.id, item.from);
+      if (forTheOwner(item)) heldForACall(item, from);
       if (item.kind === 'task_cancel') {
         // They took their request back: it leaves, wherever it stood. Work that is under way sends nothing.
         const row = item.task ? store.requestOf(item.task) : null;
@@ -2272,6 +2313,19 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           if (note.kind === 'file-part') again = true;
         } else if (note.kind === 'file') message(item, from, words);
         else { store.done(item.id); void link.seen(item.id); }
+        continue;
+      }
+      if (note?.kind === 'busy' || note?.kind === 'free') {
+        store.done(item.id);
+        void link.seen(item.id);
+        if (note.kind === 'free') { busyUntil.delete(from.id); continue; }
+        // Said once for a call, however many things were sent during it.
+        const told = onACall(from.id);
+        busyUntil.set(from.id, now() + NOTCH_PEOPLE_BUSY_MS);
+        if (!told) {
+          const say: NotchPart[] = [em(from.name), ' is on a call. ', em(`${from.name}'s`), ` ${NOTCH_NAME} holds it until `, em(from.name), ' is free.'];
+          news(`people:busy:${item.id}`, say, say, { person: true, who: from.name, ms: 3600 });
+        }
         continue;
       }
       if (note?.kind === 'look') { message(item, from, words, note); continue; }
@@ -2328,6 +2382,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await look();
     await follow();
     for (const sent of store.unanswered(now() - NOTCH_PEOPLE_ASK_WAIT_MS)) late(sent);
+    callOver();
     // A job that was taken here and has ended is told to whoever gave it.
     await jobs()?.tick().catch(() => { /* told at the next look */ });
   }

@@ -106,6 +106,12 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // that asks what came out of it. The other side of a call is other
       // people's speech: it reaches this prompt and nothing else.
       'notch/call.ts',
+      // What a file that arrived from somebody is, in one sentence: the file's
+      // name and the first part of its text (cut to a fixed length before it
+      // is framed), or its name beside the picture itself, in the prompt of
+      // one bounded question. The answer is one sentence, cut and cleaned,
+      // shown to the owner as it is and never acted on.
+      'notch/drop-gist.ts',
       // The notch's look around, day one: the beginning of a file from the
       // owner's desktop, cut to a fixed length before it is framed into the
       // prompt that asks for one line about each file.

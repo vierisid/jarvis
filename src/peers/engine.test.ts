@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EngineClient, EngineClosed, EngineRefused, ENGINE_PROTOCOL, readDialogFields } from './engine-client.ts';
 import type { EngineDialog, EngineDialogAnswer, EngineTransport } from './engine-client.ts';
-import { engineDataDir, engineEnv, startEngine } from './engine-process.ts';
+import { engineDataDir, engineEnv, engineKeystore, startEngine } from './engine-process.ts';
 import { EngineReadFailed, readEngine } from './engine-read.ts';
 import { PeerEngine } from './engine.ts';
 import type { EngineState } from './engine.ts';
@@ -219,6 +219,21 @@ describe('the environment the engine runs in', () => {
     expect(env.COLLAB_DESKTOP_NOTIFY).toBe('0');
     expect(env.COLLAB_UNATTENDED_TASKS).toBe('0');
     expect(env.COLLAB_INTERACTIVE).toBe('1');
+  });
+
+  // "Uninstall wipes it" (the plan's pass I8): removing the brain's data folder has to remove all of the engine.
+  test('left to itself the engine keeps its key in its own folder, so that removing the folder removes it', () => {
+    const { COLLAB_KEYSTORE: _set, ...unset } = base;
+    // On a Mac and on Linux the engine would prefer the desktop's keychain: a key that outlives an uninstall,
+    // and on a Mac a window of the system's own that no other system shows.
+    expect(engineEnv(unset, '/data/peers', 'darwin').COLLAB_KEYSTORE).toBe('file');
+    expect(engineEnv(unset, '/data/peers', 'linux').COLLAB_KEYSTORE).toBe('file');
+    // On Windows it is in its folder already, sealed by Windows. Left as the engine has it.
+    expect(engineEnv(unset, '/data/peers', 'win32').COLLAB_KEYSTORE).toBeUndefined();
+    // What the person set is theirs to set, on every system.
+    for (const platform of ['darwin', 'linux', 'win32']) expect(engineEnv({ ...unset, COLLAB_KEYSTORE: 'keychain' }, '/data/peers', platform).COLLAB_KEYSTORE).toBe('keychain');
+    expect(engineKeystore('darwin')).toBe('file');
+    expect(engineKeystore('win32')).toBeNull();
   });
 
   test('the server and the place of its key are the person\'s to set, and what it needs to run is there', () => {

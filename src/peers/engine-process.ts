@@ -39,13 +39,30 @@ export function engineDataDir(brainDataDir: string): string {
   return join(brainDataDir, ENGINE_DATA_FOLDER);
 }
 
+/**
+ * Where the engine keeps the key that locks its keys, when the person did
+ * not say: on a Mac and on Linux in its own folder, as a file only its
+ * owner can read. Left to itself the engine prefers the desktop's keychain
+ * there, and two things follow that are not wanted. Uninstalling removes
+ * the brain's data folder and would leave that key behind in the keychain.
+ * And a Mac shows a window of its own the first time ("wants to use your
+ * keychain"), which no other system does. On Windows the engine keeps it
+ * in its own folder already, sealed by Windows, and that is left alone.
+ */
+export function engineKeystore(platform: string): string | null {
+  return platform === 'darwin' || platform === 'linux' ? 'file' : null;
+}
+
 /** The environment the engine runs in. Pure, so that what reaches it can be tested. */
-export function engineEnv(base: Record<string, string | undefined>, dataDir: string): Record<string, string> {
+export function engineEnv(base: Record<string, string | undefined>, dataDir: string, platform: string = process.platform): Record<string, string> {
   const env = filterEnv(base);
   for (const name of [...PASSED_ON, ...KEYCHAIN]) {
     const value = base[name];
     if (typeof value === 'string' && value) env[name] = value;
   }
+  // Everything of the engine lives in its own folder, so that removing that folder removes all of it.
+  const keystore = engineKeystore(platform);
+  if (!env.COLLAB_KEYSTORE && keystore) env.COLLAB_KEYSTORE = keystore;
   if (!env.COLLAB_DEVICE_NAME) env.COLLAB_DEVICE_NAME = ENGINE_DEVICE_NAME;
   env.COLLAB_DATA_DIR = dataDir;
   // Tells the brain that something arrived, the moment it does.

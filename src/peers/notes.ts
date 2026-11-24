@@ -91,6 +91,13 @@ export type PeerNote =
   | { kind: 'job-done'; of: string; how: 'done' | 'dropped' }
   /** The giver asks for it back. */
   | { kind: 'job-back'; of: string }
+  /**
+   * The person is on a call, and what was sent is held for them until it
+   * is over. Said once to whoever writes during it, and `free` when it ends.
+   * Nothing else of what they are doing.
+   */
+  | { kind: 'busy'; why: 'call' }
+  | { kind: 'free' }
   /** It is handed back, with what was done meanwhile. Or it is kept. */
   | { kind: 'job-return'; of: string; steps: { at: number; text: string }[] }
   | { kind: 'job-keep'; of: string };
@@ -265,6 +272,8 @@ function checked(raw: unknown): PeerNote | null {
     const steps = jobSteps(note.steps);
     return of && steps ? { kind: 'job-return', of, steps } : null;
   }
+  if (note.kind === 'busy') return note.why === 'call' ? { kind: 'busy', why: 'call' } : null;
+  if (note.kind === 'free') return { kind: 'free' };
   if (note.kind === 'agent') {
     const of = id(note.id);
     const name = typeof note.name === 'string' ? peerPlain(note.name, PEER_AGENT_NAME_MAX) : '';

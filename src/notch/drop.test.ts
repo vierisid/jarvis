@@ -85,7 +85,7 @@ describe('whether a dropped file can be read', () => {
   });
 });
 
-function harness(options: { paused?: () => boolean; busy?: boolean; people?: { id: string; name: string }[] } = {}) {
+function harness(options: { paused?: () => boolean; busy?: boolean; people?: { id: string; name: string }[]; gist?: (file: NotchAskFile) => Promise<string | null> } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -106,12 +106,15 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
   const asked: { text: string; files: NotchAskFile[] }[] = [];
   const told: string[] = [];
   const logs: string[] = [];
+  /** The files that were read by themselves when they arrived. */
+  const read: string[] = [];
   /** What was handed on to somebody in the organisation. */
   const sentOn: { to: string; name: string; bytes: Uint8Array }[] = [];
   const drop = attachNotchDrop(surface, inbox, {
     ask: (words, files) => { asked.push({ text: words, files }); },
     tell: (parts) => { told.push(text(parts)); },
     paused: options.paused, holdMs: 80, log: (line) => logs.push(line),
+    ...(options.gist ? { gist: (one: NotchAskFile) => { read.push(one.name); return options.gist!(one); }, gistWaitMs: 300 } : {}),
     ...(options.people ? { send: { to: () => options.people!, file: (to: string, sending: { name: string; bytes: Uint8Array }) => { sentOn.push({ to, name: sending.name, bytes: sending.bytes }); return true; } } } : {}),
   });
   if (options.busy) inbox.present('something', (stage) => stage.say(['Busy with something.'], 60_000));
@@ -124,7 +127,7 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
     await settle();
   };
   return {
-    drop, asked, told, logs, line, fromPage, file, inbox, answer, sentOn,
+    drop, asked, told, logs, line, fromPage, file, inbox, answer, sentOn, read,
     placeholder: (): string => (line() as { placeholder?: string } | null)?.placeholder ?? '',
     notes: (): string[] => blocks().flatMap((block) => (block.kind === 'note' ? [text(block.say)] : [])),
     said: (): string => text(line()?.say),
@@ -134,6 +137,18 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
     async got(): Promise<void> {
       await settle();
       if (line()?.kind === 'say') await answer('done');
+    },
+    /** Time passes: every timer that is due by then runs, the earliest first. */
+    async advance(ms: number): Promise<void> {
+      now += ms;
+      for (;;) {
+        const due = timers.filter((timer) => timer.at <= now).sort((a, b) => a.at - b.at)[0];
+        if (!due) break;
+        timers.splice(timers.indexOf(due), 1);
+        due.fn();
+        await settle();
+      }
+      await settle();
     },
     cards: (): string[] => blocks().flatMap((block) => (block.kind === 'file' ? [`${block.icon} | ${block.name} | ${block.meta}`] : [])),
     buttons: (): string[] => blocks().flatMap((block) => (block.kind === 'buttons' ? block.buttons.map((button) => `${button.key ?? '-'} ${button.label}`) : [])),
@@ -656,6 +671,51 @@ describe('a file that arrived from somebody in the organisation', () => {
     expect(h.asked[0]!.text).toBe('Summarise the file I was sent: what it is, and the points that matter, in a few short lines.');
     expect(h.asked[0]!.files.map((one) => `${one.name} ${one.bytes.length}`)).toEqual(['Deck.pdf 2000']);
     expect(h.drop.holding()).toBe(false);
+  });
+
+  // The prototype: "Sam sent Deck, November.pdf. I read it: pricing moves to three plans."
+  test('what it is is said with its arrival, by itself, and the card comes after as before', async () => {
+    const h = harness({ gist: async () => ' "Pricing moves to three plans" ' });
+    expect(h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' })).toBe(true);
+    await settle();
+    // Read at once, cleaned to one sentence, and said where the arrival is said.
+    expect(h.read).toEqual(['Deck.pdf']);
+    expect(h.said()).toBe('Got Deck.pdf from Leo. I read it: Pricing moves to three plans. It is in your Downloads.');
+    await h.answer('done');
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    expect(h.buttons()).toEqual(['- Summarise it', '- Find the numbers', '- What is missing']);
+  });
+
+  test('when nothing can be said of it, or the reading fails, the arrival is told as before', async () => {
+    for (const gist of [async () => 'UNKNOWN', async () => null, async () => { throw new Error('no model'); }, async () => '   ']) {
+      const h = harness({ gist });
+      h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
+      await settle();
+      expect(h.said()).toBe('Got Deck.pdf from Leo. It is in your Downloads.');
+    }
+  });
+
+  test('while it reads the notch says so, waits a little and no longer, and Esc tells it without', async () => {
+    // One that never comes back.
+    const slow = harness({ gist: () => new Promise<string | null>(() => { /* never */ }) });
+    slow.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
+    await settle();
+    expect(slow.line()).toMatchObject({ kind: 'work' });
+    expect(slow.said()).toBe('Got Deck.pdf from Leo. Reading it…');
+    await slow.advance(400);
+    expect(slow.said()).toBe('Got Deck.pdf from Leo. It is in your Downloads.');
+    const skipped = harness({ gist: () => new Promise<string | null>(() => { /* never */ }) });
+    skipped.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
+    await settle();
+    await skipped.answer('stop');
+    expect(skipped.said()).toBe('Got Deck.pdf from Leo. It is in your Downloads.');
+  });
+
+  test('a file that was dropped is not read by itself: only one that somebody sent', async () => {
+    const h = harness({ gist: async () => 'Something.' });
+    h.fromPage({ type: 'drop', files: [h.file('notes.txt', 'text/plain', 40)] });
+    await settle();
+    expect(h.read).toEqual([]);
   });
 
   test('a question typed about it is asked with it', async () => {

@@ -174,6 +174,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   };
   /** This side's agents, the sentences of the ones it took on, and whether it can make agents at all. */
   const agentState: { mine: { name: string; sentence: string }[]; taken: string[] } = { mine: [], taken: [] };
+  /** Whether this side's owner is on a call. */
+  const callState = { on: false };
   /** What this side last circled on its screen and still holds. */
   const lookState: { held: { what: string; rows: string[][]; app: string } | null } = { held: null };
   /** Every request that was really worked on here. */
@@ -187,6 +189,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     // An engine that does not answer is not waited for here.
     ruleWaitMs: 1,
     look: () => lookState.held,
+    onCall: () => callState.on,
     chases: () => chasesFake,
     ...(more.noAgents ? {} : { agents: { list: () => agentState.mine, take: (sentence: string) => { agentState.taken.push(sentence); return true; } } }),
     // Read in one zone whatever the machine's own, so that the days and hours below are the same everywhere.
@@ -215,7 +218,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState, chaseState,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState, chaseState, callState,
     saved, filesDir, fileState, lookedFor, held, thought,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
@@ -2668,6 +2671,7 @@ describe('something done on their laptop, while they watch', () => {
       ['pays', "That would pay for something. I do not pay on somebody else's word. Told Sam no. 1 step had been taken."],
       ['sends', "That would send something to somebody. I do not send on somebody else's word. Told Sam no. 1 step had been taken."],
       ['installs', "That would install or remove software. I do not do that on somebody else's word. Told Sam no. 1 step had been taken."],
+      ['machinery', "That would touch what keeps your organisation: its keys and its rules. I do not do that on somebody else's word. Told Sam no. 1 step had been taken."],
       ['unreadable', 'I cannot show that step whole here, so I do not take it. Told Sam no. 1 step had been taken.'],
       ['too_many', 'That is more steps than I take for somebody else. Told Sam no. 1 step had been taken.'],
     ] as const) {
@@ -3481,6 +3485,68 @@ describe('a job that changes hands', () => {
     expect(routes('hand Leo the deck')).toBe('Send Leo a file of mine: the deck');
     expect(routes('tell Leo the contract is back')).toBe('Tell Leo: The contract is back');
     expect(routes("ask Leo for Dana's answer back")).toBe('Say what is with them.');
+  });
+});
+
+describe('on a call, told to whoever writes', () => {
+  const kinds = (side_: ReturnType<typeof side>): string[] => side_.engine.inbox.map((item) => peerNoteRead(item.payload.text as string).note?.kind ?? 'words');
+  const tell = async (sam: ReturnType<typeof side>, words: string): Promise<void> => { await sam.say(`tell Leo ${words}`); await sam.done(); await sam.done(); };
+
+  test('what arrives during a call is held, and the sender hears so once for the call', async () => {
+    const { sam, leo } = await joined();
+    leo.callState.on = true;
+    await tell(sam, 'the review moved to Friday');
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo is on a call. Leo's Pillow holds it until Leo is free.");
+    for (let rounds = 0; rounds < 4 && sam.line(); rounds++) await sam.done();
+    await settle();
+    // A second thing in the same call: held too, and not said again.
+    expect(await sam.say('tell Leo bring the deck too')).toBe(true);
+    for (let rounds = 0; rounds < 4 && sam.line(); rounds++) await sam.done();
+    await settle();
+    expect(kinds(sam).filter((kind) => kind === 'busy').length).toBe(1);
+    expect(sam.line()).toBeNull();
+    // While it lasts, the organisation's sheet says so.
+    await sam.open();
+    expect(sam.blocks()).toContain('On a call. Their Pillow holds things for them. Asks you every time.');
+    await sam.no();
+    // The call ends: whoever was told hears that too, once, and the sheet is as it was.
+    leo.callState.on = false;
+    await leo.people.tick();
+    await settle();
+    expect(kinds(sam).filter((kind) => kind === 'free').length).toBe(1);
+    await leo.people.tick();
+    await settle();
+    expect(kinds(sam).filter((kind) => kind === 'free').length).toBe(1);
+    await sam.open();
+    expect(sam.blocks()).toContain('Connected by a code. Asks you every time.');
+  });
+
+  test('nobody is told when there is no call, and what the Pillows settle between themselves tells nobody', async () => {
+    const { sam, leo } = await joined();
+    await tell(sam, 'the review moved to Friday');
+    await settle();
+    expect(kinds(sam)).toEqual([]);
+    // Sam is on a call when Leo's "seen" comes back: that is no message for Sam, and Leo is told nothing.
+    sam.callState.on = true;
+    await leo.yes();
+    await settle();
+    expect(kinds(sam)).toEqual(['seen']);
+    expect(kinds(leo).filter((kind) => kind === 'busy')).toEqual([]);
+  });
+
+  test('a request and a file that arrive during a call tell the sender too, and only "on a call" is a reason', async () => {
+    const { sam, leo } = await joined();
+    leo.callState.on = true;
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await settle();
+    expect(kinds(sam).filter((kind) => kind === 'busy').length).toBe(1);
+    expect(peerNoteRead('x\n[[jarvis:1 {"kind":"busy","why":"asleep"}]]').note).toBeNull();
+    expect(peerNoteRead('x\n[[jarvis:1 {"kind":"busy","why":"call"}]]').note).toEqual({ kind: 'busy', why: 'call' });
+    expect(peerNoteRead('x\n[[jarvis:1 {"kind":"free"}]]').note).toEqual({ kind: 'free' });
   });
 });
 
