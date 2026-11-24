@@ -456,6 +456,12 @@ html.notch-window #notch-root { position: absolute; inset: 0; overflow: hidden; 
 /* The small word on a row's right is a time or a state, and keeps its own width. When it is a sentence it is
    held to under half the row and wraps there. */
 .row .at { flex: 0 0 auto; max-width: 45%; overflow-wrap: anywhere; text-align: right; }
+/* A row's own words keep room of their own. With a sentence on the right and two buttons beside it there
+   was none: the words were squeezed to the width of one letter, and a name stood down the side of the
+   sheet, a letter a line (the owner's organisation, 24 November 2026, after each person's row was given a
+   second button). What does not fit beside the words goes under them, on the right, where it stood. */
+.row:not(.go):not(.stack) { flex-wrap: wrap; justify-content: flex-end; row-gap: 12px; }
+.row:not(.go):not(.stack) .mn { flex: 1 1 8em; }
 
 /*
  * A display with a camera housing (a MacBook's). Nothing behind the housing can be seen, so what the
