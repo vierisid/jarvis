@@ -197,6 +197,23 @@ describe('make an agent', () => {
     expect(h.agents.row()).toEqual({ kind: 'row', id: 'agents', go: true, say: [{ em: '1 agent' }, ' on duty.'] });
   });
 
+  test('an agent that somebody sent and the owner took on is built without a second question, as any agent is', async () => {
+    const h = harness();
+    // The sentence was read and said yes to on the line that offered it (./people.ts).
+    expect(h.agents.take('Every Friday at 16:00, send Sam the numbers.')).toBe(true);
+    await settle();
+    // Not read back, not asked about again: built, switched on, named, on the first rung.
+    expect(h.did).toEqual(['build Every Friday at 16:00, send Sam the numbers.', 'enable flow-1']);
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.agents.store.list()).toMatchObject([{ name: 'Tony', rung: 'asks first', sentence: 'Every Friday at 16:00, send Sam the numbers.' }]);
+    expect(h.agents.list()).toEqual([{ name: 'Tony', sentence: 'Every Friday at 16:00, send Sam the numbers.' }]);
+    // The same one twice is refused, as for a sentence that is said.
+    expect(h.agents.take('Every Friday at 16:00, send Sam the numbers.')).toBe(true);
+    await settle();
+    expect(h.did.length).toBe(2);
+    expect(h.agents.take('   ')).toBe(false);
+  });
+
   test('while it is being built the notch says so', async () => {
     let done: (built: Built) => void = () => {};
     const h = harness({ build: () => new Promise<Built>((resolve) => { done = resolve; }) });

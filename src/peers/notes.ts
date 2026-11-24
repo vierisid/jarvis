@@ -63,7 +63,21 @@ export type PeerNote =
   /** One time is asked for: a start in whole minutes since 1970, and how long. The person there says yes or not then. */
   | { kind: 'time-want'; id: string; at: number; minutes: number }
   /** The person said yes to that time, or not then (`of` is the asking's id). */
-  | { kind: 'time-yes' | 'time-no'; of: string };
+  | { kind: 'time-yes' | 'time-no'; of: string }
+  /**
+   * Something off the sender's screen, shown to the other person: a few
+   * words for what it is ("3 rows", "1,291") and the program it was in. The
+   * message's words are what was read there, row by row.
+   */
+  | { kind: 'look'; what: string; app: string }
+  /**
+   * An agent is offered: what it is called where it comes from, and the
+   * sentence it was made from. Nothing of how it was built there, and none
+   * of what it is trusted with: taken, it is built anew and asks first.
+   */
+  | { kind: 'agent'; id: string; name: string; sentence: string }
+  /** The person took it on, or not (`of` is the offer's id). */
+  | { kind: 'agent-yes' | 'agent-no'; of: string };
 
 export const PEER_NOTE_VERSION = 1;
 /** How long a time that is looked for can be, in minutes. */
@@ -72,6 +86,12 @@ export const PEER_TIME_MINUTES: readonly number[] = [30, 60];
 export const PEER_TIME_FREE_MAX = 90;
 /** The most starts an answer names. */
 export const PEER_TIME_FITS_MAX = 3;
+/** The most of a thing that is shown to somebody: the words for what it is, and the program's name. */
+export const PEER_LOOK_WHAT_MAX = 60;
+export const PEER_LOOK_APP_MAX = 40;
+/** The longest sentence of an agent that is offered: what can be read whole before it is taken on. */
+export const PEER_AGENT_SENTENCE_MAX = 200;
+export const PEER_AGENT_NAME_MAX = 24;
 export const PEER_OPTIONS_MAX = 4;
 export const PEER_OPTION_MAX = 40;
 export const PEER_ORG_MAX = 60;
@@ -186,6 +206,22 @@ function checked(raw: unknown): PeerNote | null {
   if (note.kind === 'time-yes' || note.kind === 'time-no') {
     const of = id(note.of);
     return of ? { kind: note.kind, of } : null;
+  }
+  if (note.kind === 'agent') {
+    const of = id(note.id);
+    const name = typeof note.name === 'string' ? peerPlain(note.name, PEER_AGENT_NAME_MAX) : '';
+    // A sentence that is longer than can be read whole is not cut to fit: it is no offer.
+    const whole = typeof note.sentence === 'string' ? peerPlain(note.sentence, PEER_AGENT_SENTENCE_MAX + 1) : '';
+    return of && name && whole && whole.length <= PEER_AGENT_SENTENCE_MAX ? { kind: 'agent', id: of, name, sentence: whole } : null;
+  }
+  if (note.kind === 'agent-yes' || note.kind === 'agent-no') {
+    const of = id(note.of);
+    return of ? { kind: note.kind, of } : null;
+  }
+  if (note.kind === 'look') {
+    const what = typeof note.what === 'string' ? peerPlain(note.what, PEER_LOOK_WHAT_MAX) : '';
+    const app = typeof note.app === 'string' ? peerPlain(note.app, PEER_LOOK_APP_MAX) : '';
+    return what ? { kind: 'look', what, app } : null;
   }
   if (note.kind === 'file-part') {
     const of = id(note.of);

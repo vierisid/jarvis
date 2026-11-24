@@ -63,7 +63,7 @@ import { peerLoginName } from '../peers/host.ts';
 import { ENGINE_TARGET_SAID, peerServerAddress } from '../peers/install.ts';
 import { PEER_READ_MS, engineErrorCode } from '../peers/link.ts';
 import type { PeerDecision, PeerItem, PeerLink, PeerPerson, PeerRequest, PeerSent } from '../peers/link.ts';
-import { PEER_FILE_WHAT_MAX, PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
+import { PEER_AGENT_SENTENCE_MAX, PEER_FILE_WHAT_MAX, PEER_LOOK_APP_MAX, PEER_LOOK_WHAT_MAX, PEER_OPTIONS_MAX, PEER_OPTION_MAX, PEER_ORG_MAX, peerNoteRead, peerNoteText, peerPlain } from '../peers/notes.ts';
 import type { PeerNote } from '../peers/notes.ts';
 import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
@@ -171,6 +171,17 @@ export interface NotchPeopleDeps {
      */
     act?: { signal: AbortSignal; step(step: NotchPeopleStep): Promise<'go' | 'stop'> };
   }) => Promise<{ ok: true; answer: string } | { ok: false }>;
+  /**
+   * The owner's agents (./agents.ts): which there are, to send one to
+   * somebody, and the making of one that somebody sent and the owner took
+   * on. Without it no agent is sent, and one that is offered cannot be taken.
+   */
+  agents?: { list(): { name: string; sentence: string }[]; take(sentence: string): boolean };
+  /**
+   * What the owner last circled on the screen and the notch still holds
+   * (./put.ts), or null. For "send this to Leo".
+   */
+  look?: () => { what: string; rows: string[][]; app: string } | null;
   /** Getting in: the engine put in place, and the server for whoever makes an organisation (src/peers/setup.ts). */
   setup?: PeerSetupLike;
   /**
@@ -1180,6 +1191,155 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     return null;
   }
 
+  // --- an agent, sent to somebody ---
+
+  /**
+   * "Send Tony to Leo", "share my agent Tony with Leo": one of the owner's
+   * agents, by its name, and for whom. `none`: an agent was asked for by a
+   * name that is none of theirs, and this is what to say. Null when the
+   * words are about no agent.
+   */
+  function agentShared(text: string): { person: PeerPerson; agent?: { name: string; sentence: string }; none?: NotchPart[] } | null {
+    if (!deps.agents) return null;
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').replace(new RegExp(`^${LEAD}`, 'iu'), '');
+    const verb = '(?:send|share|give|forward|pass|hand)';
+    for (const one of others().slice().sort((a, b) => b.name.length - a.name.length)) {
+      const first = one.name.split(' ')[0]!;
+      const alone = others().filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const them = `${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?`;
+        const found = new RegExp(`^${verb}\\s+${them}\\s+((?:my|the)\\s+agent\\s+)?(.+)$`, 'iu').exec(said) ?? new RegExp(`^${verb}\\s+((?:my|the)\\s+agent\\s+)?(.+?)\\s+(?:to|with)\\s+${them}$`, 'iu').exec(said);
+        if (!found) continue;
+        const called = found[2]!.trim().replace(/^(?:called|named)\s+/i, '');
+        const mine = deps.agents.list();
+        const agent = mine.find((each) => each.name.toLowerCase() === called.toLowerCase());
+        if (agent) return { person: one, agent };
+        // Only when an agent was asked for in so many words: anything else under that name may be a file.
+        if (!found[1]) return null;
+        return { person: one, none: mine.length ? ['You have no agent called ', em(cap(called)), '. You have ', em(mine.map((each) => each.name).join(', ')), '.'] : ['You have no agent to send yet.'] };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Sends somebody one of the owner's agents: its name and the sentence it
+   * was made from, and nothing else. Not how it was built here, not what it
+   * has run, and not what it is trusted with: taken on, it is built anew on
+   * their laptop and asks them first.
+   */
+  function shareAgent(to: PeerPerson, agent: { name: string; sentence: string }): void {
+    inbox.present('people-agent', async (stage) => {
+      const sentence = peerPlain(agent.sentence, PEER_AGENT_SENTENCE_MAX + 1);
+      if (sentence.length > PEER_AGENT_SENTENCE_MAX) { await stage.say([em(agent.name), ' is made from a sentence too long to send. Say it to ', em(to.name), ' instead.'], 3800, { mood: 'sorry' }); return; }
+      const went = await stage.fuse(['Sending ', em(agent.name), ' to ', em(to.name), ': ', beginning(sentence, 80), ...(sentence.length > 80 ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
+      if (went === 'lost') return;
+      const id = crypto.randomUUID();
+      // The sentence is for a contact who is not on a Pillow: they read it, and can say it to their own assistant.
+      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(`An agent of mine, ${agent.name}: ${sentence}`, { kind: 'agent', id, name: agent.name, sentence })));
+      if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
+      store.setMeta(`agent-out:${id}`, JSON.stringify({ peer: to.id, name: agent.name }));
+      await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you whether ', em(to.name), ' takes ', agent.name, ' on.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 3000, { mark: 'check' });
+    });
+  }
+
+  /** "Sam sends you Tony: Every Monday at 9:00, send Sam the numbers. Take Tony on?" */
+  function agentOffered(item: PeerItem, from: PeerPerson, note: { id: string; name: string; sentence: string }): void {
+    if (inbox.has(`people:agent:${note.id}`)) return;
+    const sentence = /[.?!…]$/.test(note.sentence) ? note.sentence : `${note.sentence}.`;
+    const says: NotchPart[] = [em(from.name), ' sends you ', em(note.name), ': ', sentence, ' Take ', note.name, ' on?'];
+    inbox.add({
+      id: `people:agent:${note.id}`, subject: `people:agent:${note.id}`, class: 'person', speaks: true,
+      title: () => [em(from.name), ' sends you an agent: ', note.name],
+      check: () => store.got(item.id)?.done !== true,
+      play: async (stage) => {
+        let yes: boolean;
+        // What it will do is read whole before it is taken on: on the line when it fits, on a sheet when it does not.
+        if (says.map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('').length <= NOTCH_PEOPLE_LINE_MAX + 40) {
+          const picked = await stage.choose(says, ['Take it on', 'Not now'], { who: from.name, mood: 'look' });
+          if (picked.act !== 'pick' || typeof picked.index !== 'number') return 'waits';
+          yes = picked.index === 0;
+        } else {
+          const first = await stage.offer([em(from.name), ' sends you an agent, ', em(note.name), '. Read what it does?'], 'read', { who: from.name, mood: 'look' });
+          if (first.act !== 'yes') return 'waits';
+          const id = stage.id();
+          stage.put({ id, kind: 'sheet', say: [em(note.name), ', from ', em(from.name), `. Take ${note.name} on?`], who: from.name, mood: 'look', stay: true, no: 'not now', yes: 'take on', whole: true,
+            blocks: [{ kind: 'paper', lines: [[sentence]] }, { kind: 'buttons', buttons: [{ id: 'no', label: 'Not now' }] }] });
+          const answer = await stage.answer(id, ['yes', 'no', 'button']);
+          if (answer.act === 'no') return 'waits';
+          yes = answer.act === 'yes';
+        }
+        // One that cannot be made here is not said yes to: the other side is told no.
+        const can = yes && !!deps.agents;
+        const told = await link.tell(item.from, peerNoteText(can ? `Yes, I took ${note.name} on.` : 'Not now.', { kind: can ? 'agent-yes' : 'agent-no', of: note.id }), { replyTo: item.id });
+        if (!told.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
+        store.done(item.id);
+        void link.seen(item.id);
+        if (!yes) { await stage.say(['Told ', em(from.name), ' not now.'], 2400, { who: from.name }); return 'settled'; }
+        if (!can) { await stage.say(['I cannot make agents on this laptop. Told ', em(from.name), ' not now.'], 3600, { mood: 'sorry', who: from.name }); return 'settled'; }
+        // Built here, anew, from the sentence that was just read: with its own name, and on the first rung.
+        await stage.say(['Told ', em(from.name), '. I build it here now. It asks you first, like every new agent.'], 3400, { mark: 'check', who: from.name });
+        if (!deps.agents!.take(note.sentence)) await stage.say(['I could not make an agent from that sentence.'], 3200, { mood: 'sorry' });
+        return 'settled';
+      },
+    });
+  }
+
+  /** How an agent that was sent was taken. */
+  function agentAnswered(id: string, yes: boolean, from: PeerPerson): void {
+    let sent: { peer?: unknown; name?: unknown } | null = null;
+    try { sent = JSON.parse(store.meta(`agent-out:${id}`) ?? 'null') as { peer?: unknown; name?: unknown } | null; } catch { sent = null; }
+    // An answer to an offer that was not made to this person is nothing.
+    if (!sent || sent.peer !== from.id || typeof sent.name !== 'string') return;
+    store.setMeta(`agent-out:${id}`, null);
+    const say: NotchPart[] = yes ? [em(from.name), ' took ', em(sent.name), ' on. On ', em(`${from.name}'s`), ' laptop it asks first, like every new agent.'] : [em(from.name), ' passed on ', em(sent.name), ' for now.'];
+    news(`people:agent-end:${id}`, say, say, { person: true, who: from.name, ms: 4400 });
+  }
+
+  /** "Send this to Leo", "show Leo what I circled": the thing the notch still holds from the screen, and for whom. */
+  function showed(text: string): PeerPerson | null {
+    const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').replace(new RegExp(`^${LEAD}`, 'iu'), '');
+    const it = "(?:this|that|it|these|those|them|what i (?:just )?(?:circled|showed you|marked)|what i am showing you|the thing i (?:just )?circled)";
+    const verb = '(?:send|show|share|forward|give|pass)';
+    for (const one of others().slice().sort((a, b) => b.name.length - a.name.length)) {
+      const first = one.name.split(' ')[0]!;
+      const alone = others().filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
+        const them = `${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?`;
+        if (new RegExp(`^${verb}\\s+${them}\\s+${it}$`, 'iu').test(said) || new RegExp(`^${verb}\\s+${it}\\s+(?:to|with)\\s+${them}$`, 'iu').test(said)) return one;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Shows somebody what the owner circled: what was read there, row by row,
+   * with a few words for what it is and the program it was in. Words only:
+   * no picture of the screen goes. It goes with the moment to take it back,
+   * and the owner hears when it was seen.
+   */
+  function sendLook(to: PeerPerson): void {
+    const held = deps.look?.() ?? null;
+    inbox.present('people-look', async (stage) => {
+      if (!held) { await stage.say(['Show me the thing first. Circle it, then say send this to ', em(to.name), '.'], 3800, { mood: 'confused' }); return; }
+      // As it was read, row by row, every cell cleaned: what cannot be seen does not travel.
+      const text = held.rows.map((cells) => cells.map((cell) => peerPlain(cell, NOTCH_PEOPLE_TEXT_MAX)).filter(Boolean).join(' | ')).filter(Boolean).join('\n');
+      const what = peerPlain(held.what, PEER_LOOK_WHAT_MAX);
+      const app = peerPlain(held.app, PEER_LOOK_APP_MAX);
+      // What goes is what was read, whole. Too much to be read on the other notch is not cut: it is said.
+      if (!text || !what) { await stage.say(['I could not read what you circled. Show me again.'], 3400, { mood: 'sorry' }); return; }
+      if (text.length > NOTCH_PEOPLE_TEXT_MAX) { await stage.say(['That is more than I can show ', em(to.name), ' in one go. Circle less of it.'], 3800, { mood: 'sorry' }); return; }
+      const went = await stage.fuse(['Showing ', em(to.name), ' what you circled', ...(app ? [' in ', app] : []), ': ', em(what), '…'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
+      if (went === 'lost') return;
+      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(text, { kind: 'look', what, app })));
+      if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
+      store.sent({ id: sent.id, to: to.id, kind: 'tell', words: what });
+      await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
+    });
+  }
+
   /** The rule for one person, when it is said: whose, and what it is to be. */
   function ruled(text: string): { person: PeerPerson; to: 'answers' | 'asks' } | null {
     const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '').replace(new RegExp(`^${LEAD}`, 'iu'), '');
@@ -1318,6 +1478,15 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
       return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
     }
+    // An agent of the owner's own, sent to somebody: "send Tony to Leo". Before a file is looked for under that name.
+    const agent = agentShared(text);
+    if (agent) {
+      if (agent.agent) { const one = agent.agent; return { did: `Send ${agent.person.name} the agent ${one.name}.`, run: () => shareAgent(agent.person, one) }; }
+      return { did: 'Say which agents there are.', run: () => { inbox.present('people-agent', (stage) => stage.say(agent.none!, 3800, { mood: 'confused' })); } };
+    }
+    // What was circled on the screen, shown to somebody: "send this to Leo".
+    const seen = showed(text);
+    if (seen) return { did: `Show ${seen.name} what was circled.`, run: () => sendLook(seen) };
     // The rule for one person, said: "let Leo have answers without asking", "ask me every time for Leo".
     const rule = ruled(text);
     if (rule) {
@@ -1373,14 +1542,24 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     });
   }
 
-  function message(item: PeerItem, from: PeerPerson, words: string): void {
+  function message(item: PeerItem, from: PeerPerson, words: string, look?: { what: string; app: string }): void {
     const shown = peerPlain(words, NOTCH_PEOPLE_TEXT_MAX);
+    // Something off their screen: said as that, and kept row by row as it was read there.
+    const rows = look ? peopleLines(words, NOTCH_PEOPLE_TEXT_MAX) : [];
+    const shows: NotchPart[] = look ? [em(from.name), ' shows you ', em(look.what), ...(look.app ? [' from ', look.app] : [])] : [];
     inbox.add({
       id: `people:${item.id}`, subject: `people:${item.id}`, class: 'person', speaks: true,
-      title: () => [em(from.name), ': ', shown.length > 60 ? `${shown.slice(0, 59)}…` : shown],
+      title: () => (look ? shows : [em(from.name), ': ', shown.length > 60 ? `${shown.slice(0, 59)}…` : shown]),
       check: () => store.got(item.id)?.done !== true,
       play: async (stage) => {
-        if (shown.length > NOTCH_PEOPLE_LINE_MAX) {
+        if (look && (rows.length > 1 || shown.length > NOTCH_PEOPLE_LINE_MAX)) {
+          const first = await stage.offer([...shows, '. Look at it?'], 'look', { who: from.name, mood: 'look' });
+          if (first.act !== 'yes') return 'waits';
+          await stage.sheet(shows, [{ kind: 'paper', lines: rows.map((row) => [row]) }], { who: from.name });
+        } else if (look) {
+          const answer = await stage.offer([...shows, ': ', shown], 'ok', { who: from.name, mood: 'look' });
+          if (answer.act !== 'yes') return 'waits';
+        } else if (shown.length > NOTCH_PEOPLE_LINE_MAX) {
           const first = await stage.offer([em(from.name), ' wrote to you. Read it?'], 'read', { who: from.name, mood: 'look' });
           if (first.act !== 'yes') return 'waits';
           await stage.sheet([em(from.name)], [{ kind: 'paper', lines: [[shown]] }], { who: from.name });
@@ -2012,6 +2191,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         else { store.done(item.id); void link.seen(item.id); }
         continue;
       }
+      if (note?.kind === 'look') { message(item, from, words, note); continue; }
+      if (note?.kind === 'agent') { agentOffered(item, from, note); continue; }
+      if (note?.kind === 'agent-yes' || note?.kind === 'agent-no') { agentAnswered(note.of, note.kind === 'agent-yes', from); store.done(item.id); void link.seen(item.id); continue; }
       if (note && note.kind !== 'ask') {
         answered(item, from, note);
         store.done(item.id);

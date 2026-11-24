@@ -492,6 +492,10 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // A time that is free for two people: the owner's calendar, read the way the mail layer reads it. Asked
       // for when it is needed, so it does not matter that the mail layer is made after this.
       time: { calendar: (from: number, to: number) => (mail ? mail.calendar(from, to) : Promise.resolve(null)) },
+      // The owner's agents, to send one to somebody, and to make one that somebody sent and the owner took on.
+      agents: { list: () => agents?.list() ?? [], take: (sentence: string) => agents?.take(sentence) ?? false },
+      // What was last circled and is still held, for "send this to Leo". Asked for when it is said: the part that holds it is made after this.
+      look: () => { const held = put?.held() ?? null; return held ? { what: held.what, rows: held.rows, app: held.app } : null; },
       // A file that arrived is held by the notch like one that was dropped on it, with the same card.
       ...(deps.peers.files ? { files: { ...deps.peers.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => drop?.arrived(file) ?? false } } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),

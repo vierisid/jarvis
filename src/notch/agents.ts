@@ -321,6 +321,14 @@ export interface NotchAgents {
   adopt(since: number): void;
   /** The clock: runs that have ended are counted, told of, and the next rung is offered. Tests call it by hand. */
   tick(): void;
+  /** The agents there are: what each is called, and the sentence it was made from. */
+  list(): { name: string; sentence: string }[];
+  /**
+   * Makes an agent from a sentence that was said yes to already, on the line
+   * that offered it (an agent somebody sent). It is not asked about again.
+   * False when nothing can be made of it.
+   */
+  take(sentence: string): boolean;
   /** The agents made since a moment, for the list of what was done (./today.ts). One that is switched on can be taken back. */
   done(since: number): { id: string; at: number; text: string; small: string; undo: boolean }[];
   /**
@@ -387,7 +395,13 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     return NOTCH_AGENT_NAMES.find((name) => !taken.has(name)) ?? `Agent ${taken.size + 1}`;
   };
 
-  function make(asked: AgentSentence): void {
+  /**
+   * `agreed`: the sentence was read and said yes to already, on another
+   * line (an agent that somebody sent, ./people.ts). It is not read back and
+   * asked about a second time. Everything else is as for any agent: built,
+   * switched on, named, on the first rung.
+   */
+  function make(asked: AgentSentence, agreed = false): void {
     if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return; }
     const sentence: AgentSentence = { ...asked };
     const id = `agent-make-${++n}`;
@@ -399,8 +413,8 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       title: line,
       play: async (stage) => {
         const lineId = stage.id();
-        stage.put({ id: lineId, kind: 'offer', say: line(), yes: 'make agent', mood: 'look', fold: 0 });
-        for (;;) {
+        if (!agreed) stage.put({ id: lineId, kind: 'offer', say: line(), yes: 'make agent', mood: 'look', fold: 0 });
+        for (; !agreed;) {
           const answer = await stage.answer(lineId, ['yes', 'no', 'fold', 'word']);
           if (answer.act === 'word') {
             const value = (answer.value ?? '').trim();
@@ -764,6 +778,15 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     open,
     adopt,
     tick,
+    list: () => store.list().map((agent) => ({ name: agent.name, sentence: agent.sentence })),
+    take(sentence) {
+      if (stopped) return false;
+      // Read as any sentence is. One that does not read as a schedule or as "an agent that" is taken as it stands.
+      const asked = agentSentence(sentence) ?? { when: null, job: sentence.trim().replace(/[.!?\s]+$/, '') };
+      if (!asked.job) return false;
+      make(asked, true);
+      return true;
+    },
     done(since) {
       return store.list().filter((agent) => agent.madeAt >= since).flatMap((agent) => {
         const seen = deps.workflows.look(agent.flowId);

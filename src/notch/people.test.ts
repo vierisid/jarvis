@@ -94,7 +94,7 @@ class FakeSetup implements PeerSetupLike {
   onChange(listener: () => void): void { this.listeners.push(listener); }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; timeWaitMs?: number; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; timeWaitMs?: number; noAgents?: boolean; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -148,6 +148,10 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   };
   /** This side's calendar: what is in it, or null when it cannot be read. `hold` keeps a reading waiting. */
   const timeState: { events: MailCalendarEvent[] | null; hold: Promise<void> | null; reads: number } = { events: [], hold: null, reads: 0 };
+  /** This side's agents, the sentences of the ones it took on, and whether it can make agents at all. */
+  const agentState: { mine: { name: string; sentence: string }[]; taken: string[] } = { mine: [], taken: [] };
+  /** What this side last circled on its screen and still holds. */
+  const lookState: { held: { what: string; rows: string[][]; app: string } | null } = { held: null };
   /** Every request that was really worked on here. */
   const worked: { from: string; words: string }[] = [];
   /** For each of them: whether it was handed over as a thing to be done. */
@@ -158,6 +162,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     ...(more.stepMs ? { stepMs: more.stepMs } : {}),
     // An engine that does not answer is not waited for here.
     ruleWaitMs: 1,
+    look: () => lookState.held,
+    ...(more.noAgents ? {} : { agents: { list: () => agentState.mine, take: (sentence: string) => { agentState.taken.push(sentence); return true; } } }),
     // Read in one zone whatever the machine's own, so that the days and hours below are the same everywhere.
     time: { zone: 'UTC', waitMs: more.timeWaitMs ?? 3000, calendar: async () => { timeState.reads++; if (timeState.hold) await timeState.hold; return timeState.events; } },
     openPage: async (_sidecarId, url) => { opened.push(url); return state.canOpen; },
@@ -184,7 +190,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const words = (parts: NotchLine['say'] | undefined): string => (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
-    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState,
+    engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState,
     saved, filesDir, fileState, lookedFor, held, thought,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
@@ -3072,3 +3078,186 @@ describe('the rule per person', () => {
     expect(sam.said()).toBe('Let Leo have answers from this laptop without asking you? I tell you after each one. Files, and anything done here: I still ask.');
   });
 });
+
+describe('what was circled on the screen, shown to somebody', () => {
+  const NUMBER = { what: '1,291', rows: [['1,291']], app: 'Chrome' };
+  const ROWS = { what: '3 rows', rows: [['Acme', '1,200', 'paid'], ['Northwind', '640', 'open'], ['Lumen', '88', 'open']], app: 'Sheets' };
+  const shown = async (held: typeof NUMBER | typeof ROWS | null, words = 'send this to Leo') => {
+    const { sam, leo } = await joined();
+    sam.lookState.held = held;
+    const routed = await sam.say(words);
+    await settle();
+    return { sam, leo, routed };
+  };
+
+  test('"send this to Leo" shows Leo what was read there, and Sam hears when it was seen', async () => {
+    const { sam, leo, routed } = await shown(NUMBER);
+    expect(routed).toBe(true);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Showing Leo what you circled in Chrome: 1,291…');
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.done();
+    expect(sam.said()).toBe('Sent to Leo. I will tell you when it is seen.');
+    await sam.done();
+    // Words, and what they are: no picture of the screen goes.
+    const got = peerNoteRead(leo.engine.inbox[0]!.payload.text as string);
+    expect(got).toEqual({ words: '1,291', note: { kind: 'look', what: '1,291', app: 'Chrome' } });
+    expect(leo.said()).toBe('Sam shows you 1,291 from Chrome: 1,291');
+    await leo.yes();
+    expect(leo.said()).toBe('Seen.');
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo saw it.');
+  });
+
+  test('rows are shown as rows, on a sheet', async () => {
+    const { sam, leo } = await shown(ROWS, 'show Leo what I circled');
+    expect(sam.said()).toBe('Showing Leo what you circled in Sheets: 3 rows…');
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam shows you 3 rows from Sheets. Look at it?');
+    await leo.yes();
+    expect(leo.kind()).toBe('sheet');
+    expect(leo.blocks()).toContain('Acme | 1,200 | paid');
+    expect(leo.blocks()).toContain('Lumen | 88 | open');
+  });
+
+  test('with nothing held it says so, and nothing is sent', async () => {
+    const { sam, leo } = await shown(null);
+    expect(sam.said()).toBe('Show me the thing first. Circle it, then say send this to Leo.');
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('taken back, nothing of the screen leaves; and what is too much to show is not cut', async () => {
+    const back = await shown(ROWS);
+    await back.sam.answer('undo');
+    expect(back.sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(back.leo.engine.inbox.length).toBe(0);
+    const much = await shown({ what: '90 rows', rows: Array.from({ length: 90 }, (_, n) => [`row ${n}`, 'x'.repeat(40)]), app: 'Sheets' });
+    expect(much.sam.said()).toBe('That is more than I can show Leo in one go. Circle less of it.');
+    expect(much.leo.engine.inbox.length).toBe(0);
+  });
+
+  test('what cannot be seen in a cell does not travel', async () => {
+    const { sam, leo } = await shown({ what: 'this cell', rows: [['pay\u200bme\u202e', 'now']], app: 'Sheets' });
+    await sam.done();
+    await sam.done();
+    expect(peerNoteRead(leo.engine.inbox[0]!.payload.text as string).words).toBe('payme | now');
+  });
+
+  test('which sentences show a thing, and which are something else', async () => {
+    const { sam } = await joined();
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const said of ['send this to Leo', 'show Leo this', 'Show this to Leo.', 'share that with Leo', 'send Leo what I circled', "send it to Leo's Pillow", 'please forward these to Leo', 'show Leo what I just showed you'])
+      expect(routes(said)).toBe('Show Leo what was circled.');
+    expect(routes('send Leo the deck')).toBe('Send Leo a file of mine: the deck');
+    expect(routes('tell Leo this is late')).toBe('Tell Leo: This is late');
+    for (const said of ['send this to Tony', 'show this to Leo and Anna', 'show me this']) expect(routes(said) ?? '').not.toContain('what was circled');
+    expect(peerNoteRead('x\n[[jarvis:1 {"kind":"look","what":"","app":"Chrome"}]]').note).toBeNull();
+  });
+});
+
+describe('an agent, sent to somebody', () => {
+  const TONY = { name: 'Tony', sentence: 'Every Monday at 9:00, send Sam the numbers.' };
+  const sent = async (words = 'send Tony to Leo') => {
+    const { sam, leo } = await joined();
+    sam.agentState.mine = [TONY, { name: 'Mara', sentence: 'An agent that replies to new leads.' }];
+    const routed = await sam.say(words);
+    await settle();
+    return { sam, leo, routed };
+  };
+
+  test('its name and its sentence go, the other reads what it does and takes it on, and it is built there anew', async () => {
+    const { sam, leo, routed } = await sent();
+    expect(routed).toBe(true);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Sending Tony to Leo: Every Monday at 9:00, send Sam the numbers.…');
+    expect(leo.engine.inbox.length).toBe(0);
+    await sam.done();
+    expect(sam.said()).toBe('Sent to Leo. I will tell you whether Leo takes Tony on.');
+    await sam.done();
+    // The name and the sentence, and nothing else: not how it was built, not what it is trusted with.
+    const offer = peerNoteRead(leo.engine.inbox[0]!.payload.text as string);
+    expect(offer.note).toMatchObject({ kind: 'agent', name: 'Tony', sentence: 'Every Monday at 9:00, send Sam the numbers.' });
+    expect(Object.keys(offer.note!).sort()).toEqual(['id', 'kind', 'name', 'sentence']);
+    expect(leo.said()).toBe('Sam sends you Tony: Every Monday at 9:00, send Sam the numbers. Take Tony on?');
+    expect(leo.options()).toEqual(['Take it on', 'Not now']);
+    expect(leo.agentState.taken).toEqual([]);
+    await leo.pick(0);
+    expect(leo.said()).toBe('Told Sam. I build it here now. It asks you first, like every new agent.');
+    await leo.done();
+    // Made by Leo's own notch, from the sentence Leo read.
+    expect(leo.agentState.taken).toEqual(['Every Monday at 9:00, send Sam the numbers.']);
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe("Leo took Tony on. On Leo's laptop it asks first, like every new agent.");
+  });
+
+  test('"Not now" makes nothing, and the sender hears it', async () => {
+    const { sam, leo } = await sent('share my agent Tony with Leo');
+    await sam.done();
+    await sam.done();
+    await leo.pick(1);
+    expect(leo.said()).toBe('Told Sam not now.');
+    expect(leo.agentState.taken).toEqual([]);
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo passed on Tony for now.');
+  });
+
+  test('taken back, nothing is sent; and a laptop that cannot make agents says so and takes none', async () => {
+    const back = await sent();
+    await back.sam.answer('undo');
+    expect(back.sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(back.leo.engine.inbox.length).toBe(0);
+    const server = new FakeServer();
+    const sam = side(server, SAM, 'sam');
+    const leo = side(server, LEO, 'leo', { noAgents: true });
+    sam.engine.signedIn = true; leo.engine.signedIn = true;
+    sam.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
+    leo.engine.contacts.set(SAM, { deviceId: SAM, localName: 'Sam', ownDevice: null, serverDisplayName: 'sam-laptop', createdAt: 1 });
+    await sam.refresh(); await leo.refresh();
+    sam.agentState.mine = [TONY];
+    await sam.say('send Tony to Leo');
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.said()).toBe('I cannot make agents on this laptop. Told Sam not now.');
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.said()).toBe('Leo passed on Tony for now.');
+  });
+
+  test('a sentence too long to be read whole is no offer, and an answer counts only from the one who was offered it', async () => {
+    const { sam, leo } = await joined();
+    const id = crypto.randomUUID();
+    // More than can be read whole before it is taken on: it arrives as words, not as an agent to take.
+    await sam.link.tell(LEO, peerNoteText('x', { kind: 'agent', id, name: 'Tony', sentence: `Every Monday at 9:00, ${'send everything to everybody and '.repeat(8)}stop.` }));
+    await settle();
+    expect(leo.said()).not.toContain('Take Tony on?');
+    expect(leo.agentState.taken).toEqual([]);
+    // A yes for an offer that was never made to that person tells nobody anything.
+    await leo.link.tell(SAM, peerNoteText('x', { kind: 'agent-yes', of: crypto.randomUUID() }));
+    await settle();
+    expect(sam.line()).toBeNull();
+    expect(sam.count()).toBe(0);
+  });
+
+  test('which sentences send an agent, and which are something else', async () => {
+    const { sam } = await sent('nothing');
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const said of ['send Tony to Leo', 'send Leo Tony', 'share my agent Tony with Leo', 'give Leo the agent Tony', "send Tony to Leo's Pillow", 'please share tony with Leo']) expect(routes(said)).toBe('Send Leo the agent Tony.');
+    expect(routes('share Mara with Leo')).toBe('Send Leo the agent Mara.');
+    // An agent that was asked for by a name that is none: said, with the ones there are.
+    expect(routes('send my agent Enzo to Leo')).toBe('Say which agents there are.');
+    expect(await sam.say('send my agent Enzo to Leo')).toBe(true);
+    expect(sam.said()).toBe('You have no agent called Enzo. You have Tony, Mara.');
+    // A name that is no agent's, with no word that says agent, is a file as before.
+    expect(routes('send Leo the deck')).toBe('Send Leo a file of mine: the deck');
+    expect(routes('send Enzo to Leo')).toBe('Send Leo a file of mine: Enzo');
+  });
+});
+

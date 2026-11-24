@@ -651,6 +651,50 @@ told after: "I answered Leo by myself: What changed in the last deck. Read what 
   Settings.
 - Run against the real engine in the rehearsal. Not run on two people's machines.
 
+## What was circled, shown to somebody (24 November)
+
+The owner: "build I6, i13 and i14". The prototype: "Sending 3 rows to Leo…", and on the other
+notch "Sam shows you 3 rows from Sheets: ...".
+
+Circle something, then say "send this to Leo" or "show Leo what I circled" while the notch still
+holds it (ninety seconds, as for "put it here"). Leo's notch: "Sam shows you 1,291 from Chrome:
+1,291". Several rows are read on a sheet, row by row.
+
+98. **What goes is what was read, and words only.** The rows the notch holds from the look, a few
+    words for what it is, and the program's name. No picture of the screen, and nothing of the
+    window but its program.
+99. **It goes whole or not at all.** More than can be read on the other notch is not cut: the
+    owner is told to circle less.
+100. **What cannot be seen in a cell does not travel**, as for every text that crosses.
+101. **With nothing held it says so.** It does not send the last thing that was held before.
+102. **Seen comes back** as for a message, because it is one.
+
+## An agent, sent to somebody (24 November)
+
+The prototype: "Sam sends you Tony: Every Monday send Sam the numbers. Take Tony on?"
+
+"Send Tony to Leo", "share my agent Tony with Leo". Leo's notch shows the sentence the agent was
+made from. On "Take it on" Leo's own notch builds it, as it builds any agent.
+
+103. **Its name and its sentence go, and nothing else.** Not the workflow that was built from it,
+    not what it has run, and not the rung it stands on.
+104. **What it does is read whole before it is taken on.** A sentence longer than can be read
+    whole is no offer: it arrives as words.
+105. **Taken on, it is built anew, by the taker's own notch, and asks first.** The yes on the
+    line is the yes: the sentence is not read back a second time. Everything else is as for an
+    agent that was said: one sentence, one agent; built, switched on, named there.
+106. **A laptop that cannot make agents takes none**, and the sender hears "passed on".
+107. **An answer counts only from the one it was offered to.**
+108. **An agent is asked for by its name.** "Send Enzo to Leo", with no agent called Enzo, looks
+    for a file. "Send my agent Enzo to Leo" says which agents there are.
+
+### Where these two stop
+
+- What was circled goes as words. A chart or a picture that was circled cannot be shown yet.
+- The other side cannot put what it was shown somewhere ("put it here as a table"): it reads it.
+- An agent that needs something set up on the taker's side (a connection, an account) is built
+  and waits switched off there, as any agent would.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of
