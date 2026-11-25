@@ -253,8 +253,12 @@ export interface NotchPeopleFiles {
   send(to: PeerPerson, file: { name: string; bytes: Uint8Array }): void;
   /** Asks a person's Pillow for a file of theirs, in words. */
   want(to: PeerPerson, what: string): void;
-  /** Offers a person a file of the owner's own that was named in words: "send Leo the deck". */
-  give(to: PeerPerson, what: string): void;
+  /** Offers a file of the owner's own that was named in words, to one person or to several: "send Leo and Anna the deck". */
+  give(to: PeerPerson[], what: string): void;
+  /** The clock: an asking for a file that nobody answered since `before` is said, once. */
+  late(before: number): void;
+  /** Somebody took back what they asked for (`id` is the asking's): it leaves the notch. True when it was one of theirs that still waited. */
+  unwant(id: string, from: PeerPerson): boolean;
   /** Takes in a note about a file that arrived. */
   note(item: PeerItem, from: PeerPerson, note: PeerFileNote, words: string): Promise<void>;
   /** After the brain was started anew: what was on its way goes on. */
@@ -522,6 +526,85 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
     });
   }
 
+  /** "Leo and Anna", "Leo, Anna and Sam": several people, as they are said. */
+  const listed = (people: PeerPerson[]): NotchPart[] => people.flatMap((one, at): NotchPart[] => [...(at === 0 ? [] : [at === people.length - 1 ? ' and ' : ', ']), em(one.name)]);
+
+  /**
+   * Offers one file to several people at once: "send Leo and Anna the
+   * deck". One line says it, with one moment to take it back for all of
+   * them. Then each gets an offer of their own, and takes it or not by
+   * themselves: what one does changes nothing for another.
+   */
+  async function offerMany(stage: NotchStage, tos: PeerPerson[], file: { name: string; bytes: Uint8Array }, where: string): Promise<void> {
+    const name = peerFileName(file.name);
+    const size = file.bytes.length;
+    if (size < 1) { await stage.say([em(name), ' is empty.'], 2600); return; }
+    if (size > PEER_FILE_MAX) { await stage.say([em(name), ` is larger than I can send yet: ${Math.round(PEER_FILE_MAX / (1024 * 1024))} MB is the most.`], 3600, { mood: 'sorry' }); return; }
+    const went = await stage.fuse(['Offering ', ...listed(tos), ' the file ', em(name), `, ${where}, ${fileSize(size)}…`], NOTCH_FILE_PICKED_FUSE_MS, { mood: 'work' });
+    if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
+    if (went === 'lost') return;
+    const sha = createHash('sha256').update(file.bytes).digest('hex');
+    const parts = peerFileParts(size);
+    const reached: PeerPerson[] = [];
+    const missed: PeerPerson[] = [];
+    for (const to of tos) {
+      const id = crypto.randomUUID();
+      try {
+        mkdirSync(folder(id), { recursive: true, mode: 0o700 });
+        writeFileSync(join(folder(id), 'whole'), file.bytes, { mode: 0o600 });
+      } catch { missed.push(to); continue; }
+      store.file({ id, dir: 'out', peer: to.id, name, size, parts, sha });
+      const sent = await link.tell(to.id, peerNoteText(`A file for you: ${name}, ${fileSize(size)}. It comes when you take it on your ${NOTCH_NAME}.`, { kind: 'file', id, name, size, parts, sha }));
+      if (!sent.ok) { store.fileState(id, 'lost', ['offered']); clear(id); missed.push(to); continue; }
+      reached.push(to);
+    }
+    // Who it was offered to, and who it could not be: never "sent to all" when it was not.
+    if (reached.length === 0) { await stage.say(['It could not be offered to anybody now.'], 3400, { mood: 'sorry' }); return; }
+    await stage.say(missed.length === 0 ? ['Offered to ', ...listed(reached), '. It goes to each of them when they take it.']
+      : ['Offered to ', ...listed(reached), '. It could not be offered to ', ...listed(missed), ' now.'], 3800, missed.length === 0 ? { mark: 'check' } : { mood: 'sorry' });
+  }
+
+  /**
+   * An asking for a file that nobody answered: said once, with what can be
+   * done about it. Tell and ask have had this from the start. The asking
+   * itself waits as long as it takes: only the silence is said.
+   */
+  function late(before: number): void {
+    for (const row of store.openWants('out')) {
+      if (row.state !== 'open' || row.at > before || store.meta(`want-late:${row.id}`) !== null) continue;
+      const to = deps.person(row.peer);
+      if (!to) continue;
+      store.setMeta(`want-late:${row.id}`, '1');
+      inbox.add({
+        id: `people:want-late:${row.id}`, subject: `people:want-late:${row.id}`, class: 'rest', speaks: true,
+        title: () => [em(to.name), ' has not answered about ', row.what, '.'],
+        check: () => store.wantOf(row.id)?.state === 'open',
+        play: async (stage) => {
+          const answer = await stage.choose([em(to.name), ' has not answered about ', em(row.what), '. Ask again, or take it back?'], ['Ask again', 'Wait', 'Take it back'], { who: to.name });
+          if (answer.act !== 'pick') return 'waits';
+          // "Wait" is an answer: it is not brought up again.
+          if (answer.index === 1) { await stage.say(['It waits. I will tell you when ', em(to.name), ' answers.'], 3000); return 'settled'; }
+          // Taken back there first, also when it is asked again: the same thing is not on their notch twice.
+          const back = await link.tell(to.id, peerNoteText('Taken back.', { kind: 'back', of: row.id }));
+          if (!back.ok) { await stage.say(sorry(back), 3200, { mood: 'sorry' }); return 'waits'; }
+          store.wantState(row.id, 'no', ['open']);
+          if (answer.index === 0) { inbox.after(() => want(to, row.what)); return 'settled'; }
+          await stage.say(['Taken back. ', em(to.name), ' will not be asked.'], 2800);
+          return 'settled';
+        },
+      });
+    }
+  }
+
+  /** Somebody took back what they asked for. Only the one who asked can, and only while it still waits. */
+  function unwant(id: string, from: PeerPerson): boolean {
+    const row = store.wantOf(id);
+    if (!row || row.dir !== 'in' || row.peer !== from.id || !store.wantState(id, 'no', ['open', 'show'])) return false;
+    if (row.item) { store.done(row.item); void link.seen(row.item); }
+    if (inbox.remove(`people:want:${id}`)) deps.news(`people:want-back:${id}`, [em(from.name), ' took it back.'], { who: from.name });
+    return true;
+  }
+
   /**
    * "Send Leo the deck": a file of the owner's own, named in words. It is
    * looked for on this laptop as a file somebody asks for is, and offered as
@@ -530,9 +613,12 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
    * from where. Two or three that may be meant are put up to pick from:
    * that is the answer to "which", not a second question.
    */
-  function give(to: PeerPerson, what: string): void {
+  function give(tos: PeerPerson[], what: string): void {
+    const to = tos[0];
+    if (!to) return;
+    const many = tos.length > 1;
     inbox.present('people-give', async (stage) => {
-      const drop: NotchPart[] = ['Drop it on me, and pick ', em(`Send to ${to.name}`), '.'];
+      const drop: NotchPart[] = many ? ['Drop it on me, and send it to each of them.'] : ['Drop it on me, and pick ', em(`Send to ${to.name}`), '.'];
       if (!deps.find) { await stage.say(['I cannot look through the files on this laptop right now.'], 3400, { mood: 'sorry' }); return; }
       const line = stage.id();
       const working = (say: NotchPart[]): void => { stage.put({ id: line, kind: 'work', say, steps: 0, done: 0, mood: 'work', who: to.name }); };
@@ -552,17 +638,18 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
         working(['Taking ', em(one.name), ' from its folder…']);
         const bytes = deps.open ? await deps.open(one.place, one.name, one.dir).catch(() => null) : null;
         if (!bytes || bytes.length < 1) { await stage.say(['I could not take ', em(one.name), ' from its folder. ', ...drop], 4600, { mood: 'sorry' }); return; }
-        await offer(stage, to, { name: one.name, bytes }, { where: fileWhere(one) });
+        if (many) await offerMany(stage, tos, { name: one.name, bytes }, fileWhere(one));
+        else await offer(stage, to, { name: one.name, bytes }, { where: fileWhere(one) });
       };
       const { all, picks } = looked;
       if (picks.length === 1) { await sendIt(picks[0]!); return; }
       if (picks.length > 1) {
         const sheet = stage.id();
         stage.put({
-          id: sheet, kind: 'sheet', say: ['Which one goes to ', em(to.name), '?'], who: to.name, mood: 'look', stay: true, no: 'not now',
+          id: sheet, kind: 'sheet', say: ['Which one goes to ', ...listed(tos), '?'], who: to.name, mood: 'look', stay: true, no: 'not now',
           blocks: [
             ...picks.map((one, at): NotchBlock => ({ kind: 'row', id: `pick${at}`, go: true, lead: KIND[one.kind] ?? 'File', say: [one.name], small: cap(`${fileWhere(one)}, changed ${fileWhen(one.changed, now())}, ${fileSize(one.size)}`) })),
-            { kind: 'note', say: ['One file is offered to ', em(to.name), ': the one you pick.'] },
+            { kind: 'note', say: ['One file is offered to ', ...listed(tos), ': the one you pick.'] },
             { kind: 'buttons', buttons: [{ id: 'none', label: 'None of these' }] },
           ],
         });
@@ -711,7 +798,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
       if (!row || row.dir !== 'in' || row.peer !== item.from || row.state !== 'offered') { await settle(); return; }
       // It answers something this machine asked of them, and that is still open: the asking was the yes.
       const asked = got.want ? store.wantOf(got.want) : null;
-      if (asked && asked.dir === 'out' && asked.peer === item.from && asked.state === 'open' && await take(row, from)) { store.wantState(asked.id, 'done', ['open']); return; }
+      if (asked && asked.dir === 'out' && asked.peer === item.from && asked.state === 'open' && await take(row, from)) { store.wantState(asked.id, 'done', ['open']); inbox.remove(`people:want-late:${asked.id}`); return; }
       if (!inbox.has(`people:file:${got.id}`)) ask(got.id);
       return;
     }
@@ -726,6 +813,8 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
     if (got.kind === 'file-want-no') {
       const asked = store.wantOf(got.of);
       if (asked && asked.dir === 'out' && asked.peer === item.from && store.wantState(asked.id, 'no', ['open'])) {
+        // What was said about its silence is over with it.
+        inbox.remove(`people:want-late:${asked.id}`);
         deps.news(`people:want-no:${asked.id}`, [em(from.name), ' said no. Nothing left ', em(`${from.name}'s`), ' laptop.'], { who: from.name });
       }
       await settle();
@@ -760,7 +849,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
   }
 
   return {
-    send, want, give, note, restore,
+    send, want, give, late, unwant, note, restore,
     idle: async () => { while (pumping.size) await Promise.all([...pumping.values()]); },
   };
 }

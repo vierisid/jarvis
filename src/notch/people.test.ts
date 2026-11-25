@@ -2121,6 +2121,156 @@ describe('asking for a file from somebody else\'s laptop', () => {
     await crossing(sam, leo);
     expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
   });
+
+  test('no answer in ten minutes: told once, and "take it back" takes the asking off their notch', async () => {
+    const { server, sam, leo } = await asked();
+    // Leo saw it and put it aside.
+    await leo.no();
+    expect(leo.count()).toBe(1);
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe('Leo has not answered about the Q3 numbers. Ask again, or take it back?');
+    expect(sam.line()).toMatchObject({ options: ['Ask again', 'Wait', 'Take it back'] });
+    await sam.pick(2);
+    expect(sam.said()).toBe('Taken back. Leo will not be asked.');
+    await leo.people.look();
+    await settle();
+    expect(leo.count()).toBe(0);
+    expect(leo.said()).toBe('Sam took it back.');
+    // And it is not told a second time.
+    await sam.done();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    // What was taken back is answered by nothing: a late yes on Leo's side has nothing to send.
+    expect(leo.store.openWants('in')).toEqual([]);
+    expect(sam.store.openWants('out')).toEqual([]);
+  });
+
+  test('"wait" leaves it asked, it is not brought up again, and the file still arrives', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.no();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    await sam.pick(1);
+    expect(sam.said()).toBe('It waits. I will tell you when Leo answers.');
+    await sam.done();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS * 3;
+    await sam.people.tick();
+    await settle();
+    expect(sam.line()).toBeNull();
+    // Nothing was said to Leo about it, and his yes still sends it.
+    expect(leo.everShown()).not.toContain('took it back');
+    await leo.tap();
+    expect(leo.said()).toStartWith('Sam asks for the Q3 numbers.');
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
+  });
+
+  test('"ask again" takes the first asking off their notch and asks once more: one asking stands there, not two', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.no();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    await sam.pick(0);
+    expect(sam.said()).toBe("Asking Leo's Pillow for the Q3 numbers. Leo must say yes there.");
+    await sam.done();
+    await sam.done();
+    await leo.people.look();
+    await settle();
+    expect(leo.store.openWants('in').length).toBe(1);
+    expect(sam.store.openWants('out').length).toBe(1);
+    // The one that stands is the new one, and a yes to it sends the file.
+    expect(leo.everShown()).toContain(' took it back.');
+    for (let step = 0; step < 4 && !leo.said().startsWith('Sam asks for'); step++) { if (leo.line()) await leo.done(); else await leo.tap(); }
+    expect(leo.said()).toStartWith('Sam asks for the Q3 numbers.');
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
+  });
+
+  test('an asking that was answered in time is not brought up, and one that is answered while it is told leaves the notch', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.pick(2);
+    await leo.done();
+    await sam.people.look();
+    await settle();
+    await sam.done();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    expect(sam.everShown()).not.toContain('has not answered');
+    // Another one, told as late, and then answered with a no before the owner said anything.
+    const second = await asked();
+    await second.leo.no();
+    second.server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await second.sam.people.tick();
+    await settle();
+    await second.sam.no();
+    expect(second.sam.count()).toBe(1);
+    await second.leo.tap();
+    await second.leo.pick(2);
+    await second.leo.done();
+    await second.sam.people.look();
+    await settle();
+    expect(second.sam.everShown()).toContain(' said no. Nothing left ');
+    // What was said about its silence left with the answer: nothing waits.
+    expect(second.sam.count()).toBe(0);
+    for (let step = 0; step < 4 && second.sam.line(); step++) await second.sam.done();
+    expect(second.sam.count()).toBe(0);
+    await second.sam.tap();
+    expect(second.sam.everShown().split('has not answered about').length).toBe(2);
+  });
+
+  test('taken back after "Another file": the file the owner then sends is an offer like any other, not the answer', async () => {
+    const { server, sam, leo } = await asked();
+    await leo.pick(1);
+    await leo.done();
+    server.clock += NOTCH_PEOPLE_ASK_WAIT_MS + 1;
+    await sam.people.tick();
+    await settle();
+    expect(sam.said()).toBe('Leo has not answered about the Q3 numbers. Ask again, or take it back?');
+    await sam.pick(2);
+    await sam.done();
+    await leo.people.look();
+    await settle();
+    expect(leo.store.openWants('in')).toEqual([]);
+    for (let step = 0; step < 4 && leo.line(); step++) await leo.done();
+    leo.people.sendFile(SAM, { name: 'Q3 numbers final.xlsx', bytes: bytesOf(5000) });
+    await settle();
+    expect(leo.said()).toBe('Offering Sam the file Q3 numbers final.xlsx, 5 KB…');
+  });
+
+  test('only the one who asked can take an asking back', async () => {
+    const { server, sam, leo } = await asked();
+    const anna = side(server, ANNA, 'anna');
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(LEO, { deviceId: LEO, localName: 'Leo', ownDevice: null, serverDisplayName: 'leo-laptop', createdAt: 1 });
+    leo.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 1 });
+    await anna.refresh();
+    await leo.refresh();
+    const want = (peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note as { id: string }).id;
+    await anna.link.tell(LEO, peerNoteText('Taken back.', { kind: 'back', of: want }));
+    await leo.people.look();
+    await settle();
+    expect(leo.store.wantOf(want)?.state).toBe('open');
+    expect(leo.everShown()).not.toContain('took it back');
+    // Sam's own asking still stands, and is answered.
+    await leo.pick(0);
+    await leo.done();
+    await crossing(sam, leo);
+    expect(sam.saved.map((one) => one.name)).toEqual(['Q3 numbers.xlsx']);
+  });
 });
 
 describe('a file that arrived is held by the notch', () => {
@@ -2489,6 +2639,130 @@ describe('a file of one\'s own, sent to somebody by saying which', () => {
     const { sam, leo } = await saying('send Leo the Q3 numbers', { thinks: '{"fits":[1]}', found: [{ ...NUMBERS, name: 'Q3 final.xlsx' }] });
     expect(sam.said()).toBe('I could not take Q3 final.xlsx from its folder. Drop it on me, and pick Send to Leo.');
     expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  /** Sam, with Leo and Anna in the organisation. */
+  const three = async (sentence: string, more: { thinks?: string } = {}) => {
+    const { server, sam, leo } = await joined();
+    const anna = side(server, ANNA, 'anna');
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(SAM, { deviceId: SAM, localName: 'Sam', ownDevice: null, serverDisplayName: 'sam-laptop', createdAt: 1 });
+    sam.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 1 });
+    anna.store.setOrg('Northwind');
+    await anna.refresh();
+    await sam.refresh();
+    sam.fileState.found = [V30, V29, NUMBERS, HOLIDAY];
+    sam.fileState.thinks = more.thinks ?? '{"fits":[1]}';
+    sam.fileState.onDisk.set('Pitch/Decks/Pillow v30.pdf', bytesOf(5000, 30));
+    sam.fileState.onDisk.set('Pitch/Pillow v29.pptx', bytesOf(5000, 29));
+    const routed = await sam.say(sentence);
+    await settle();
+    return { server, sam, leo, anna, routed };
+  };
+
+  test('"send Leo and Anna the deck" offers the one file to each of them, with one moment to take it back', async () => {
+    const { sam, leo, anna, routed } = await three('send Leo and Anna the deck');
+    expect(routed).toBe(true);
+    // Looked for once, and one line for both of them.
+    expect(sam.lookedFor).toEqual(['the deck']);
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Offering Leo and Anna the file Pillow v30.pdf, in your Documents, in Pitch › Decks, 5 KB…');
+    expect((sam.line() as { ms?: number }).ms).toBe(NOTCH_FILE_PICKED_FUSE_MS);
+    expect(leo.engine.inbox.length).toBe(0);
+    expect(anna.engine.inbox.length).toBe(0);
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo and Anna. It goes to each of them when they take it.');
+    await sam.done();
+    // Each of them is asked on their own notch, and each takes it or not by themselves.
+    await leo.people.look();
+    await anna.people.look();
+    await settle();
+    expect(leo.said()).toBe('Sam sends you a file: Pillow v30.pdf, 5 KB. Take it?');
+    expect(anna.said()).toBe('Sam sends you a file: Pillow v30.pdf, 5 KB. Take it?');
+    await anna.pick(1);
+    await anna.done();
+    await leo.pick(0);
+    await leo.done();
+    for (let round = 0; round < 6; round++) { await settle(); await sam.people.filesIdle(); await leo.people.filesIdle(); await anna.people.filesIdle(); await leo.people.look(); await anna.people.look(); await sam.people.look(); }
+    await settle();
+    // Anna's no changed nothing for Leo.
+    expect(leo.saved.map((one) => one.name)).toEqual(['Pillow v30.pdf']);
+    expect(leo.saved[0]!.bytes[0]).toBe(30);
+    expect(anna.saved).toEqual([]);
+  });
+
+  test('taken back, it goes to none of them', async () => {
+    const { sam, leo, anna } = await three('send the deck to Leo and Anna');
+    expect(sam.said()).toStartWith('Offering Leo and Anna the file Pillow v30.pdf');
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(leo.engine.inbox.length).toBe(0);
+    expect(anna.engine.inbox.length).toBe(0);
+    expect(readdirSync(sam.filesDir)).toEqual([]);
+  });
+
+  test('two that may be meant are picked from once, for all of them', async () => {
+    const { sam, leo, anna } = await three('send Leo and Anna the deck', { thinks: '{"fits":[1,2]}' });
+    expect(sam.kind()).toBe('sheet');
+    expect(sam.said()).toBe('Which one goes to Leo and Anna?');
+    const note = ((sam.line() as { blocks: { kind: string; say?: unknown }[] }).blocks).find((block) => block.kind === 'note');
+    expect(JSON.stringify(note?.say)).toBe('["One file is offered to ",{"em":"Leo"}," and ",{"em":"Anna"},": the one you pick."]');
+    await sam.answer('go', { row: 'pick1' });
+    expect(sam.said()).toBe('Offering Leo and Anna the file Pillow v29.pptx, in your Documents, in Pitch, 5 KB…');
+    await sam.done();
+    await sam.done();
+    await leo.people.look();
+    await anna.people.look();
+    await settle();
+    expect(leo.said()).toBe('Sam sends you a file: Pillow v29.pptx, 5 KB. Take it?');
+    expect(anna.said()).toBe('Sam sends you a file: Pillow v29.pptx, 5 KB. Take it?');
+  });
+
+  test('when it cannot be offered to one of them, the line says to whom it was and to whom it was not', async () => {
+    const { sam, leo, anna } = await three('send Leo and Anna the deck');
+    // Anna is no longer somebody a thing can be sent to, between the saying and the sending.
+    const tell = sam.link.tell.bind(sam.link);
+    sam.link.tell = async (to, text, more) => (to === ANNA ? { ok: false, why: 'refused' } : tell(to, text, more));
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo. It could not be offered to Anna now.');
+    await sam.done();
+    await leo.people.look();
+    await settle();
+    expect(leo.said()).toBe('Sam sends you a file: Pillow v30.pdf, 5 KB. Take it?');
+    expect(anna.engine.inbox.length).toBe(0);
+    // Nothing is kept for the one it did not go to.
+    expect(readdirSync(sam.filesDir).length).toBe(1);
+  });
+
+  test('nothing that fits is said once, whoever it was for', async () => {
+    const { sam } = await three('send Leo and Anna the tax return', { thinks: '{"fits":[]}' });
+    expect(sam.said()).toBe('I do not find a file like that on this laptop. Drop it on me, and send it to each of them.');
+  });
+
+  test('which sentences name several people, and which name somebody who is not here', async () => {
+    const { server, sam } = await joined();
+    for (const [id, name] of [[ANNA, 'Anna Rossi'], ['Dana000000000000000004', 'Dana']] as const) {
+      sam.engine.contacts.set(id, { deviceId: id, localName: name, ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+    }
+    void server;
+    await sam.refresh();
+    sam.fileState.found = [];
+    const routes = (text: string): string | null => sam.people.route(text)?.did ?? null;
+    for (const [said, to, what] of [
+      ['send Leo and Anna the deck', 'Leo and Anna Rossi', 'the deck'], ['send the deck to Leo and Anna', 'Leo and Anna Rossi', 'the deck'],
+      ['send Leo, Anna and Dana the deck', 'Leo, Anna Rossi and Dana', 'the deck'], ['share the roadmap with Leo, Anna, and Dana', 'Leo, Anna Rossi and Dana', 'the roadmap'],
+      ['send the deck to Leo and to Anna', 'Leo and Anna Rossi', 'the deck'], ['send both Leo and Anna Rossi budget.xlsx', 'Leo and Anna Rossi', 'budget.xlsx'],
+      ["send Leo's Pillow and Anna's laptop the deck", 'Leo and Anna Rossi', 'the deck'], ['forward my CV to Dana & Leo', 'Dana and Leo', 'my CV'],
+      // Said twice, a person is one person.
+      ['send Leo and Leo the deck', 'Leo', 'the deck'],
+      // A file about somebody is not for them.
+      ['send the Anna contract to Leo', 'Leo', 'the Anna contract'],
+    ] as const) expect(routes(said)).toBe(`Send ${to} a file of mine: ${what}`);
+    // Somebody who is not in the organisation, or one of two: it goes to nobody.
+    for (const said of ['send Leo and Tony the deck', 'send Tony and Leo the deck', 'send the deck to Leo and Tony', 'send the deck to Tony and Leo', 'send Leo or Anna the deck',
+      'send Leo, Tony and Anna the deck', 'send the deck to Leo and to Tony', 'send Leo and Anna my regards', 'send Leo and Anna an email with the deck', 'send it to Leo and Anna', 'send Leo and Anna the deck by email']) {
+      expect(routes(said) ?? '').not.toContain('a file of mine');
+    }
   });
 
   test('which sentences are a file of one\'s own for somebody, and which are not', async () => {

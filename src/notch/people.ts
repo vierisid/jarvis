@@ -1186,6 +1186,10 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
    *
    *   "send Leo the deck"                    "send the deck to Leo"
    *   "share the Acme contract with Leo"     "give Leo's Pillow budget.xlsx"
+   *   "send Leo and Anna the deck"           "send the deck to Leo, Anna and Sam"
+   *
+   * Several people are each offered the same file. Every one of them has to
+   * be somebody here: with a name that is not, it goes to nobody.
    *
    * Not what is no file: "send Leo my regards", "give Leo a call", "send
    * Leo my number", a mail, a message, a link, money, or another way to
@@ -1193,32 +1197,49 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
    * for a file ("send Leo the tax return"); with "give", "pass" and "hand"
    * only what is named as one.
    */
-  function handed(text: string): { person: PeerPerson; file: string } | null {
+  function handed(text: string): { people: PeerPerson[]; file: string } | null {
     const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
     const people = others().slice().sort((a, b) => b.name.length - a.name.length);
+    // Every way a person here is said, the longest first: a whole name, and a first name that only one of them has.
+    const ways: { name: string; person: PeerPerson }[] = [];
     for (const one of people) {
       const first = one.name.split(' ')[0]!;
       const alone = people.filter((other) => other.name.split(' ')[0]!.toLowerCase() === first.toLowerCase()).length === 1;
-      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) {
-        // Them, or their laptop: "Leo", "Leo's Pillow", "Leos laptop".
-        const them = `(?<![\\p{L}\\p{N}])${escaped(name)}(?:(?:'s|’s|s|')?\\s+${MACHINE})?(?![\\p{L}\\p{N}'’])`;
-        const found = new RegExp(`^${LEAD}(${GIVE})\\s+${them}\\s+(.+)$`, 'iu').exec(said)
-          ?? new RegExp(`^${LEAD}(${GIVE})\\s+(.+?)\\s+(?:to|with)\\s+${them}$`, 'iu').exec(said);
-        const what = found?.[2]?.replace(/\s+(?:for me|please)$/i, '').trim();
-        if (!found || !what) continue;
-        // "Send Leo and Anna the deck": more than one person is meant. It does not go to the first of them.
-        if (/^(?:and|or|&|\+|,)(?:\s|$)/i.test(what) || /\s(?:and|or|&)$/i.test(what)) return null;
-        // "By email", "on Slack": another way to reach them was named. Not this one.
-        if (/\b(?:by|via|on|over|through|per|in)\s+(?:slack|e-?mail|mail|whatsapp|telegram|teams|discord|sms|text|linkedin|signal|imessage|messenger)\b/i.test(what)) return null;
-        // A file on somebody else's laptop is not one of the owner's own.
-        if (new RegExp(`(?:'s|’s|s)?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what) && people.some((other) => new RegExp(`(?<![\\p{L}\\p{N}])${escaped(other.name.split(' ')[0]!)}(?:'s|’s|s|')?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what))) return null;
-        // A name that ends as a file's does is a file, whatever it begins with. Otherwise: not a thing that is
-        // no file, and either named as a file or said with a verb that is said of files ("send Leo the tax
-        // return"). "Give Leo a hand" and "pass Leo the word" stay what they are.
-        const named = /\.[a-z0-9]{2,5}$/i.test(what);
-        if (!named && (NO_GIFT.test(what) || NO_GIFT_LAST.test(what) || /^(?:it|this|that|these|those|them|one)$/i.test(what) || !(GIVE_FILE.test(found[1]!) || FILE_WORD.test(what)))) continue;
-        return { person: one, file: what };
+      for (const name of alone && first !== one.name ? [one.name, first] : [one.name]) ways.push({ name, person: one });
+    }
+    if (ways.length === 0) return null;
+    ways.sort((a, b) => b.name.length - a.name.length);
+    // Them, or their laptop: "Leo", "Leo's Pillow", "Leos laptop".
+    const them = `(?<![\\p{L}\\p{N}])(?:${ways.map((way) => escaped(way.name)).join('|')})(?:(?:'s|’s|s|')?\\s+${MACHINE})?(?![\\p{L}\\p{N}'’])`;
+    // One of them, or several: "Leo and Anna", "Leo, Anna and Sam", "to Leo and to Anna".
+    const list = `(?:both\\s+)?${them}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+(?:and|&)\\s+)(?:(?:to|with)\\s+)?${them})*`;
+    const who = (names: string): PeerPerson[] => {
+      const found: PeerPerson[] = [];
+      for (const match of names.matchAll(new RegExp(`(?<![\\p{L}\\p{N}])(${ways.map((way) => escaped(way.name)).join('|')})(?:(?:'s|’s|s|')?\\s+${MACHINE})?(?![\\p{L}\\p{N}'’])`, 'giu'))) {
+        const one = ways.find((way) => way.name.toLowerCase() === match[1]!.toLowerCase())?.person;
+        if (one && !found.includes(one)) found.push(one);
       }
+      return found;
+    };
+    const first = new RegExp(`^${LEAD}(${GIVE})\\s+(${list})\\s+(.+)$`, 'iu').exec(said);
+    const last = new RegExp(`^${LEAD}(${GIVE})\\s+(.+?)\\s+(?:to|with)\\s+(${list})$`, 'iu').exec(said);
+    for (const found of [first ? { verb: first[1]!, names: first[2]!, what: first[3]! } : null, last ? { verb: last[1]!, names: last[3]!, what: last[2]! } : null]) {
+      const what = found?.what.replace(/\s+(?:for me|please)$/i, '').trim();
+      if (!found || !what) continue;
+      // "Send Leo and Bob the deck", "send Leo or Anna the deck": somebody is meant who is not here, or only
+      // one of them is. It does not go to the ones that happened to be known.
+      if (/^(?:and|or|&|\+|,)(?:\s|$)/i.test(what) || /\s(?:and|or|&)$/i.test(what)) return null;
+      // "By email", "on Slack": another way to reach them was named. Not this one.
+      if (/\b(?:by|via|on|over|through|per|in)\s+(?:slack|e-?mail|mail|whatsapp|telegram|teams|discord|sms|text|linkedin|signal|imessage|messenger)\b/i.test(what)) return null;
+      // A file on somebody else's laptop is not one of the owner's own.
+      if (new RegExp(`(?:'s|’s|s)?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what) && people.some((other) => new RegExp(`(?<![\\p{L}\\p{N}])${escaped(other.name.split(' ')[0]!)}(?:'s|’s|s|')?\\s+${MACHINE}(?![\\p{L}\\p{N}])`, 'iu').test(what))) return null;
+      // A name that ends as a file's does is a file, whatever it begins with. Otherwise: not a thing that is
+      // no file, and either named as a file or said with a verb that is said of files ("send Leo the tax
+      // return"). "Give Leo a hand" and "pass Leo the word" stay what they are.
+      const named = /\.[a-z0-9]{2,5}$/i.test(what);
+      if (!named && (NO_GIFT.test(what) || NO_GIFT_LAST.test(what) || /^(?:it|this|that|these|those|them|one)$/i.test(what) || !(GIVE_FILE.test(found.verb) || FILE_WORD.test(what)))) continue;
+      const to = who(found.names);
+      if (to.length > 0) return { people: to, file: what };
     }
     return null;
   }
@@ -1582,7 +1603,10 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const mine = files ? handed(text) : null;
     if (mine) {
       const file = peerPlain(mine.file, PEER_FILE_WHAT_MAX);
-      if (file) return { did: `Send ${mine.person.name} a file of mine: ${file}`, run: () => files!.give(mine.person, file) };
+      // "Leo", "Leo and Anna", "Leo, Anna and Sam".
+      const names = mine.people.map((one) => one.name);
+      const to = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
+      if (file) return { did: `Send ${to} a file of mine: ${file}`, run: () => files!.give(mine.people, file) };
     }
     // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
     const wanted = requested(text);
@@ -1716,6 +1740,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (note.kind === 'back') {
       // Their question is taken back: it leaves, whether it was on the notch or in the count. Only the one
       // who asked it can take it back: the id must be of something that came from them.
+      // An asking for a file that is taken back leaves the same way.
+      if (files?.unwant(note.of, from)) return;
       if (store.gotFrom(note.of) !== item.from || store.got(note.of)?.done) return;
       store.done(note.of);
       void link.seen(note.of);
@@ -2382,6 +2408,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     await look();
     await follow();
     for (const sent of store.unanswered(now() - NOTCH_PEOPLE_ASK_WAIT_MS)) late(sent);
+    // An asking for a file that is out as long is said the same way.
+    files?.late(now() - NOTCH_PEOPLE_ASK_WAIT_MS);
     callOver();
     // A job that was taken here and has ended is told to whoever gave it.
     await jobs()?.tick().catch(() => { /* told at the next look */ });

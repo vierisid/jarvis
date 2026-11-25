@@ -475,7 +475,27 @@ somebody asks for a file (rules 56 to 61), and what is found is offered as a dro
     are not this. With "send", "share" and "forward" anything else is taken for a file ("send
     Leo the tax return"). With "give", "pass" and "hand" only what is named as one ("give Leo
     the Q3 numbers", not "give Leo a hand").
-67. **It goes to one person.** "Send Leo and Anna the deck" is not sent to the first of them.
+67. **It goes to the people who were named, and to all of them or to nobody.** "Send Leo and
+    Anna the deck" offers it to both (rules 130 to 133). With a name in the list that is nobody
+    of the organisation, or with "Leo or Anna", it is not sent to the ones that happened to be
+    known.
+
+### Where it stops
+
+- A file is found on the desktop, in the documents and in the downloads, two folders deep. It is
+  told by its name, its kind, its date, its folder and what is remembered about it, not by
+  opening it. 16 MB is the most that is taken from a folder.
+- Which file the model picks has not been tried with a real model: the tests and the rehearsal
+  use a stand-in for it. That its pick reaches the owner, and only as a pick, is tested.
+- The desktop app's saving and looking have been run in its own tests and not on a person's
+  machine yet. On a Mac, macOS may ask once whether Jarvis may use the Downloads folder.
+- 25 MB, and both sides must be Pillows. Anybody else reads one sentence that a file is offered.
+- The sender's brain has to be on when the yes comes. Its pieces start again from the first after
+  a restart.
+- It is slow by design of the channel: about 14 MB a minute at best.
+- An offer that is never answered waits. It is not taken back by itself, and the one who
+  offered is not told that it waits.
+- "Everybody" and "the team" are not names: a file goes to people who are named.
 
 ## Something done on their laptop, while they watch (23 November)
 
@@ -537,24 +557,6 @@ The server was restarted and answers again."
   not show where it acts.
 - The asker cannot tell a stop from a failure. Both read "It was not finished".
 - Twelve steps at the most.
-
-### Where it stops
-
-- A file is found on the desktop, in the documents and in the downloads, two folders deep. It is
-  told by its name, its kind, its date, its folder and what is remembered about it, not by
-  opening it. 16 MB is the most that is taken from a folder.
-- Which file the model picks has not been tried with a real model: the tests and the rehearsal
-  use a stand-in for it. That its pick reaches the owner, and only as a pick, is tested.
-- An asking that is never answered waits. The asker is not told that it waits.
-- The desktop app's saving and looking have been run in its own tests and not on a person's
-  machine yet. On a Mac, macOS may ask once whether Jarvis may use the Downloads folder.
-- 25 MB, and both sides must be Pillows. Anybody else reads one sentence that a file is offered.
-- The sender's brain has to be on when the yes comes. Its pieces start again from the first after
-  a restart.
-- It is slow by design of the channel: about 14 MB a minute at best.
-- More than one person cannot be named for a file ("send Leo and Anna the deck"): it goes to
-  nobody, and the words are taken as any other.
-- An offer that is never answered waits. It is not taken back by itself.
 
 ## A time that is free for both (23 November)
 
@@ -812,6 +814,55 @@ them.
 - An engine that already kept its key in a keychain (a Mac or a Linux desktop that ran it
   without `COLLAB_KEYSTORE=file`) would not find it in its folder, and would be a new device.
   No machine that is known to have run this did.
+
+## Two loose ends, closed (25 November)
+
+The owner: "You fix the two loose ends, and I'll test." Both were in the list of what the files
+could not do.
+
+### One file, to several people
+
+"Send Leo and Anna the deck", "send the deck to Leo, Anna and Dana", "share the roadmap with Leo
+and with Anna".
+
+130. **One look, one pick, one line.** The laptop is looked through once and the file is picked
+     once (rules 62 to 65). The line names all of them: "Offering Leo and Anna the file Pillow
+     v30.pdf, in your Documents, in Pitch › Decks, 4.2 MB…". It burns five seconds, and taking it
+     back takes it back for all of them: nothing has gone to anybody before the line is out.
+131. **Each of them gets an offer of their own.** Each is asked "Take it?" on their own notch and
+     takes it or not by themselves. One person's no changes nothing for another, and nobody is
+     told who else it was offered to.
+132. **The line after says to whom it was offered, and to whom it could not be.** "Offered to
+     Leo. It could not be offered to Anna now." Never "offered" for somebody it did not reach,
+     and nothing of the file is kept for them.
+133. **Everybody in the list is somebody here.** A name that is nobody of the organisation, "or"
+     in place of "and", or a list that ends in a name that is not known: it goes to nobody. A
+     person who is named twice is one person. A file that is about somebody ("send the Anna
+     contract to Leo") is not for them.
+
+### An asking for a file that nobody answers
+
+134. **After ten minutes of silence the asker is told, once.** "Leo has not answered about the Q3
+     numbers. Ask again, or take it back?", as a question that was asked says it. The
+     asking itself waits as long as it takes: only the silence is said.
+135. **"Wait" is an answer.** It is not brought up again, and nothing is said to the other.
+136. **"Take it back" takes it off their notch.** They read that it was taken back. A yes that
+     comes after sends nothing, and a file they then send is an offer like any other, not the
+     answer.
+137. **"Ask again" takes the first asking back and asks once more.** One asking stands on their
+     notch, not two.
+138. **Only the one who asked can take an asking back**, as with a question.
+139. **An answer that comes while the silence is on the notch takes it away.** The file, or the
+     no, is what is said.
+
+### Where these stop
+
+- After a restart of the brain, a silence that was said and not answered is not said again. The
+  asking still stands, and its answer still arrives.
+- A Pillow from before this day does not know an asking can be taken back: there it stays on the
+  notch, and "Ask again" puts a second one beside it.
+- An offer to several people is several offers. The sender is not told as one thing who took
+  it: each taking is said as it is for one person.
 
 ## Limits
 
