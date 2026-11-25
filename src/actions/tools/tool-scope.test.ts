@@ -410,6 +410,14 @@ describe('what a future change could silently undo', () => {
     for (const args of execs) {
       expect(`${args}|${/,\s*(null|turnScope)\s*$/.test(args)}`).toBe(`${args}|true`);
     }
+    // A turn that is watched step by step runs its calls by a method of its
+    // own (executeToolWatched). The same holds for it: its scope is passed,
+    // last, and is never null.
+    const watched = [...src.matchAll(/this\.executeToolWatched\(([^)]*)\)/g)].map((m) => m[1]!);
+    expect(watched.length).toBeGreaterThanOrEqual(1);
+    for (const args of watched) {
+      expect(`${args}|${/,\s*turnScope\s*$/.test(args)}`).toBe(`${args}|true`);
+    }
     // ...and NONE of them may pass `null`.
     //
     // This assertion started life as "at least four pass turnScope", which was

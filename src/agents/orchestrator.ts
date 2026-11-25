@@ -1062,7 +1062,11 @@ export class AgentOrchestrator {
           this.noteToolUse(ledger, tc.name, turnScope);
           // A tool call's arguments came from this turn's prompt: none runs once the turn may no longer send.
           hold?.checkpoint?.();
-          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, hold?.signal, turnTaint, turnScope, hold?.watched === true));
+          // A turn that is watched step by step runs its calls by a method of its own, so that every call of
+          // executeTool still ends in the scope it decided on (actions/tools/tool-scope.test.ts pins that).
+          const result = await withSnapshotReadLog(turnReads, () => (hold?.watched === true
+            ? this.executeToolWatched(tc, hold.signal, turnTaint, turnScope)
+            : this.executeTool(tc, hold?.signal, turnTaint, turnScope)));
           messages.push({
             role: 'tool',
             content: result,
@@ -1980,12 +1984,36 @@ export class AgentOrchestrator {
    * `taint` is required so a tool loop cannot forget its turn set (tsc
    * catches a missed call site); the fallback only guards an untyped caller.
    */
-  private async executeTool(
+  private executeTool(
     toolCall: LLMToolCall,
     signal: AbortSignal | undefined,
     taint: Set<string>,
     scope: TurnToolScope | null,
-    watched = false,
+  ): Promise<string | ContentBlock[]> {
+    return this.executeToolAs(toolCall, signal, taint, scope, false);
+  }
+
+  /**
+   * The same, for a turn the person watches step by step (`hold.watched`): a
+   * call that waits for an approval is run by the executor kept for watched
+   * turns, and is withdrawn when nobody decides it. The scope is its last
+   * argument here too.
+   */
+  private executeToolWatched(
+    toolCall: LLMToolCall,
+    signal: AbortSignal | undefined,
+    taint: Set<string>,
+    scope: TurnToolScope | null,
+  ): Promise<string | ContentBlock[]> {
+    return this.executeToolAs(toolCall, signal, taint, scope, true);
+  }
+
+  private async executeToolAs(
+    toolCall: LLMToolCall,
+    signal: AbortSignal | undefined,
+    taint: Set<string>,
+    scope: TurnToolScope | null,
+    watched: boolean,
   ): Promise<string | ContentBlock[]> {
     // Enter the turn's taint set for the duration of the call so noteTaint,
     // getEffectiveProfile and any sub-agent spawned by the tool see it.
