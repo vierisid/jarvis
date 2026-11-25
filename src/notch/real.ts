@@ -239,6 +239,8 @@ export interface NotchRealDeps {
       /** The line that is remembered about a file the owner once had read. */
       known?: (place: PeerFileFound['place'], name: string) => string | null;
     };
+    /** One bounded question to the model: what a sentence that names somebody of the organisation means (./people-read.ts). */
+    think?: (messages: { role: 'system' | 'user'; content: string }[], signal?: AbortSignal) => Promise<string>;
     noClock?: boolean;
   };
   /**
@@ -495,6 +497,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
+      ...(deps.peers.think ? { think: deps.peers.think } : {}),
       // A time that is free for two people: the owner's calendar, read the way the mail layer reads it. Asked
       // for when it is needed, so it does not matter that the mail layer is made after this.
       time: { calendar: (from: number, to: number) => (mail ? mail.calendar(from, to) : Promise.resolve(null)) },
@@ -556,9 +559,15 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
         ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text)
         // After everything that has words of its own: what was said over a line that is up answers that line.
         ?? saidLine.route(text, how) ?? null,
+      // After all of them: words that name somebody of the organisation and are none of the fixed ones are
+      // read by the model (./people-read.ts). Only what `side` left: while day one waits to hear the person,
+      // whatever they say is its answer and never gets here.
+      read: (text) => people?.read(text) ?? null,
       keys: () => saidLine.keys(),
       // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
       people: () => mail?.store.people() ?? [],
+      // And who is in the organisation: a name that is exactly one of theirs is not read back as somebody else's.
+      here: () => people?.names() ?? [],
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
       // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.

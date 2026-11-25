@@ -4766,6 +4766,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // What another person's Jarvis asks of this one is done by the background agent, on a turn that starts tainted.
         ...(peerLink && peerSetupNow ? { peers: {
           db: getDb(), link: peerLink, setup: peerSetupNow, openPage: notchOpenUrl, work: notchPeerWork(() => bgAgent, { decide: (action, requestId) => applyApprovalDecision(action, requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }) }),
+          // What a sentence that names somebody of the organisation means, when it is none of the fixed words:
+          // one small question to the model. It is what the owner has just said, so it does not wait behind
+          // the assistant's own work, and it is counted as theirs.
+          think: (messages, signal) => runWithOrigin('user', async () =>
+            (await agentService.getLLMManager().chatTier('medium', 'notch_peer_read', messages, { max_tokens: 240, temperature: 0, ...(signal ? { signal } : {}) })).content),
           // A file from somebody in the organisation: kept in the brain's own folder while it crosses, then put in the person's Downloads.
           files: {
             dir: path.join(dataDir, 'peers', 'files'),

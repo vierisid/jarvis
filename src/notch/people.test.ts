@@ -96,7 +96,7 @@ class FakeSetup implements PeerSetupLike {
   onChange(listener: () => void): void { this.listeners.push(listener); }
 }
 
-function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; timeWaitMs?: number; noAgents?: boolean; setup?: { ready?: boolean; hostable?: boolean } } = {}) {
+function side(server: FakeServer, id: string, handle: string, more: { account?: string; canOpen?: boolean; noWork?: boolean; engineWaitMs?: number; stepMs?: number; timeWaitMs?: number; noAgents?: boolean; setup?: { ready?: boolean; hostable?: boolean }; reads?: boolean; readMs?: number } = {}) {
   const pushed: NotchToPage[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -132,6 +132,12 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   } = { canSave: true, found: [], onDisk: new Map(), holds: false, thinks: null, knownLines: new Map() };
   /** What the model was asked, each time. */
   const thought: { role: string; content: string }[][] = [];
+  /**
+   * The model that reads a sentence about somebody (./people-read.ts), on a side that was given one (`reads`).
+   * `says`: its answer; a thrown error; null when no answer ever comes; or a function of the sentence.
+   * `asked`: what it was asked, each time.
+   */
+  const readState: { says: string | Error | null | ((sentence: string) => string | Promise<string>); asked: { role: string; content: string }[][] } = { says: null, asked: [] };
   /** What was looked for on this laptop, and what the notch was handed to hold. */
   const lookedFor: string[] = [];
   const held: { name: string; from: string; place: string | null; size: number }[] = [];
@@ -188,6 +194,16 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     ...(more.stepMs ? { stepMs: more.stepMs } : {}),
     // An engine that does not answer is not waited for here.
     ruleWaitMs: 1,
+    ...(more.reads ? {
+      readMs: more.readMs ?? 40,
+      think: async (messages: { role: 'system' | 'user'; content: string }[]) => {
+        readState.asked.push(messages);
+        const says = readState.says;
+        if (says === null) return new Promise<string>(() => { /* it never answers */ });
+        if (says instanceof Error) throw says;
+        return typeof says === 'function' ? says(messages[1]!.content.split('\n').pop()!) : says;
+      },
+    } : {}),
     look: () => lookState.held,
     onCall: () => callState.on,
     chases: () => chasesFake,
@@ -219,7 +235,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
     engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState, chaseState, callState,
-    saved, filesDir, fileState, lookedFor, held, thought,
+    saved, filesDir, fileState, lookedFor, held, thought, readState,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
     /** The sheet's or the line's blocks, as text. */
@@ -243,14 +259,30 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     async open(): Promise<void> { inbox.present('people', (stage) => people.open(stage)); await settle(); },
     /** What the person says or types to the notch. False when these are not words for this file. */
     async say(text: string): Promise<boolean> { const route = people.route(text); if (!route) return false; route.run(); await settle(); return true; },
+    /**
+     * What the person says, as the notch takes it in (./asks.ts): the fixed words first, and what they leave is
+     * read by the model. 'fixed': the fixed words took it. 'read': the model's reading did. 'nothing': it was
+     * read, and is for nobody here. 'unasked': it names nobody here, and nothing waited for a model.
+     */
+    async hear(text: string): Promise<'fixed' | 'read' | 'nothing' | 'unasked'> {
+      const route = people.route(text);
+      if (route) { route.run(); await settle(); return 'fixed'; }
+      const reading = people.read(text);
+      if (!reading) return 'unasked';
+      const meant = await reading;
+      if (!meant) return 'nothing';
+      meant.run();
+      await settle();
+      return 'read';
+    },
     async refresh(): Promise<void> { await link.refresh(); await settle(); },
   };
 }
 
 /** Two people, signed in and joined, each with a name for the other. */
-async function joined(more: { org?: string; stepMs?: number; timeWaitMs?: number } = {}) {
+async function joined(more: { org?: string; stepMs?: number; timeWaitMs?: number; reads?: boolean; readMs?: number } = {}) {
   const server = new FakeServer();
-  const sam = side(server, SAM, 'sam', more.timeWaitMs ? { timeWaitMs: more.timeWaitMs } : {});
+  const sam = side(server, SAM, 'sam', { ...(more.timeWaitMs ? { timeWaitMs: more.timeWaitMs } : {}), ...(more.reads ? { reads: true } : {}), ...(more.readMs ? { readMs: more.readMs } : {}) });
   const leo = side(server, LEO, 'leo', more.stepMs ? { stepMs: more.stepMs } : {});
   sam.engine.signedIn = true;
   leo.engine.signedIn = true;
@@ -3824,3 +3856,263 @@ describe('on a call, told to whoever writes', () => {
   });
 });
 
+
+describe('a sentence read by the model', () => {
+  /** Waits for something to have come about, however long this machine takes for it. */
+  const until = async (ready: () => boolean): Promise<void> => {
+    for (let round = 0; round < 400 && !ready(); round++) await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle();
+  };
+  /** Sam, Leo and Anna in one organisation; Sam's notch has a model to read with. */
+  const three = async () => {
+    const { server, sam, leo } = await joined({ reads: true });
+    const anna = side(server, ANNA, 'anna');
+    anna.engine.signedIn = true;
+    anna.engine.contacts.set(SAM, { deviceId: SAM, localName: 'Sam', ownDevice: null, serverDisplayName: 'sam-laptop', createdAt: 1 });
+    sam.engine.contacts.set(ANNA, { deviceId: ANNA, localName: 'Anna', ownDevice: null, serverDisplayName: 'anna-laptop', createdAt: 1 });
+    anna.store.setOrg('Northwind');
+    await anna.refresh();
+    await sam.refresh();
+    return { server, sam, leo, anna };
+  };
+  /** What the model was shown: the list of people, and the sentence. */
+  const shown = (sam: ReturnType<typeof side>, at = 0): string => sam.readState.asked[at]![1]!.content;
+
+  test('"can you get me the logo from Leo" is none of the fixed words: it is read as a file of his, and asked for as one', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"file-from","to":[1],"what":"the logo"}';
+    expect(sam.people.route('can you get me the logo from Leo')).toBeNull();
+    expect(await sam.hear('can you get me the logo from Leo')).toBe('read');
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe("Asking Leo's Pillow for the logo. Leo must say yes there.");
+    await sam.done();
+    expect(sam.said()).toBe("Asked Leo's Pillow. I will tell you what Leo does.");
+    await sam.done();
+    await settle();
+    expect(leo.lookedFor).toEqual(['the logo']);
+    // The model saw the people the sentence names, and the sentence. One question.
+    expect(sam.readState.asked.length).toBe(1);
+    expect(shown(sam)).toBe("Colleagues:\n1. Leo\n\nThe owner's sentence:\ncan you get me the logo from Leo");
+  });
+
+  test('"hey, I need Leo to know I am running late" is a word to Leo, and goes with its moment to take it back', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"I am running late"}';
+    expect(await sam.hear('hey, I need Leo to know I am running late')).toBe('read');
+    expect(sam.kind()).toBe('send');
+    expect(sam.said()).toBe('Telling Leo: I am running late…');
+    expect(leo.line()).toBeNull();
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam: I am running late');
+    // Taken back in that moment, nothing goes.
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"The deck is ready"}';
+    expect(await sam.hear('would you let Leo know the deck is ready')).toBe('read');
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(sam.engine.sent.length).toBe(1);
+  });
+
+  test('"tell Leo I love him": the words are turned to the reader, shown as they will go, and that is what Leo reads', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"I love you"}';
+    expect(await sam.say('tell Leo I love him')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: I love you…');
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam: I love you');
+    expect(shown(sam)).toBe("Colleagues:\n1. Leo\n\nThe owner's sentence:\ntell Leo I love him");
+  });
+
+  test('"tell Leo hi" and "tell Leo the review moved" go as they were said, and no model is asked', async () => {
+    const { sam } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"SOMETHING ELSE"}';
+    expect(await sam.say('can you tell Leo hi')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: Hi…');
+    await sam.answer('undo');
+    await sam.done();
+    expect(await sam.say('tell Leo the review moved to Friday')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: The review moved to Friday…');
+    expect(sam.readState.asked).toEqual([]);
+  });
+
+  test('with no model, a model that errs, or an answer that is no reading, the words go as they were said', async () => {
+    const plain = await joined();
+    expect(await plain.sam.say('tell Leo I love him')).toBe(true);
+    expect(plain.sam.said()).toBe('Telling Leo: I love him…');
+    for (const says of [new Error('provider said: secret words'), 'I think this is a message.', '{"kind":"poem","to":[1],"words":"x"}', '{"kind":"tell","to":[1],"words":""}', '{"kind":"none"}']) {
+      const { sam } = await joined({ reads: true });
+      sam.readState.says = says;
+      expect(await sam.say('tell Leo I love him')).toBe(true);
+      expect(sam.said()).toBe('Telling Leo: I love him…');
+      expect(sam.readState.asked.length).toBe(1);
+      // What a provider says when it fails is in no log.
+      expect(sam.logs.join('\n')).not.toContain('secret words');
+    }
+  });
+
+  test('a model that does not answer is waited for as long as it may take and no longer: "One moment…", then the words as they were said', async () => {
+    const { sam } = await joined({ reads: true, readMs: 700 });
+    sam.readState.says = null;
+    expect(await sam.say('tell Leo I love him')).toBe(true);
+    expect(sam.line()).toBeNull();
+    await until(() => sam.said() === 'One moment…');
+    expect(sam.said()).toBe('One moment…');
+    await until(() => sam.said().startsWith('Telling'));
+    expect(sam.said()).toBe('Telling Leo: I love him…');
+    expect(sam.logs.join('\n')).toContain('was not read by the model in time');
+  });
+
+  test('"ask Leo if he is coming tomorrow" is asked as a question to him, with yes and no', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"ask","to":[1],"words":"Are you coming tomorrow?"}';
+    expect(await sam.say('ask Leo if he is coming tomorrow')).toBe(true);
+    expect(sam.said()).toBe('Asking Leo: Are you coming tomorrow? Answers: Yes, No.');
+    await sam.done();
+    await sam.done();
+    expect(leo.said()).toBe('Sam asks: Are you coming tomorrow?');
+    expect(leo.options()).toEqual(['Yes', 'No']);
+    // A question that one key cannot answer is told: Leo reads it and answers in his own words.
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"How are you?"}';
+    expect(await sam.say('ask Leo how he is')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: How are you?…');
+  });
+
+  test('"tell Leo to send me the deck" may be read as a file of his; anything else the model makes of a word to Leo is not taken', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"file-from","to":[1],"what":"the deck"}';
+    expect(await sam.say('tell Leo to send me the deck')).toBe(true);
+    expect(sam.said()).toBe("Asking Leo's Pillow for the deck. Leo must say yes there.");
+    await sam.answer('undo');
+    await sam.done();
+    // Something to be done on his laptop was not said: "tell Leo" is a word to Leo.
+    sam.readState.says = '{"kind":"do","to":[1],"words":"Restart the server."}';
+    expect(await sam.say('tell Leo to restart his server')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: To restart his server…');
+    await sam.answer('undo');
+    await sam.done();
+    for (const says of ['{"kind":"time","to":[1],"minutes":30}', '{"kind":"look","to":[1]}', '{"kind":"file-to","to":[1],"what":"the deck"}']) {
+      sam.readState.says = says;
+      expect(await sam.say('tell Leo to restart his server')).toBe(true);
+      expect(sam.said()).toBe('Telling Leo: To restart his server…');
+      await sam.answer('undo');
+      await sam.done();
+    }
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('what is read can go only to somebody the sentence names', async () => {
+    const { sam, anna } = await three();
+    // The sentence names Leo. The model is shown Leo and nobody else, so it has no number for Anna.
+    sam.readState.says = '{"kind":"tell","to":[2],"words":"I am late"}';
+    expect(await sam.hear('could you let Leo know that I am late')).toBe('nothing');
+    expect(shown(sam)).toBe("Colleagues:\n1. Leo\n\nThe owner's sentence:\ncould you let Leo know that I am late");
+    expect(sam.line()).toBeNull();
+    // And a word the fixed words found for Leo stays Leo's, whatever the model says.
+    sam.readState.says = '{"kind":"tell","to":[2],"words":"Anna lost her keys"}';
+    expect(await sam.say('tell Leo that Anna lost her keys')).toBe(true);
+    expect(shown(sam, 1)).toBe("Colleagues:\n1. Leo\n2. Anna\n\nThe owner's sentence:\ntell Leo that Anna lost her keys");
+    expect(sam.said()).toBe('Telling Leo: Anna lost her keys…');
+    await sam.done();
+    await sam.done();
+    expect(anna.engine.inbox.length).toBe(0);
+  });
+
+  test('a sentence that names nobody here is not read, and waits for nothing', async () => {
+    const { sam } = await three();
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"x"}';
+    for (const text of ['what is the weather tomorrow', 'summarise my inbox', 'tell Bob the review moved', 'Leopold wrote to me', 'will you remind me at five']) {
+      expect(sam.people.read(text)).toBeNull();
+      expect(await sam.hear(text)).toBe('unasked');
+    }
+    expect(sam.readState.asked).toEqual([]);
+    // And without a model nothing is read at all.
+    const plain = await joined();
+    expect(plain.sam.people.read('can you get me the logo from Leo')).toBeNull();
+  });
+
+  test('a sentence that only mentions somebody is for nobody: it stays an instruction like any other', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"none"}';
+    expect(await sam.hear('what did Leo say in his last email')).toBe('nothing');
+    expect(sam.line()).toBeNull();
+    expect(sam.engine.sent).toEqual([]);
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('each kind does what the fixed words for it do', async () => {
+    const { sam, leo, anna } = await three();
+    sam.readState.says = '{"kind":"do","to":[1],"words":"What changed in the last deck?"}';
+    expect(await sam.hear("could you find out from Leo's computer what changed in the last deck")).toBe('fixed');
+    await sam.answer('undo');
+    await sam.done();
+    // Their laptop is not named in so many words: the fixed words do not fit, the reading does.
+    expect(await sam.hear('I want to know what changed in the last deck that Leo has open, have his assistant check')).toBe('read');
+    expect(sam.said()).toBe("Asking Leo's Pillow: What changed in the last deck? Leo must say yes there.");
+    await sam.answer('undo');
+    await sam.done();
+    sam.readState.says = '{"kind":"look","to":[1]}';
+    expect(await sam.hear('Leo has to see what I just marked')).toBe('read');
+    expect(sam.said()).toBe('Show me the thing first. Circle it, then say send this to Leo.');
+    await sam.done();
+    // A file of the owner's own, for both of them: looked for once, and one line that names them both.
+    sam.fileState.found = [{ place: 'documents', dir: '', name: 'Tax return.pdf', kind: 'pdf', size: 5000, changed: AT_FILES - 86_400_000, score: 30 }];
+    sam.fileState.onDisk.set('Tax return.pdf', new Uint8Array(5000).fill(7));
+    sam.readState.says = '{"kind":"file-to","to":[1,2],"what":"the tax return"}';
+    expect(await sam.hear('Leo and Anna both need the tax return from me')).toBe('read');
+    await until(() => sam.said().startsWith('Offering'));
+    expect(sam.lookedFor).toEqual(['the tax return']);
+    expect(sam.said()).toStartWith('Offering Leo and Anna the file Tax return.pdf');
+    await sam.answer('undo');
+    expect(sam.said()).toBe('Taken back. Nothing was sent.');
+    expect(leo.engine.inbox.length + anna.engine.inbox.length).toBe(0);
+  });
+
+  test('a time with somebody, however it is said, is the comparing of the two calendars', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"time","to":[1],"minutes":45}';
+    expect(sam.people.route('me and Leo should sit down for 45 minutes soon')).toBeNull();
+    expect(await sam.hear('me and Leo should sit down for 45 minutes soon')).toBe('read');
+    expect(sam.said()).toBe("Comparing calendars with Leo's Pillow. Neither of you sees the other's.");
+    await sam.done();
+    for (let round = 0; round < 4; round++) { await settle(); await leo.people.look(); await sam.people.look(); }
+    // Half an hour or an hour are the lengths the two Pillows compare: 45 minutes is asked for as an hour, as in the fixed words.
+    expect(peerNoteRead(leo.engine.inbox[0]!.payload.text as string).note).toMatchObject({ kind: 'time-ask', minutes: 60 });
+  });
+
+  test('beside somebody here, a name that is nobody here: it is not read, and goes to nobody', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"file-to","to":[1],"what":"the deck"}';
+    expect(await sam.hear('could you send Leo and Bob the deck')).toBe('nothing');
+    expect(await sam.hear('I need Bob and Leo to know I am late')).toBe('nothing');
+    expect(sam.readState.asked).toEqual([]);
+    expect(sam.line()).toBeNull();
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+
+  test('more words than were said are not sent: a model that writes a letter is not listened to', async () => {
+    const { sam } = await joined({ reads: true });
+    const letter = `Dear Leo, I hope this finds you well. ${'I wanted to reach out. '.repeat(4)}`.trim();
+    sam.readState.says = JSON.stringify({ kind: 'tell', to: [1], words: letter });
+    expect(await sam.hear('please let Leo know I am late')).toBe('nothing');
+    expect(await sam.say('tell Leo I love him')).toBe(true);
+    expect(sam.said()).toBe('Telling Leo: I love him…');
+  });
+
+  test('what is told is in no log: only which kind the model read it as', async () => {
+    const { sam } = await joined({ reads: true });
+    sam.readState.says = '{"kind":"tell","to":[1],"words":"I love you"}';
+    await sam.say('tell Leo I love him');
+    const logs = sam.logs.join('\n');
+    expect(logs).toContain('read by the model as: tell');
+    expect(logs).not.toContain('love');
+  });
+
+  test('somebody who left while the model read is told nothing', async () => {
+    const { sam, leo } = await joined({ reads: true });
+    sam.readState.says = async () => { sam.engine.contacts.delete(LEO); await sam.link.refresh(); return '{"kind":"tell","to":[1],"words":"I am late"}'; };
+    expect(await sam.hear('please let Leo know I am late')).toBe('nothing');
+    expect(sam.line()).toBeNull();
+    expect(leo.engine.inbox.length).toBe(0);
+  });
+});

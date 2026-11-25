@@ -373,6 +373,33 @@ describe('a name that may have been misheard is read back before anything runs',
     expect(memory.said()).toBe('Remember: Ana prefers calls.?');
   });
 
+  test('a name that is exactly somebody of the organisation is not read back as somebody it is close to', async () => {
+    // "Ana" is close to Anna Rossi, whom the owner writes with. Without an Ana in the organisation it is read back.
+    const asked: string[] = [];
+    const read = (text: string) => { asked.push(text); return Promise.resolve({ did: 'Ask Ana for a file.', run: () => {} }); };
+    const without = harness({ deps: { people, read } });
+    await without.speak('t1', 'I need the notes from Ana');
+    await without.advance(NOTCH_HEARD_MS);
+    expect(heard(without)).toBe('I heard "I need the notes from Ana". Is that [Anna Rossi]?');
+    // With one, that is who was named: nothing is asked, and the words are read as they were heard.
+    asked.length = 0;
+    const h = harness({ deps: { people, here: () => [{ name: 'Ana' }], read } });
+    await h.speak('t1', 'I need the notes from Ana');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(asked).toEqual(['I need the notes from Ana']);
+    expect(row(h)).toMatchObject({ state: 'done', kind: 'notch', did: ['Ask Ana for a file.'] });
+    // Two people the owner writes with who both have that very name are still asked about.
+    const two = harness({ deps: { people: () => [{ name: 'Ana Costa' }, { name: 'Ana Lima' }], here: () => [{ name: 'Ana' }], read } });
+    await two.speak('t1', 'I need the notes from Ana');
+    await two.advance(NOTCH_HEARD_MS);
+    expect(two.line()).toMatchObject({ kind: 'offer' });
+    // And a list of the organisation that cannot be had changes nothing.
+    const broken = harness({ deps: { people, here: () => { throw new Error('closed'); }, read } });
+    await broken.speak('t1', 'I need the notes from Ana');
+    await broken.advance(NOTCH_HEARD_MS);
+    expect(heard(broken)).toBe('I heard "I need the notes from Ana". Is that [Anna Rossi]?');
+  });
+
   test('with nobody known, or no way to know, nothing is read back', async () => {
     for (const deps of [{}, { people: () => [] }, { people: () => { throw new Error('the mail store is closed'); } }] as Partial<NotchAsksDeps>[]) {
       const h = harness({ deps });
@@ -1737,5 +1764,112 @@ describe('pass 12: whether a "where is" was answered by pointing is told', () =>
     await h.type('what is two plus two');
     await h.advance(0);
     expect(told).toEqual([]);
+  });
+});
+
+describe('words for somebody of the organisation, read by the model', () => {
+  /** A reader that takes every sentence with "Leo" in it and answers when `answer` is called. */
+  function read(more: Partial<NotchAsksDeps> = {}) {
+    const ran: string[] = [];
+    const asked: string[] = [];
+    let answer: (meant: { did: string; run(): void } | null) => void = () => {};
+    let fail: (error: Error) => void = () => {};
+    const h = harness({ deps: {
+      read: (text) => {
+        if (!/\bLeo\b/.test(text)) return null;
+        asked.push(text);
+        return new Promise((resolve, reject) => { answer = resolve; fail = reject; });
+      },
+      ...more,
+    } });
+    const meant = (did: string) => ({ did, run: () => { ran.push(did); } });
+    return { h, ran, asked, answer: async (to: { did: string; run(): void } | null) => { answer(to); await settle(); }, fail: async () => { fail(new Error('no model')); await settle(); }, meant };
+  }
+
+  test('typed: the model says what is meant, the notch does it itself, and no turn is started', async () => {
+    const { h, ran, asked, answer, meant } = read();
+    await h.type('can you get me the logo from Leo');
+    expect(asked).toEqual(['can you get me the logo from Leo']);
+    // While it is read nothing is done, and the line of work stands.
+    expect(ran).toEqual([]);
+    expect(h.line()).toMatchObject({ kind: 'work' });
+    expect(row(h)).toMatchObject({ state: 'heard' });
+    await answer(meant("Ask Leo's Pillow for a file: the logo"));
+    expect(ran).toEqual(["Ask Leo's Pillow for a file: the logo"]);
+    expect(h.door.texts()).toEqual([]);
+    expect(h.line()).toBeNull();
+    expect(row(h)).toMatchObject({ state: 'done', kind: 'notch', did: ["Ask Leo's Pillow for a file: the logo"] });
+    expect(h.ledger.unseen()).toEqual([]);
+  });
+
+  test('for nobody after all: it is an instruction like any other, and runs as a turn', async () => {
+    const { h, ran, answer } = read();
+    await h.type('what did Leo say in his last email');
+    expect(h.door.texts()).toEqual([]);
+    await answer(null);
+    expect(ran).toEqual([]);
+    expect(h.door.texts()).toEqual(['what did Leo say in his last email']);
+    expect(row(h)).toMatchObject({ state: 'running', kind: 'turn' });
+  });
+
+  test('a reading that fails is no reading: the words run as a turn', async () => {
+    const { h, fail } = read();
+    await h.type('can you get me the logo from Leo');
+    await fail();
+    expect(h.door.texts()).toEqual(['can you get me the logo from Leo']);
+  });
+
+  test('words that name nobody there wait for nothing, and the fixed words are never read', async () => {
+    const { h, asked } = read({ side: (text) => (text === 'tell Leo hi' ? { did: 'Tell Leo: Hi', run: () => {} } : null) });
+    await h.type('summarise my inbox');
+    expect(h.door.texts()).toEqual(['summarise my inbox']);
+    const fixed = read({ side: (text) => (text === 'tell Leo hi' ? { did: 'Tell Leo: Hi', run: () => {} } : null) });
+    await fixed.h.type('tell Leo hi');
+    expect(fixed.asked).toEqual([]);
+    expect(row(fixed.h)).toMatchObject({ state: 'done', kind: 'notch', did: ['Tell Leo: Hi'] });
+    expect(asked).toEqual([]);
+  });
+
+  test('"remember that Leo ..." is something to keep, and is not read as words for Leo', async () => {
+    const kept: string[] = [];
+    const { h, asked } = read({ remember: async (what) => { kept.push(what); return { ok: true, understood: what, said: 'Remembered.' }; } });
+    await h.type('Remember that Leo prefers calls');
+    expect(asked).toEqual([]);
+    expect(kept.length).toBe(1);
+  });
+
+  test('spoken: turned away while it is read, nothing is done and no turn starts', async () => {
+    const { h, ran, asked, answer, meant } = read();
+    await h.speak('t1', 'can you tell Leo I am late');
+    await h.advance(NOTCH_HEARD_MS);
+    expect(asked).toEqual(['can you tell Leo I am late']);
+    expect(h.line()).toMatchObject({ kind: 'listen', heard: 'can you tell Leo I am late' });
+    await h.answer('no');
+    await answer(meant('Tell Leo: I am late'));
+    expect(ran).toEqual([]);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'dismissed' });
+  });
+
+  test('spoken: read once, done once', async () => {
+    const { h, ran, asked, answer, meant } = read();
+    await h.speak('t1', 'can you tell Leo I am late');
+    await h.advance(NOTCH_HEARD_MS);
+    await answer(meant('Tell Leo: I am late'));
+    expect(asked.length).toBe(1);
+    expect(ran).toEqual(['Tell Leo: I am late']);
+    expect(h.door.texts()).toEqual([]);
+    expect(h.line()).toBeNull();
+  });
+
+  test('everything was stopped while it was read: it is not done', async () => {
+    let stopped = false;
+    const { h, ran, answer, meant } = read({ paused: () => stopped });
+    await h.type('can you tell Leo I am late');
+    stopped = true;
+    await answer(meant('Tell Leo: I am late'));
+    expect(ran).toEqual([]);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'refused' });
   });
 });

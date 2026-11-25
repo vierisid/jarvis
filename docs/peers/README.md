@@ -864,6 +864,79 @@ and with Anna".
 - An offer to several people is several offers. The sender is not told as one thing who took
   it: each taking is said as it is for one person.
 
+## Any way of saying it (25 November)
+
+The owner: "the keywords to make the pillow perform a certain action or do pillow talk are very
+specific [...] if I say, can you get me X from [a colleague], it wouldn't do it [...] we need to
+make it be able to be very, very flexible." And: "if I say tell [him] I love him [...] [he]
+doesn't see I love you because it sees I love him. So it's literal."
+
+Until this day every sentence about a person was matched against fixed words, and what came after
+"tell Leo" went out letter for letter. The fixed words stay: they need no model and take no time.
+Under them the model now reads what they leave (`src/notch/people-read.ts`).
+
+### Rules
+
+140. **The fixed words first.** A sentence they fit is done at once, as before, with no model.
+     "Tell Leo hi" asks nothing of anybody.
+141. **What they leave, and names somebody here, is read by the model.** One question, with the
+     sentence and the people it names: is it a word for them, a question, a file of theirs, a
+     file for them, something for their Pillow to do, a time with them, something off the
+     screen, or none of these. A sentence that names nobody of the organisation is not read and
+     waits for nothing. Nor is "remember that Leo ...": that is something to keep.
+142. **A reading does one of the things the fixed words do, and nothing else.** It is done by the
+     same code: the same line on the notch, the same moment to take it back, the same yes on the
+     other side. The model starts nothing by itself and there is no kind of its own.
+143. **It can only go to somebody the sentence names.** The model is shown those people and
+     nobody else, by number. A number that is not in its list, a word for several people at
+     once, or a name beside them that is nobody here ("send Leo and Bob the deck"): no reading,
+     and it goes to nobody.
+144. **"None" is an answer.** "What did Leo say in his last email", "email Leo the invoice",
+     "remind me to call Leo": the sentence is an instruction like any other and runs as one.
+145. **Words about the reader are turned to the reader.** "Tell Leo I love him" reaches Leo as "I
+     love you". "Tell Leo to call me": "Call me." "Ask Leo if he is coming": "Are you coming?"
+     This is asked of the model only when the words need it: a "he", "his" or "her", or words
+     that begin with "to", "if", "whether" or "about". "Hi" and "the review moved" go as said.
+146. **Still the owner's words.** The model is told to keep them and their order, to change only
+     what makes them read as said to that person, and to add nothing: no greeting, no reason, no
+     politeness. Words that are more than 30 letters longer than the whole sentence are not
+     taken. And the line shows the words as they will go, for its three seconds, before they do:
+     "Telling Leo: I love you…".
+147. **A question that one key cannot answer is told.** "Ask Leo how he is" reaches him as a word,
+     "How are you?", that he reads and answers in his own words. Only what yes, no or a pick
+     answers is a question with keys.
+148. **No model, a slow one, or an answer that is no reading: as before.** A word the fixed words
+     found goes as it was said. Any other sentence runs as an instruction. The model has eight
+     seconds; from 0.4 seconds on the notch says "One moment…".
+149. **A word to Leo stays a word to Leo.** When the fixed words found "tell Leo ..." and the
+     model makes something else of it, only three things are taken: a word, a question, or a
+     file of his ("tell Leo to send me the deck"). Something done on his laptop is never made
+     out of "tell Leo".
+150. **Esc while it reads turns it away.** Nothing was started. While the model reads spoken
+     words they are still on the notch, and Esc there is a no.
+151. **What is told is in no log.** The log says which kind the model read a sentence as, never
+     its words, and never what a provider said when it failed.
+152. **A name that is exactly somebody here is not read back as somebody else's.** A spoken
+     name that is close to one of the people the owner writes with is asked about before
+     anything runs ("Is that Lea Rossi?"). When somebody of the organisation has that very
+     name, that is who was named, and nothing is asked. Two people the owner writes with who
+     both have the name are still asked about.
+
+### Where it stops
+
+- Handing over a job, sending an agent, the rule for a person and opening the organisation are
+  still understood by their fixed words only.
+- A word for several people at once ("tell Leo and Anna hi") is still not sent to anybody.
+- A name that speech wrote down wrongly is not recognised. The reading starts from a name that
+  is one of theirs.
+- A name beside the others that is nobody here is told by its capital letter. Typed small ("send
+  leo and bob the deck"), it is left to the model, which is told to answer none, and to the line
+  that names who it goes to before it does.
+- The turning is asked of the model by a list of English words. In another language the fixed
+  words do not fit at all, so the whole sentence is read by the model, which answers in that
+  language.
+- How long the model takes to read a sentence was not measured on a real one.
+
 ## Limits
 
 - The engine answers a tool call in prose. Reading an id out of a sentence is done by the shape of

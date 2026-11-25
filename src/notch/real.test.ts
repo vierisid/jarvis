@@ -582,7 +582,7 @@ describe('a call that is listened to, put together', () => {
 });
 
 describe("other people's Jarvises, put together", () => {
-  function assembled(given: boolean) {
+  function assembled(given: boolean, think?: (sentence: string) => string) {
     const pushed: NotchToPage[] = [];
     let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const port: NotchSurfacePort = {
@@ -609,7 +609,7 @@ describe("other people's Jarvises, put together", () => {
       approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       day: { db: getDb(), noClock: true },
-      ...(given ? { peers: { db: getDb(), link, openPage: async () => true, noClock: true } } : {}),
+      ...(given ? { peers: { db: getDb(), link, openPage: async () => true, noClock: true, ...(think ? { think: async (messages: { role: string; content: string }[]) => think(messages[1]!.content.split('\n').pop()!) } : {}) } } : {}),
       lookMs: 3_600_000,
       log: () => {},
     });
@@ -644,6 +644,33 @@ describe("other people's Jarvises, put together", () => {
     await h.wait();
     expect(h.said()).toBe('Sent to Leo. I will tell you when it is seen.');
     expect(h.leo.inbox.map((item) => item.payload.text)).toEqual(['The review moved to Friday']);
+    h.real.stop();
+  });
+
+  test('said any way: what the fixed words do not fit is read by the model, and goes to Leo turned to him', async () => {
+    const asked: string[] = [];
+    const h = assembled(true, (sentence) => { asked.push(sentence); return sentence.includes('love') ? '{"kind":"tell","to":[1],"words":"I love you"}' : sentence.includes('late') ? '{"kind":"tell","to":[1],"words":"I am running late"}' : '{"kind":"none"}'; });
+    await h.link.refresh();
+    const type = async (text: string): Promise<void> => {
+      h.fromPage({ type: 'open' });
+      await h.wait();
+      h.fromPage({ type: 'answer', id: h.line()!.id, act: 'ask', text });
+      await h.wait();
+    };
+    const out = async (): Promise<void> => { h.fromPage({ type: 'answer', id: h.line()!.id, act: 'done' }); await h.wait(); h.fromPage({ type: 'answer', id: h.line()!.id, act: 'done' }); await h.wait(); };
+    // None of the fixed words: read, and done as "tell Leo ..." is.
+    await type('hey, I need Leo to know I am running late');
+    expect([h.line()?.kind, h.said()]).toEqual(['send', 'Telling Leo: I am running late…']);
+    await out();
+    // The fixed words, with words about him: turned to him.
+    await type('tell Leo I love him');
+    expect([h.line()?.kind, h.said()]).toEqual(['send', 'Telling Leo: I love you…']);
+    await out();
+    expect(h.leo.inbox.map((item) => item.payload.text)).toEqual(['I am running late', 'I love you']);
+    // The fixed words, with nothing to turn: no model.
+    await type('can you tell Leo hi');
+    expect(h.said()).toBe('Telling Leo: Hi…');
+    expect(asked).toEqual(['hey, I need Leo to know I am running late', 'tell Leo I love him']);
     h.real.stop();
   });
 

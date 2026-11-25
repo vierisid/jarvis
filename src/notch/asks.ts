@@ -136,6 +136,15 @@ export interface NotchAsksDeps {
    */
   side?: (text: string, how?: NotchAskHow) => { did: string; run(): void } | null;
   /**
+   * Words for somebody of the organisation that none of the fixed words
+   * fit ("can you get me the logo from Leo"): one short question to the
+   * model says what is meant (./people-read.ts), and the notch then does it
+   * itself, as with `side`. Null at once when the words name nobody there,
+   * so that nothing else waits for it; a promise of null when they are for
+   * nobody after all, and are then an instruction like any other.
+   */
+  read?: (text: string) => Promise<{ did: string; run(): void } | null> | null;
+  /**
    * The talk keys went down, and what is on the notch is about to make way
    * for the listening: told before it does, so that what is said can be
    * about the line that was up (./said.ts).
@@ -148,6 +157,13 @@ export interface NotchAsksDeps {
    * anything runs (./names.ts). Not given: nothing is read back.
    */
   people?: () => { name: string }[];
+  /**
+   * The people of the organisation, by the names the owner gave them. A name
+   * that was heard and is exactly one of theirs is not in doubt because it
+   * is close to the name of somebody the owner writes with: "I need the logo
+   * from Leo" is not answered with "Is that Lea Rossi?".
+   */
+  here?: () => { name: string }[];
   /** Home's row about the jobs Jarvis was shown, when there are any, and the sheet it opens. */
   learned?: { row(): NotchBlock | null; open(stage: NotchStage): Promise<void> };
   /**
@@ -307,6 +323,8 @@ interface Live {
   named?: boolean;
   /** What was heard with that name put right: this is what runs. What was heard stays as it was heard. */
   meant?: string;
+  /** What the model makes of words that name somebody of the organisation (`read`): asked once, whoever runs it. Null: not asked for these. */
+  reading?: Promise<{ did: string; run(): void } | null> | null;
   /** When it began to be carried out. */
   began?: number;
   /** What goes with the words: what was circled on the screen, a file that was dropped. */
@@ -593,7 +611,21 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // and what is running does not stand in their way: "done" is said while
     // a showing runs, "undo that" after a job. They are claimed like anything
     // else, so they too happen once.
-    const side = !ask.files?.length ? deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null : null;
+    let side = !ask.files?.length ? deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null : null;
+    // Words for somebody of the organisation that are none of the fixed ones: read by the model, once, and
+    // then done by the notch itself like the others. Nothing is claimed while it reads, so the person can
+    // still turn it away or say something else; and whoever comes back from the reading second finds it run.
+    // Not for "remember that Leo ...": that is something to keep, read back whole in its own way.
+    if (!side && !ask.files?.length && deps.read && !(deps.remember && rememberSentence(ask.heard))) {
+      if (ask.reading === undefined) {
+        try { ask.reading = deps.read(ask.meant ?? ask.heard); } catch { ask.reading = null; }
+      }
+      if (ask.reading) {
+        side = await ask.reading.catch(() => null);
+        if (ask.phase !== 'heard') return;
+        if (deps.paused?.()) { refuse(ask, 'Everything is stopped. Wake me first.'); return; }
+      }
+    }
     if (side) {
       if (!ledger.claim(ask.id, 'notch')) { sync(ask); return; }
       ledger.did(ask.id, side.did);
@@ -952,6 +984,15 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
               && !deps.side?.(ask.heard, { source: ask.source, at: ask.at }) && !(deps.remember && rememberSentence(ask.heard))) {
               let doubt: NotchNameDoubt | null = null;
               try { doubt = notchNameDoubt(ask.heard, deps.people()); } catch { doubt = null; }
+              // Close to somebody the owner writes with, and exactly somebody of the organisation: that is who was
+              // named. Two people who both have that very name are still asked about.
+              if (doubt && deps.here) {
+                const firstOf = (name: string): string => (name.trim().split(/\s+/)[0] ?? '').toLowerCase();
+                const heard = firstOf(doubt.heard).replace(/['’]s?$/, '');
+                let here: { name: string }[] = [];
+                try { here = deps.here(); } catch { here = []; }
+                if (heard && !doubt.options.some((option) => firstOf(option) === heard) && here.some((one) => firstOf(one.name) === heard)) doubt = null;
+              }
               if (doubt) {
                 // How many it may be, never who: a name is not written to a log.
                 log(`[notch] a name that was heard is read back (${doubt.options.length} it may be)`);
@@ -983,7 +1024,18 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
                 if (ask.phase !== 'heard') continue;
               }
             }
-            await run(ask, stage);
+            // While the model reads who the words are for (`read`), they are still up, and Esc still turns
+            // them away: nothing was started yet. Anything else `run` does is begun before it waits.
+            const going = run(ask, stage);
+            if (listenId !== null && listenEsc && ask.reading) {
+              const first = await Promise.race([going.then(() => 'ran' as const), listenEsc]);
+              if (first === 'esc' && ask.phase === 'heard') {
+                turnAway(ask, 'You turned it away.');
+                await going;
+                return 'settled';
+              }
+            }
+            await going;
           }
           continue;
         }

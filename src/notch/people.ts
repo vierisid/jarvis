@@ -18,7 +18,13 @@
  *     and no question. Nothing is sent that the person did not say, except
  *     three small notes: "seen" when they pressed ok on a message, the pick
  *     when they answered a question, and the organisation's name when
- *     somebody joined.
+ *     somebody joined. What they said about the reader is turned to the
+ *     reader ("tell Leo I love him" reaches Leo as "I love you"), and the
+ *     line shows the words as they will go before they do (./people-read.ts).
+ *   - Any way of saying it. The fixed words below are tried first and need
+ *     no model. A sentence they do not fit, and that names somebody here, is
+ *     read by the model, and what it is read as is done by the same code
+ *     as the fixed words: never anything of the model's own.
  *   - What another person wrote is shown, word for word, and nothing else is
  *     done with it. No model reads it and nothing runs on it.
  *   - A decision of the engine (sign in here? connect with this device?) is
@@ -55,6 +61,8 @@ import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import { attachNotchPeopleTime, isTimeNote, peerTimeMinutes } from './people-time.ts';
 import { attachNotchPeopleJobs, isJobNote } from './people-jobs.ts';
+import { NOTCH_PEOPLE_READ_MS, peopleIndirect, peopleNamed, peopleReadMessages, peopleReadParse, peopleStranger } from './people-read.ts';
+import type { PeopleReading } from './people-read.ts';
 import type { NotchJobChases, NotchPeopleJobs } from './people-jobs.ts';
 import { chaseWhat } from './standing.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
@@ -223,6 +231,15 @@ export interface NotchPeopleDeps {
     known?: (place: PeerFileFound['place'], name: string) => string | null;
     paceMs?: number; retryMs?: number;
   };
+  /**
+   * One bounded question to the model: what a sentence that names somebody
+   * here means, and how its words read when they are said to that person
+   * (./people-read.ts). Without it only the fixed words are understood, and
+   * what is told goes word for word.
+   */
+  think?: (messages: { role: 'system' | 'user'; content: string }[], signal?: AbortSignal) => Promise<string>;
+  /** How long that question may take. For tests; NOTCH_PEOPLE_READ_MS otherwise. */
+  readMs?: number;
   log?: (line: string) => void;
   now?: () => number;
   /** How long the engine has to come back with its first question. For tests; NOTCH_PEOPLE_ENGINE_WAIT_MS otherwise. */
@@ -246,6 +263,13 @@ export interface NotchPeople {
   server(stage: NotchStage): Promise<void>;
   /** Words the notch acts on itself: "tell Leo ...", "ask Leo ...", "show my organisation". */
   route(text: string): { did: string; run(): void } | null;
+  /**
+   * Words for somebody here that none of the fixed words fit ("can you get
+   * me the logo from Leo"): read by the model, and then done as the fixed
+   * words are. Null at once when the sentence names nobody here or there is
+   * no model to ask; a promise of null when it is for nobody after all.
+   */
+  read(text: string): Promise<{ did: string; run(): void } | null> | null;
   /** The people by name, for reading back a name that was heard and is close to one of theirs. */
   names(): { name: string }[];
   /** Who a file can be sent to: nobody while files are not set up, or while nothing can go out. */
@@ -1631,8 +1655,118 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (!words) {
       return { did: `Tell ${to.person.name} something.`, run: () => { inbox.present('people-what', (stage) => stage.say([cap(to.verb), ' ', em(to.person.name), ' what? Say it after the name.'], 3200, { mood: 'confused' })); } };
     }
-    if (to.verb === 'ask' || /\sor\s/i.test(words)) return { did: `Ask ${to.person.name}: ${words}`, run: () => ask(to.person, words) };
-    return { did: `Tell ${to.person.name}: ${words}`, run: () => tell(to.person, words) };
+    const literal = to.verb === 'ask' || /\sor\s/i.test(words)
+      ? { did: `Ask ${to.person.name}: ${words}`, run: () => ask(to.person, words) }
+      : { did: `Tell ${to.person.name}: ${words}`, run: () => tell(to.person, words) };
+    // Words about the reader, not to them ("tell Leo I love him", "ask Leo if he is coming"): turned to the
+    // reader before they go, when there is a model to ask. Without one they go as they were said.
+    if (deps.think && peopleIndirect(to.verb, to.words)) return { did: literal.did, run: () => turned(text, to.person, literal) };
+    return literal;
+  }
+
+  // --- a sentence read by the model (./people-read.ts) ---
+
+  const readMs = deps.readMs ?? NOTCH_PEOPLE_READ_MS;
+
+  /**
+   * The model's reading of a sentence, with the people it was given: the
+   * ones the sentence names, and nobody else, so that what is read can go to
+   * nobody who was not named. `must`: somebody the fixed words already found
+   * in it. Null when there is no reading to be had: no model, no answer in
+   * time, or an answer that is none of the forms.
+   */
+  async function reading(text: string, must?: PeerPerson): Promise<{ read: PeopleReading; list: PeerPerson[] } | null> {
+    const think = deps.think;
+    const all = others();
+    const named = peopleNamed(text, all);
+    const list = all.filter((one, at) => named.includes(at) || one.id === must?.id);
+    if (!think || list.length === 0) return null;
+    // "Send Leo and Bob the deck", and Bob is nobody here: it goes to all who were named or to nobody.
+    if (peopleStranger(text, all)) { log('[notch] a sentence about somebody names somebody else as well, who is not here: not read'); return null; }
+    const stop = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const late = new Promise<null>((resolve) => { timer = setTimeout(() => { stop.abort(); resolve(null); }, readMs); });
+    try {
+      const raw = await Promise.race([think(peopleReadMessages(text, list), stop.signal), late]);
+      if (raw === null) { log('[notch] a sentence about somebody was not read by the model in time'); return null; }
+      const read = peopleReadParse(raw, list.length, text);
+      // Which form it is, never the words: what somebody is told is in no log.
+      log(`[notch] a sentence about somebody was read by the model as: ${read ? read.kind : 'nothing it can be'}`);
+      return read ? { read, list } : null;
+    } catch (error) {
+      // The kind of error only: what a provider says is not written down.
+      log(`[notch] the model could not read a sentence about somebody (${error instanceof Error ? error.name : 'error'})`);
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * What a reading comes to: one of the things the fixed words do, done by
+   * the same code, with the same line and the same moment to take it back.
+   * Null: it is for nobody here.
+   */
+  function act(got: { read: PeopleReading; list: PeerPerson[] }): { did: string; run(): void } | null {
+    const { read } = got;
+    if (read.kind === 'none') return null;
+    // Somebody who left the organisation while the model read is nobody.
+    const people = read.to.map((at) => got.list[at]).filter((one): one is PeerPerson => !!one && others().some((other) => other.id === one.id));
+    if (people.length === 0 || people.length !== read.to.length) return null;
+    const one = people[0]!;
+    const theirs = `${one.name}'s ${NOTCH_NAME}`;
+    if (read.kind === 'tell' || read.kind === 'ask') {
+      const words = cap(peerPlain(read.words, NOTCH_PEOPLE_SAY_MAX));
+      if (!words) return null;
+      return read.kind === 'ask' ? { did: `Ask ${one.name}: ${words}`, run: () => ask(one, words) } : { did: `Tell ${one.name}: ${words}`, run: () => tell(one, words) };
+    }
+    if (read.kind === 'do') {
+      const asked = cap(peerPlain(read.words, NOTCH_PEOPLE_SAY_MAX));
+      return asked ? { did: `Ask ${theirs}: ${asked}`, run: () => request(one, asked) } : null;
+    }
+    if (read.kind === 'file-from' || read.kind === 'file-to') {
+      const file = peerPlain(read.what, PEER_FILE_WHAT_MAX);
+      if (!files || !file) return null;
+      if (read.kind === 'file-from') return { did: `Ask ${theirs} for a file: ${file}`, run: () => files.want(one, file) };
+      const names = people.map((each) => each.name);
+      const to = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
+      return { did: `Send ${to} a file of mine: ${file}`, run: () => files.give(people, file) };
+    }
+    if (read.kind === 'time') {
+      // Half an hour or an hour, as when it is said in the fixed words: those are the lengths the two Pillows compare.
+      const minutes = peerTimeMinutes(`${read.minutes} minutes`);
+      return { did: `Find a time with ${one.name}: ${minutes} minutes`, run: () => times.find(one, minutes) };
+    }
+    return { did: `Show ${one.name} what was circled.`, run: () => sendLook(one) };
+  }
+
+  /**
+   * Words for somebody here that none of the fixed words fit: "can you get
+   * me the logo from Leo", "hey, I need Leo to know I am late". Null at once
+   * when the sentence names nobody here, so that a sentence about anything
+   * else waits for nothing.
+   */
+  function read(text: string): Promise<{ did: string; run(): void } | null> | null {
+    if (!deps.think) return null;
+    const all = others();
+    if (all.length === 0 || peopleNamed(text, all).length === 0) return null;
+    return reading(text).then((got) => (got ? act(got) : null));
+  }
+
+  /**
+   * A word or a question that the fixed words found, whose words are about
+   * the reader: the model turns them to the reader, and then they go as any
+   * word does, shown first. When it cannot be asked, is slow, or makes
+   * something else of the sentence, they go as they were said.
+   */
+  function turned(text: string, to: PeerPerson, literal: { did: string; run(): void }): void {
+    inbox.present('people-read', async (stage) => {
+      const got = await meanwhile(stage, ['One moment…'], reading(text, to));
+      // A word, a question, or a file of theirs, and for the one who was named: nothing else the model made of it is taken.
+      const fits = got && (got.read.kind === 'tell' || got.read.kind === 'ask' || got.read.kind === 'file-from') && got.read.to.length === 1 && got.list[got.read.to[0]!]?.id === to.id;
+      const meant = fits ? act(got) : null;
+      inbox.after(() => { inbox.own(() => { (meant ?? literal).run(); }); });
+    });
   }
 
   // --- what arrives ---
@@ -2436,7 +2570,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   setup?.onChange(() => { inbox.refresh(); });
 
   return {
-    row, rows, open, server, route, look, tick,
+    row, rows, open, server, route, read, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
     fileTargets: () => (files && link.account().engine === 'up' && link.account().signedIn ? others().map((one) => ({ id: one.id, name: one.name })) : []),
     sendFile(to, file) { const one = person(to); if (!files || !one) return false; files.send(one, file); return true; },
