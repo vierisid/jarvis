@@ -1160,7 +1160,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   function tell(to: PeerPerson, words: string): void {
     inbox.present('people-tell', async (stage) => {
       // Their own words: all of them go, and the line shows where they begin.
-      const went = await stage.fuse(['Telling ', em(to.name), ': ', beginning(words, NOTCH_PEOPLE_GOING_MAX), ...(words.length > NOTCH_PEOPLE_GOING_MAX ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
+      // The dots say that it is on its way. Words that end a sentence themselves ("How are you?", "Call me.") stand as they are.
+      const went = await stage.fuse(['Telling ', em(to.name), ': ', beginning(words, NOTCH_PEOPLE_GOING_MAX), ...(words.length > NOTCH_PEOPLE_GOING_MAX || /[.!?…]$/.test(words) ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
       if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
       // Nobody saw the line burn: what nobody may have seen does not go out.
       if (went === 'lost') return;

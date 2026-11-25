@@ -3975,7 +3975,8 @@ describe('a sentence read by the model', () => {
     // A question that one key cannot answer is told: Leo reads it and answers in his own words.
     sam.readState.says = '{"kind":"tell","to":[1],"words":"How are you?"}';
     expect(await sam.say('ask Leo how he is')).toBe(true);
-    expect(sam.said()).toBe('Telling Leo: How are you?…');
+    // Words that end their own sentence get no dots after them.
+    expect(sam.said()).toBe('Telling Leo: How are you?');
   });
 
   test('"tell Leo to send me the deck" may be read as a file of his; anything else the model makes of a word to Leo is not taken', async () => {
