@@ -51,7 +51,7 @@ function harness(start = at(10)) {
   fromPage({ type: 'hello', v: 1 });
   const real: NotchReal = attachNotchReal(surface, {
     approvalManager: new ApprovalManager(),
-    approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+    approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
     where: { port: { ...port, dispatchRPC: async () => ({}) } },
     asks: undefined,
     day: { db: new Database(':memory:'), around: port, now: () => now, noClock: true },

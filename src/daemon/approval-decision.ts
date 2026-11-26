@@ -20,6 +20,13 @@ import { approvalChannelCard, approvalToast, LITERAL_TEXT_CHANNELS, LOOK_ALIKE_R
 /** Who decided, when the yes was given on the desktop notch. */
 export { NOTCH_DECIDER };
 
+/**
+ * Who decided, when nobody did: the brain closed a request itself, because
+ * what asked for it was over. The audit writes it on the `system` channel
+ * (`resolutionChannel`), never as a person's no.
+ */
+export const SYSTEM_DECIDER = 'system';
+
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
   /** Optional revision fence supplied by a decision surface. Runs before a durable write. */

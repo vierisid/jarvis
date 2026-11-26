@@ -102,6 +102,12 @@ export interface NotchRealDeps {
   approve(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Denies through the same function, as the notch: what Esc on an approval's line does. */
   deny(requestId: string): Promise<ApprovalDecisionOutcome>;
+  /**
+   * Closes an approval nobody answered, because the instruction that asked
+   * for it is over. Through the same function, as the system and not as the
+   * notch: the owner said nothing, and the audit must not say they said no.
+   */
+  withdraw(requestId: string): Promise<ApprovalDecisionOutcome>;
   /** Approves as a click on the dashboard card does. Given only when fixtures may be made, and used by them only. */
   approveAsDashboard?: (requestId: string) => Promise<ApprovalDecisionOutcome>;
   /** The brain's own tools, once loaded. Used by the shell command fixture only, and given only when fixtures may be made. */
@@ -676,8 +682,10 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
       callHeard: () => calls?.listening() ?? false,
       stillFor: () => presence?.stillFor() ?? 0,
-      // The instruction is over: what it was still asking for is asked no more.
-      withdrawApproval: (approvalId) => { void deps.deny(approvalId).catch(() => {}); },
+      // The instruction is over: what it was still asking for is asked no more. Closed as the system:
+      // it went through `deny`, and every turn that ended was written in the audit as the owner's no
+      // on the notch (the review of 26 November 2026).
+      withdrawApproval: (approvalId) => { void deps.withdraw(approvalId).catch(() => {}); },
       attention: () => surface.act({ gesture: 'shake' }),
       nod: () => surface.act({ gesture: 'nodg', kick: 240 }),
       reach: (aim) => surface.act({ lip: 'reach', aim }),

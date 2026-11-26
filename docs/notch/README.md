@@ -169,6 +169,12 @@ What holds for all of them:
     answered: it goes back to the count and comes round again. Esc inside a
     fuse takes back the yes just given, and nothing else. By the owner's
     decision of 13 November 2026; before it, Esc only meant "not now".
+    An approval that nobody answered, closed because the instruction that
+    asked for it is over, is not a no of the owner's and is not written down
+    as one: it is closed through the same function as the system
+    (`withdraw`, since 26 November 2026). It had been closed as the notch,
+    and the audit said the owner had said no there to things they were
+    never asked.
 22. **A yes is not acted on at once.** A fuse burns first and Esc takes it
     back. Nothing has been decided while it burns, so nothing has to be
     undone. A fuse nobody saw burn out (the page went away) decides nothing.

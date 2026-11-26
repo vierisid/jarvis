@@ -11,7 +11,7 @@ import { approvalToast } from '../authority/approval-delivery.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
-import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
+import { NOTCH_DECIDER, SYSTEM_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import type { RawInteraction } from '../skills/recorder.ts';
 import { NOTCH_WATCH_EVENT } from './catch.ts';
@@ -64,6 +64,7 @@ function harness() {
     approvalManager: approvals,
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
     deny: (id) => applyApprovalDecision('deny', id, NOTCH_DECIDER, deps),
+    withdraw: (id) => applyApprovalDecision('deny', id, SYSTEM_DECIDER, deps),
     deliverApproval: (request) => { delivered.push(request.id); },
     openDashboard: (from) => { opened.push(from); },
     approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
@@ -140,7 +141,7 @@ describe('the approval fixture, from the command to Today', () => {
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} }, () => {});
     onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
     const real = attachNotchReal(surface, {
-      approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       openFailures: () => open,
       recordFixtureFailure: () => { open.push({ key: 'k', headline: 'The notch test failed, and Jarvis cannot tell whether it took effect.' }); return open[0]!.headline; },
       lookMs: 3_600_000, log: () => {},
@@ -192,10 +193,10 @@ describe('the approval fixture, from the command to Today', () => {
   test('without the brain\'s tools there is no command fixture, and before they are loaded it says so', async () => {
     const approvals = new ApprovalManager();
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} }, () => {});
-    const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
+    const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
     expect(none.fixtures.kinds()).toEqual(['approval', 'payment']);
     none.stop();
-    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
+    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
     live = early;
     await expect(early.fixtures.make('command', {})).rejects.toThrow('has not loaded its tools yet');
     expect(approvals.getPending()).toEqual([]);
@@ -329,7 +330,7 @@ describe('doing it in view, put together (pass 10)', () => {
     const hearers = new Set<(interaction: RawInteraction, count: number) => void>();
     let watchAsked = 0;
     const real = attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       jobs: {
         db: getDb(), noClock: true,
@@ -449,7 +450,7 @@ describe('words the notch acts on itself, typed into Home as a person types them
     fromPage({ type: 'hello', v: 1 });
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
-      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       day: { db: getDb(), noClock: true },
       lookMs: 3_600_000,
@@ -504,7 +505,7 @@ describe('a call that is listened to, put together', () => {
     ];
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
-      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       day: { db: getDb(), noClock: true, around: { onEvent(listener) { around = listener; }, onSidecarDisconnected() {} } },
       calls: {
@@ -606,7 +607,7 @@ describe("other people's Jarvises, put together", () => {
     engine.notice = link.notice;
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
-      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       day: { db: getDb(), noClock: true },
       ...(given ? { peers: { db: getDb(), link, openPage: async () => true, noClock: true, ...(think ? { think: async (messages: { role: string; content: string }[]) => think(messages[1]!.content.split('\n').pop()!) } : {}) } } : {}),
@@ -711,7 +712,7 @@ function assembledNotch(think: () => string) {
     const submitted: { text: string; requestId: string }[] = [];
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
-      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       emergency: { getState: () => (state.paused ? 'paused' : 'normal'), pause() { state.paused = true; }, resume() { state.paused = false; }, subscribe() { return () => {}; } } as never,
       asks: {
         db: getDb(), modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null,
@@ -797,7 +798,7 @@ describe('a call that was not listened to leaves the notch to its owner, put tog
     const submitted: string[] = [];
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
-      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: {
         db: getDb(), modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null,
         turns: () => ({ ready: () => true, conversation: () => 'conv-notch', submit(turn: { text: string }) { submitted.push(turn.text); }, cancel() {}, onEvent: () => () => {}, look: () => null, mark() {} }) as never,
@@ -1061,7 +1062,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
       return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
     } });
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       emergency: { getState: () => (state.broken ? boom('the pause') : 'normal'), pause() {}, resume() {}, subscribe() { return () => {}; } } as never,
       asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       jobs: jobsDeps(),
@@ -1093,7 +1094,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     const { surface } = page();
     const logs: string[] = [];
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       onTaskEnded: () => { throw new Error('the task manager is broken'); },
       lookMs: 3_600_000, log: (line) => logs.push(line),
     }));
@@ -1116,7 +1117,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
   test('a notch that was stopped no longer says it tells the person: what waits is toasted again', () => {
     const { surface } = page();
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       lookMs: 3_600_000, log: () => {},
     }));
     const real = made.out!;
@@ -1131,7 +1132,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     const { surface } = page();
     const logs: string[] = [];
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       promises: {
         executor: { subscribe: () => () => { throw new ReferenceError('gone is not defined'); }, cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {} },
         create: () => ({ id: 'p', when_due: null }), kept: () => [],
@@ -1146,7 +1147,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
   test('stop clears every clock, takes the line off the notch, and nothing comes up after it', async () => {
     const { surface, fromPage } = page();
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       jobs: jobsDeps(),
       questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) },
@@ -1177,7 +1178,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     const { surface, fromPage } = page();
     const logs: string[] = [];
     const made = clocks(() => attachNotchReal(surface, {
-      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
       jobs: jobsDeps(),
       questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) },
@@ -1195,6 +1196,64 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     fromPage({ type: 'open' });
     await settle();
     expect(surface.current().line).toBeNull();
+  });
+});
+
+// The review of 26 November 2026: every instruction that ended with an approval still unanswered
+// closed it through `deny`, as the notch. The audit said the owner had said no on the notch, to
+// something they were never asked.
+describe('an instruction that ends with an approval unanswered', () => {
+  test('closes it as the system: the audit does not say the owner said no on the notch', async () => {
+    const approvals = new ApprovalManager();
+    const audit = new AuditTrail();
+    const deps: ApprovalDecisionDeps = { approvalManager: approvals, deferredExecutor: new DeferredExecutor(approvals, audit), auditTrail: audit };
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    const listeners = new Set<(event: unknown) => void>();
+    const turns: { conversationId: string; turnId: string; requestId: string }[] = [];
+    const closedAs: string[] = [];
+    const real = attachNotchReal(surface, {
+      approvalManager: approvals,
+      approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
+      deny: (id) => { closedAs.push('the notch'); return applyApprovalDecision('deny', id, NOTCH_DECIDER, deps); },
+      withdraw: (id) => { closedAs.push('the system'); return applyApprovalDecision('deny', id, SYSTEM_DECIDER, deps); },
+      asks: {
+        db: getDb(), modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null,
+        turns: () => ({
+          ready: () => true, conversation: () => 'conv-notch',
+          submit(turn: { conversationId: string; turnId: string; requestId: string }) { turns.push({ conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId }); },
+          cancel() {}, look: () => null, mark() {},
+          onEvent(listener: (event: unknown) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        }) as never,
+      },
+      day: { db: getDb(), noClock: true },
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    live = real;
+    const wait = async (): Promise<void> => { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); for (let i = 0; i < 60; i++) await Promise.resolve(); };
+    let sequence = 0;
+    const emit = (payload: unknown): void => { for (const listener of [...listeners]) listener({ ...turns[0]!, eventId: `e${++sequence}`, sequence, payload }); };
+
+    fromPage({ type: 'open' });
+    await wait();
+    fromPage({ type: 'answer', id: surface.current().line!.id, act: 'ask', text: 'Send the numbers to Sam' });
+    await wait();
+    expect(turns).toHaveLength(1);
+    // The turn asks for an approval, and then ends without it having been answered.
+    const request = approvals.createRequest({ agentId: 'a1', agentName: 'PA', toolName: 'send_email', toolArguments: { to: 'sam@northwind.example' }, actionCategory: 'send_email', urgency: 'normal', reason: 'test', context: '' });
+    emit({ kind: 'approval', approvalId: request.id, status: 'pending' });
+    await wait();
+    emit({ kind: 'terminal', state: 'completed' });
+    await wait();
+
+    expect(closedAs).toEqual(['the system']);
+    expect(approvals.getRequest(request.id)).toMatchObject({ status: 'denied', decided_by: SYSTEM_DECIDER });
+    expect(getDb().query('SELECT channel, decided_by, authority_decision FROM audit_trail WHERE approval_id = ?').all(request.id))
+      .toEqual([{ channel: 'system', decided_by: 'system', authority_decision: 'denied' }]);
   });
 });
 

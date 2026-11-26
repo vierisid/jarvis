@@ -144,7 +144,7 @@ import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { NOTCH_DECIDER, applyApprovalDecision, channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
+import { NOTCH_DECIDER, SYSTEM_DECIDER, applyApprovalDecision, channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { approvalHeldByAwareness, approvalIsWatched } from "../authority/approval-provenance.ts";
 import { sendDesktopNotification, sendDesktopNotificationReceipt } from "../comms/desktop-notify.ts";
 import { channelLabel, failureText, projectFailure } from "../failures/projection.ts";
@@ -4853,6 +4853,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.
         deny: (requestId) => applyApprovalDecision('deny', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
+        // An instruction that ended with an approval unanswered: closed through the same function, as
+        // the system. Nobody said no, and the audit does not say the owner did.
+        withdraw: (requestId) => applyApprovalDecision('deny', requestId, SYSTEM_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         deliverApproval: (request) => approvalDelivery.deliver(request),
         // For the hand test, demo gate only: the shell command fixture is
         // filed against the brain's real run_command tool.
