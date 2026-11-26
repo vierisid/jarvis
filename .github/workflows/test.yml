@@ -894,6 +894,9 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     # Cross-build and vet both targets below without relying on ARM runner capacity.
     runs-on: macos-26-intel
+    # For a runner that stands still. How long the job takes with the tests
+    # in it has not been measured yet; the tests have a limit of their own.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -917,8 +920,9 @@ jobs:
           # a test that waits for the main thread hangs here, which is the
           # point, and the timeout turns that into a failure with every
           # goroutine's stack instead of a job that runs to its limit.
-          # The Chromium-driving tests stay on linux, where they are retried
-          # (same shape as CHROMIUM_TESTS in sidecar-build).
+          # The Chromium-driving tests stay on linux, where they are retried.
+          # The pattern is CHROMIUM_TESTS of sidecar-build, written out: that
+          # one is set on its job, and no job reads another one's env.
           go test -count=1 -timeout 10m -skip '^TestBrowser.*Integration$' .
           # Both architectures, at the SAME deployment target the release uses.
           # That target is what makes APIs newer SDKs mark obsoleted fail here
