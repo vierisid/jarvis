@@ -923,7 +923,7 @@ jobs:
       # as static Linux binaries for x64 and arm64 so an npm install sandboxes
       # its engines without Go. Without one the daemon warns and runs them
       # unsandboxed, or refuses under workflows.sandbox: require.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           # The Actions cache is writable by any run on main (#681).
           cache: false
