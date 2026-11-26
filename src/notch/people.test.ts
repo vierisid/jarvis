@@ -874,6 +874,18 @@ describe("asking somebody's Pillow for something", () => {
     return all;
   }
 
+  test('the answer the owner let go with "Send it" is one entry, the answer on a line, by a pick', async () => {
+    const { sam, leo } = await joined();
+    await sam.say("ask Leo's Pillow what changed in the last deck");
+    await sam.done();
+    await sam.done();
+    await leo.pick(0);
+    expect(leo.actions.since(0)).toEqual([]);
+    await leo.pick(0);
+    expect(leo.said()).toBe('Sent. Only that left this laptop.');
+    expect(leo.actions.since(0)).toMatchObject([{ kind: 'people_request_answer', outcome: 'done', what: 'Answered a request from Sam', target: 'Sam', seen: 'line', how: 'pick' }]);
+  });
+
   test('they say yes there, it is found, they see it before it goes, and it comes back', async () => {
     const { sam, leo } = await joined();
     await sam.say("ask Leo's Pillow what changed in the last deck");
@@ -3114,6 +3126,22 @@ describe('a time that is free for two people', () => {
     expect(sam.opened.at(-1)).toBe('https://calendar.google.com/calendar/render?action=TEMPLATE&text=Leo&dates=20270121T100000Z/20270121T103000Z');
   });
 
+  test('the answer the asked Pillow gives by itself, and the yes to a time, are each one entry. How many times, never which', async () => {
+    const { sam, leo } = await compared();
+    await sam.done();
+    await through(sam, leo);
+    expect(leo.actions.since(0)).toMatchObject([{ kind: 'people_time', outcome: 'done', what: "Told Sam's Pillow 3 times free for both", target: 'Sam', seen: 'nothing', how: 'system' }]);
+    await sam.pick(1);
+    await sam.done();
+    await sam.done();
+    await through(sam, leo);
+    if (!leo.said() || /asked when you are both free/.test(leo.said())) { if (leo.said()) await leo.done(); await leo.tap(); }
+    if (/asked when you are both free/.test(leo.said())) { await leo.done(); await leo.tap(); }
+    await leo.pick(0);
+    expect(leo.actions.since(0)[0]).toMatchObject({ kind: 'people_time', outcome: 'done', what: 'Told Sam yes to 30 min on Thursday at 10:00', seen: 'line', how: 'pick' });
+    expect(leo.actions.since(0)).toHaveLength(2);
+  });
+
   test('"Not then": the asker hears it, and is offered the other times that were free for both', async () => {
     const { sam, leo } = await compared();
     await sam.done();
@@ -3305,6 +3333,14 @@ describe('the rule per person', () => {
     await leo.done();
     expect(leo.blocks()).toContain('Connected by a code. Gets answers without asking.');
     expect(leo.blocks()).toContain('Ask me every time');
+  });
+
+  test('an answer sent by the rule is one entry, by the system with nothing before the owner, and none of its words', async () => {
+    const { sam, leo } = await trusted();
+    await cycle(sam, leo);
+    for (let round = 0; round < 4; round++) await settle();
+    expect(leo.actions.since(0)).toMatchObject([{ kind: 'people_request_answer', outcome: 'done', what: 'Answered a request from Sam, by your rule for them', target: 'Sam', seen: 'nothing', how: 'system' }]);
+    expect(JSON.stringify(leo.actionsDb.query('SELECT * FROM notch_actions').all())).not.toContain('slides');
   });
 
   test('with it, a thing to find out is answered without a question, and the owner is told after, with what went', async () => {
@@ -3551,6 +3587,19 @@ describe('an agent, sent to somebody', () => {
     await settle();
     if (!sam.said()) await sam.tap();
     expect(sam.said()).toBe("Leo took Tony on. On Leo's laptop it asks first, like every new agent.");
+  });
+
+  test('the yes that goes back is one entry on the side that took it on, and "Not now" writes none', async () => {
+    const took = await sent();
+    await took.sam.done();
+    await took.sam.done();
+    await took.leo.pick(0);
+    expect(took.leo.actions.since(0)).toMatchObject([{ kind: 'people_agent_yes', outcome: 'done', what: 'Told Sam you took their agent Tony on', target: 'Sam', seen: 'line', how: 'pick', fuseMs: null }]);
+    const passed = await sent();
+    await passed.sam.done();
+    await passed.sam.done();
+    await passed.leo.pick(1);
+    expect(passed.leo.actions.since(0)).toEqual([]);
   });
 
   test('"Not now" makes nothing, and the sender hears it', async () => {

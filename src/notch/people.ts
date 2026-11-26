@@ -56,7 +56,7 @@
  *   - The work is reading and looking. Whatever would change the machine or
  *     reach somebody stops for an approval of its own (src/daemon/notch-peers.ts).
  */
-import { notchSentOutcome, type NotchActionHow, type NotchActionKind, type NotchActions } from './actions.ts';
+import { notchAskedHow, notchSentOutcome, type NotchActionAsked, type NotchActionHow, type NotchActionKind, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
@@ -1407,11 +1407,14 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       check: () => store.got(item.id)?.done !== true,
       play: async (stage) => {
         let yes: boolean;
+        /** What the owner had before them when they said whether to take it on, and how they said it. */
+        let asked: NotchActionAsked = { seen: 'line', how: 'pick' };
         // What it will do is read whole before it is taken on: on the line when it fits, on a sheet when it does not.
         if (says.map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('').length <= NOTCH_PEOPLE_LINE_MAX + 40) {
           const picked = await stage.choose(says, ['Take it on', 'Not now'], { who: from.name, mood: 'look' });
           if (picked.act !== 'pick' || typeof picked.index !== 'number') return 'waits';
           yes = picked.index === 0;
+          asked = { seen: 'line', how: notchAskedHow(stage, 'pick') };
         } else {
           const first = await stage.offer([em(from.name), ' sends you an agent, ', em(note.name), '. Read what it does?'], 'read', { who: from.name, mood: 'look' });
           if (first.act !== 'yes') return 'waits';
@@ -1421,10 +1424,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           const answer = await stage.answer(id, ['yes', 'no', 'button']);
           if (answer.act === 'no') return 'waits';
           yes = answer.act === 'yes';
+          asked = { seen: 'sheet', how: notchAskedHow(stage) };
         }
         // One that cannot be made here is not said yes to: the other side is told no.
         const can = yes && !!deps.agents;
         const told = await link.tell(item.from, peerNoteText(can ? `Yes, I took ${note.name} on.` : 'Not now.', { kind: can ? 'agent-yes' : 'agent-no', of: note.id }), { replyTo: item.id });
+        // The yes that went to them in the owner's name (a no takes nothing on, and is not written down).
+        if (can) deps.actions?.record({ kind: 'people_agent_yes', ref: `agent-in:${note.id}`, what: `Told ${from.name} you took their agent ${note.name} on`, target: from.name, asked, outcome: notchSentOutcome(told) });
         if (!told.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
         store.done(item.id);
         void link.seen(item.id);
@@ -2038,7 +2044,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   }
 
   /** "For Sam: ... Send only that?" The answer to the engine's own question about what is about to leave. */
-  function sendOnly(stage: NotchStage, from: PeerPerson, answer: string, waiting: Waiting) {
+  function sendOnly(stage: NotchStage, from: PeerPerson, answer: string, waiting: Waiting, shown?: (asked: NotchActionAsked) => void) {
     return async (): Promise<Record<string, unknown> | null> => {
       waiting.reached();
       if (waiting.over()) return null;
@@ -2047,6 +2053,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         const said = await stage.choose(['For ', em(from.name), ': ', answer, ' Send only that?'], ['Send it', 'No'], { who: from.name, mood: 'look' });
         if (said.act !== 'pick') return null;
         waiting.line(['One moment…']);
+        if (said.index === 0) shown?.({ seen: 'line', how: notchAskedHow(stage, 'pick') });
         return said.index === 0 ? { choice: 'send' } : { choice: 'cancel' };
       }
       const first = await stage.offer(['I have the answer for ', em(from.name), '. Read it before it goes?'], 'read', { who: from.name, mood: 'look' });
@@ -2059,6 +2066,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const said = await stage.answer(id, ['yes', 'no', 'button']);
       const chosen = said.act === 'yes' ? { choice: 'send' } : said.act === 'button' && said.button === 'no' ? { choice: 'cancel' } : null;
       if (chosen) waiting.line(['One moment…']);
+      if (said.act === 'yes') shown?.({ seen: 'sheet', how: notchAskedHow(stage) });
       return chosen;
     };
   }
@@ -2196,6 +2204,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (finished === 'sent') {
       store.requestState(taskId, 'done');
       ended();
+      // It went in the owner's name by their rule for this person, with nobody asked just then. Never the words.
+      deps.actions?.record({ kind: 'people_request_answer', ref: `request:${taskId}`, what: `Answered a request from ${from.name}, by your rule for them`, target: from.name, asked: { seen: 'nothing', how: 'system' }, outcome: 'done' });
       log('[peers] a request was answered without asking, by the owner\'s rule for that person');
       toldAfter(taskId, from, row.words, answer);
       return;
@@ -2354,8 +2364,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
           const ruleNow = await Promise.race([ruleOf(from), sending.gone]);
           if (ruleNow === 'stop') return 'waits';
           if (ruleNow === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
+          /** What the owner had before them when the answer was let go: nothing, when the rule sent it without a question. */
+          let shown: NotchActionAsked = { seen: 'nothing', how: 'system' };
+          const seen = (asked: NotchActionAsked): void => { shown = asked; };
           if (ruleNow === 'answers') {
-            const said = await sendOnly(stage, from, row.answer, sending)();
+            const said = await sendOnly(stage, from, row.answer, sending, seen)();
             if (!said) return 'waits';
             if (said.choice !== 'send') {
               store.requestState(taskId, 'no'); ended(); streak(from.id, 0); void link.refuse(taskId);
@@ -2363,7 +2376,14 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
               return 'settled';
             }
           }
-          const finished = await Promise.race([link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer, sending) }), sending.gone]);
+          const finished = await Promise.race([link.finish(taskId, row.answer, { result: sendOnly(stage, from, row.answer, sending, seen) }), sending.gone]);
+          /** What came of the answer, written down (./actions.ts). Never its words. */
+          const noted = (outcome: 'done' | 'not_done'): void => {
+            deps.actions?.record({ kind: 'people_request_answer', ref: `request:${taskId}`, what: `Answered a request from ${from.name}`, target: from.name, asked: shown, outcome });
+          };
+          if (finished === 'sent') noted('done');
+          // A yes to the answer that stood, and it did not go: that is written too. With no yes, nothing was decided.
+          else if (shown.how !== 'system' && finished !== 'closed' && finished !== 'stop') noted('not_done');
           if (finished === 'closed' || finished === 'stop') return 'waits';
           if (finished === 'failed' || finished === 'late') { await stage.say(['I could not send it now. It waits for you.'], 3000, { mood: 'sorry' }); return 'waits'; }
           if (finished === 'sent') {

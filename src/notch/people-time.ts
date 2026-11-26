@@ -33,7 +33,7 @@
  *     longer free is said to be so.
  *   - Each side says a time in its own clock.
  */
-import { notchSentOutcome, type NotchActions } from './actions.ts';
+import { notchAskedHow, notchSentOutcome, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchPart } from './protocol.ts';
@@ -276,6 +276,11 @@ export function attachNotchPeopleTime(deps: NotchPeopleTimeDeps): NotchPeopleTim
     const fits = mailPickStarts(both, zone).slice(0, PEER_TIME_FITS_MAX);
     const sentence = !mine ? `My ${NOTCH_NAME} cannot read my calendar.` : fits.length ? `Free for both of us (my time): ${fits.map(says).join(', ')}.` : 'Nothing is free for both of us in the next days.';
     const told = await link.tell(from.id, peerNoteText(sentence, { kind: 'time-fit', of: note.id, fits: fits.map((at) => Math.round(at / MINUTE)), ...(mine ? {} : { blind: true }) }), { replyTo: item.id });
+    // Answered by itself, in the owner's name, with nobody asked: written down, how many and never which.
+    deps.actions?.record({
+      kind: 'people_time', target: from.name, asked: { seen: 'nothing', how: 'system' }, outcome: notchSentOutcome(told),
+      what: !mine ? `Told ${theirs(from)} your calendar could not be read` : `Told ${theirs(from)} ${fits.length} time${fits.length === 1 ? '' : 's'} free for both`,
+    });
     settle();
     // How many, never which.
     log(`[notch] a comparing of calendars was answered: ${note.free.length} asked about, ${fits.length} named${mine ? '' : ' (no calendar here)'}${told.ok ? '' : ', not sent'}`);
@@ -308,6 +313,8 @@ export function attachNotchPeopleTime(deps: NotchPeopleTimeDeps): NotchPeopleTim
         if (picked.act !== 'pick' || typeof picked.index !== 'number') return 'waits';
         const yes = picked.index === 0;
         const told = await link.tell(from.id, peerNoteText(yes ? `Yes: ${says(at)} (my time).` : 'Not then.', { kind: yes ? 'time-yes' : 'time-no', of: note.id }), { replyTo: item.id });
+        // The yes went in the owner's name: written down. "Not then" commits them to nothing, and is not.
+        if (yes) deps.actions?.record({ kind: 'people_time', ref: `time-yes:${note.id}`, what: `Told ${from.name} yes to ${short(note.minutes)} on ${says(at)}`, target: from.name, asked: { seen: 'line', how: notchAskedHow(stage, 'pick') }, outcome: notchSentOutcome(told) });
         if (!told.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
         settle();
         if (!yes) { await stage.say(['Told ', em(from.name), ' not then.'], 2600, { who: from.name }); return 'settled'; }

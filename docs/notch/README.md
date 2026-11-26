@@ -3028,6 +3028,9 @@ What is written down, and where:
 | The follow-up of a call | the follow-up on a sheet | yes key, or said | 5 s | new |
 | A word, a question, a request, an agent, something circled, sent to somebody | the line under the fuse | said | 3 s | new |
 | An answer to somebody's question | their question on a line | a pick | 3 s | new |
+| The answer to a request from their Pillow | the answer on a line or a sheet, or nothing (the owner's rule) | a pick, yes key, or the system | none | new |
+| Free times named to a Pillow that asked to compare | nothing | the system | none | new |
+| "Yes" to a time somebody asked for, "yes" to an agent somebody sent | the line, or the agent's sheet | a pick, or yes key | none | new |
 | A file offered to somebody, and sent | the line under the fuse | said | 3 s, or longer for one picked from a folder | new |
 | A job handed to somebody, a time asked of them | the line under the fuse | said, or a pick | 3 s | new |
 | An agent made | its sentence on a line | yes key, or said | none | the agent's own |
@@ -3043,13 +3046,21 @@ What is not done, or not proven:
 - **"Said" is what the owner's words started, and a press on a card too.**
   What is sent to somebody is written as said. A file that was dropped on
   the notch and sent with a press on its card reads the same.
-- **Answers that are no send of the owner's own are not written.** "Yes, I
-  took it", "No, thank you", "Seen", "Got it", and the pieces of a file:
-  the engine carries them, and they follow an answer the owner gave on a
-  line. A file that arrived and was saved is not written either.
-- **What is done for somebody who asked** (a request from their Pillow,
-  step by step under the owner's eyes) is the assistant's work: its steps
-  are approvals, and those have their own audit.
+- **Answers that commit the owner to nothing are not written.** "No,
+  thank you", "Not now", "Not then", "Seen", "Got it", and the pieces of a
+  file: the engine carries them. A file that arrived and was saved is not
+  written either. What does go out in the owner's name as an answer is
+  written, since the review of 26 November 2026: the answer to a request
+  from somebody's Pillow (on "Send it", or by the owner's rule for that
+  person, as the system), the free times this Pillow names by itself when
+  another asks to compare calendars (how many, never which), "yes" to a
+  time somebody asked for, and "yes, I took it on" to an agent somebody
+  sent. A chase taken over from somebody ("Yes, I took it") is written as
+  the chase's first mail.
+- **The steps done for somebody who asked** (a thing done on this laptop,
+  step by step under the owner's eyes) are the assistant's work: each is a
+  tool call, and those have their own audit. What is sent back at the end
+  is written, as above.
 - **An instruction to the assistant is not in the list.** What a turn does
   is audited by the product as ever, tool by tool.
 - **After a restart a reply that may have gone is not looked for** (the

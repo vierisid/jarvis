@@ -50,7 +50,7 @@ import { NOTCH_NAME } from './name.ts';
 export type NotchActionKind =
   | 'mail_reply' | 'mail_slot' | 'chase_mail' | 'chase_followup' | 'call_followup'
   | 'people_tell' | 'people_ask' | 'people_answer' | 'people_request' | 'people_share' | 'people_agent' | 'people_file' | 'people_file_ask'
-  | 'people_job' | 'people_time'
+  | 'people_job' | 'people_time' | 'people_request_answer' | 'people_agent_yes'
   | 'agent_made' | 'agent_rung' | 'agent_paused' | 'agent_run' | 'agent_gone'
   | 'job_rounds' | 'job_skill' | 'put'
   | 'promise' | 'question' | 'approval';
@@ -148,6 +148,7 @@ export const NOTCH_ACTION_CATEGORY: Record<Exclude<NotchActionKind, 'approval'>,
   mail_reply: 'send_email', mail_slot: 'send_email', chase_mail: 'send_email', chase_followup: 'send_email', call_followup: 'send_email',
   people_tell: 'send_message', people_ask: 'send_message', people_answer: 'send_message', people_request: 'send_message', people_share: 'send_message',
   people_agent: 'send_message', people_file: 'send_message', people_file_ask: 'send_message', people_job: 'send_message', people_time: 'send_message',
+  people_request_answer: 'send_message', people_agent_yes: 'send_message',
   agent_made: 'spawn_agent', agent_rung: 'modify_settings', agent_paused: 'modify_settings', agent_run: 'spawn_agent', agent_gone: 'terminate_agent',
   job_rounds: 'control_app', job_skill: 'control_app', put: 'control_app',
   promise: 'write_data', question: 'write_data',
