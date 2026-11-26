@@ -356,6 +356,8 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
     // What the yes sets off is the line's own: the line was shown, and this is its answer.
     id: 'said.answer', feature: 'saidLine', says: 'what is said over a line that is up answers that line: its yes, its no, or a new value for one of its lit words', band: 'up', act: 'none', first: 'acts',
     examples: ['yes do it', 'not now', 'make it Friday at ten'],
+    // "Do it" over an offer is the yes to it, also when a job was once shown that "do it" could mean (rule 206).
+    over: ['teach.run'],
     match(text, how) {
       const was = up;
       // Meant only by what was said with the keys that took the line off: not by what is typed, and not by the next thing said.

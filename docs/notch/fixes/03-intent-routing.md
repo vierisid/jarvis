@@ -72,8 +72,12 @@ the general turn.
 - Decision 5 (2026-11-26): "do it again" with no fresh job acts at once only when the job's window is in
   front. Otherwise it shows a line ("Do <job> again?") and waits for the yes.
 - Not decided yet, so pinned in the corpus and not marked: a bare "at 6" (afternoon or refused), "stop" as a
-  control word, whether control and open intents rank above an open mail draft, what the classifier may see
-  of the screen beyond the app's name, what a sentence that could not be read in time may do.
+  control word, whether open intents and commands rank above an open mail draft ("pause" does, since C3), what
+  the classifier may see of the screen beyond the app's name, what a sentence that could not be read in time
+  may do.
+- For the owner to confirm (taken in C3 as the task put it): in a reply to the assistant's question only
+  "pause" is still the notch's own. "Settings" and "undo" typed there go to the assistant as the answer. One
+  flag on an intent (`inReply`) changes it.
 
 ## What C1 found that the design had wrong or did not have
 
@@ -87,6 +91,18 @@ the general turn.
 - In a window that lists its elements, a question that is not in the list sends the list and then a picture.
 - The page reads "sunset" as Sunday, "satisfied" and "saturn" as Saturday, "money at 9" as Monday at 9:00.
 
+## What C2 and C3 found that the design had wrong
+
+- An eye ("tell me when Sam replies") has no line of its own: it is kept at once and then said. It only ever
+  tells the owner, so the table calls its act "none" and it is not held to the line-first rule.
+- "Find" says whether a job's window is there, not whether it is in front. Decision 5 uses the act `front`,
+  which both desktop apps had and the brain never called.
+- The design's must-not-match list was for the classifier. On the fast path a sentence that an intent takes
+  never reaches a classifier, so the fast path itself had to stop taking them: the words for the job are now
+  the whole sentence, and two narrow guards cover the calendar entry and the "daily ... should" statement.
+- "Get the reply from support" (A4) is still a chase: it shows its own line, and whether a name the notch does
+  not know may be chased is not settled. It is not marked.
+
 ## Status
 
 - C1 corpus: done in "notch: pin what every sentence means today in a corpus, wrong rows marked"
@@ -95,8 +111,24 @@ the general turn.
   wrong, counts pinned per section). The chain of real.ts is now one exported function, `notchSide`, that the
   notch and the corpus both call: same routers, same order, same arguments. A taught job done again is let run
   against stand-in hands, so its rows say "acts at once" today and can flip to "a line first" (decision 5).
-- C2 table: pending. It replaces the body of `notchSide`; the corpus keeps calling the product's resolver.
-- C3 precedence, reply rule, control words: pending.
+- C2 table: done in "notch: one table of intents that every part hands its words to, asked once for an
+  instruction" (src/notch/intents.ts). Every part has `intents()`, a list; `notchSide` resolves over the table
+  and says which intent took the sentence; asks.ts asks once and keeps the answer (`routed`). No routing changed
+  in that commit: the corpus stayed as it was but for the "asked twice" pins, now "once". Day one got no
+  `noted` hook: its note is made in the one intent that is asked about every sentence.
+- C3 precedence, reply rule, control words: done in "notch: a reply is the answer, a shown job asks before it
+  is done again, and pause is a word". Bands (control, up, command, open), `over` held by a test over the
+  corpus, `never` held by a test, the reply rule (only "pause" is open in a reply; the reading of names, the
+  memory and the pointing are skipped too), decision 5 with the states "front" and "fresh" in the corpus, the
+  words for the job as the whole sentence, the calendar entry, the "daily ... should" statement, "pause" and
+  "pausa". 41 routing rows and 1 time value lost their mark; 27 and 22 are still marked (C4: 20 routing; C5:
+  5 routing, 13 times; C6: 9 times; C4 with C5: 2 routing; see the corpus).
+  Not marked and changed, each with its reason beside the row: "repeat that" with a job (a line first, as every
+  way of asking for the job); "undo", "settings" (twice) and "tell Anna instead" as a reply (the answer); and
+  with a draft open "day one" and "look around" are now what the reply is to say, as "settings" already was
+  (decision 9 settles all three).
+  Every intent has `act` (none, screen, send, create, command, install, settings) for point 1 to read. Nothing
+  reads it yet.
 - C4 classifier: pending.
 - C5 one When: pending.
 - C6 page sends raw text: pending.

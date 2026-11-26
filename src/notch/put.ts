@@ -428,11 +428,8 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       reading = null;
     },
   };
-  const intents: NotchIntent[] = [{
-    id: 'put.here', feature: 'put', says: 'put the thing that is held where the pointer or the caret is', band: 'command', act: 'screen', first: 'acts',
-    live: 'a thing that was circled is held, or is still being read',
-    examples: ['put it here', 'put it here as a table', 'paste'],
-    match(text) {
+  /** What these words do with the held thing, and whether they answer the "put it here?" that is up. */
+  const taken = (text: string): { did: string; run(): void; answers: boolean } | null => {
       if (stopped) return null;
       const asked = pending && now() - pending.madeAt < NOTCH_PUT_SAID_MS && held === pending.thing ? pending : null;
       const thing = asked?.thing ?? (held && now() - held.at < NOTCH_HOLD_MS ? held : null);
@@ -442,6 +439,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
         const form = putForm(text) ?? 'a table';
         return {
           did: 'Put what you showed me where you pointed.',
+          answers: false,
           run: () => {
             void circle.done.then((read) => {
               if (stopped) return;
@@ -457,6 +455,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       const form = putForm(text) ?? asked?.form() ?? 'a table';
       return {
         did: 'Put what you showed me where you pointed.',
+        answers: asked !== null,
         run: () => {
           const sidecarId = asked?.sidecarId ?? '';
           if (asked) {
@@ -468,7 +467,20 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
             .then((said) => say(said.parts, said.ms, said.mood, said.mark));
         },
       };
-    },
+  };
+  const hit = (found: { did: string; run(): void } | null): { did: string; run(): void } | null => (found ? { did: found.did, run: found.run } : null);
+  const intents: NotchIntent[] = [{
+    // While "put it here?" is up, what is said is its answer: a yes, the form alone, or the whole request. It
+    // stands with the answers to what is up, where it always was: before what is said over any other line.
+    id: 'put.answer', feature: 'put', says: 'the answer to "put it here?": a yes, or the form it is to have', band: 'up', act: 'screen', first: 'acts',
+    live: 'the question "put it here?" that is up, about the thing that is held and the place that was pointed at',
+    examples: ['as a list', 'yes'],
+    match(text) { const found = taken(text); return found?.answers ? hit(found) : null; },
+  }, {
+    id: 'put.here', feature: 'put', says: 'put the thing that is held where the caret is', band: 'command', act: 'screen', first: 'acts',
+    live: 'a thing that was circled is held, or is still being read',
+    examples: ['put it here', 'put it here as a table', 'paste'],
+    match(text) { const found = taken(text); return found && !found.answers ? hit(found) : null; },
   }];
   return made;
 }

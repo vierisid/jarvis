@@ -27,7 +27,7 @@ import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
 import { notchNewsFeature } from './news.ts';
 import type { NotchNews, NotchOpenFailure } from './news.ts';
-import { notchPauseFeature } from './pause.ts';
+import { notchPauseFeature, notchPauseWords } from './pause.ts';
 import type { NotchPauseDeps } from './pause.ts';
 import { notchPromisesFeature } from './promises.ts';
 import { notchQuestionsFeature } from './questions.ts';
@@ -345,13 +345,17 @@ export interface NotchSideRouters {
   dayOne: NotchIntentSource | null; mail: NotchIntentSource | null; put: NotchIntentSource | null; teach: NotchIntentSource | null;
   people: NotchIntentSource | null; standing: NotchIntentSource | null; agents: NotchIntentSource | null; memory: NotchIntentSource | null;
   calls: NotchIntentSource | null; prefs: NotchIntentSource | null; moves: NotchIntentSource; canDo: NotchIntentSource; saidLine: NotchIntentSource;
+  /** The control word: "pause" (./pause.ts). Null when the product's pause was not given. */
+  pause: NotchIntentSource | null;
 }
 
-/** The one table of intents (./intents.ts), from the lists the parts hand over, in this order. */
+/**
+ * The one table of intents (./intents.ts), from the lists the parts hand over. The table orders them by band
+ * (a control word, an answer to what is up, a command, something to open); inside a band this is the order.
+ */
 export function notchIntents(routers: NotchSideRouters): NotchIntent[] {
-  const { dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine } = routers;
-  // After everything that has words of its own: what was said over a line that is up answers that line.
-  return notchIntentTable([dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine].map((part) => part?.intents()));
+  const { pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine } = routers;
+  return notchIntentTable([pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine].map((part) => part?.intents()));
 }
 
 /**
@@ -581,6 +585,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   }));
   if (deps.asks) {
     const emergency = deps.emergency;
+    const pauseWords = emergency ? notchPauseWords(emergency, log) : null;
     asks = attachNotchAsks(inbox, {
       ledger: new NotchLedger(deps.asks.db),
       turns: deps.asks.turns,
@@ -598,7 +603,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       // Before all of them: while day one waits to hear the person, whatever they say is its answer.
       // Before an eye and a chase: "tell Leo ..." is a word to Leo when Leo's Jarvis is one this one talks to (./people.ts).
       // The parts are read when something is said, not now: several of them are made further down.
-      side: (text, how) => notchSide({ dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine }, text, how),
+      side: (text, how) => notchSide({ pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine }, text, how),
       // After all of them: words that name somebody of the organisation and are none of the fixed ones are
       // read by the model (./people-read.ts). Only what `side` left: while day one waits to hear the person,
       // whatever they say is its answer and never gets here.

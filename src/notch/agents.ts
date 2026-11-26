@@ -155,6 +155,10 @@ export function agentSentence(text: string): AgentSentence | null {
     // something to do. "Every day I get so many emails from recruiters" says
     // what happens to a person, and is not asking for anything to be made.
     if (!made && /^(?:i|i'm|i've|we|we're|you|he|she|they|it|it's|there|my|our|his|her|their|the|this|that|these|those|someone|somebody|people|everyone)\b/i.test(job)) return null;
+    // "Daily" and "weekly" are also what a thing is called. "Daily standup notes should go to the team" says
+    // what should happen to the daily notes, and asks for nothing to be made: begun with one of those two
+    // words and said with "should", it is a statement.
+    if (!made && /^(?:daily|weekly)\b/i.test(rest) && /\b(?:should|must|ought to|shall)\b/i.test(job)) return null;
     return job.split(' ').filter(Boolean).length >= 2 ? { when: schedule.when, job } : null;
   }
   // "Every 5 minutes", "every invoice": not a schedule the notch can say, and not asked for as an agent.
@@ -769,6 +773,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     // The sentence is read back as a line, with its schedule lit, and only "make agent" makes it.
     id: 'agents.make', feature: 'agents', says: 'make an agent from a sentence that says when and what', band: 'command', act: 'create', first: 'line',
     examples: ['every Monday send Sam the numbers', 'can you make an agent that replies to new leads'],
+    never: ['daily standup notes should go to the team', 'every evening I go for a run', 'remind me every day at 8 to take my pills'],
     match(text) {
       if (stopped) return null;
       const asked = agentSentence(text);

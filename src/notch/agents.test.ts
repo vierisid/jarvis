@@ -115,6 +115,13 @@ describe('a sentence that asks for an agent', () => {
       'Every morning my inbox is full again',
       'Every week there are more of these invoices',
     ]) expect(agentSentence(no)).toBeNull();
+    // "Daily" and "weekly" are also what a thing is called: said with "should", it is a statement about that thing.
+    for (const no of ['daily standup notes should go to the team', 'Weekly reports must be signed by Friday', 'daily backups ought to be checked']) expect([no, agentSentence(no)]).toEqual([no, null]);
+    // The same words asked for as an agent, or begun with "every", are still one.
+    expect(agentSentence('make an agent that daily checks what should go to the team')).not.toBeNull();
+    expect(agentSentence('every day send Sam what he should know')).toEqual({ when: 'day at 9:00', job: 'send Sam what he should know' });
+    expect(agentSentence('daily send me the news')).toEqual({ when: 'day at 9:00', job: 'send me the news' });
+    expect(agentSentence('weekly review of my tasks please')).toEqual({ when: 'Monday at 9:00', job: 'review of my tasks please' });
     expect(agentSentence('Daily, send Sam the numbers')).toEqual({ when: 'day at 9:00', job: 'send Sam the numbers' });
     // In "an agent that sends…" the schedule may stand anywhere, and what it does is read back as what to do.
     expect(agentSentence('Make an agent that sends Sam the numbers every week')).toEqual({ when: 'Monday at 9:00', job: 'send Sam the numbers' });

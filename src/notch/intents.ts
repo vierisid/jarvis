@@ -54,11 +54,42 @@
  * just shown, the paste that was just made. Words alone never set the hands
  * to work.
  *
- * ## Order
+ * ## Order (`band`, `over`)
  *
  * The table is asked from the top, and the first intent that matches takes
- * the sentence. The order is the order the parts are handed over in, and
- * inside a part the order of its list.
+ * the sentence. No model settles it. The order is declared:
+ *
+ *   1. control   a word that stops everything ("pause")
+ *   2. up        an answer to what is up on the notch now, or was a moment
+ *                ago: day one waiting to hear the person, a draft, a line
+ *                that takes a yes, a showing that waits for "done"
+ *   3. command   something to do
+ *   4. open      something of the notch's own to open
+ *
+ * Inside a band the order is the order the parts are handed over in, and
+ * inside a part the order of its list. So "do it" said over an offer is the
+ * yes to that offer, also when a job was once shown that "do it" could mean
+ * (docs/notch/README.md, rule 206).
+ *
+ * When a sentence can be matched by two intents, the one that takes it says
+ * so: `over` names the intents it is taken from. A test over the corpus
+ * holds that no sentence there is matched twice without it, so a new intent
+ * cannot quietly take, or lose, somebody else's words.
+ *
+ * ## Words that are not an intent (`never`)
+ *
+ * Sentences that look like the intent and are not: "do it by email" is not
+ * the job that was shown. A test holds that the fast path of the intent
+ * does not take them. They are also what a reading of a sentence (the next
+ * step) is shown as "none of these".
+ *
+ * ## A reply (`inReply`)
+ *
+ * When the assistant has asked something back and the person answers, what
+ * they say is the answer: it goes to the assistant, and no intent takes it.
+ * "Do it", said to "Shall I send it?", is not the job that was shown. Only
+ * an intent marked `inReply` is still asked, and that is the control band:
+ * "pause" pauses whatever is on the notch.
  */
 
 /** What kind of act an intent is. See the top of this file. */
@@ -76,8 +107,14 @@ export const NOTCH_INTENT_ACTS_GUARDED: readonly NotchIntentAct[] = ['screen', '
  */
 export type NotchIntentBand = 'control' | 'up' | 'command' | 'open';
 
-/** How some words came: typed or spoken, and when the typing was sent or the talk keys went down. */
-export interface NotchIntentHow { source: 'spoken' | 'typed' | 'offered' | 'shown'; at: number }
+/** The bands, in the order they are asked in. */
+export const NOTCH_INTENT_BANDS: readonly NotchIntentBand[] = ['control', 'up', 'command', 'open'];
+
+/**
+ * How some words came: typed or spoken, and when the typing was sent or the talk keys went down. `reply`: they
+ * are the answer to a question the assistant asked back, typed into its line or said while it was up.
+ */
+export interface NotchIntentHow { source: 'spoken' | 'typed' | 'offered' | 'shown'; at: number; reply?: boolean }
 
 /** What an intent would do with a sentence: what the ledger says was done, and the doing. Nothing happens until `run`. */
 export interface NotchIntentHit { did: string; run(): void }
@@ -96,6 +133,15 @@ export interface NotchIntent {
   live?: string;
   /** Sentences that are this intent, when the state it needs holds. */
   examples: readonly string[];
+  /** Sentences that look like it and are not: its fast path must not take them. */
+  never?: readonly string[];
+  /**
+   * The intents further down that can match a sentence this one takes. 'any': it takes whatever is said while
+   * what it answers is up (day one waiting to hear the person, a draft that is open).
+   */
+  over?: readonly string[] | 'any';
+  /** Still asked when the words are the reply to a question the assistant asked back. Only a control word is. */
+  inReply?: boolean;
   /** The fast path: the part's own fixed words. Null when the sentence is not this intent now. */
   match(text: string, how?: NotchIntentHow): NotchIntentHit | null;
 }
@@ -106,24 +152,40 @@ export interface NotchIntentSource { intents(): readonly NotchIntent[] }
 /** A sentence that an intent took. */
 export interface NotchRouted extends NotchIntentHit { intent: NotchIntent }
 
-/** The lists of the parts, put together in the order they are given in. A part that was not made gives none. */
+/**
+ * The lists of the parts as one table, in the order it is asked in: by band, and inside a band in the order
+ * the lists are given in. A part that was not made gives none.
+ */
 export function notchIntentTable(lists: readonly (readonly NotchIntent[] | null | undefined)[]): NotchIntent[] {
-  const table = lists.flatMap((list) => list ?? []);
+  const given = lists.flatMap((list) => list ?? []);
   const ids = new Set<string>();
-  for (const intent of table) {
+  for (const intent of given) {
     if (ids.has(intent.id)) throw new Error(`two intents are called ${intent.id}`);
     ids.add(intent.id);
+    if (!NOTCH_INTENT_BANDS.includes(intent.band)) throw new Error(`${intent.id} stands in no band`);
   }
-  return table;
+  return NOTCH_INTENT_BANDS.flatMap((band) => given.filter((intent) => intent.band === band));
 }
+
+/** Whether an intent is asked about these words at all: a reply to the assistant's question is only a control word's. */
+const asked = (intent: NotchIntent, how?: NotchIntentHow): boolean => how?.reply !== true || intent.inReply === true;
 
 /** Which intent of the table takes the sentence: the first that matches. Null when none does. */
 export function resolveIntent(table: readonly NotchIntent[], text: string, how?: NotchIntentHow): NotchRouted | null {
   for (const intent of table) {
+    if (!asked(intent, how)) continue;
     const hit = intent.match(text, how);
     if (hit) return { intent, did: hit.did, run: () => hit.run() };
   }
   return null;
+}
+
+/**
+ * Every intent of the table that matches the sentence, in the order of the table: the first is the one that
+ * takes it. For the tests that hold the declared overlaps; the notch itself asks `resolveIntent`.
+ */
+export function matchingIntents(table: readonly NotchIntent[], text: string, how?: NotchIntentHow): NotchIntent[] {
+  return table.filter((intent) => asked(intent, how) && intent.match(text, how) !== null);
 }
 
 /** A part's own `route`: the first of its intents that takes the words. */

@@ -1493,11 +1493,15 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
    *   "book an hour with Leo"               "get a slot with Leo"
    *
    * Not a word to Leo ("ask Leo when he is free" is a question for Leo), and
-   * not more than one person.
+   * not more than one person. And not an entry for the owner's own calendar:
+   * "put a meeting with Sam on my calendar for Friday" asks for something to
+   * be written down here, at a time the owner already has, and nothing of it
+   * is for Sam's machine. It used to start a comparing of the two calendars.
    */
   function timed(text: string): { person: PeerPerson; minutes: number } | null {
     const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
     if (/^(?:(?:please|ok|okay|hey|jarvis|pillow)[,\s]+)*(?:tell|ask|message|ping|send|give|share|forward)\b/i.test(said)) return null;
+    if (/^(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you)[,\s]+)*(?:put|add|enter|write|note|log|mark|block|pencil)\b.*\b(?:on|to|in|into)\s+(?:my|the|our)\s+(?:calendar|agenda|diary)\b/i.test(said)) return null;
     const people = others().slice().sort((a, b) => b.name.length - a.name.length);
     for (const one of people) {
       const first = one.name.split(' ')[0]!;
@@ -1602,8 +1606,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
 
   type Hit = { did: string; run(): void };
   /** One of the things this part does, as an intent of the one table. Every send here is shown under a fuse that can be taken back. */
-  const sends = (id: string, says: string, examples: string[], match: (text: string) => Hit | null): NotchIntent =>
-    ({ id: `people.${id}`, feature: 'people', says, band: 'command', act: 'send', first: 'line', examples, match });
+  const sends = (id: string, says: string, examples: string[], match: (text: string) => Hit | null, over?: string[]): NotchIntent =>
+    ({ id: `people.${id}`, feature: 'people', says, band: 'command', act: 'send', first: 'line', examples, match, ...(over ? { over } : {}) });
   const intents: NotchIntent[] = [{
     id: 'people.org', feature: 'people', says: 'open the organisation', band: 'open', act: 'none', first: 'acts',
     examples: ['my organisation', 'invite someone'],
@@ -1623,7 +1627,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (!agent) return null;
     if (agent.agent) { const one = agent.agent; return { did: `Send ${agent.person.name} the agent ${one.name}.`, run: () => shareAgent(agent.person, one) }; }
     return { did: 'Say which agents there are.', run: () => { inbox.present('people-agent', (stage) => stage.say(agent.none!, 3800, { mood: 'confused' })); } };
-  }),
+  // "Send Tony to Leo" also reads as a file called Tony: an agent of that name is asked first.
+  }, ['people.give']),
   // What was circled on the screen, shown to somebody: "send this to Leo".
   sends('show', 'show somebody what was circled on the screen', ['send this to Leo'], (text) => {
     const seen = showed(text);
@@ -1644,10 +1649,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     },
   },
   // A time with somebody: the two calendars are compared, and neither person sees the other's.
-  sends('time', 'find a time with somebody by comparing the two calendars', ['find a time with Sam for 30 minutes', 'book an hour with Leo'], (text) => {
-    const when = timed(text);
-    return when ? { did: `Find a time with ${when.person.name}: ${when.minutes} minutes`, run: () => times.find(when.person, when.minutes) } : null;
-  }),
+  {
+    ...sends('time', 'find a time with somebody by comparing the two calendars', ['find a time with Sam for 30 minutes', 'book an hour with Leo'], (text) => {
+      const when = timed(text);
+      return when ? { did: `Find a time with ${when.person.name}: ${when.minutes} minutes`, run: () => times.find(when.person, when.minutes) } : null;
+    }),
+    never: ['put a meeting with Sam on my calendar for Friday', 'add the call with Leo to my calendar'],
+  },
   // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
   sends('give', 'send somebody a file of mine', ['send Leo the deck'], (text) => {
     const mine = files ? handed(text) : null;
@@ -1675,7 +1683,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (!theirs) return null;
     const file = peerPlain(theirs.file, PEER_FILE_WHAT_MAX);
     return file ? { did: `Ask ${theirs.person.name}'s ${NOTCH_NAME} for a file: ${file}`, run: () => files!.want(theirs.person, file) } : null;
-  }),
+  // "Ask Leo for the deck" also reads as a question for Leo: a file that is named is asked for as a file.
+  }, ['people.say']),
   sends('say', 'tell somebody something, or ask them something', ["tell Anna I'm late", 'ask Leo if he is coming'], (text) => said(text)),
   ];
   const route = (text: string): Hit | null => routeByIntents(intents, text);

@@ -18,6 +18,7 @@
 import type { EmergencyState } from '../authority/emergency.ts';
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchIntent, NotchIntentSource } from './intents.ts';
 import type { NotchMood } from './protocol.ts';
 import type { NotchSurface } from './surface.ts';
 
@@ -40,6 +41,36 @@ export interface NotchPauseDeps {
 }
 
 const HOLD = 'stopped';
+
+/**
+ * "Pause", said or typed, and nothing else in the sentence: everything is stopped, as with Esc twice. English
+ * and Italian. "Pause the music" and "stop" are not this: the first is an instruction, and whether "stop" is a
+ * control word is not decided.
+ */
+export function pauseWord(text: string): boolean {
+  return /^(?:(?:ok(?:ay)?|hey|jarvis|pillow|please|now)[,\s]+)*(?:pause|pause (?:everything|it all|jarvis|pillow|yourself)|pausa|pausa tutto|metti(?:ti)? in pausa)(?:[,\s]+(?:please|now|per favore))?[\s.!]*$/i.test(text.trim());
+}
+
+/**
+ * The control word as an intent of the one table (./intents.ts). It stands before everything else, needs no
+ * model, and is still asked when the words are the reply to a question. When everything is stopped already it
+ * takes nothing: what is said then is turned away where it arrives, with "Wake me first".
+ */
+export function notchPauseWords(controller: Pick<NotchPauseDeps['controller'], 'getState' | 'pause'>, log: (line: string) => void = (line) => console.log(line)): NotchIntentSource {
+  const intents: NotchIntent[] = [{
+    id: 'pause.all', feature: 'pause', says: 'stop everything until I wake you, as Esc twice does', band: 'control', act: 'none', first: 'acts',
+    examples: ['pause', 'pausa'],
+    never: ['pause the music', 'pause for a second and think about it', 'stop'],
+    // While its context is up, a draft or day one takes whatever is said: this word is taken from them.
+    over: ['dayone.answer', 'mail.steer'],
+    inReply: true,
+    match(text) {
+      if (!pauseWord(text) || controller.getState() !== 'normal') return null;
+      return { did: 'Stopped everything.', run: () => { log('[notch] "pause" was said or typed: pausing everything'); controller.pause(); } };
+    },
+  }];
+  return { intents: () => intents };
+}
 
 export function attachNotchPause(surface: Pick<NotchSurface, 'onStop' | 'setFace' | 'act'>, inbox: NotchInbox, deps: NotchPauseDeps): () => void {
   const log = deps.log ?? ((line: string) => console.log(line));

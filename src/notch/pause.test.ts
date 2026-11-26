@@ -10,6 +10,8 @@ import { createCommitment, findCommitments } from '../vault/commitments.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { NOTCH_FIXTURE_ORIGIN } from './fixtures.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
+import { getDb } from '../vault/schema.ts';
+import { notchPauseWords, pauseWord } from './pause.ts';
 import { attachNotchReal } from './real.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
@@ -191,5 +193,100 @@ describe('pass 12: the stop is seen as well as said', () => {
     await h.open();
     expect(h.controller.getState()).toBe('normal');
     expect(acts()).toEqual([{ gesture: 'shake', lip: 'zip' }, { gesture: 'wake' }]);
+  });
+});
+
+// "Pause" used to be an instruction for the assistant, typed or said: only Esc twice paused
+// (docs/notch/fixes/03-intent-routing.md).
+describe('"pause", typed or said', () => {
+  test('the word is the whole of the sentence, in English and Italian', () => {
+    for (const said of ['pause', 'Pause.', 'PAUSE!', 'pause everything', 'Jarvis, pause', 'ok pause please', 'pause yourself', 'pausa', 'Pausa tutto', 'mettiti in pausa', 'metti in pausa, per favore']) expect([said, pauseWord(said)]).toEqual([said, true]);
+    for (const said of ['', 'stop', 'pause the music', 'pause the video and tell me what he said', 'pause for a second', 'can you pause', 'do not pause', 'pauses', 'pausa pranzo', 'unpause', 'pause it', 'what does pause do?']) expect([said, pauseWord(said)]).toEqual([said, false]);
+  });
+
+  test('it is the control word of the table: before everything, still asked in a reply, and nothing happens until it is run', () => {
+    let state: 'normal' | 'paused' = 'normal';
+    const [word] = notchPauseWords({ getState: () => state, pause: () => { state = 'paused'; } }, () => {}).intents();
+    expect(word).toMatchObject({ id: 'pause.all', band: 'control', act: 'none', inReply: true });
+    const hit = word!.match('pause');
+    expect(hit?.did).toBe('Stopped everything.');
+    expect(state).toBe('normal');
+    hit!.run();
+    expect(state as string).toBe('paused');
+    // Stopped already: it takes nothing. What is said then is turned away where it arrives.
+    expect(word!.match('pause')).toBeNull();
+  });
+
+  /** The real notch with the product's own pause, something to type into, and no model at all. */
+  function typing(options: { emergency?: boolean } = {}) {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
+    const surface = new NotchSurface(port, () => {});
+    const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    const submitted: string[] = [];
+    const real = attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(),
+      approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
+      ...(options.emergency === false ? {} : { emergency: controller }),
+      asks: {
+        db: getDb(), modelReady: () => false, talkPort: { onEvent() {} }, stt: () => null,
+        turns: () => ({ ready: () => true, conversation: () => 'conv-notch', submit(turn: { text: string }) { submitted.push(turn.text); }, cancel() {}, onEvent: () => () => {}, look: () => null, mark() {} }) as never,
+      },
+      lookMs: 3_600_000,
+      log: () => {},
+    });
+    cleanup.push(() => real.stop());
+    fromPage({ type: 'hello', v: 1 });
+    const line = (): NotchLine | null => surface.current().line;
+    const wait = async (): Promise<void> => { for (let round = 0; round < 4; round++) { await settle(); await new Promise((resolve) => setTimeout(resolve, 2)); } };
+    return {
+      controller, real, submitted, line,
+      said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
+      async type(words: string): Promise<void> {
+        fromPage({ type: 'open' });
+        await wait();
+        if (line()?.kind !== 'ask') throw new Error(`Home is not open: ${line()?.kind}`);
+        fromPage({ type: 'answer', id: line()!.id, act: 'ask', text: words });
+        await wait();
+      },
+      async say(words: string): Promise<void> {
+        real.asks!.listen('t1');
+        await wait();
+        real.asks!.released('t1');
+        real.asks!.words('t1', words);
+        await wait();
+      },
+    };
+  }
+
+  test('typed with no model set up, it pauses Jarvis itself and the notch says so', async () => {
+    const h = typing();
+    await h.type('pause');
+    expect(h.controller.getState()).toBe('paused');
+    expect(h.said()).toBe('Everything is stopped. Nothing runs until you wake me.');
+    expect(h.submitted).toEqual([]);
+  });
+
+  test('said, it pauses too', async () => {
+    const h = typing();
+    await h.say('Pausa.');
+    for (let round = 0; round < 60 && h.controller.getState() !== 'paused'; round++) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.controller.getState()).toBe('paused');
+  });
+
+  test('a sentence with the word in it pauses nothing', async () => {
+    const h = typing();
+    await h.type('pause the music');
+    expect(h.controller.getState()).toBe('normal');
+  });
+
+  test('on a notch that was given no pause, the word is an instruction like any other', async () => {
+    const h = typing({ emergency: false });
+    await h.type('pause');
+    expect(h.controller.getState()).toBe('normal');
+    // No model: it is refused as any instruction is.
+    expect(h.said()).toContain('No model is set up yet');
   });
 });

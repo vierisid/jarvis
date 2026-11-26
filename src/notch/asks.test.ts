@@ -2088,3 +2088,148 @@ describe('a question the notch wrote is always about something', () => {
     expect(h.line()).toBeNull();
   });
 });
+
+// A reply to a question the assistant asked back is its answer (docs/notch/fixes/03-intent-routing.md). It used
+// to be put to everything the notch does itself first: with one job ever shown, "do it" said to "Shall I send
+// it?" replayed that job's clicks and keys.
+describe('a reply to a question the assistant asked back', () => {
+  /** A notch whose own words, reading of names, memory and pointing each note that they were asked. */
+  function replying(more: Partial<NotchAsksDeps> = {}) {
+    const seen = { sides: [] as { text: string; reply: boolean }[], ran: [] as string[], read: [] as string[], remembered: [] as string[], pointed: [] as string[] };
+    // What sets the scene (an instruction for the assistant, and its answer) is nobody's here.
+    const scene = (text: string): boolean => /^(?:draft|what is|yes send)/.test(text);
+    const h = harness({
+      deps: {
+        // "pause" is the control word; everything else here is a command that takes whatever it is asked about.
+        side: (text, how) => {
+          seen.sides.push({ text, reply: how?.reply === true });
+          if (scene(text) || (how?.reply && text !== 'pause')) return null;
+          return { did: `The notch took: ${text}`, run: () => { seen.ran.push(text); } };
+        },
+        read: (text) => { if (scene(text)) return null; seen.read.push(text); return Promise.resolve({ did: `Read: ${text}`, run: () => { seen.ran.push(`read ${text}`); } }); },
+        remember: async (what) => { seen.remembered.push(what); return { ok: true, said: 'Kept.', understood: what }; },
+        point: Object.assign(async (question: string) => { seen.pointed.push(question); return null; }, { goesOn: (text: string) => !scene(text) }),
+        ...more,
+      },
+    });
+    /** An instruction goes to the assistant, and its answer is a question that waits on the notch. */
+    const asked = async (question = 'Shall I send it?'): Promise<void> => {
+      h.asks.offered('draft a mail to Sam about the offsite');
+      await settle();
+      h.door.say(h.door.running(), question);
+      h.door.end(h.door.running());
+      await settle();
+      if (h.line()?.kind !== 'ask') throw new Error(`the assistant's question is not up: ${h.line()?.kind}`);
+    };
+    return { h, seen, asked };
+  }
+
+  test('typed into the question, it goes to the assistant: nothing of the notch takes it, reads it, keeps it or points', async () => {
+    for (const words of ['do it', 'tell Anna instead', 'remember that Leo likes tea', 'where is the export button', 'go on', 'settings']) {
+      const { h, seen, asked } = replying();
+      await asked();
+      await h.answer('ask', { text: words });
+      await h.advance(0);
+      expect([words, h.door.texts().at(-1)]).toEqual([words, words]);
+      // Asked once, and told that it is a reply.
+      expect([words, seen.sides.filter((one) => one.text === words)]).toEqual([words, [{ text: words, reply: true }]]);
+      expect([words, seen.ran, seen.read, seen.remembered, seen.pointed]).toEqual([words, [], [], [], []]);
+      expect(h.ledger.recent(1)[0]).toMatchObject({ heard: words, kind: 'turn' });
+    }
+  });
+
+  test('said while the question is up, it is the answer too', async () => {
+    const { h, seen, asked } = replying();
+    await asked();
+    await h.speak('t1', 'do it');
+    await h.advance(900);
+    expect(h.door.texts().at(-1)).toBe('do it');
+    expect(seen.sides.filter((one) => one.text === 'do it')).toEqual([{ text: 'do it', reply: true }]);
+    expect([seen.ran, seen.read, seen.remembered, seen.pointed]).toEqual([[], [], [], []]);
+  });
+
+  test('the control word is still the notch\'s own, typed or said, and nothing goes to the assistant', async () => {
+    for (const how of ['typed', 'spoken'] as const) {
+      const { h, seen, asked } = replying();
+      await asked();
+      if (how === 'typed') await h.answer('ask', { text: 'pause' });
+      else { await h.speak('t1', 'pause'); await h.advance(900); }
+      await h.advance(0);
+      expect([how, seen.ran]).toEqual([how, ['pause']]);
+      expect([how, h.door.texts()]).toEqual([how, ['draft a mail to Sam about the offsite']]);
+      expect(h.ledger.recent(1)[0]).toMatchObject({ heard: 'pause', kind: 'notch' });
+    }
+  });
+
+  test('only a question makes what comes next a reply: after an answer that asks nothing, the same words are a command again', async () => {
+    const { h, seen } = replying();
+    h.asks.offered('what is two plus two');
+    await settle();
+    h.door.say(h.door.running(), 'It is four.');
+    h.door.end(h.door.running());
+    await settle();
+    // Said while that answer is still being read on the notch.
+    await h.speak('t1', 'do it');
+    await h.advance(900);
+    expect(seen.sides.filter((one) => one.text === 'do it')).toEqual([{ text: 'do it', reply: false }]);
+    expect(seen.ran).toEqual(['do it']);
+  });
+
+  test('the reply is the one thing said to the question: what is typed after it is an instruction like any other', async () => {
+    const { h, seen, asked } = replying();
+    await asked();
+    await h.answer('ask', { text: 'yes send it' });
+    h.door.say(h.door.running(), 'Sent.');
+    h.door.end(h.door.running());
+    await settle();
+    await h.answer('done');
+    await h.type('do it');
+    await h.advance(0);
+    expect(seen.sides.filter((one) => one.text === 'do it')).toEqual([{ text: 'do it', reply: false }]);
+    expect(seen.ran).toEqual(['do it']);
+  });
+
+  test('a question that was closed with Esc is over: what is typed next is not its reply', async () => {
+    const { h, seen, asked } = replying();
+    await asked();
+    await h.answer('no');
+    await h.type('do it');
+    await h.advance(0);
+    expect(seen.sides.filter((one) => one.text === 'do it')).toEqual([{ text: 'do it', reply: false }]);
+    expect(seen.ran).toEqual(['do it']);
+  });
+
+  test('an offer that is taken while the question is up is nobody\'s reply', async () => {
+    const { h, seen, asked } = replying();
+    await asked();
+    h.asks.offered('do it');
+    await settle();
+    await h.advance(0);
+    expect(seen.sides.filter((one) => one.text === 'do it')).toEqual([{ text: 'do it', reply: false }]);
+  });
+
+  test('a question the notch wrote about a file, pressed while the question is up, is not a reply either', async () => {
+    const { h, seen, asked } = replying();
+    await asked();
+    h.asks.shown('where is the export button', [{ name: 'a.png', mime: 'image/png', data: new Uint8Array([1]) } as never]);
+    await settle();
+    await h.advance(0);
+    // It carries a file, so nothing of the notch's own is asked about it, and it runs as the instruction it is.
+    expect(seen.sides.filter((one) => one.text === 'where is the export button')).toEqual([]);
+    expect([seen.read, seen.remembered, seen.pointed]).toEqual([[], [], []]);
+    expect(h.door.texts().at(-1)).toBe('where is the export button');
+  });
+
+  test('words the notch does itself are asked about once for an instruction, typed or said, taken or not', async () => {
+    for (const how of ['typed', 'spoken'] as const) {
+      for (const words of ['watch me', 'what is the weather in Rome']) {
+        const asked: string[] = [];
+        const h = harness({ deps: { people: () => [{ name: 'Anna Rossi' }], side: (text) => { asked.push(text); return text === 'watch me' ? { did: 'Began watching.', run: () => {} } : null; } } });
+        if (how === 'typed') await h.type(words);
+        else { await h.speak('t1', words); await h.advance(900); }
+        await h.advance(0);
+        expect([how, words, asked]).toEqual([how, words, [words]]);
+      }
+    }
+  });
+});

@@ -67,10 +67,49 @@ const NUMBERS: Record<string, number> = {
   a: 1, an: 1, another: 1, once: 1, twice: 2,
 };
 
+/** What a sentence that asks for the job begins with. What comes after it is read by `RUN_TAIL`. */
+const RUN_HEADS = [
+  /^(?:run|do|repeat|redo) (?:it|that|this|the same|them)\b/,
+  /^(?:do|finish|run) the (?:rest|others?|remaining|next)\b/,
+  /^(?:finish|continue) (?:it|them|that)\b/,
+  /^(?:take it from here|take over|keep going|go on|continue|carry on)\b/,
+  /^(?:fai|finisci) (?:il resto|gli altri|le altre)\b/,
+  /^(?:do|run)\b/,
+];
+
+/**
+ * The words that may come after "do it": how many, of what, and from where.
+ * Nothing else. "Do it by email", "finish it by Friday" and "continue with
+ * the draft to Sam" each have a word that is not about the job, and are an
+ * instruction like any other.
+ */
+const RUN_TAIL = new Set([
+  'again', 'once', 'more', 'time', 'times', 'now', 'please', 'too', 'then', 'thanks',
+  'on', 'for', 'with', 'from', 'here', 'me', 'of', 'the', 'these', 'those', 'all', 'some', 'few', 'couple',
+  'next', 'other', 'others', 'remaining', 'rest', 'following', 'same', 'thing',
+  'row', 'rows', 'line', 'lines', 'cell', 'cells', 'column', 'columns', 'file', 'files', 'item', 'items', 'entry', 'entries',
+  'record', 'records', 'one', 'ones', 'them',
+  'per', 'favore', 'ancora', 'adesso',
+]);
+
+/** Whether every word after the words that ask for the job is about the job: a count, what is counted, where from. */
+function runTailRead(rest: string): boolean {
+  const head = RUN_HEADS.map((one) => one.exec(rest)).find((found) => found !== null);
+  if (!head) return false;
+  return rest.slice(head[0].length).split(/[\s-]+/).filter(Boolean)
+    .every((word) => RUN_TAIL.has(word) || Object.hasOwn(NUMBERS, word) || /^\d{1,3}$/.test(word));
+}
+
 /**
  * "Run it on nine rows", "do the rest", "do it again", "take it from here":
  * the last job that was shown, or begun by hand, is to be done. `count` is
  * how many, when a number was said.
+ *
+ * These words are the whole of the sentence. They used to be its beginning:
+ * anything that began "do it", "continue" or "finish it" was the job, and
+ * with one job ever shown "do it by email" replayed its clicks and keys
+ * (docs/notch/fixes/03-intent-routing.md). A comma, or a word that is not
+ * about the job, makes the sentence an instruction like any other.
  */
 export function runItRequest(text: string): { count: number | null } | null {
   const said = text.trim().toLowerCase().replace(/[.!?]+$/, '');
@@ -83,7 +122,7 @@ export function runItRequest(text: string): { count: number | null } | null {
     || /^(?:finish|continue) (?:it|them|that)\b/.test(rest)
     || /^(?:take it from here|take over|keep going|go on|continue|carry on)(?: (?:for|with|on) .*)?$/.test(rest)
     || /^(?:fai|finisci) (?:il resto|gli altri|le altre)\b/.test(rest);
-  if (!fits) return null;
+  if (!fits || !runTailRead(rest)) return null;
   const digits = /\b(\d{1,3})\b/.exec(rest);
   if (digits) return { count: Math.max(1, Number(digits[1])) };
   for (const part of rest.split(/[\s-]+/)) {
@@ -478,7 +517,31 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     }
   }
 
-  function startSkill(learned: NotchLearned): void {
+  /**
+   * Whether the window a job was shown in is the one in front now: the same program, at the size it had. Asking
+   * touches nothing. No window in front, one of Jarvis's own, or a machine that cannot say: not in front.
+   */
+  async function windowInFront(placed: PlacedStep[] | null): Promise<boolean> {
+    const first = placed?.find((step): step is Exclude<PlacedStep, { kind: 'secret' }> => step.kind !== 'secret');
+    if (!first) return false;
+    try {
+      const front = await deps.hands.act({ do: 'front' });
+      if (front?.done !== true || !front.win) return false;
+      if (front.win.id === first.win.id && front.win.pid === first.win.pid) return true;
+      return (front.app ?? '').toLowerCase() === first.app.toLowerCase() && Math.abs(front.win.w - first.win.w) <= 2 && Math.abs(front.win.h - first.win.h) <= 2;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Does a saved job once. `said`: it was asked for by words alone ("do it again"), with nothing of it fresh.
+   * Then it is done at once only when its window is the one in front, and otherwise it is asked about first:
+   * words that could have meant something else never set the hands to work in a window that is not there to
+   * be seen (the owner, 26 November 2026). Asked for on its own row, or at its time and answered with a yes,
+   * it is done as before.
+   */
+  function startSkill(learned: NotchLearned, said = false): void {
     const effect = deps.effect(learned.skill);
     if (effect.missing) { tell(['I no longer have that job. Show me again.'], 'sorry'); return; }
     if (effect.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
@@ -501,7 +564,29 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
         if (!deps.jobs.start(plan)) tell(['I am in the middle of something else.']);
       })();
     };
-    if (!effect.deletes) { begin(); return; }
+    if (!effect.deletes) {
+      if (!said) { begin(); return; }
+      void (async () => {
+        if (await windowInFront(learned.placed)) { begin(); return; }
+        if (stopped) return;
+        const id = `teach-again-${++tells}`;
+        const line = (): NotchPart[] => ['Do ', em(short(learned.what, 60)), ' again?'];
+        deps.inbox.add({
+          id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
+          title: line,
+          play: async (stage) => {
+            const answer = await stage.offer(line(), 'do it', { mood: 'look', fold: 0 });
+            // Asked a moment ago, and things may have changed since: stopped, or busy with something else.
+            if (answer.act !== 'yes') return 'settled';
+            if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'settled'; }
+            begin();
+            return 'settled';
+          },
+        });
+      })();
+      return;
+    }
+    // A job that deletes is asked about either way, and that question is the line: it is not asked twice.
     const id = `teach-delete-${++tells}`;
     deps.inbox.add({
       id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
@@ -727,7 +812,8 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     }
     const [last] = store.all();
     if (!last) { tell(['I have not been shown a job yet. Say "watch me" and do it once.'], 'confused', 4600); return; }
-    startSkill(last);
+    // Nothing of it is fresh: by words alone it is done at once only where its window is in front.
+    startSkill(last, true);
   }
 
   /** The jobs it was shown, as a sheet: each can be run, taken off its schedule, or forgotten. */
@@ -788,8 +874,10 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     },
   }, {
     id: 'teach.run', feature: 'teach', says: 'do the job that was shown again, or go on with it', band: 'command', act: 'screen', first: 'acts',
-    live: 'a job that was shown or begun by hand',
+    live: 'a job shown or begun by hand in the last three minutes, or the window of the last shown job in front: with neither, it asks first',
     examples: ['run it on nine rows', 'do it again', 'do the rest'],
+    never: ['do it by email', 'do that tomorrow morning instead', 'continue with the draft to Sam', 'finish it by Friday', 'run the same report as last week',
+      'repeat that please, I did not hear', 'do this for all the files in downloads', 'do them one at a time please', 'carry on with the summary'],
     match(text) {
       if (stopped) return null;
       const run = runItRequest(text);

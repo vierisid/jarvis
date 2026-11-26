@@ -310,10 +310,15 @@ export interface NotchAsks {
 /** What the notch does itself with some words, and the intent of the one table that took them, when it is known. */
 export type NotchSided = NotchIntentHit & { intent?: NotchIntent };
 
-/** How some words came: typed or spoken, and when the typing was sent or the talk keys went down. */
+/**
+ * How some words came: typed or spoken, and when the typing was sent or the talk keys went down. `reply`: they
+ * answer a question the assistant asked back, so they are its answer and none of the notch's own words, but for
+ * a control word (./intents.ts).
+ */
 export interface NotchAskHow {
   source: NotchAskSource;
   at: number;
+  reply?: boolean;
 }
 
 interface Live {
@@ -350,6 +355,15 @@ interface Live {
    * answer. Null: none of the notch's own words. Not there yet: not asked.
    */
   routed?: NotchSided | null;
+  /** Its answer is a question, and that question is on the notch as a line that takes the reply. */
+  asking?: boolean;
+  /**
+   * These words are the reply to a question the assistant asked back: typed into its line, or said or typed
+   * while it was up. They are the answer. Nothing of the notch's own takes them but a control word: not a job
+   * that was once shown ("do it"), not a word to somebody ("tell Anna instead"), not the reading of who is
+   * named, not the memory and not the pointing. They go to the assistant, which asked.
+   */
+  reply?: boolean;
   /** A name in what was heard has been read back and answered (./names.ts): it is not asked about again. */
   named?: boolean;
   /** What was heard with that name put right: this is what runs. What was heard stays as it was heard. */
@@ -622,7 +636,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
 
   /** What the notch does itself with these words: asked once for an instruction, and kept on it. */
   function sided(ask: Live): NotchSided | null {
-    if (ask.routed === undefined) ask.routed = deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null;
+    if (ask.routed === undefined) ask.routed = deps.side?.(ask.heard, { source: ask.source, at: ask.at, ...(ask.reply ? { reply: true } : {}) }) ?? null;
     return ask.routed;
   }
 
@@ -653,7 +667,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // then done by the notch itself like the others. Nothing is claimed while it reads, so the person can
     // still turn it away or say something else; and whoever comes back from the reading second finds it run.
     // Not for "remember that Leo ...": that is something to keep, read back whole in its own way.
-    if (!side && !ask.files?.length && deps.read && !(deps.remember && rememberSentence(ask.heard))) {
+    if (!side && !ask.reply && !ask.files?.length && deps.read && !(deps.remember && rememberSentence(ask.heard))) {
       if (ask.reading === undefined) {
         try { ask.reading = deps.read(ask.meant ?? ask.heard); } catch { ask.reading = null; }
       }
@@ -685,7 +699,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     const running = [...live.values()].find((other) => other !== ask && other.phase === 'running');
     if (running) { refuse(ask, `I am still on the last thing: ${shortened(running.heard, 60)}`); return; }
 
-    const what = deps.remember ? rememberSentence(ask.heard) : null;
+    // A reply to the assistant's question is its answer, also when it begins "remember".
+    const what = deps.remember && !ask.reply ? rememberSentence(ask.heard) : null;
     if (what) {
       if (!ledger.claim(ask.id, 'remember')) { sync(ask); return; }
       ask.phase = 'running';
@@ -792,7 +807,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // that says so, not in its way: it can be stopped like anything running.
     const point = deps.point;
     // "Go on" after a walk that stopped before its end is that walk again, from where the person is.
-    if (point && !ask.files?.length && (whereQuestion(ask.heard) || point.goesOn?.(ask.heard) === true)) {
+    if (point && !ask.reply && !ask.files?.length && (whereQuestion(ask.heard) || point.goesOn?.(ask.heard) === true)) {
       ask.activity = 'Looking for it in the window.';
       const stop = new AbortController();
       ask.walk = () => stop.abort();
@@ -1126,13 +1141,15 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
               id, kind: 'ask', say: [], yes: 'answer', placeholder: 'Answer here, or hold the keys and speak', mood: 'curious',
               blocks: [{ kind: 'row', say: [shape.text] }],
             });
+            ask.asking = true;
             const reply = await stage.answer(id, ['ask', 'no']);
             if (stage.surface.listening() === 0) return 'waits';
             ledger.seen(ask.id);
             forget(ask);
             const said = reply.act === 'ask' ? (reply.text ?? '').trim() : '';
-            // A bare yes to what a turn with no word of the owner's proposed has none either.
-            if (said) typed(said, undefined, 'typed', unsaid(ask));
+            // A bare yes to what a turn with no word of the owner's proposed has none either. And typed into the
+            // question's own line, it is the answer to it.
+            if (said) typed(said, undefined, 'typed', unsaid(ask), true);
             return 'settled';
           }
           // How long the hands had been still when the answer came: asked before it is shown.
@@ -1211,6 +1228,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       if (other === ask || other.phase !== 'done' || inbox.showing() !== itemId(other.id)) continue;
       // Said with the keys instead of typed in its field: the same answer to the same question.
       if (unsaid(other) && /\?\s*$/.test((other.answer ?? '').trim())) ask.answersUnsaid = true;
+      // An answer that is a question, and not one that is only being read. Only the person's own words are a
+      // reply: an offer that was taken, or a question the notch wrote about a file, is nobody's answer.
+      if (other.asking && (ask.source === 'typed' || ask.source === 'spoken')) ask.reply = true;
       ledger.seen(other.id);
       forget(other);
       inbox.remove(itemId(other.id));
@@ -1327,7 +1347,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   /** Whether an instruction ran, or will run, with no word of the owner's (authority/standing.ts). */
   const unsaid = (ask: Live): boolean => ask.source === 'shown' || ask.unsaid === true;
 
-  function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answersUnsaid = false): string {
+  function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answersUnsaid = false, reply = false): string {
     endWalks();
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
@@ -1335,6 +1355,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     const ask = make(id, source, 'heard', text);
     if (files?.length) ask.files = files;
     if (answersUnsaid) ask.answersUnsaid = true;
+    if (reply) ask.reply = true;
     begin(ask);
     return id;
   }

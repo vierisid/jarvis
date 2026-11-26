@@ -922,6 +922,9 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // Only the draft on the notch is written again: nothing is sent by it.
     id: 'mail.steer', feature: 'mail', says: 'what is said with a draft open is what that reply is to say', band: 'up', act: 'none', first: 'acts',
     examples: ['decline it, we are full until January'],
+    // Whatever is said with the draft open, and is no question, is what the reply is to say. Whether "settings"
+    // and "undo" should stand before it is not decided (docs/notch/fixes/03-intent-routing.md).
+    over: 'any',
     match: steer,
   }];
   const route = (text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null => routeByIntents(intents, text, how);

@@ -3216,6 +3216,12 @@ describe('a time that is free for two people', () => {
     expect(routes('ask Leo when he is free')).toBe('Ask Leo: When he is free');
     expect(routes('tell Leo I have no time today')).toBe('Tell Leo: I have no time today');
     for (const said of ['find a time with Leo and Anna', 'find a time with Tony', 'what time is it', 'Leo was on time']) expect(routes(said) ?? '').not.toContain('Find a time');
+    // An entry for the owner's own calendar is written down here: nothing of it is a comparing with Leo's machine
+    // (the review of 26 November 2026: "put a meeting with Sam on my calendar for Friday" began one).
+    for (const said of ['put a meeting with Leo on my calendar for Friday', 'add the call with Leo to my calendar', 'Jarvis, block an hour with Leo in my calendar tomorrow',
+      'can you put a 30 minutes sync with Leo on the calendar', 'note the meeting with Leo in my diary']) expect([said, routes(said)]).toEqual([said, null]);
+    // Looking for a time is still that, wherever the calendar is named.
+    for (const said of ['find a time with Leo in my calendar', 'look at my calendar and find a slot with Leo']) expect([said, routes(said)]).toEqual([said, 'Find a time with Leo: 30 minutes']);
     expect(peerTimeMinutes('a quick call')).toBe(30);
     expect(peerTimeMinutes('15 minutes')).toBe(30);
     expect(peerTimeMinutes('90 min')).toBe(60);

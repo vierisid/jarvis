@@ -779,6 +779,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   const intents: NotchIntent[] = [{
     id: 'dayone.answer', feature: 'dayOne', says: 'what is said while day one waits to hear what the person does', band: 'up', act: 'none', first: 'acts',
     examples: ['I run a small bakery'],
+    // Whatever they say now is its answer.
+    over: 'any',
     match(text) {
       if (stopped) return null;
       if (hearing && on('talk')) {

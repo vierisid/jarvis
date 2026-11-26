@@ -56,6 +56,24 @@ describe('what is said to start, to end and to run a showing', () => {
     }
   });
 
+  // The review of 26 November 2026: with one job ever shown, each of these replayed its clicks and keys.
+  test('the words for the job are the whole sentence: one word that is not about the job, and it is an instruction', () => {
+    for (const said of [
+      'do it by email', 'do that tomorrow morning instead', 'do this for all the files in downloads', 'do them one at a time please',
+      'continue with the draft to Sam', 'carry on with the summary', 'finish it by Friday', 'run the same report as last week',
+      'repeat that please, I did not hear', 'go on, tell me more', 'do it yourself', 'run it past Anna first', 'do the rest tomorrow',
+      'finish the rest of the report', 'do the same for Leo', 'keep going until Friday', 'take over the meeting', 'do some more research',
+      // A word that every object has is not a number.
+      'do it constructor', 'run it toString',
+    ]) expect([said, runItRequest(said)]).toEqual([said, null]);
+    for (const [said, count] of [
+      ['do it', null], ['Do it.', null], ['do it again please', null], ['ok, run it now', null], ['run it once more', 1], ['do that 3 more times', 3],
+      ['do it for the next 4 rows please', 4], ['run it on all the rows', null], ['do the same for the other 12', 12], ['do the same thing again', null],
+      ['continue with the next five', 5], ['go on with the rest', null], ['keep going', null], ['take it from here', null], ['finish the rest', null],
+      ['do some more', null], ['do twenty more', 20], ['repeat that', null], ['finisci il resto per favore', null],
+    ] as const) expect([said, runItRequest(said)]).toEqual([said, { count }]);
+  });
+
   test('"undo that" is taking a paste back, and not undoing anything else', () => {
     for (const said of ['Undo', 'undo that', 'Undo the paste.', 'take it back', 'Jarvis, undo that', 'annulla']) expect(undoRequest(said)).toBe(true);
     for (const said of ['Undo the last commit', 'undo my changes to the deck', 'take it back to the shop', '']) expect(undoRequest(said)).toBe(false);
@@ -119,7 +137,11 @@ const rowShown = (n: number, at: number): RawInteraction[] => [
   { action: 'press_keys', value: 'ctrl,v', ts: at + 3, app: 'excel', win: SHEET },
 ];
 
-function harness(options: { left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean; window?: 'gone' } = {}) {
+function harness(options: {
+  left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean; window?: 'gone';
+  /** The window that is in front. Not given: none is. 'lost': the machine was asked and never answered. 'off': no machine to ask. */
+  front?: { app: string; win: WatchWin } | 'lost' | 'off'; paused?: () => boolean;
+} = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -144,6 +166,11 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
       sent.push(request);
       if (request.do === 'pitch') return Promise.resolve(options.rows === 'unseen' ? { done: true, known: false } : { done: true, known: true, dy: request.dy as number });
       if (request.do === 'find') return Promise.resolve(options.window === 'gone' ? { done: false, why: 'gone' } : { done: true, win: request.win as WatchWin });
+      if (request.do === 'front') {
+        if (options.front === 'lost') return Promise.reject(new Error('no answer'));
+        if (options.front === 'off') return Promise.resolve(null);
+        return Promise.resolve(options.front ? { done: true, win: options.front.win, app: options.front.app } : { done: false, why: 'gone' });
+      }
       const answer: NotchActResult = request.do === 'copy' ? { done: true, empty: false, rows: 1, cols: 2, hash: 'h' } : { done: true };
       return Promise.resolve(answer);
     },
@@ -173,6 +200,7 @@ function harness(options: { left?: number | null; effect?: Partial<NotchSkillEff
     async runSkill(skill, from, run) { ran.push({ skill, from }); run.onProgress(runEnd.next); return runEnd; },
     count: options.left === undefined ? undefined : async () => options.left ?? null,
     byPlace: options.byPlace === undefined ? undefined : () => options.byPlace!,
+    paused: options.paused,
   });
   const line = (): NotchLine | null => surface.current().line;
   const said = (): string => text(line()?.say);
@@ -360,6 +388,11 @@ describe('a job to do again at a time of the week', () => {
     await h.pass(4000);
     expect(await h.say('Run it')).toBe('Did the job again.');
     await settle();
+    // Asked for by words alone, some time after: it asks before it does (owner decision 5).
+    expect(h.said()).toBe('Do renames the file and saves it again?');
+    expect(h.ran).toEqual([]);
+    await h.reply('yes');
+    await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
   });
 
@@ -370,6 +403,8 @@ describe('a job to do again at a time of the week', () => {
     await h.pass(4000);
     h.setRunEnd({ end: { how: 'failed', why: 'I could not find the next thing to click on the screen.' }, next: 1 });
     await h.say('run it');
+    await settle();
+    await h.reply('yes');
     await settle();
     expect(h.said()).toBe('I stopped at 1 of 2. I could not find the next thing to click on the screen. What now?');
     h.setRunEnd({ end: { how: 'done' }, next: 2 });
@@ -506,12 +541,14 @@ describe('a shown job is done again where it was done', () => {
   }
 
   test('"run it" does the steps at their places, and not through the product\'s own replay', async () => {
-    const h = harness({ byPlace: true });
+    const h = harness({ byPlace: true, front: { app: 'TextEdit', win: FILE } });
     await shown(h);
     await h.say('run it');
     await settle();
     expect(h.ran).toEqual([]);
     expect(h.sent).toEqual([
+      // Asked first which window is in front: that touches nothing. It is the job's, so nothing is asked of the person.
+      { do: 'front' },
       { do: 'find', app: 'TextEdit', win: FILE, front: true },
       { do: 'click', win: FILE, x: 40, y: 12, hand: 0 },
       { do: 'keys', win: FILE, keys: 'cmd,s' },
@@ -524,7 +561,7 @@ describe('a shown job is done again where it was done', () => {
   // browser stopped at "0 of 12. I could not find the next thing to click".
   // A field on a page has no name to be found by. Where it was typed is known.
   test('on Windows too, when the window is there as it was: words typed into a page, and Enter', async () => {
-    const h = harness({ byPlace: false });
+    const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
     await h.say('Watch me');
     await h.does({ action: 'set_value', ref: ref(''), value: '12', ts: 1, app: 'chrome', win: SHEET });
     await h.does({ action: 'press_keys', value: 'enter', ts: 2, app: 'chrome', win: SHEET });
@@ -539,7 +576,8 @@ describe('a shown job is done again where it was done', () => {
     // Not through the replay that looks for each thing by its name.
     expect(h.ran).toEqual([]);
     expect(h.sent).toEqual([
-      // Asked first whether the window is there: that touches nothing.
+      // Asked first which window is in front, and then whether the job's is there: neither touches anything.
+      { do: 'front' },
       { do: 'find', app: 'chrome', win: SHEET },
       // Then for real, and brought forward: what is typed goes to whichever window is in front.
       { do: 'find', app: 'chrome', win: SHEET, front: true },
@@ -557,6 +595,10 @@ describe('a shown job is done again where it was done', () => {
     await shown(h);
     await h.say('run it');
     await settle();
+    // A window that is gone is not in front: it asks first.
+    expect(h.said()).toBe('Do renames the file and saves it again?');
+    await h.reply('yes');
+    await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
     expect(h.sent.some((request) => request.do === 'click' || request.do === 'keys')).toBe(false);
   });
@@ -570,6 +612,11 @@ describe('a shown job is done again where it was done', () => {
     await h.reply('no');
     await h.pass(4000);
     await h.say('run it');
+    await settle();
+    // It has no window to be in front: it asks first, and nothing was asked of the machine to find that out.
+    expect(h.said()).toBe('Do renames the file and saves it again?');
+    expect(h.sent.filter((request) => request.do === 'front')).toEqual([]);
+    await h.reply('yes');
     await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
     // Nothing is pressed by place: the pointer only goes home when the job is over.
@@ -587,6 +634,139 @@ describe('a shown job is done again where it was done', () => {
     await h.say('run it');
     expect(h.said()).toBe('I cannot do that one again here: one of its steps has no place I can go back to. Show me again, with clicks and keys only.');
     expect(h.sent.filter((request) => request.do !== 'pitch')).toEqual([]);
+  });
+
+  // Owner decision 5, 26 November 2026: "do it again" with nothing of the job fresh acts at once only when the
+  // job's window is in front. Otherwise it shows a line and waits for the yes.
+  describe('asked for by words alone, some time after it was shown', () => {
+    const acted = (h: ReturnType<typeof harness>): Record<string, unknown>[] => h.sent.filter((request) => !['front', 'find', 'pitch'].includes(request.do as string));
+
+    test('with another window in front it asks, does nothing until the yes, and nothing at all on a no', async () => {
+      const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
+      await shown(h);
+      expect(await h.say('do it again')).toBe('Did the job again.');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      expect(h.line()).toMatchObject({ kind: 'offer', yes: 'do it' });
+      expect([acted(h), h.ran, h.jobs.busy()]).toEqual([[], [], false]);
+      await h.reply('no');
+      await h.pass(5000);
+      expect([acted(h), h.ran, h.jobs.busy()]).toEqual([[], [], false]);
+      // And it is asked again the next time: a no is not remembered as a yes, nor a yes for the next time.
+      await h.say('run it');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      await h.reply('yes');
+      await settle();
+      expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+      await h.pass(8000);
+      await h.say('do it');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+    });
+
+    test('with its own window in front it is done at once, and nothing is asked', async () => {
+      const h = harness({ byPlace: false, front: { app: 'TextEdit', win: FILE } });
+      await shown(h);
+      await h.say('do it again');
+      await settle();
+      expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+      expect(h.said()).toBe('Done. 2 steps.');
+    });
+
+    test('its program started again since is its window when it has the size it had, and not when it has another', async () => {
+      const again = harness({ byPlace: false, front: { app: 'textedit', win: { id: '0x99', pid: 4321, w: FILE.w + 2, h: FILE.h - 2 } } });
+      await shown(again);
+      await again.say('run it');
+      await settle();
+      expect(acted(again).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+
+      for (const win of [{ id: '0x99', pid: 4321, w: FILE.w + 3, h: FILE.h }, { id: '0x99', pid: 4321, w: FILE.w, h: FILE.h - 3 }]) {
+        const other = harness({ byPlace: false, front: { app: 'TextEdit', win } });
+        await shown(other);
+        await other.say('run it');
+        await settle();
+        expect(other.said()).toBe('Do renames the file and saves it again?');
+        expect(acted(other)).toEqual([]);
+      }
+      // Another program whose window happens to have that size is not it.
+      const same = harness({ byPlace: false, front: { app: 'Notes', win: { ...FILE, id: '0x77', pid: 9 } } });
+      await shown(same);
+      await same.say('run it');
+      await settle();
+      expect(same.said()).toBe('Do renames the file and saves it again?');
+      // And the same window's number on another process is not it either.
+      const reused = harness({ byPlace: false, front: { app: 'Notes', win: { id: FILE.id, pid: 9, w: 300, h: 200 } } });
+      await shown(reused);
+      await reused.say('run it');
+      await settle();
+      expect(reused.said()).toBe('Do renames the file and saves it again?');
+    });
+
+    test('when the machine cannot say which window is in front, it asks', async () => {
+      for (const front of [undefined, 'lost', 'off'] as const) {
+        const h = harness({ byPlace: false, front });
+        await shown(h);
+        await h.say('do it');
+        await settle();
+        expect([front, h.said()]).toEqual([front, 'Do renames the file and saves it again?']);
+        expect(acted(h)).toEqual([]);
+      }
+    });
+
+    test('where a job is only ever done by place (a Mac), it still asks when its window is not in front', async () => {
+      const h = harness({ byPlace: true, front: { app: 'Safari', win: SHEET } });
+      await shown(h);
+      await h.say('run it');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      // Its window was not brought forward to find out.
+      expect(h.sent.filter((request) => request.do === 'find')).toEqual([]);
+      await h.reply('yes');
+      await settle();
+      expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+    });
+
+    test('everything stopped between the question and the yes: the yes does nothing', async () => {
+      let paused = false;
+      const h = harness({ byPlace: false, paused: () => paused });
+      await shown(h);
+      await h.say('run it');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      paused = true;
+      await h.reply('yes');
+      await settle();
+      expect(h.said()).toBe('Everything is stopped. Wake me first.');
+      expect([acted(h), h.ran]).toEqual([[], []]);
+    });
+
+    test('a job that deletes is asked about once, not twice, wherever its window is', async () => {
+      for (const front of [{ app: 'TextEdit', win: FILE }, { app: 'chrome', win: SHEET }]) {
+        const h = harness({ byPlace: false, front, effect: { deletes: true } });
+        await shown(h);
+        await h.say('run it');
+        await settle();
+        expect(h.said()).toBe('That job deletes something. Do it?');
+        await h.reply('yes');
+        await settle();
+        expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+      }
+    });
+
+    test('pressed on its own row, it is done as before: the press is the asking', async () => {
+      const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
+      await shown(h);
+      await h.pass(7000);
+      h.inbox.present('home', (stage) => h.teach.open(stage));
+      await settle();
+      expect(h.said()).toBe('Jobs you showed me: 1');
+      await h.reply('button', { row: h.db.query<{ id: string }, []>('SELECT id FROM notch_learned').get()!.id, button: 'run' });
+      for (let round = 0; round < 4; round++) { await settle(); await h.pass(10); }
+      await settle();
+      expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+      expect(h.sent.filter((request) => request.do === 'front')).toEqual([]);
+    });
   });
 
   test('how a Mac shortcut is said', () => {

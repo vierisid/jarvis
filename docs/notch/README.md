@@ -388,7 +388,9 @@ product's own turn store (`BriefChatTransport.submit`): the same agent, tools
 and authority gate as a dashboard message, kept in one conversation called
 Notch, which the dashboard lists like any other. "Remember that..." does not
 go to the agent: it is written to memory as one fact and read back
-(`src/notch/remember.ts`).
+(`src/notch/remember.ts`). Words the notch acts on itself do not go to the
+agent either: which those are is decided by one table, described under
+"What a sentence means".
 
 | What | Where |
 |---|---|
@@ -1615,7 +1617,9 @@ says of itself, the clipboard, a click or a key made as if by hand),
     when it has places and its window is there as it was (asked first,
     which touches nothing), and through the product's replay by name when
     the window is gone or another size, or when a step has no place
-    (`startSkill`). On a Mac by place is the only way (`byPlace` in
+    (`startSkill`). Asked for by words alone some time after it was shown,
+    it is done at once only when its window is the one in front, and is
+    asked about first when it is not (258). On a Mac by place is the only way (`byPlace` in
     `src/daemon/notch-jobs.ts`): with no places "run it" says to show the
     job again, and with the window gone it says it cannot find it and
     touches nothing. What is typed is told with the window it was typed in from now
@@ -2729,8 +2733,10 @@ took spoken words. The owner asked for the prototype's way on 18 November
 How it goes. The talk keys take the notch for the listening, so the line
 they were pressed over leaves it. When the keys go down the line that is up
 is remembered (`src/notch/said.ts`, `keys`). When the words arrive they are
-tried as an answer to that line, after everything that has words of its own
-("settings", "watch me", "remember that"). If they are one, the thing whose
+tried as an answer to that line before any command and before anything that
+only opens ("watch me", "do it", "settings"): what is up stands before a
+command (256). A draft that is open and day one waiting to hear the person
+are asked before it. If they are one, the thing whose
 line it was is brought back to the notch (`NotchInbox.replay`), and when
 its script shows that line again the line has its answer at once: the pick
 is made, the word is changed, the yes is given. If they are not, they are
@@ -3226,6 +3232,114 @@ What is not done, or not proven:
 - **None of the four was seen on a real machine.** The first was looked at
   in a browser.
 
+## What a sentence means
+
+Some words the notch acts on itself, with no model: "watch me", "tell Leo I
+am late", "settings". Each part that has such words used to have a router of
+its own, and the routers were asked one after the other in the order they
+happened to stand in (`src/notch/real.ts`). Nobody owned the whole. With one
+job ever shown, "do it" said to the assistant's "Shall I send it?" replayed
+that job's clicks and keys, and so did "do it by email" and "finish it by
+Friday" (the review of 26 November 2026).
+
+Now every part hands its words over as a list of intents, and one table
+decides (`src/notch/intents.ts`). An intent is one thing the fixed words can
+do: its name (`teach.run`), its band, what kind of act it is, whether it acts
+at once or shows a line first, sentences that are it, sentences that look
+like it and are not, and its fast path, which is the part's own regexes. A
+sentence that no intent takes is an instruction for the assistant like any
+other.
+
+| What | Where |
+|---|---|
+| The table, its order and its rules | `src/notch/intents.ts` |
+| The lists the parts hand over, and the one resolver | `src/notch/real.ts` (`notchIntents`, `notchSide`) |
+| Asked once for an instruction, and the reply rule | `src/notch/asks.ts` (`sided`, `reply`) |
+| What every sentence means, pinned row by row | `src/notch/intents-corpus.txt`, `intents-corpus.test.ts` |
+
+255. **A sentence is put to the table once.** The answer is kept on the
+    instruction (`routed`), and where its line is drawn, whether a name in
+    it is read back and what is run all go by it. It used to be asked two
+    times for one sentence, and day one notes "asked" as it is asked.
+256. **The order is declared, not where a part happens to stand.** Four
+    bands, asked in this order: a control word ("pause"); an answer to what
+    is up on the notch, or was a moment ago (day one waiting to hear the
+    person, a draft that is open, a line that takes a yes, a showing that
+    waits for "done"); a command; something of the notch's own to open
+    (settings, memory, the agents, day one). Inside a band the parts keep
+    the order `notchIntents` lists them in. So "do it" said over an offer is
+    the yes to that offer (206), also when a job was once shown that "do it"
+    could mean. When two intents can match one sentence, the one that takes
+    it names the other (`over`), and a test holds that no sentence of the
+    corpus is matched twice without it.
+257. **A reply to a question the assistant asked back is the answer.** Typed
+    into the question's own line, or said or typed while it is up, it goes
+    to the assistant that asked. No intent takes it but the control word,
+    it is not read for who is named, it is not kept as a memory and it is
+    not answered by pointing. "Do it" is not the job that was shown, "tell
+    Anna instead" is not a word to Anna, and "settings" may be the answer to
+    "which one, settings or profile?". An answer that asks nothing does not
+    make what comes next a reply, and neither does a question that was
+    closed with Esc.
+258. **Words alone never set the hands to work in a window that is not
+    there to be seen.** An intent that acts on the screen, sends or creates
+    shows a line first (an offer that takes a yes, a fuse that can be taken
+    back), unless it names the live context its words are about: the thing
+    that is held, the job shown in the last three minutes, the paste that
+    was just made. A test over the table holds it. For a job that was shown
+    some time ago the owner decided it on 26 November 2026: "do it again"
+    does it at once only when the job's window is the one in front (the same
+    program at the size it had, asked with `notch.act` `front`, which
+    touches nothing). Otherwise the notch asks "Do <the job> again?" and
+    waits for the yes. A job that deletes is asked about once, not twice.
+    Run from its own row in Home, or at its time and on a yes, it is done as
+    before: the press is the asking.
+259. **The words for the job are the whole sentence.** After "do it", "run
+    it", "continue", "do the rest" may come only how many, of what and from
+    where: "again", "on nine rows", "for the next 4", "please"
+    (`runItRequest`, `RUN_TAIL`). One word that is not about the job, or a
+    comma and more, and the sentence is an instruction: "do it by email",
+    "continue with the draft to Sam", "repeat that please, I did not hear".
+    Each intent lists such sentences (`never`), and a test holds that its
+    fast path does not take them. Two more of the kind: "put a meeting with
+    Sam on my calendar" is an entry for the owner's calendar and starts no
+    comparing with Sam's machine, and "daily standup notes should go to the
+    team" says what should happen and asks for no agent.
+260. **"Pause" is a word, as Esc twice is a key.** Said or typed, alone in
+    the sentence, in English or Italian ("pause", "pause everything",
+    "pausa"), it stops everything through the product's own pause
+    (`pauseWord`, `src/notch/pause.ts`). It needs no model, it stands before
+    a draft that is open and before what day one waits to hear, and it is
+    the one word that is still the notch's own in a reply. "Pause the music"
+    is an instruction. "Stop" is not a control word: that is not decided.
+261. **Every intent says what kind of act it is.** None, screen, send,
+    create, command, install or settings (`act`, described at the top of
+    `intents.ts`). It is what the owner's words cover when they fit the
+    intent, and the check of whether the owner asked for a thing is to read
+    it from there (docs/notch/fixes/01-owner-word.md). An instruction that no
+    intent took covers nothing by this table.
+
+What is not done, or not proven:
+
+- **The fixed words are still English, with a little Italian.** "Fallo",
+  "impostazioni", "tienimi d'occhio la risposta di Sam" go to the assistant.
+  The reading of a sentence the fixed words miss is the next step.
+- **The reading of words that name somebody is still its own call**
+  (`src/notch/people-read.ts`). The fast path no longer takes "put a meeting
+  with Sam on my calendar", and that model is then asked what it means: it
+  has not been given the sentences an intent must never take.
+- **Whether a draft that is open should give way to "settings" and "undo"
+  is not decided.** It takes whatever is said that is no question, and
+  since the bands that includes "day one" and "look around", which used to
+  be asked before it only because day one stood first.
+- **Which window is in front was not tried on a real machine.** While Home
+  has the keyboard the window in front may be the notch's own, and then a
+  typed "do it again" asks first even with the job's window right behind
+  it. That is the safe side. Said with the talk keys, nothing takes the
+  keyboard.
+- **Schedules are read as before**: "every weekday at 9" is still every
+  day. One reader of a time is a later step.
+
 ## Your organisation
 
 The people whose Jarvises this one may talk to: Home's row for them, signing in, joining two
@@ -3241,7 +3355,7 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 | Yes | tap Win + Alt (Mac: Option + Cmd) | the two down within 0.7 s of each other and up again within 1.5 s, with no other key |
 | Esc | Esc | only while the notch has something on it, and never with a modifier |
 | Look | hold the talk pair, then click or draw with the mouse | the pair down alone, from the first moment; the press and its letting go are kept from the app in front (75) |
-| Stop everything | Esc twice | the second within 0.4 s of one that was taken |
+| Stop everything | Esc twice, or "pause" said or typed (260) | the second within 0.4 s of one that was taken |
 
 - A pair is two different modifier keys. Left and right are the same key.
   AltGr is never Ctrl and never Alt.
