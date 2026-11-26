@@ -90,6 +90,19 @@ const NOT_AN_APP_ENDING = /\.(bat|cmd|com|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|ms
 const bareName = (value: string): string => value.toLowerCase().replace(/\.(exe|app)$/, '').trim();
 
 /**
+ * Whether a window's program (or its title) is a shell, a terminal or a
+ * script host: what is typed into it, once Enter is pressed, is run
+ * (authority/owner-word.ts).
+ */
+export function runsWhatIsTyped(program: string, title = ''): boolean {
+  const name = bareName(program.split(/[\\/]/).pop() ?? '');
+  if (/^(?:cmd|powershell|powershell_ise|pwsh|wt|windowsterminal|conhost|openconsole|bash|sh|zsh|fish|dash|ksh|csh|tcsh|wsl|wslhost|terminal|iterm|iterm2|xterm|gnome-terminal|gnome-terminal-server|konsole|alacritty|kitty|warp|hyper|tmux|screen|wscript|cscript|mshta|python|python3|pythonw|py|node|bun|deno|perl|ruby|php|lua|osascript|xfce4-terminal|tilix|terminator|wezterm|wezterm-gui)$/.test(name)) return true;
+  if (name) return false;
+  // No program named: only a title that a shell's own window has.
+  return /^(?:(?:administrator:\s*)?(?:command prompt|windows powershell|powershell|git bash)\b|terminal$)/i.test(title.trim());
+}
+
+/**
  * A name a person would call an app by: letters, digits, spaces, and a dot,
  * underscore, plus or hyphen. No path, no address (a colon or a slash would
  * make it a link the system opens), nothing a shell reads.

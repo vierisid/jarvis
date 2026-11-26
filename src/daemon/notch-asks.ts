@@ -18,8 +18,8 @@ import { approvalIntentFromContext } from '../authority/approval.ts';
 import { outsideBriefTurn } from '../brief/chat-context.ts';
 import { currentStanding, ownersOwnWords } from '../authority/standing.ts';
 import { findSidecar, getSidecarManager, lastScreenPicture, resolveToolTarget } from '../actions/tools/sidecar-route.ts';
-import { notchApprovalWhere, notchPressReads, type NotchWhereDeps } from './notch-where.ts';
-import { setOwnerWordProbe } from '../authority/owner-word.ts';
+import { notchApprovalWhere, notchFrontReads, notchPressReads, type NotchWhereDeps } from './notch-where.ts';
+import { setOwnerWordFrontProbe, setOwnerWordProbe } from '../authority/owner-word.ts';
 import { isScreenCaptureEnabled } from '../actions/tools/desktop-guard.ts';
 import {
   bindScriptedModel, scriptedCalls, scriptedModelBound, scriptedTurns, setScriptedTurns,
@@ -165,6 +165,7 @@ export const notchWhereDeps: NotchWhereDeps = {
  */
 export function wireOwnerWord(): void {
   setOwnerWordProbe((toolName, params) => notchPressReads(toolName, params, notchWhereDeps));
+  setOwnerWordFrontProbe((toolName, params) => notchFrontReads(toolName, params, notchWhereDeps));
 }
 
 const OS_NAMES: Record<string, string> = { windows: 'Windows', win32: 'Windows', darwin: 'macOS', macos: 'macOS', linux: 'Linux' };

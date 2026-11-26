@@ -26,7 +26,7 @@ import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
   routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, captureMachineApprovalGuard, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
-  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog,
+  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog, remoteSnapshotSeen,
   type SidecarPageRead,
 } from './sidecar-route.ts';
 import { currentReviewedExecution, type ReviewedExecution, type ReviewedRemoteSnapshot } from './reviewed-call-scope.ts';
@@ -47,6 +47,26 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 // Shared browser controller (lazy-connected on first browser tool use)
 export const browser = new BrowserController();
 
+/**
+ * What the browser shows where a call acts, for the owner's word
+ * (authority/owner-word.ts): the page, and what the element the call names
+ * says, from the map the model read (this loop's, for the local browser), or
+ * from the newest snapshot of a browser on another machine. It only reads.
+ */
+setOwnerWordBrowserReader((toolName, params) => {
+  const id = typeof params.element_id === 'number' ? params.element_id : null;
+  const target = resolveBrowserTarget(params, toolName, { quiet: true });
+  if (target) {
+    const sidecar = findSidecar(target, getSidecarManager()?.listSidecars() ?? []);
+    const seen = sidecar ? remoteSnapshotSeen(sidecar.id) : null;
+    return seen ? { page: seen.page, element: id === null ? null : seen.line(id) } : null;
+  }
+  if (isLocalBrowserDisabled() || isNoLocalTools()) return null;
+  const log = currentSnapshotReadLog();
+  const sameMap = log?.localGeneration === undefined || log.localGeneration === browser.snapshotGeneration();
+  return { page: browser.lastKnownPageUrl(), element: id === null || !sameMap ? null : browser.snapshotElementText(id) };
+});
+
 import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
 import { siteProjectExecOnWrite } from '../../sites/project-exec-paths.ts';
 import {
@@ -56,6 +76,7 @@ import {
 } from './file-path-policy.ts';
 import { forCard, commandForCard, escapedLiteralForCard } from '../../util/card-text.ts';
 import { failedToolResult } from '../progress-context.ts';
+import { setOwnerWordBrowserReader } from '../../authority/owner-word.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 

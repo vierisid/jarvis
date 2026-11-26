@@ -1001,6 +1001,57 @@ function recordRemoteSnapshotGeneration(key: string, gen: string): void {
 }
 
 /**
+ * What the newest remote snapshot each reader took showed for each element,
+ * as the line the snapshot text gives it (`[12] button "Send" aria-label=...`),
+ * and the page it was on. For the owner's word (authority/owner-word.ts),
+ * which reads a browser click by the name of what it presses, as `ui_act` is
+ * read, and may only add a question by it. The lines are read after the LAST
+ * header of the element list, which the page's own text (printed before it,
+ * and the only part that keeps its line breaks) cannot come after. Capped
+ * like the generations; a restart clears it.
+ */
+const remoteSnapshotElements = new Map<string, { page: string | null; lines: Map<number, string> }>();
+
+function recordRemoteSnapshotElements(key: string, text: unknown, pageUrl: string | null): void {
+  remoteSnapshotElements.delete(key);
+  if (typeof text !== 'string') return;
+  const header = text.lastIndexOf('--- Interactive Elements (');
+  const lines = new Map<number, string>();
+  if (header >= 0) {
+    for (const line of text.slice(header).split('\n').slice(1)) {
+      const match = /^\[(\d+)\]\s+(.*)$/.exec(line);
+      if (match) lines.set(Number(match[1]), elementSays(match[2]!));
+    }
+  }
+  remoteSnapshotElements.set(key, { page: pageUrl, lines });
+  while (remoteSnapshotElements.size > REMOTE_SNAPSHOT_GENERATIONS_CAP) {
+    const oldest = remoteSnapshotElements.keys().next().value;
+    if (oldest === undefined) break;
+    remoteSnapshotElements.delete(oldest);
+  }
+}
+
+/**
+ * What an element's line says: its text (the quoted string after its tag) and
+ * its aria-label, as written, without the tag or the other attributes.
+ */
+function elementSays(line: string): string {
+  const quoted = (raw: string): string => { try { return String(JSON.parse(raw)); } catch { return raw.slice(1, -1); } };
+  const said: string[] = [];
+  const text = /^[\w-]+\s+("(?:[^"\\]|\\.)*")/.exec(line);
+  if (text) said.push(quoted(text[1]!));
+  const label = /\baria-label=("(?:[^"\\]|\\.)*")/.exec(line);
+  if (label) said.push(quoted(label[1]!));
+  return said.join(' ').slice(0, 400);
+}
+
+/** What the newest snapshot this reader took on that sidecar showed: its page, and what each element says. Null: none was taken. */
+export function remoteSnapshotSeen(sidecarId: string): { page: string | null; line(elementId: number): string | null } | null {
+  const seen = remoteSnapshotElements.get(readerKey(sidecarId));
+  return seen ? { page: seen.page, line: (elementId) => seen.lines.get(elementId) ?? null } : null;
+}
+
+/**
  * Drop every generation recorded for a template-delivery scope's reader, on
  * every sidecar (#879). Called when a sub-agent run settles: its scope id is
  * per spawn, so nothing reads those keys again except an approved call the
@@ -1158,6 +1209,7 @@ export async function routeBrowserReadToSidecar(
   recordActionVerification(method, observedPage(read.pageUrl, documentId));
   if (elemGen) recordRemoteSnapshotGeneration(readerKey(out.sidecarId), elemGen);
   else remoteSnapshotGenerations.delete(readerKey(out.sidecarId));
+  recordRemoteSnapshotElements(readerKey(out.sidecarId), read.text, read.pageUrl);
   // The loop's own record too (#827). A read without a generation is kept as
   // null rather than deleted, so a card in this loop does not fall back to the
   // shared record -- which may name a map some other loop filled since.

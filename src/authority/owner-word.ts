@@ -91,11 +91,21 @@
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
- * anything else. After outside content, clicks and typed text are still not
- * asked about, so text that was read can still drive an app by its buttons;
- * a button that reads as Send, Delete or Buy is caught by its name. When the
- * owner did ask for a send, what was read can still shape its wording. That
- * is the price of not being asked, and it is the owner's to pay.
+ * anything else. After outside content, a click, a key or typed text is
+ * read by where it lands (`uiReads`): a control that says Send, Post,
+ * Forward or Submit is a send (on the desktop by what the machine says is
+ * there, in a page by the snapshot the model read); Ctrl or Cmd with Enter
+ * in mail or chat, and Enter in a chat, is a send; Enter or text into a
+ * shell, Ctrl+Alt+T, and a command typed into Win+R, the Start menu,
+ * Spotlight or Alt+F2 is a command; where the window or page cannot be
+ * read, Enter (and a browser Ctrl+Enter) is asked like a blind click. What
+ * still goes ahead: other clicks and text typed with no Enter, so what was
+ * read can still drive an app by buttons that say none of those words, a
+ * nameless button, a form submitted by Enter on a page that is no chat, and
+ * a page on another machine whose snapshot this side did not keep is read
+ * as blind. When the owner did ask for a send, what was read can still
+ * shape its wording. That is the price of not being asked, and it is the
+ * owner's to pay.
  * What is NOT waived: a call the product refuses outright (it stays
  * refused), and a call whose own classifier failed (nothing is known about
  * it, so it is asked about).
@@ -107,7 +117,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ActionCategory } from '../roles/authority.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
-import { ownersTurn, plainAppOpen } from './app-open.ts';
+import { ownersTurn, plainAppOpen, runsWhatIsTyped } from './app-open.ts';
+import { uiEffectHints } from './ui-intent.ts';
 import type { OwnerAct } from './words-cover.ts';
 import { setToolRunListener } from '../actions/tools/registry.ts';
 
@@ -665,6 +676,153 @@ let probe: OwnerWordProbe | null = null;
 
 export function setOwnerWordProbe(next: OwnerWordProbe | null): void {
   probe = next;
+  // Taken away together: the two ask the same machine.
+  if (next === null) frontProbe = null;
+}
+
+/**
+ * Asks the machine which window a key press or typed text goes to: its
+ * program and title (`element_id` given: the window of that element). The
+ * same three answers as for a click: what it saw, `'blind'` where it cannot
+ * look by its making, null (or a throw) where it tried and was told nothing.
+ */
+export type OwnerWordFrontProbe = (toolName: string, params: Record<string, unknown>) => Promise<{ program: string; title: string } | 'blind' | null>;
+
+let frontProbe: OwnerWordFrontProbe | null = null;
+
+export function setOwnerWordFrontProbe(next: OwnerWordFrontProbe | null): void {
+  frontProbe = next;
+}
+
+/**
+ * Says what the browser shows where a browser call acts: the page (its
+ * address and title, or null when not known) and what the element the call
+ * names says (null when it is not in the map the model read). Null: the
+ * browser cannot be read here. Set by the browser tools
+ * (actions/tools/builtin.ts); it only reads.
+ */
+export type OwnerWordBrowserReader = (toolName: string, params: Record<string, unknown>) => { page: string | null; element: string | null } | null;
+
+let browserReader: OwnerWordBrowserReader | null = null;
+
+/** Sets the reader and hands back the one it replaced (a test puts that back). */
+export function setOwnerWordBrowserReader(next: OwnerWordBrowserReader | null): OwnerWordBrowserReader | null {
+  const before = browserReader;
+  browserReader = next;
+  return before;
+}
+
+/** A window or a page that holds mail, and one where people chat. Read on its program, title or address. */
+const MAIL_PLACE = /\b(?:outlook|olk|hxoutlook|thunderbird|gmail|mail\.google|inbox|mail|proton\s?mail|fastmail|mailspring|spark|evolution|geary|kmail|posta|webmail)\b/i;
+const CHAT_PLACE = /\b(?:slack|teams|discord|telegram|whatsapp|signal|skype|messenger|messages|wechat|element|mattermost|zulip|rocket\.chat|viber|chat|messaggi)\b/i;
+
+/** The keys of a press, lower-cased, one per key held. */
+const keysHeld = (params: Record<string, unknown>): string[] => {
+  const keys = params.keys ?? params.key;
+  return typeof keys === 'string' ? keys.split(/[,+]/).map((key) => key.trim().toLowerCase()).filter(Boolean) : [];
+};
+const ENTER = /^(?:enter|return|kp_enter|numpadenter)$/;
+const COMMAND_KEY = /^(?:ctrl|control|cmd|command|meta)$/;
+
+/** A press that opens a place where what is typed next is run or opened: Win+R, the Start menu, Spotlight, Alt+F2. */
+function opensRunPlace(keys: string[]): boolean {
+  const has = (pattern: RegExp): boolean => keys.some((key) => pattern.test(key));
+  if (keys.length === 1 && /^(?:win|windows|super|lwin|rwin)$/.test(keys[0]!)) return true;
+  if (keys.length === 2 && has(/^(?:win|windows|super|lwin|rwin)$/) && has(/^r$/)) return true;
+  if (keys.length === 2 && has(/^(?:cmd|command|meta)$/) && has(/^space$/)) return true;
+  return keys.length === 2 && has(/^alt$/) && has(/^f2$/);
+}
+
+/** A press that opens a terminal: Ctrl+Alt+T. Starting a shell is a command by another name, as for an app. */
+const opensTerminal = (keys: string[]): boolean => keys.length === 3 && keys.includes('t') && keys.includes('alt') && keys.some((key) => /^(?:ctrl|control)$/.test(key));
+
+/** What was typed since a run place was opened, by the tool loop it was opened in. */
+const runPlaces = new WeakMap<ReadonlySet<string>, { typed: string }>();
+
+/** What is run when a run place is sent: an app named as a person names one is an app opened, anything else a command. */
+const runPlaceRuns = (typed: string): ActionCategory[] => (plainAppOpen('desktop_launch_app', { executable: typed.trim() }) ? [] : ['execute_command']);
+
+/**
+ * What a key press, typed text, or a browser click, key or typing sends or
+ * runs, read from where it lands, as `ui_act` is read by its control's
+ * label. Asked only after outside content (`outside`), since before it none
+ * of the four is asked about; a run place opened is followed either way.
+ *
+ *   - a browser click on an element that says Send, Post, Forward, Submit
+ *     (`uiEffectHints`, on what the element says and the page): a send;
+ *     where the browser cannot be read (a browser on another machine whose
+ *     snapshot this side did not keep), `'blind'`;
+ *   - Ctrl or Cmd with Enter in a mail or chat window or page: a send; Enter
+ *     alone, or text with a line break, in a chat: a send; a browser typing
+ *     with `submit` on a chat page: a send;
+ *   - Enter, or text typed, into a window whose program is a shell, a
+ *     terminal or a script host (`runsWhatIsTyped`): a command;
+ *   - Ctrl+Alt+T: a command; Win+R, the Start menu, Spotlight or Alt+F2
+ *     followed by typed text and Enter: what was typed is an app opened when
+ *     it names one as a person does, and a command otherwise;
+ *   - Enter (or a line break typed, or Ctrl/Cmd+Enter in a page) where the
+ *     window cannot be read: `'blind'`. Text typed with no line break is
+ *     never held for this: nothing is sent or run until Enter.
+ */
+async function uiReads(toolName: string, params: Record<string, unknown>, outside: boolean): Promise<ActionCategory[] | 'blind'> {
+  const loop = held.getStore()?.marks;
+  // Anything else done on the desktop leaves the run place: what is typed after it goes elsewhere.
+  if (loop && /^desktop_(?:click|pointer|launch_app|focus_window)$/.test(toolName)) runPlaces.delete(loop);
+  if (toolName === 'desktop_press_keys' || toolName === 'desktop_type') {
+    const keys = toolName === 'desktop_press_keys' ? keysHeld(params) : [];
+    const text = toolName === 'desktop_type' && typeof params.text === 'string' ? params.text : '';
+    if (opensRunPlace(keys)) {
+      if (loop) runPlaces.set(loop, { typed: '' });
+      return [];
+    }
+    if (opensTerminal(keys)) return ['execute_command'];
+    const place = loop ? runPlaces.get(loop) : undefined;
+    const enter = keys.some((key) => ENTER.test(key)) || /[\r\n]/.test(text);
+    if (place) {
+      if (!enter) {
+        if (keys.some((key) => key === 'escape' || key === 'esc')) runPlaces.delete(loop!);
+        else place.typed += text;
+        return [];
+      }
+      runPlaces.delete(loop!);
+      const typed = place.typed + text.split(/[\r\n]/)[0];
+      if (typed.trim()) return runPlaceRuns(typed);
+    }
+    if (!outside || (toolName === 'desktop_press_keys' && !enter)) return [];
+    let front: Awaited<ReturnType<OwnerWordFrontProbe>> = frontProbe ? null : 'blind';
+    try {
+      if (frontProbe) front = await frontProbe(toolName, params);
+    } catch {
+      front = null;
+    }
+    if (front === null || front === 'blind') return enter ? 'blind' : [];
+    if (runsWhatIsTyped(front.program, front.title)) return ['execute_command'];
+    if (!enter) return [];
+    const where = `${front.program} ${front.title}`;
+    const withCommand = keys.some((key) => COMMAND_KEY.test(key));
+    if (CHAT_PLACE.test(where)) return ['send_message'];
+    if (withCommand && MAIL_PLACE.test(where)) return ['send_email'];
+    return [];
+  }
+  if (!outside) return [];
+  if (toolName === 'browser_click') {
+    if (params.button === 'right') return [];
+    const seen = browserReader?.(toolName, params) ?? null;
+    if (!seen || seen.element === null) return 'blind';
+    return uiEffectHints('click', seen.element, seen.page ?? '');
+  }
+  if (toolName === 'browser_press_key' || toolName === 'browser_type') {
+    const keys = toolName === 'browser_press_key' ? keysHeld(params) : [];
+    const enter = keys.some((key) => ENTER.test(key)) || (toolName === 'browser_type' && params.submit === true);
+    if (!enter) return [];
+    const withCommand = keys.some((key) => COMMAND_KEY.test(key));
+    const page = browserReader?.(toolName, params)?.page ?? null;
+    if (page === null) return withCommand ? 'blind' : [];
+    if (CHAT_PLACE.test(page)) return ['send_message'];
+    if (withCommand && MAIL_PLACE.test(page)) return ['send_email'];
+    return [];
+  }
+  return [];
 }
 
 /** The tools that press whatever is at a place the call itself does not name. */
@@ -783,6 +941,13 @@ export async function ownerWord(
       reads = [...gate.categories, ...looked];
     }
   }
+  // A key, typed text or a browser click: what it sends or runs is read from where it lands.
+  const landed = await uiReads(toolName, params, now.outside);
+  if (landed === 'blind') {
+    if (now.beyond ?? now.outside) return 'blind';
+  } else {
+    reads = [...reads, ...landed];
+  }
   if (!now.outside) return 'go';
   const acts = callActs(toolName, params, reads);
   const command = commandText(toolName, params);
@@ -812,7 +977,7 @@ export const OWNER_WORD_ASKS_REASON = 'a delete or a payment is always asked abo
 export const OWNER_WORD_UNSEEN_REASON = 'the screen could not be read to see what this click lands on, so it is asked about';
 
 /** And for a raw click where nothing can look, after outside content was read. */
-export const OWNER_WORD_BLIND_REASON = 'this turn has read content you did not write, and what this click lands on cannot be read here, so it is asked about';
+export const OWNER_WORD_BLIND_REASON = 'this turn has read content you did not write, and what this click or key lands on cannot be read here, so it is asked about';
 
 const ACT_SAID: Record<OwnerAct, string> = {
   send: 'a send',

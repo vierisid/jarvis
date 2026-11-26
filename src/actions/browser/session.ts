@@ -520,6 +520,8 @@ export class BrowserController {
   private elementCoords = new Map<number, { x: number; y: number }>();
   /** Tag and visible text of each element of the last snapshot, for an approval card. Page content: display only. */
   private elementLabels = new Map<number, string>();
+  /** What each element says (its text, else its aria-label or title), as the page gave it: for reading what a click presses. */
+  private elementTexts = new Map<number, string>();
 
   /**
    * Which DOCUMENT the coordinates and element refs above were minted in, and
@@ -1155,6 +1157,7 @@ export class BrowserController {
   private forgetSnapshotElements(): void {
     this.elementCoords.clear();
     this.elementLabels.clear();
+    this.elementTexts.clear();
     this.elementInFrame.clear();
     this.elementDoc = { loaderId: '', frameStamp: '' };
     this.elementWorld = null;
@@ -1414,12 +1417,14 @@ export class BrowserController {
     // Store coordinates locally, strip from LLM-facing data
     this.elementCoords.clear();
     this.elementLabels.clear();
+    this.elementTexts.clear();
     this.elementInFrame.clear();
     const cleanElements: PageElement[] = [];
 
     for (const el of data.elements) {
       this.elementCoords.set(el.id, { x: el.x, y: el.y });
       this.elementLabels.set(el.id, elementCardLabel(el));
+      this.elementTexts.set(el.id, [el.text, el.attrs?.['aria-label'], el.attrs?.title, el.attrs?.value].filter((one): one is string => typeof one === 'string' && one.trim() !== '').join(' ').slice(0, 400));
       // Which frame the element came from, from the marker the snapshot script
       // already sets. Not forgeable by the page: `iframe` is not in the
       // script's attribute allowlist, and the marker is written after that loop
@@ -1507,6 +1512,11 @@ export class BrowserController {
   /** What the last snapshot showed for an element, or null when it is not in the current map. Display only. */
   snapshotElementLabel(elementId: number): string | null {
     return this.elementLabels.get(elementId) ?? null;
+  }
+
+  /** What an element of the last snapshot says, unescaped, or null when it is not in the current map. For reading only, never shown. */
+  snapshotElementText(elementId: number): string | null {
+    return this.elementTexts.get(elementId) ?? null;
   }
 
   snapshotElementPoint(elementId: number): { x: number; y: number } | null {

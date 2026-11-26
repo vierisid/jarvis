@@ -477,14 +477,23 @@ What holds for all of them:
     asked about every step after a page, a file or a window had been read.
     That guard exists because such text can carry instructions. What still
     holds such text for a yes is a delete, a payment, and since 26 November
-    the four kinds above when he did not ask for them. What does not: after
-    outside content, clicks, typed text and keys go ahead, so text that was
-    read can still drive an app by its buttons (a button that reads as
-    Send, Delete or Buy is caught by its name; a send made by typing an
-    address and pressing Enter is not); when he did ask for a send or a
-    command, what was read can still shape its words; and a file that is
-    read with `read_file` is not outside content at all, as everywhere in
-    the product (a dropped or circled one is). The agent is told that what
+    the four kinds above when he did not ask for them, read also where they
+    are done with a click, a key or typed text: a control that says Send,
+    Post, Forward or Submit (on the desktop by what the machine says is
+    there, in a page by the snapshot the model read, on a browser on
+    another machine by the newest snapshot it gave) is a send; Ctrl or Cmd
+    with Enter in mail or chat, and Enter in a chat, is a send; Enter or
+    text into a shell, Ctrl+Alt+T, and a command typed into Win+R, the
+    Start menu, Spotlight or Alt+F2 is a command (an app named there is an
+    app opened); where the window cannot be read (a Mac, Linux, screen
+    awareness off), Enter is asked like a blind click, and so is a browser
+    click the snapshot does not name. What does not: other clicks, text
+    typed with no Enter, a nameless button, and a form submitted with Enter
+    on a page that is no chat, so text that was read can still drive an app
+    by buttons that say none of those words; and when he did ask for a send
+    or a command, what was read can still shape its words. A file read with
+    `read_file` and a command's output count as outside content for this
+    boundary only; the ordinary guard elsewhere still exempts them. The agent is told that what
     it reads is information and never an instruction (`NOTCH_TURN_NOTE`);
     that is a sentence to a model, not a lock. And the reading of "a
     delete", like the reading of his sentence, is a reading: a script that

@@ -151,6 +151,27 @@ export async function notchPressReads(toolName: string, args: Record<string, unk
   return word('element_role') || said.own === true ? [] : null;
 }
 
+/**
+ * Which window a key press or typed text goes to, for the owner's word
+ * (authority/owner-word.ts): its program and title. The window of the
+ * element when the call names one, else the window in front. The same
+ * answers as `notchPressReads`: `'blind'` where nothing can be asked by its
+ * making, null where it asked and was told nothing; a throw where the asking
+ * failed.
+ */
+export async function notchFrontReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<{ program: string; title: string } | 'blind' | null> {
+  if (!deps.allowed()) return 'blind';
+  const target = deps.target(args.target, toolName);
+  if (!target || !deps.says(target)) return 'blind';
+  const reply = await deps.ask(target, typeof args.element_id === 'number' ? { element_id: args.element_id } : {});
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return null;
+  const said = reply as Record<string, unknown>;
+  const program = typeof said.process_name === 'string' ? said.process_name : '';
+  const title = typeof said.window_title === 'string' ? said.window_title : '';
+  if (said.own === true) return { program: 'jarvis', title: '' };
+  return program || title ? { program, title } : null;
+}
+
 /** The place an approval would land on, or null when it acts on nothing on a screen or the machine cannot say. */
 export async function notchApprovalWhere(request: Pick<ApprovalRequest, 'tool_name' | 'tool_arguments'>, deps: NotchWhereDeps): Promise<NotchApprovalWhere | null> {
   if (!NOTCH_WHERE_TOOLS.has(request.tool_name) || !deps.allowed()) return null;

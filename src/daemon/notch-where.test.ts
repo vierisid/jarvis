@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { notchApprovalWhere, notchPlaceSentence, notchPressReads, type NotchWhereDeps } from './notch-where.ts';
+import { notchApprovalWhere, notchFrontReads, notchPlaceSentence, notchPressReads, type NotchWhereDeps } from './notch-where.ts';
 
 const request = (tool: string, args: unknown) => ({ tool_name: tool, tool_arguments: JSON.stringify(args) });
 
@@ -167,5 +167,25 @@ describe('what a raw press would land on, for the word of the owner', () => {
     expect(await notchPressReads('desktop_pointer', { x: 5000, y: 10 }, machine(del).deps)).toEqual([]);
     expect(await notchPressReads('desktop_pointer', { x: 10, y: 10 }, machine(del, false).deps)).toEqual([]);
     expect(await notchPressReads('desktop_click', {}, machine(del).deps)).toEqual([]);
+  });
+});
+
+describe('which window a key press or typed text goes to, for the owner\'s word', () => {
+  test('the window in front, or the window of the element named: its program and title', async () => {
+    const front = machine({ window_title: 'Windows PowerShell', process_name: 'WindowsTerminal' });
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, front.deps)).toEqual({ program: 'WindowsTerminal', title: 'Windows PowerShell' });
+    expect(await notchFrontReads('desktop_type', { text: 'x', element_id: 4 }, front.deps)).toEqual({ program: 'WindowsTerminal', title: 'Windows PowerShell' });
+    expect(front.asked).toEqual([{ target: 'desk-pc', params: {} }, { target: 'desk-pc', params: { element_id: 4 } }]);
+  });
+
+  test('where it cannot look by its making it is blind and nothing is asked; a reply with nothing in it is no look', async () => {
+    const off = machine({ process_name: 'cmd' }, true, false);
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, off.deps)).toBe('blind');
+    const mute = machine({ process_name: 'cmd' }, true, true, false);
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, mute.deps)).toBe('blind');
+    expect([...off.asked, ...mute.asked]).toEqual([]);
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, { ...machine({}).deps, target: () => null })).toBe('blind');
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, machine({}).deps)).toBeNull();
+    expect(await notchFrontReads('desktop_press_keys', { keys: 'enter' }, machine(null).deps)).toBeNull();
   });
 });
