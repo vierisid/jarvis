@@ -3375,7 +3375,11 @@ other.
     second time, an hour that is none ("at 25"). Then nothing is made of
     it: the sentence goes to the assistant as it was said, an agent that
     was asked for by name is read back whole with no schedule lit, and a
-    line keeps the time it had. Several days are one schedule ("every
+    line keeps the time it had. Nobody is told in a line that the time was
+    not read: the sentence's turn is the outcome (the design's
+    recommendation, "hand on, never rewrite"), and a value typed into a lit
+    word that is none leaves the word as it was, with no word said, until
+    the page hands over what was typed and shows the brain's refusal (C6). Several days are one schedule ("every
     Monday and Friday at 9", "every week on Friday"). What the notch wrote
     itself is read as written: "day at 6:00" on a line, on an agent's card
     or in a sentence somebody sent is six in the morning, where a bare six
@@ -3394,11 +3398,13 @@ other.
     letters, between marks it cannot close. Never a window's title or what
     is in it, never a picture, never memory or mail. The smallest tier, 2.5
     seconds, counted as `notch_intent`; a sentence that names somebody here
-    keeps the eight seconds and the middle tier it had (`notch_intent_people`,
-    docs/peers/README.md, 153). After the deadline, on a failure, with no
-    model, or on an answer in no form, the sentence goes on as an
-    instruction exactly as before. Three sentences in a row not read in time
-    and nothing is asked for five minutes. The log says how long each took,
+    keeps the eight seconds and the middle tier it had (now counted as
+    `notch_intent_people`, docs/peers/README.md, 153). After the deadline,
+    on a failure, with no model, or on an answer in no form, the sentence
+    goes on as an instruction exactly as before. Three sentences of one tier
+    in a row not read in time and that tier is not asked for five minutes;
+    the other still is, so words about a colleague are read while the small
+    tier rests. The log says how long each took,
     which intent and which acts, never the words. Not read: a reply to a
     question the assistant asked back (257), "remember that ...", something
     sent with a file, a question that itself points at the screen (85).
@@ -3408,15 +3414,26 @@ other.
     a word for somebody here. Never the control word, an answer to what is
     up, or anything done at once to what is held. What the model fills in
     has to stand in the owner's own sentence (a name, what an agent is to
-    do, a number) or be a time the one reader can read (262), and it is
-    turned into the intent's own fixed words, which are put to the table
-    like any sentence. So a reading meets every check a fixed match meets,
-    because it is one: the bands, the state the intent needs, the reply
-    rule, decision 5 for the job, the line or the fuse before anything goes.
-    A sentence an intent must never take is not that intent, and a plain
-    question is never made into something that sends, creates or acts. Any
-    other answer is "none". A sentence that tells the model what to answer
-    can at most select one of these intents, and the table places it or not.
+    do, a number; an hour the sentence writes in numbers) or be a time the
+    one reader can read (262), and it is turned into the intent's own fixed
+    words, which are put to the table like any sentence, marked as read. So
+    the bands, the state the intent needs and the reply rule are the same
+    checks a fixed match meets. And a model's pick never acts at once: the
+    job, an eye, anything that acts on the screen, sends or creates shows
+    its line and waits for the yes, also with the job's window in front or
+    the job just shown (`readAsks`; an intent that cannot ask is never
+    placed). A word for a colleague is the one exception to the re-put: it
+    is the reading of docs/peers/README.md (141 to 147), parsed and done by
+    `src/notch/people.ts` as before, so whom it is for is one of the
+    colleagues the sentence names, but the words, the file and the minutes
+    are the model's, as they were, under the fuse or line that kind always
+    had. A sentence an intent must never take is not that intent, and a
+    plain question is never made into an intent of the table that sends,
+    creates or acts, nor into a word, a question or a job for a colleague; it
+    can still be a time with them or a file ("when can Leo and I talk", "can
+    Leo send me the contract?"), as before. Any other answer is "none". A
+    sentence that tells the model what to answer can at most select one of
+    these intents, and its line or fuse still shows before anything goes.
 265. **Every sentence read says what it asks for** (`NotchAsksFor` in
     `src/notch/intents.ts`, `asksFor` on the turn in `src/notch/asks.ts`):
     the kinds of act among send, command, install, settings, screen and

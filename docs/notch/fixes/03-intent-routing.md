@@ -95,8 +95,17 @@ Each of these is how it is built now, and one line to change.
 - C4: "how do I ..." and "where is ..." with no word that points at the screen ("how do I add a page")
   point only when the reading says they are about the window in front. Before, every such question read the
   window. When the reading is late or fails, they point as before.
-- C4: no "One moment" is shown while a sentence is read (2.5 s at most); the words stay up, as they did
-  while people.read read.
+- C4: no "One moment" is shown while a sentence is read (2.5 s at most), though the design asked for it from
+  0.4 s; the words stay up, as they did while people.read read.
+- C4: "how do I cook rice" still reads the window and sends what is named in it when the reading is late, fails,
+  or there is no reader: then it is answered by pointing, as before.
+- C4: the reading about colleagues is counted as `notch_intent_people` with up to 320 tokens out; it was
+  `notch_peer_read` with 240.
+- C4: a model's pick never acts at once. "Fallo di nuovo" with the job's window in front, or "continua" with the
+  job just shown, asks "Do <the job> again?" first, where "do it again" does it at once; an eye read out of
+  Italian asks "Keep an eye on ...?" first, where "tell me when Sam replies" keeps it at once.
+- C5: a schedule that cannot be read ("every 2 weeks ...") goes to the assistant as a turn and no line says the
+  notch could not keep it; a lit word typed as no time keeps its value with nothing said (C6 shows a refusal).
 
 
 ## What C1 found that the design had wrong or did not have
@@ -166,7 +175,10 @@ Each of these is how it is built now, and one line to change.
 - C4 classifier: done in "notch: a sentence the fixed words miss is read once by a small model, which can
   only pick an intent the table then places" (src/notch/intent-read.ts; `read` on intents; `NotchAsksFor` on
   the turn; people.read folded in as `reads`; the screen gate `pointsAtScreen`). All 20 C4 routing rows and
-  the 2 C4-with-C5 rows lost their mark; 15 rows were added (a model that obeys the sentence, a wrong model,
+  the 2 C4-with-C5 rows lost their mark; 15 rows were added, and after review, in "notch: a model's pick
+  always asks first, each tier rests on its own, and a question can still be a time or a file for a
+  colleague", 5 more (the injection under `job front` and `shown`, three questions for a colleague); the
+  model's pick of the job or an eye shows its line first (`how.read`, `readAsks`) (a model that obeys the sentence, a wrong model,
   the job read in front and fresh, replies that are not read). Every missed row now says "read+".
 - C5 one When: done in "notch: one reader of a time, which refuses what it cannot read instead of rewriting it"
   (src/notch/when.ts; `NotchWhen` is the one type, read by `readSchedule` for a sentence, `readWhen` for a

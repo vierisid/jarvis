@@ -935,11 +935,17 @@ Under them the model now reads what they leave (`src/notch/people-read.ts`).
      both have the name are still asked about.
 153. **One model for one sentence** (26 November 2026). Every sentence the fixed words miss is
      now read once, by one question that asks what it is of everything the notch does itself
-     (docs/notch/README.md, 263). When it names somebody here, the question of 141 is part of
-     that one, word for word (`NOTCH_PEOPLE_READ_KINDS`, `reads` in `src/notch/people.ts`): the
-     same people by number, the same parse, the same doing (142 to 147), the same eight seconds
-     and the same middle tier (148), counted as `notch_intent_people`. It is never asked as
-     well: `read` alone is asked only where there is no reader of every sentence. Turning the
+     (docs/notch/README.md, 263). When it names somebody here, the kinds and the rules for the
+     words of 141 to 147 are part of that one question (`NOTCH_PEOPLE_READ_KINDS`,
+     `NOTCH_PEOPLE_READ_WORDS`), framed by the rules for everything else and answered with an
+     `"intent":"people"` beside the kind. The answer is parsed and done by the same code as
+     before (`reads` in `src/notch/people.ts`): the same people by number, the same doing and
+     the same fuse; the words, the file and the minutes are the model's, as they were. A plain
+     question is no word, question or job for a colleague, but can still be a time or a file.
+     The same eight seconds and the same middle tier (148), now counted as
+     `notch_intent_people` with up to 320 tokens out (was `notch_peer_read`, 240), and a rest
+     of its own after three late answers. It is never asked as well: `read` alone is asked only
+     where there is no reader of every sentence. Turning the
      words of "tell Leo I love him" to the reader (145) is still its own question: those are
      fixed words, which no reader is asked about.
 
