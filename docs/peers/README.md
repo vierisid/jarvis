@@ -715,7 +715,9 @@ answer back".
     said to be taken only when the taker's first mail has gone. Handed back, it stops there
     before the giver is told.
 111. **Nobody's mail is written in a name unseen.** What the taker's chase sends is on the sheet
-    the taker says yes to, to whom and when the one follow-up goes, as for a chase they start.
+    the taker says yes to, to whom, and the follow-up in full with when it goes, as for a chase
+    they start. Since 26 November 2026 the taker's yes burns the chase's fuse of five seconds
+    before the first mail goes: Esc in it takes nothing, and the giver is told nothing.
 112. **The history that travels is what the notch wrote down**, step by step, the newest twelve.
     It arrives as text, is shown as text, and is kept as the other person's: "Sam: Nudged Dana
     by email."
@@ -723,8 +725,11 @@ answer back".
     one is no job.
 114. **A taker who is on that person already cannot take it**, and is offered only the no.
 115. **Whoever took it tells the giver once when it ends**: done, or let go.
-116. **Asked for back, the taker chooses.** Handed back, what they did comes with it and the
-    giver's chase is under way again, a whole wait from its next step. Kept, the giver hears so.
+116. **Asked for back, the taker chooses.** Handed back, what they did comes with it, and the
+    giver's chase asks what now: send the follow-up, wait until Monday, or let it go. Nothing of
+    it is sent until the giver has said (26 November 2026; it used to be under way again at
+    once, a whole wait from its next step, and the follow-up went with nobody having said so
+    since it left). Kept, the giver hears so.
 117. **An answer counts only from the one it was handed to.**
 118. **It hands over what was named, and never picks.** With several under way and none named
     it asks which. Only "hand", or a word that says job, hands a job: "give Leo the deck" is a

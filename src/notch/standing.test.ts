@@ -4,7 +4,7 @@ import { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import {
-  NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
+  NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_FUSE_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
   type StandingMail, type StandingPerson,
 } from './standing.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -288,6 +288,8 @@ describe('until it is done', () => {
   async function started(h: ReturnType<typeof harness>, said = "Get Sam's answer on the contract by Friday"): Promise<void> {
     await h.speak(said);
     await h.reply('yes');
+    // The fuse burns out with somebody there to see it. Nothing burns when it is refused at once.
+    if (h.line()?.kind === 'send') await h.reply('done');
   }
 
   // The plan's test, step 2: "Start a chase. Its steps appear. When stuck, it gives choices. Reply, and it says done."
@@ -300,15 +302,25 @@ describe('until it is done', () => {
     expect(sheet.blocks).toEqual([
       // In the thread the talk is already in.
       { kind: 'paper', to: ['To ', { em: 'sam@northwind.example' }, '  ·  Re: The contract'], lines: [['Hi Sam,'], ['A quick nudge on the contract: could you get back to me by Friday?'], ['Thanks,'], ['Vieri']] },
-      { kind: 'note', say: ['This goes now. If there is no answer, one short follow-up goes tomorrow. After that I ask you. Nothing else is sent.'] },
+      { kind: 'note', say: ['This goes now. If there is no answer, this follow-up goes tomorrow:'] },
+      // README 116: both mails are shown before it starts. Of the second, the sheet only said that one would go.
+      { kind: 'paper', to: ['To ', { em: 'sam@northwind.example' }, '  ·  the follow-up'], lines: [['Hi Sam,'], ['Following up on my note below. Could you let me know by Friday?'], ['Thanks,'], ['Vieri']] },
+      { kind: 'note', say: ['After that I ask you. Nothing else is sent.'] },
     ]);
     // Nothing has gone yet.
     expect(h.sent).toEqual([]);
-    // The day is a word that can be changed, and the mail says the day it is changed to.
+    // The day is a word that can be changed, and both mails say the day it is changed to.
     await h.reply('word', { word: 'by', value: 'tomorrow' });
     expect(h.said()).toBe("I will get Sam's answer by tomorrow, and only come back if I am stuck. Go?");
     expect(JSON.stringify((h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks)).toContain('could you get back to me tomorrow?');
+    expect(JSON.stringify((h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks)).toContain('Could you let me know tomorrow?');
     await h.reply('yes');
+    // README 22: a yes is not acted on at once. A fuse burns, and nothing has gone while it does.
+    expect(h.line()).toMatchObject({ kind: 'send', ms: NOTCH_CHASE_FUSE_MS });
+    expect(h.said()).toBe('Sending Sam the first mail…');
+    expect(h.sent).toEqual([]);
+    expect(h.standing.counts().chases).toBe(0);
+    await h.reply('done');
     expect(h.sent).toEqual([{
       address: 'sam@northwind.example', thread: 'aaaaaaaaaaaaaaaa', subject: 'The contract',
       text: 'Hi Sam,\n\nA quick nudge on the contract: could you get back to me tomorrow?\n\nThanks,\nVieri',
@@ -335,12 +347,13 @@ describe('until it is done', () => {
     h.advance(10 * 60_000);
     await h.standing.tick();
     expect(h.sent.length).toBe(before);
-    // Back, with what was done meanwhile, told as theirs. Under way again, and the next step is a whole wait off.
+    // Back, with what was done meanwhile, told as theirs. Not under way again by itself: it asks what now.
+    await h.pass(9000);
     expect(h.standing.back(id, [{ at: h.now(), text: 'Nudged Sam by email.' }], 'Leo')).toBe(true);
     const back = h.standing.chase(id)!;
-    expect(back.state).toBe('on');
+    expect(back.state).toBe('stuck');
+    expect(back.stuck).toEqual({ kind: 'back', from: 'Leo' });
     expect(back.steps.slice(-2).map((step) => step.text)).toEqual(['Leo: Nudged Sam by email.', 'Back with you, with what Leo did.']);
-    expect(back.nextAt).toBe(h.now() + 2 * 60_000);
     expect(h.standing.back(id, [], 'Leo')).toBe(false);
     // Handed again, and this time they finish it.
     expect(h.standing.hand(id, 'Leo')).toBe(true);
@@ -361,8 +374,14 @@ describe('until it is done', () => {
     // What is shown before it starts is what will go, to whom.
     expect(JSON.stringify(h.standing.blocks(draft))).toContain('dana@acme.example');
     expect(JSON.stringify(h.standing.blocks(draft))).toContain('A quick nudge on the renewal');
-    const begun = await h.standing.begin(draft);
-    expect(begun.ok).toBe(true);
+    // Taking it is a yes to a mail: the same fuse burns before it goes.
+    let begun: Awaited<ReturnType<typeof h.standing.begin>> | null = null;
+    h.inbox.present('take', async (stage) => { begun = await h.standing.begin(draft, stage); });
+    await settle();
+    expect(h.said()).toBe('Sending Dana the first mail…');
+    expect(h.sent).toEqual([]);
+    await h.reply('done');
+    expect(begun).toMatchObject({ ok: true });
     expect(h.sent.map((mail) => [mail.address, mail.thread])).toEqual([['dana@acme.example', null]]);
     expect(h.standing.chase(draft.id)).toMatchObject({ state: 'on', nudges: 1 });
     expect(h.standing.chase(draft.id)!.steps.map((step) => step.text)).toEqual(['Sam: Nudged Dana by email.', 'Taken from Sam.', 'Nudged Dana by email.']);
@@ -376,6 +395,173 @@ describe('until it is done', () => {
     await h.reply('no');
     expect(h.sent).toEqual([]);
     expect(h.standing.counts().chases).toBe(0);
+  });
+
+  // README 22. The first mail went the moment yes was pressed: there was nothing to take back.
+  test('Esc while the fuse burns takes the yes back: nothing is sent, and the sheet is up again', async () => {
+    const h = harness();
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    await h.reply('undo');
+    expect(h.sent).toEqual([]);
+    expect(h.standing.counts().chases).toBe(0);
+    expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'go' });
+    expect(h.said()).toBe("I will get Sam's answer by Friday, and only come back if I am stuck. Go?");
+    // And a yes after that is a yes like the first.
+    await h.reply('yes');
+    await h.reply('done');
+    expect(h.sent.length).toBe(1);
+    expect(h.standing.counts().chases).toBe(1);
+  });
+
+  test('a fuse nobody saw burn out sends nothing and starts nothing', async () => {
+    const h = harness();
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    await h.pass(NOTCH_CHASE_FUSE_MS + 5000);
+    expect(h.sent).toEqual([]);
+    expect(h.standing.counts().chases).toBe(0);
+  });
+
+  test('what would refuse a chase is said before any fuse burns', async () => {
+    let paused = false;
+    const h = harness({ paused: () => paused });
+    await h.speak("Get Sam's answer on the contract by Friday");
+    paused = true;
+    await h.reply('yes');
+    expect(h.line()?.kind).not.toBe('send');
+    expect(h.said()).toBe('Everything is stopped. Wake me first.');
+    expect(h.sent).toEqual([]);
+  });
+
+  // A peer hands a chase back (./people-jobs.ts). It was under way again at once, and a wait later
+  // its follow-up went from the owner's mailbox with nobody having said so.
+  describe('handed back by whoever took it', () => {
+    async function handedBack(h: ReturnType<typeof harness>): Promise<string> {
+      await started(h);
+      await h.pass(9000);
+      const id = h.standing.handable()[0]!.id;
+      h.standing.hand(id, 'Leo');
+      h.standing.back(id, [{ at: h.now(), text: 'Called Sam. No answer.' }], 'Leo');
+      await settle();
+      return id;
+    }
+
+    test('it asks what now, and sends nothing however long it is left', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      expect(h.said()).toBe("Leo handed Sam's answer back. What now?");
+      expect((h.line() as Extract<NotchLine, { kind: 'offer' }>).options).toEqual(['Send the follow-up', 'Wait until Monday', 'Let it go']);
+      h.advance(48 * HOUR);
+      await h.standing.tick();
+      await settle();
+      expect(h.sent.length).toBe(1);
+      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', nudges: 1 });
+    });
+
+    test('"Send the follow-up" burns a fuse, and then the follow-up that was shown goes', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      await h.reply('pick', { option: 'Send the follow-up', index: 0 });
+      expect(h.line()).toMatchObject({ kind: 'send', ms: NOTCH_CHASE_FUSE_MS });
+      expect(h.said()).toBe('Sending Sam the follow-up…');
+      expect(h.sent.length).toBe(1);
+      await h.reply('done');
+      await settle();
+      expect(h.looks()).toBe(1);
+      expect(h.sent.length).toBe(2);
+      expect(h.sent[1]!.text).toContain('Following up on my note below.');
+      expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 2, stuck: null });
+    });
+
+    test('Esc in that fuse sends nothing, and the question is still there', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      await h.reply('pick', { option: 'Send the follow-up', index: 0 });
+      await h.reply('undo');
+      expect(h.said()).toBe('Taken back. Nothing was sent.');
+      expect(h.sent.length).toBe(1);
+      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck' });
+      expect(h.inbox.has(`chase-stuck-${id}`)).toBe(true);
+    });
+
+    test('"Wait until Monday" says that the follow-up goes then, and "Let it go" ends it', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      await h.reply('pick', { option: 'Wait until Monday', index: 1 });
+      expect(h.said()).toBe('Waiting until Monday. If nothing has come by then, the follow-up goes.');
+      expect(h.standing.chase(id)).toMatchObject({ state: 'on', stuck: null });
+      const other = harness({ waitMs: 60_000 });
+      const dropped = await handedBack(other);
+      await other.reply('pick', { option: 'Let it go', index: 2 });
+      expect(other.standing.chase(dropped)).toMatchObject({ state: 'dropped' });
+    });
+
+    test('with both mails gone already there is no follow-up to offer', async () => {
+      const h = harness({ waitMs: 60_000 });
+      await started(h);
+      await h.pass(9000);
+      h.advance(60_000);
+      await h.standing.tick();
+      const id = h.standing.handable()[0]!.id;
+      expect(h.standing.chase(id)!.nudges).toBe(2);
+      h.standing.hand(id, 'Leo');
+      h.standing.back(id, [], 'Leo');
+      await settle();
+      expect(h.said()).toBe("Leo handed Sam's answer back. What now?");
+      expect((h.line() as Extract<NotchLine, { kind: 'offer' }>).options).toEqual(['Call Sam', 'Wait until Monday', 'Let it go']);
+    });
+  });
+
+  // A stuck chase asked its question from memory only. After a restart it asked nothing, could not
+  // be answered, and "I am already on that" met every new chase of that person.
+  describe('stuck, and the brain restarts', () => {
+    test('the question is asked again, as it was: why it was stuck is kept', async () => {
+      const db = new Database(':memory:');
+      const h = harness({ db, waitMs: 60_000, send: [{ ok: true }, { ok: false, why: 'Gmail did not say it was sent' }, { ok: true }] });
+      await started(h);
+      await h.pass(9000);
+      h.advance(60_000);
+      await h.standing.tick();
+      await settle();
+      expect(h.said()).toBe('I could not send Sam the follow-up: Gmail did not say it was sent. What now?');
+      h.standing.stop();
+      const again = harness({ db, waitMs: 60_000 });
+      await settle();
+      expect(again.said()).toBe('I could not send Sam the follow-up: Gmail did not say it was sent. What now?');
+      expect((again.line() as Extract<NotchLine, { kind: 'offer' }>).options).toEqual(['Try again', 'Let it go']);
+      await again.reply('pick', { option: 'Let it go', index: 1 });
+      expect(again.standing.counts().chases).toBe(0);
+    });
+
+    test('one that was handed back asks its own question again', async () => {
+      const db = new Database(':memory:');
+      const h = harness({ db, waitMs: 60_000 });
+      await started(h);
+      await h.pass(9000);
+      const id = h.standing.handable()[0]!.id;
+      h.standing.hand(id, 'Leo');
+      h.standing.back(id, [], 'Leo');
+      h.standing.stop();
+      const again = harness({ db, waitMs: 60_000 });
+      await settle();
+      expect(again.said()).toBe("Leo handed Sam's answer back. What now?");
+    });
+
+    test('a table from before the reason was kept is given the column, and its stuck chase still asks', async () => {
+      const db = new Database(':memory:');
+      db.run(`CREATE TABLE notch_chases (
+        id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL, thing TEXT NOT NULL,
+        about TEXT NOT NULL, day TEXT NOT NULL, by_at INTEGER NOT NULL, thread TEXT, subject TEXT NOT NULL, state TEXT NOT NULL,
+        nudges INTEGER NOT NULL, next_at INTEGER NOT NULL, steps TEXT NOT NULL, updated_at INTEGER NOT NULL
+      )`);
+      db.run("INSERT INTO notch_chases VALUES ('c1', 1, 'Sam Rivers', 'sam@northwind.example', 'answer', '', 'Friday', 2, NULL, '', 'stuck', 2, 0, '[]', 1)");
+      const h = harness({ db });
+      await settle();
+      expect(h.said()).toBe('2 nudges and nothing from Sam. What now?');
+      expect(h.standing.chase('c1')).toMatchObject({ state: 'stuck', stuck: null });
+    });
   });
 
   test('a quiet follow-up, then it comes back only because it is stuck, and each choice does what it says', async () => {
@@ -607,6 +793,7 @@ describe('until it is done', () => {
     await h.speak('Get a reply from leo@acme.example about the invoice by Friday');
     expect(((h.line() as Extract<NotchLine, { kind: 'sheet' }>).blocks[0] as Extract<NotchBlock, { kind: 'paper' }>).to).toEqual(['To ', { em: 'leo@acme.example' }, '  ·  The invoice']);
     await h.reply('yes');
+    await h.reply('done');
     expect(h.sent[0]).toMatchObject({ address: 'leo@acme.example', thread: null, subject: 'The invoice' });
     expect(h.said()).toBe("On it. I will come back when Leo's reply is in, or if I am stuck.");
   });
@@ -644,7 +831,7 @@ describe('until it is done', () => {
 
 // Undo on a receipt (./today.ts): a watch and a chase can be taken back from the list of what was done.
 describe('what was started, in the list of what was done, with Undo', () => {
-  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.pass(9000); };
+  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.reply('done'); await h.pass(9000); };
 
   test('an eye and a chase are each a row from the moment they are started, and both can be taken back', async () => {
     const h = harness({ waitMs: 60_000 });
@@ -717,7 +904,7 @@ describe('what was started, in the list of what was done, with Undo', () => {
 
 // The prototype: "I keep working here and hold what has to go out." / "Back online. 2 things I was holding went out."
 describe('a follow-up that comes due with no connection', () => {
-  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.pass(9000); };
+  const chase = async (h: ReturnType<typeof harness>): Promise<void> => { await h.speak("Get Sam's answer on the contract by Friday"); await h.reply('yes'); await h.reply('done'); await h.pass(9000); };
 
   test('is held, not tried and called failed, and goes out when the connection is back', async () => {
     let offline = false;

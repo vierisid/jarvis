@@ -1654,10 +1654,16 @@ applied).
     (`chaseRequest`) is read back as "I will get Sam's answer by Friday,
     and only come back if I am stuck. Go?", with the day as a word that can
     be changed, and under it the mail that goes now, who it goes to, and
-    when the one follow-up goes. One yes is leave for those two mails. The
-    plan: "You give permission once, when you start it." The two mails are
-    fixed and short (`chaseMail`): nothing a model wrote goes out in the
-    owner's name unseen. It never fills in someone who was not named.
+    the follow-up in full with when it goes. One yes is leave for those two
+    mails. The plan: "You give permission once, when you start it." The two
+    mails are fixed and short (`chaseMail`): nothing a model wrote goes out
+    in the owner's name unseen. It never fills in someone who was not named.
+    Since 26 November 2026 the follow-up is on the sheet word for word (the
+    sheet had only said that one would go, which was not this rule), and
+    the yes burns a fuse of five seconds before the first mail goes
+    (`NOTCH_CHASE_FUSE_MS`, rule 22): Esc in it brings the sheet back with
+    nothing sent, and a fuse nobody saw burn out sends nothing. The same
+    fuse burns when a chase is taken from somebody (`begin`).
 117. **The answer is looked for before every step.** Before the follow-up
     goes, the mailbox is looked at (`StandingMail.look`): nothing is sent
     to someone who has just answered. A step is quiet: written in the
@@ -1665,6 +1671,15 @@ applied).
     call them (handed back, and nothing more is written), wait until
     Monday, or let it go. A follow-up that could not be sent is said, with
     "Try again". An answer says "Done." once, also while it was stuck.
+    A chase that somebody had taken and hands back asks too (26 November
+    2026): "Leo handed Sam's answer back. What now?", with "Send the
+    follow-up" (a fuse, then the mail that was shown), wait until Monday, or
+    let it go. It used to be under way again at once, and its follow-up
+    went a wait later with nobody having said so since it left. And why a
+    chase is stuck is kept with it (`stuck_why`): after a restart the
+    question is asked again as it was. It had been kept in memory only, so
+    a stuck chase asked nothing after a restart and stood in the way of a
+    new one for that person.
 118. **Stop ends a chase for good.** A chase that was stopped, dropped or
     handed back is never taken up again, by the clock or by a late answer
     (`NotchStandingStore.move` changes a state only from the one it was

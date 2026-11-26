@@ -13,11 +13,16 @@
  * arrives is heard of there, and a nudge is one short mail sent from the
  * owner's own Gmail. Nothing here reads the mailbox a second time.
  *
- * What a chase sends is shown before it starts: the words, who they go to,
- * and when the one follow-up goes. One yes is leave for both mails, and for
- * nothing else. The plan: "You give permission once, when you start it."
- * The two mails are fixed, short, and the same for everyone: nothing a model
- * wrote is sent in the owner's name without being seen.
+ * What a chase sends is shown before it starts: both mails word for word,
+ * who they go to, and when the follow-up goes. One yes is leave for both
+ * mails, and for nothing else. The plan: "You give permission once, when you
+ * start it." The two mails are fixed, short, and the same for everyone:
+ * nothing a model wrote is sent in the owner's name without being seen.
+ *
+ * The yes burns a fuse before the first mail goes, and Esc takes it back. A
+ * chase that comes back from somebody who had taken it does not go on by
+ * itself: it asks what now. And a chase that is stuck keeps why, so that its
+ * question is asked again after a restart.
  *
  * One watcher per person: a chase takes over from an eye on the same person,
  * and an eye is not kept on someone who is already being chased.
@@ -50,6 +55,12 @@ export const NOTCH_CHASE_NUDGES = 2;
 export const NOTCH_STANDING_TICK_MS = 30_000;
 /** How long a chase that is over stays in the list. */
 export const NOTCH_CHASE_KEPT_MS = 24 * 3_600_000;
+/**
+ * How long the owner has to take a yes back before a chase's mail goes: the
+ * first one, and a follow-up they ask for by hand. README 22: a yes is not
+ * acted on at once. The first mail used to go the moment yes was pressed.
+ */
+export const NOTCH_CHASE_FUSE_MS = 5000;
 
 const NOT_A_NAME = /^(the|a|an|my|me|his|her|their|it|this|that|he|she|they|him|them|someone|anyone|somebody|anybody|answer|reply|signature|you|us|we|up|down|on|off|in|out|back|over|for|to|with|about|from|by|at|of|and|or|if|when|until|after|before|some|all|any|every|each|more|one|what|who|which|where|how|why|ready|started|rid|going|there|here)$/i;
 /** Somebody who is meant and not named: "he", "they", "this one". The notch asks who. */
@@ -173,6 +184,16 @@ export interface StandingMail {
 /** `handed`: somebody else took it, with its history (./people-jobs.ts). It is not done and not dropped, and it can come back. */
 export type NotchChaseState = 'on' | 'stuck' | 'done' | 'dropped' | 'handed';
 
+/**
+ * Why a chase is stuck, kept with it: the question it asks is asked again
+ * after a restart, and it has to be the same question.
+ *
+ *   quiet  its mails went and nothing came.
+ *   send   a follow-up could not be sent, and why.
+ *   back   whoever had taken it handed it back.
+ */
+export type NotchChaseStuck = { kind: 'quiet' } | { kind: 'send'; why: string } | { kind: 'back'; from: string };
+
 export interface NotchEye {
   id: string;
   createdAt: number;
@@ -199,9 +220,23 @@ export interface NotchChase {
   nextAt: number;
   steps: { at: number; text: string }[];
   updatedAt: number;
+  /** Why it is stuck, while it is. */
+  stuck?: NotchChaseStuck | null;
 }
 
-interface StoredChase { id: string; created_at: number; name: string; address: string; thing: string; about: string; day: string; by_at: number; thread: string | null; subject: string; state: string; nudges: number; next_at: number; steps: string; updated_at: number }
+interface StoredChase { id: string; created_at: number; name: string; address: string; thing: string; about: string; day: string; by_at: number; thread: string | null; subject: string; state: string; nudges: number; next_at: number; steps: string; updated_at: number; stuck_why: string | null }
+
+/** Why a chase is stuck, as it was written down. Null when nothing readable was. */
+function stuckOf(raw: string | null): NotchChaseStuck | null {
+  if (!raw) return null;
+  try {
+    const read = JSON.parse(raw) as { kind?: unknown; why?: unknown; from?: unknown } | null;
+    if (read?.kind === 'quiet') return { kind: 'quiet' };
+    if (read?.kind === 'send') return { kind: 'send', why: typeof read.why === 'string' ? read.why : '' };
+    if (read?.kind === 'back' && typeof read.from === 'string') return { kind: 'back', from: read.from };
+  } catch { /* not readable: not known */ }
+  return null;
+}
 
 /** Where eyes and chases are kept. */
 export class NotchStandingStore {
@@ -214,6 +249,9 @@ export class NotchStandingStore {
       about TEXT NOT NULL, day TEXT NOT NULL, by_at INTEGER NOT NULL, thread TEXT, subject TEXT NOT NULL, state TEXT NOT NULL,
       nudges INTEGER NOT NULL, next_at INTEGER NOT NULL, steps TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`);
+    // Why a chase is stuck (26 November 2026): the question was kept only in memory, so a restart lost it.
+    const columns = (db.query('PRAGMA table_info(notch_chases)').all() as { name: string }[]).map((column) => column.name);
+    if (!columns.includes('stuck_why')) db.run('ALTER TABLE notch_chases ADD COLUMN stuck_why TEXT');
   }
 
   eyes(): NotchEye[] {
@@ -237,6 +275,7 @@ export class NotchStandingStore {
       return {
         id: row.id, createdAt: row.created_at, name: row.name, address: row.address, thing: row.thing as ChaseAsked['thing'], about: row.about, day: row.day,
         byAt: row.by_at, thread: row.thread, subject: row.subject, state: row.state as NotchChaseState, nudges: row.nudges, nextAt: row.next_at, steps, updatedAt: row.updated_at,
+        stuck: row.state === 'stuck' ? stuckOf(row.stuck_why) : null,
       };
     });
   }
@@ -247,13 +286,24 @@ export class NotchStandingStore {
 
   putChase(chase: NotchChase): void {
     this.db.run(
-      `INSERT INTO notch_chases (id, created_at, name, address, thing, about, day, by_at, thread, subject, state, nudges, next_at, steps, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO notch_chases (id, created_at, name, address, thing, about, day, by_at, thread, subject, state, nudges, next_at, steps, updated_at, stuck_why)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET day = excluded.day, by_at = excluded.by_at, thread = excluded.thread, state = excluded.state, nudges = excluded.nudges,
-         next_at = excluded.next_at, steps = excluded.steps, updated_at = excluded.updated_at`,
+         next_at = excluded.next_at, steps = excluded.steps, updated_at = excluded.updated_at, stuck_why = excluded.stuck_why`,
       [chase.id, chase.createdAt, chase.name, chase.address, chase.thing, chase.about, chase.day, chase.byAt, chase.thread, chase.subject, chase.state, chase.nudges, chase.nextAt,
-        JSON.stringify(chase.steps.slice(-40)), chase.updatedAt],
+        JSON.stringify(chase.steps.slice(-40)), chase.updatedAt,
+        // Why it is stuck is kept only while it is: a chase that goes on is no longer asking anything.
+        chase.state === 'stuck' && chase.stuck ? JSON.stringify(chase.stuck) : null],
     );
+  }
+
+  /**
+   * A chase is stuck, and why. Only from one of the states given, as `move`:
+   * one that ended a moment ago does not come back to ask.
+   */
+  stick(id: string, from: NotchChaseState[], why: NotchChaseStuck, at: number): boolean {
+    const marks = from.map(() => '?').join(', ');
+    return this.db.run(`UPDATE notch_chases SET state = 'stuck', stuck_why = ?, updated_at = ? WHERE id = ? AND state IN (${marks})`, [JSON.stringify(why), at, id, ...from]).changes > 0;
   }
 
   /**
@@ -386,7 +436,12 @@ export interface NotchStanding {
   chase(id: string): NotchChase | null;
   /** Somebody took this chase: it is theirs now, and nothing of it is sent from here. False when it was over already. */
   hand(id: string, to: string): boolean;
-  /** A chase that was handed over comes back, with what was done meanwhile. Under way again. */
+  /**
+   * A chase that was handed over comes back, with what was done meanwhile.
+   * It is not under way again by itself: it is stuck, and asks what now.
+   * The yes that started it was for it here, and it has been somewhere else
+   * since: whoever had it may have written a moment ago.
+   */
   back(id: string, steps: { at: number; text: string }[], from: string): boolean;
   /** Whoever took a chase ended it. */
   closed(id: string, how: 'done' | 'dropped', by: string): boolean;
@@ -398,8 +453,12 @@ export interface NotchStanding {
   drafted(job: { name: string; address: string; thing: ChaseAsked['thing']; about: string; day: string; steps: { at: number; text: string }[]; from: string }): NotchChase | null;
   /** What a chase sends when it starts, as it is shown before it does. */
   blocks(chase: NotchChase): NotchBlock[];
-  /** Starts it: its first mail goes. `ok` is whether it did. */
-  begin(chase: NotchChase): Promise<{ ok: boolean; parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry' | 'careful'; mark?: 'check' | 'fail' } }>;
+  /**
+   * Starts it: a fuse burns on the stage, and then its first mail goes. `ok`
+   * is whether it did. `took` when the fuse did not burn out: `undo` is the
+   * owner's Esc, `lost` is a fuse nobody saw (then there is nothing to say).
+   */
+  begin(chase: NotchChase, stage: NotchStage): Promise<{ ok: boolean; took?: 'undo' | 'lost'; parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry' | 'careful'; mark?: 'check' | 'fail' } }>;
   /**
    * Takes one of them back, by the id its row has: an eye is closed, a chase
    * is stopped. Comes back with what to say, or null when it is none of
@@ -506,12 +565,19 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     return `in ${Math.round(wait / (24 * 3_600_000))} days`;
   }
 
-  /** What is shown before a chase starts: the mail that goes now, to whom, and what follows. */
+  /**
+   * What is shown before a chase starts: the mail that goes now, to whom, and
+   * the follow-up, both in full. README 116 says both are shown; only the
+   * first was, and of the second the sheet said that one would go.
+   */
   function chaseBlocks(chase: NotchChase): NotchBlock[] {
-    const text = chaseMail(chase, 0, deps.mail.owner());
+    const owner = deps.mail.owner();
+    const paper = (n: number): NotchPart[][] => chaseMail(chase, n, owner).split('\n').filter((line) => line.trim()).map((line): NotchPart[] => [line]);
     return [
-      { kind: 'paper', to: ['To ', em(chase.address), `  ·  ${chase.thread ? 'Re: ' : ''}${oneLine(chaseSubject(chase), 70)}`], lines: text.split('\n').filter((line) => line.trim()).map((line): NotchPart[] => [line]) },
-      { kind: 'note', say: [`This goes now. If there is no answer, one short follow-up goes ${followUpSaid(chase)}. After that I ask you. Nothing else is sent.`] },
+      { kind: 'paper', to: ['To ', em(chase.address), `  ·  ${chase.thread ? 'Re: ' : ''}${oneLine(chaseSubject(chase), 70)}`], lines: paper(0) },
+      { kind: 'note', say: [`This goes now. If there is no answer, this follow-up goes ${followUpSaid(chase)}:`] },
+      { kind: 'paper', to: ['To ', em(chase.address), '  ·  the follow-up'], lines: paper(1) },
+      { kind: 'note', say: ['After that I ask you. Nothing else is sent.'] },
     ];
   }
 
@@ -545,8 +611,12 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
       title: line,
       play: async (stage) => {
-        const lineId = stage.id();
-        stage.put({ id: lineId, kind: 'sheet', say: line(), blocks: chaseBlocks(draft), yes: 'go', mood: 'look' });
+        let lineId = '';
+        const show = (): void => {
+          lineId = stage.id();
+          stage.put({ id: lineId, kind: 'sheet', say: line(), blocks: chaseBlocks(draft), yes: 'go', mood: 'look' });
+        };
+        show();
         for (;;) {
           const answer = await stage.answer(lineId, ['yes', 'no', 'fold', 'word']);
           if (answer.act === 'word') {
@@ -556,7 +626,11 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
             continue;
           }
           if (answer.act !== 'yes') return 'settled';
-          const said = await startChase(draft);
+          const said = await beginChase(draft, stage);
+          // A fuse nobody saw burn out decides nothing: the question is still there to be asked.
+          if (said.took === 'lost') return 'waits';
+          // Esc in the fuse takes back the yes, and nothing else: the sheet is up again.
+          if (said.took === 'undo') { show(); continue; }
           await stage.say(said.parts, said.ms, said.extras);
           return 'settled';
         }
@@ -564,9 +638,34 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     });
   }
 
-  async function startChase(chase: NotchChase): Promise<{ parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry' | 'careful'; mark?: 'check' | 'fail' } }> {
+  type Started = { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry' | 'careful'; mark?: 'check' | 'fail' } };
+
+  /** Why a chase cannot be started now, as it is said. Null when it can. */
+  const cannotStart = (chase: NotchChase): Started | null => {
     if (deps.paused?.()) return { parts: STOPPED, ms: 3200, extras: { mood: 'careful' } };
     if (store.chases().some((other) => live(other) && other.address === chase.address)) return { parts: ['I am already on that.'], ms: 2400, extras: {} };
+    return null;
+  };
+
+  /**
+   * The yes was given: a fuse burns, and the first mail goes when it has
+   * burnt out with somebody there to see it (README 22). It went the moment
+   * yes was pressed, with no way to take it back.
+   */
+  async function beginChase(chase: NotchChase, stage: NotchStage): Promise<Started & { ok: boolean; took?: 'undo' | 'lost' }> {
+    // What would refuse it is said now, not after a fuse that could send nothing.
+    const refused = cannotStart(chase);
+    if (refused) return { ...refused, ok: false };
+    const went = await stage.fuse(['Sending ', em(first(chase.name)), ' the first mail…'], NOTCH_CHASE_FUSE_MS, { src: 'mail' });
+    if (went === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 2600, extras: {} };
+    if (went === 'lost') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
+    const said = await startChase(chase);
+    return { ...said, ok: store.chase(chase.id) !== null };
+  }
+
+  async function startChase(chase: NotchChase): Promise<Started> {
+    const refused = cannotStart(chase);
+    if (refused) return refused;
     chase.createdAt = now();
     const sent = await sendNudge(chase);
     if (!sent.ok) {
@@ -602,17 +701,34 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
   }
 
   /** It only comes back when it needs the owner: what now? */
-  function chaseStuck(chase: NotchChase, why: string | null): void {
-    if (chase.state !== 'stuck') {
-      if (!store.move(chase.id, ['on'], 'stuck', now())) return;
-    }
+  function chaseStuck(chase: NotchChase, why: NotchChaseStuck): void {
+    if (!store.stick(chase.id, ['on'], why, now())) return;
+    log('[notch] a chase is stuck and asks what now');
+    raise(store.chase(chase.id)!);
+  }
+
+  /**
+   * The question of a chase that is stuck, put in the inbox. Asked from what
+   * is kept with the chase, so that it can be asked again: the question lived
+   * only in memory, and after a restart a stuck chase asked nothing, could
+   * not be answered, and stood in the way of a new one for that person.
+   */
+  function raise(chase: NotchChase): void {
     const id = `chase-stuck-${chase.id}`;
     const name = first(chase.name);
-    const head: NotchPart[] = why
-      ? ['I could not send ', em(name), ' the follow-up: ', oneLine(why, 70), '. What now?']
-      : [`${chase.nudges} ${chase.nudges === 1 ? 'nudge' : 'nudges'} and nothing from `, em(name), '. What now?'];
-    const options = why ? ['Try again', 'Let it go'] : [`Call ${name}`, 'Wait until Monday', 'Let it go'];
-    log('[notch] a chase is stuck and asks what now');
+    // A chase stuck before the reason was kept: with a mail still to send it was a send that failed, otherwise silence.
+    const why: NotchChaseStuck = chase.stuck ?? (chase.nudges < NOTCH_CHASE_NUDGES ? { kind: 'send', why: '' } : { kind: 'quiet' });
+    /** Whether the follow-up has still not gone. */
+    const owed = chase.nudges < NOTCH_CHASE_NUDGES;
+    const FOLLOW_UP = 'Send the follow-up';
+    const head: NotchPart[] = why.kind === 'send'
+      ? ['I could not send ', em(name), ' the follow-up', ...(why.why ? [': ', oneLine(why.why, 70)] : []), '. What now?']
+      : why.kind === 'back'
+        ? [em(why.from), ' handed ', em(chaseWhat(chase)), ' back. What now?']
+        : [`${chase.nudges} ${chase.nudges === 1 ? 'nudge' : 'nudges'} and nothing from `, em(name), '. What now?'];
+    const options = why.kind === 'send' ? ['Try again', 'Let it go']
+      : why.kind === 'back' && owed ? [FOLLOW_UP, 'Wait until Monday', 'Let it go']
+        : [`Call ${name}`, 'Wait until Monday', 'Let it go'];
     deps.inbox.add({
       id, subject: id, class: 'person', speaks: true,
       title: () => head,
@@ -627,7 +743,23 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           fresh.day = 'Monday'; fresh.byAt = chaseBy('Monday', now()); fresh.state = 'on'; fresh.nextAt = fresh.byAt - 9 * 3_600_000;
           step(fresh, 'You said: wait until Monday.');
           store.putChase(fresh);
-          await stage.say(['Waiting until ', em('Monday'), '. Still on it.'], 2800);
+          // With the follow-up still to go, waiting is leave for it to go then: that is said, not left to be found out.
+          await stage.say(['Waiting until ', em('Monday'), owed ? '. If nothing has come by then, the follow-up goes.' : '. Still on it.'], owed ? 3600 : 2800);
+          return 'settled';
+        }
+        if (pick.option === FOLLOW_UP) {
+          // A yes to a mail: a fuse burns first, and Esc takes it back.
+          const went = await stage.fuse(['Sending ', em(name), ' the follow-up…'], NOTCH_CHASE_FUSE_MS, { src: 'mail' });
+          if (went === 'lost') return 'waits';
+          if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2600); return 'waits'; }
+          const still = store.chase(chase.id);
+          if (!still || still.state !== 'stuck') { await stage.say(['That one is already closed.'], 2400); return 'settled'; }
+          still.state = 'on'; still.nextAt = now();
+          step(still, 'You said: send the follow-up.');
+          store.putChase(still);
+          // It goes by the same step as any follow-up: the mailbox is looked at first, and one that cannot go asks again.
+          void tick();
+          await stage.say(['Sending it. I will come back if it does not go.'], 2800);
           return 'settled';
         }
         if (pick.option === 'Try again') {
@@ -695,7 +827,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         if (stopped || deps.paused?.()) return;
         const chase = store.chase(was.id);
         if (!chase || chase.state !== 'on') continue;
-        if (chase.nudges >= NOTCH_CHASE_NUDGES) { chaseStuck(chase, null); continue; }
+        if (chase.nudges >= NOTCH_CHASE_NUDGES) { chaseStuck(chase, { kind: 'quiet' }); continue; }
         const sent = await sendNudge(chase);
         const fresh = store.chase(chase.id);
         // Stopped, or answered, while the mail was on its way: nothing more is written down for it.
@@ -704,7 +836,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           step(fresh, 'The follow-up could not be sent.');
           store.putChase(fresh);
           log('[notch] a chase could not send its follow-up');
-          chaseStuck(fresh, sent.why);
+          chaseStuck(fresh, { kind: 'send', why: sent.why });
           continue;
         }
         fresh.nudges++;
@@ -761,6 +893,11 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       }
     }
   }
+
+  // What was stuck when the brain stopped is still stuck, and asks again.
+  const stuckBefore = store.chases().filter((chase) => chase.state === 'stuck');
+  for (const chase of stuckBefore) raise(chase);
+  if (stuckBefore.length) log(`[notch] ${stuckBefore.length} stuck chase(s) ask again after a restart`);
 
   return {
     store,
@@ -843,14 +980,15 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       return true;
     },
     back(id, steps, from) {
-      if (!store.move(id, ['handed'], 'on', now())) return false;
+      // Back, and stuck: it asks what now. It used to be under way again at once, and a wait later
+      // its follow-up went from the owner's mailbox with nobody having said so since it left.
+      if (!store.stick(id, ['handed'], { kind: 'back', from }, now())) return false;
       const fresh = store.chase(id)!;
       for (const one of steps) fresh.steps.push({ at: one.at, text: `${from}: ${one.text}` });
       step(fresh, `Back with you, with what ${from} did.`);
-      // The next step is a whole wait away: whoever had it may have written a moment ago.
-      fresh.nextAt = now() + waitOf(fresh);
       store.putChase(fresh);
-      log('[notch] a chase that was handed over is back');
+      log('[notch] a chase that was handed over is back, and asks what now');
+      raise(fresh);
       return true;
     },
     closed(id, how, by) {
@@ -874,10 +1012,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       };
     },
     blocks: (chase) => chaseBlocks(chase),
-    async begin(chase) {
-      const said = await startChase(chase);
-      return { ...said, ok: store.chase(chase.id) !== null };
-    },
+    begin: (chase, stage) => beginChase(chase, stage),
     stop() { stopped = true; },
   };
 }

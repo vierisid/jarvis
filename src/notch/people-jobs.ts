@@ -17,7 +17,8 @@
  *   3. Only then does it stop here: one owner at a time.
  *   4. When they are done, or let it go, the giver hears it, once.
  *   5. The giver can ask for it back. Handed back, it comes with what was
- *      done meanwhile, and is under way here again.
+ *      done meanwhile, and asks what now: nothing of it is sent from here
+ *      until the giver has said.
  *
  * What holds:
  *
@@ -178,10 +179,11 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
       say([em(from.name), ' keeps ', em(mine.what), '.']);
       return;
     }
-    // Handed back, with what was done there.
+    // Handed back, with what was done there. It is not taken up again by itself: the chase asks what
+    // now (./standing.ts). The yes that started it was given before it left, and no mail goes on it.
     if (got.kind !== 'job-return' || !chases.back(mine.chase, got.steps, from.name)) return;
     keep(`job-out:${got.of}`, null);
-    say(['It is back with you, with what ', em(from.name), ' did. I am on it again.']);
+    say(['It is back with you, with what ', em(from.name), ' did. Nothing more goes until you say what now.']);
   }
 
   // --- the one it is handed to ---
@@ -225,9 +227,11 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
         const answer = await stage.answer(sheet, ['yes', 'no', 'button']);
         if (answer.act === 'button' && answer.button === 'no') return no(['Told ', em(from.name), ' no. It stays with ', em(from.name), '.']);
         if (answer.act !== 'yes') return 'waits';
-        // Taking it is starting it: the first mail goes from here. Only when it went is it said to be taken.
-        const begun = await chases.begin(draft);
-        if (!begun.ok) { await stage.say([...begun.parts, ' It stays with ', em(from.name), ' for now.'], 5200, { mood: 'sorry' }); return 'waits'; }
+        // Taking it is starting it: a fuse burns, and the first mail goes from here. Only when it went is it said to be taken.
+        const begun = await chases.begin(draft, stage);
+        // A fuse nobody saw burn out decides nothing, and there is nobody to say it to.
+        if (begun.took === 'lost') return 'waits';
+        if (!begun.ok) { await stage.say([...begun.parts, ' It stays with ', em(from.name), ' for now.'], 5200, begun.took === 'undo' ? {} : { mood: 'sorry' }); return 'waits'; }
         const told = await link.tell(from.id, peerNoteText('Yes, I took it.', { kind: 'job-yes', of: job.id }), { replyTo: item.id });
         keep(`job-in:${job.id}`, { peer: from.id, chase: draft.id, what });
         settle();

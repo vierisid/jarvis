@@ -157,13 +157,13 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   /** This side's calendar: what is in it, or null when it cannot be read. `hold` keeps a reading waiting. */
   const timeState: { events: MailCalendarEvent[] | null; hold: Promise<void> | null; reads: number } = { events: [], hold: null, reads: 0 };
   /** This side's chases, as the chases part keeps them, and whether a first mail can go from here. */
-  const chaseState: { list: NotchChase[]; canBegin: boolean } = { list: [], canBegin: true };
+  const chaseState: { list: NotchChase[]; canBegin: boolean; fuse?: 'undo' | 'lost' } = { list: [], canBegin: true };
   const liveChase = (chase: NotchChase): boolean => chase.state === 'on' || chase.state === 'stuck';
   const chasesFake: NotchJobChases = {
     handable: () => chaseState.list.filter(liveChase),
     chase: (id) => chaseState.list.find((one) => one.id === id) ?? null,
     hand(id, to) { const one = chaseState.list.find((each) => each.id === id); if (!one || !liveChase(one)) return false; one.state = 'handed'; one.steps.push({ at: server.now(), text: `Handed to ${to}. ${to} took it.` }); return true; },
-    back(id, steps, from) { const one = chaseState.list.find((each) => each.id === id); if (!one || one.state !== 'handed') return false; one.state = 'on'; for (const step of steps) one.steps.push({ at: step.at, text: `${from}: ${step.text}` }); one.steps.push({ at: server.now(), text: `Back with you, with what ${from} did.` }); return true; },
+    back(id, steps, from) { const one = chaseState.list.find((each) => each.id === id); if (!one || one.state !== 'handed') return false; one.state = 'stuck'; one.stuck = { kind: 'back', from }; for (const step of steps) one.steps.push({ at: step.at, text: `${from}: ${step.text}` }); one.steps.push({ at: server.now(), text: `Back with you, with what ${from} did.` }); return true; },
     closed(id, how, by) { const one = chaseState.list.find((each) => each.id === id); if (!one || one.state !== 'handed') return false; one.state = how === 'done' ? 'done' : 'dropped'; one.steps.push({ at: server.now(), text: `${by} closed it.` }); return true; },
     drafted(job) {
       if (chaseState.list.some((one) => liveChase(one) && one.address === job.address)) return null;
@@ -172,6 +172,9 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
     },
     blocks: (chase) => [{ kind: 'paper', to: ['To ', { em: chase.address }], lines: [[`Hi ${chase.name.split(' ')[0]}, where are we on ${chase.about || 'this'}?`]] }],
     async begin(chase) {
+      // The fuse before the first mail, as the chases part burns it (./standing.ts): taken back, or seen by nobody.
+      if (chaseState.fuse === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 1, extras: {} };
+      if (chaseState.fuse === 'lost') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
       if (!chaseState.canBegin) return { ok: false, parts: ['I could not send it: no mailbox here. Nothing was started.'], ms: 1, extras: { mood: 'sorry' } };
       chase.nudges = 1; chase.steps.push({ at: server.now(), text: `Nudged ${chase.name.split(' ')[0]} by email.` }); chaseState.list.push(chase);
       return { ok: true, parts: ['On it.'], ms: 1, extras: {} };
@@ -3713,9 +3716,10 @@ describe('a job that changes hands', () => {
     await leo.done();
     await settle();
     if (!sam.said()) await sam.tap();
-    expect(sam.said()).toBe('It is back with you, with what Leo did. I am on it again.');
+    // Not under way again by itself: the chase asks what now, and nothing goes until that is answered.
+    expect(sam.said()).toBe('It is back with you, with what Leo did. Nothing more goes until you say what now.');
     const mine = sam.chaseState.list[0]!;
-    expect(mine.state).toBe('on');
+    expect(mine.state).toBe('stuck');
     // What Leo did is in the history as Leo's, and what was Sam's own is not there twice.
     expect(mine.steps.map((step) => step.text).filter((text) => text.startsWith('Leo: '))).toEqual(['Leo: Nudged Dana by email.']);
   });
@@ -3733,6 +3737,22 @@ describe('a job that changes hands', () => {
     if (!sam.said()) await sam.tap();
     expect(sam.said()).toBe("Leo keeps Dana's answer.");
     expect(sam.chaseState.list[0]!.state).toBe('handed');
+  });
+
+  // Taking it sends a mail in the taker's name: the yes has a fuse like any other (README 22).
+  test('the yes taken back in its fuse, or a fuse nobody saw: nothing is taken, and the giver is told nothing', async () => {
+    for (const fuse of ['undo', 'lost'] as const) {
+      const { sam, leo } = await handedOver();
+      await sam.done();
+      await sam.done();
+      leo.chaseState.fuse = fuse;
+      await leo.yes();
+      expect(leo.said()).toBe(fuse === 'undo' ? 'Taken back. Nothing was sent. It stays with Sam for now.' : '');
+      expect(leo.chaseState.list).toEqual([]);
+      await settle();
+      expect(sam.chaseState.list[0]!.state).toBe('on');
+      expect(sam.engine.inbox.length).toBe(0);
+    }
   });
 
   test('it is not taken when its first mail cannot go, or when the taker is on that person already', async () => {
