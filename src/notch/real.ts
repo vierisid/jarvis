@@ -576,7 +576,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   const prefs: NotchPrefs | null = registry.add(notchPrefsFeature({
     keys: office?.keys, voice: office?.voice, connections: office?.connections, connect: office?.connect,
     openPage: office?.openPage, openDashboard: deps.openDashboard,
-    dayOne: deps.dayOne !== undefined, calls: deps.calls !== undefined, notice: deps.notice !== undefined,
+    dayOne: deps.dayOne !== undefined,
   }));
   if (deps.asks) {
     const emergency = deps.emergency;

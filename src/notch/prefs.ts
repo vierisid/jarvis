@@ -293,10 +293,8 @@ export interface NotchPrefsGiven extends Pick<NotchPrefsDeps, 'keys' | 'voice' |
   openPage?: (sidecarId: string | null, page: NotchSettingsPage) => void;
   /** Opens the dashboard itself. */
   openDashboard?: (sidecarId: string | null) => void;
-  /** Whether the brain was given day one, listening to calls, noticing: each has its link or its row in Settings when it was. */
+  /** Whether the brain was given day one: then Settings has the link that starts it again, whether or not day one could be made. */
   dayOne: boolean;
-  calls: boolean;
-  notice: boolean;
 }
 
 /**
@@ -305,7 +303,8 @@ export interface NotchPrefsGiven extends Pick<NotchPrefsDeps, 'keys' | 'voice' |
  * brain that was not given where to keep the settings.
  *
  * Day one, the calls and the noticing are made after this: each is asked for
- * when its row is drawn or its word is changed.
+ * when its row is drawn or its word is changed, and one that is not there has
+ * no row and takes no word.
  */
 export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'prefs'> {
   return {
@@ -329,9 +328,9 @@ export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'pref
         canDo: (stage) => canDo.open(stage),
         dayOne: given.dayOne ? () => ctx.use('dayOne')?.again() : undefined,
         // Listening to calls: whether it is offered, and whether the other side is heard.
-        calls: given.calls ? { row: () => ctx.use('calls')?.settingsRow() ?? null, set: (name, value) => ctx.use('calls')?.setWord(name, value) ?? false } : undefined,
+        calls: { row: () => ctx.use('calls')?.settingsRow() ?? null, set: (name, value) => ctx.use('calls')?.setWord(name, value) ?? false },
         // Noticing: whether it offers one thing in the window the person is in.
-        notice: given.notice ? { row: () => ctx.use('notice')?.settingsRow() ?? null, set: (name, value) => ctx.use('notice')?.setWord(name, value) ?? false } : undefined,
+        notice: { row: () => ctx.use('notice')?.settingsRow() ?? null, set: (name, value) => ctx.use('notice')?.setWord(name, value) ?? false },
         connections: given.connections,
         connect: given.connect,
         // A page of the dashboard when it can be opened at one, the dashboard itself when not.

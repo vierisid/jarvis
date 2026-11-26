@@ -41,7 +41,7 @@ export interface NotchPauseDeps {
 
 const HOLD = 'stopped';
 
-export function attachNotchPause(surface: NotchSurface, inbox: NotchInbox, deps: NotchPauseDeps): () => void {
+export function attachNotchPause(surface: Pick<NotchSurface, 'onStop' | 'setFace' | 'act'>, inbox: NotchInbox, deps: NotchPauseDeps): () => void {
   const log = deps.log ?? ((line: string) => console.log(line));
   let shown: EmergencyState = 'normal';
 

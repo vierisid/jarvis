@@ -101,6 +101,63 @@ describe('the scheduler', () => {
     expect(w.logs.map((line) => line.split('\n')[0])).toEqual(['[notch] looking slowly failed: later']);
   });
 
+  test('a log that cannot be written ends nothing: not out of the timer, and not as a rejection nobody hears', async () => {
+    const w = world();
+    const unheard: unknown[] = [];
+    const hear = (reason: unknown): void => { unheard.push(reason); };
+    process.on('unhandledRejection', hear);
+    try {
+      const registry = createNotchRegistry({ surface: {} as never, settings: null, now: () => 0, log: () => { throw new Error('the log is full'); }, paused: () => false });
+      registry.every('at once', 100, () => { throw new Error('it broke'); });
+      registry.every('later', 200, async () => { await Promise.resolve(); throw new Error('it broke later'); });
+      expect(() => { for (const one of w.started) one.fn(); }).not.toThrow();
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(unheard).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', hear);
+    }
+  });
+
+  test('a run that takes time is started again while it is still under way, unless the clock was told to skip', async () => {
+    const w = world();
+    const ends: (() => void)[] = [];
+    let asUsual = 0;
+    let skipping = 0;
+    const slow = (count: () => void) => () => { count(); return new Promise<void>((resolve) => { ends.push(resolve); }); };
+    w.registry.every('as today', 100, slow(() => { asUsual++; }));
+    w.registry.every('skipping', 200, slow(() => { skipping++; }), { skipWhileRunning: true });
+    for (let run = 0; run < 3; run++) for (const one of w.started) one.fn();
+    expect([asUsual, skipping]).toEqual([3, 1]);
+    // The one under way ends: the next is started at its time.
+    for (const end of ends.splice(0)) end();
+    await settle();
+    for (const one of w.started) one.fn();
+    expect([asUsual, skipping]).toEqual([4, 2]);
+    expect(w.logs).toEqual([]);
+  });
+
+  test('a skipping clock goes on after a run that failed, at once or later, and a run that takes no time is never skipped', async () => {
+    const w = world();
+    let later = 0;
+    let atOnce = 0;
+    let plain = 0;
+    w.registry.every('failing later', 100, async () => { later++; await Promise.resolve(); throw new Error('later'); }, { skipWhileRunning: true });
+    w.registry.every('failing at once', 200, () => { atOnce++; throw new Error('at once'); }, { skipWhileRunning: true });
+    w.registry.every('plain', 300, () => { plain++; }, { skipWhileRunning: true });
+    for (let run = 0; run < 3; run++) { for (const one of w.started) one.fn(); await settle(); }
+    expect([later, atOnce, plain]).toEqual([3, 3, 3]);
+  });
+
+  test('a clock named in `ticks` skips when it says so', () => {
+    const w = world();
+    let runs = 0;
+    w.registry.add(feature('moves', () => ({ api: api('moves'), ticks: [{ name: 'moving', everyMs: 700, skipWhileRunning: true, run: () => { runs++; return new Promise<void>(() => {}); } }] })));
+    w.started[0]!.fn();
+    w.started[0]!.fn();
+    expect(runs).toBe(1);
+  });
+
   test('what comes back ends that clock and no other', () => {
     const w = world();
     const end = w.registry.every('the first', 100, () => {});
@@ -178,10 +235,11 @@ describe('making a feature', () => {
     let where: unknown = null;
     w.registry.lend('where', () => where as never);
     const pause = feature('pause', (ctx) => ({ api: { asks: () => ctx.use('where') } as never }), { needs: ['where'] });
+    const wanting = feature('pause', (ctx) => ({ api: { asks: () => ctx.use('where') } as never }), { wants: ['where'] });
     expect(w.registry.add(pause)).toBeNull();
     expect(w.logs).toEqual(['[notch] pause was not made: it needs where']);
-    // Without the need, it is made, and finds the part when it asks after the part was made.
-    const made = w.registry.add(feature('pause', (ctx) => ({ api: { asks: () => ctx.use('where') } as never }))) as unknown as { asks(): unknown };
+    // Only wanted, it is made, and finds the part when it asks after the part was made.
+    const made = w.registry.add(wanting) as unknown as { asks(): unknown };
     expect(made.asks()).toBeNull();
     where = api('where');
     expect(made.asks()).toEqual(api('where'));
@@ -206,14 +264,35 @@ describe('making a feature', () => {
     expect(() => late.registry.setInbox(late.inbox as never)).toThrow('[notch] the inbox is there already');
   });
 
-  test('one that says it has what nothing gathers yet is refused, by name, and is stopped with the rest', () => {
-    for (const member of ['homeRows', 'open', 'settingsRows', 'done', 'undo', 'hello'] as const) {
-      const w = world();
-      const has: NotchFeature<never> = { api: api('moves'), [member]: () => [], stop() { w.order.push('stopped'); } };
-      expect(() => w.registry.add(feature('moves', () => has))).toThrow(`[notch] moves has ${member}, which the registry does not gather yet`);
-      w.registry.stop();
-      expect(w.order).toEqual(['inbox stopped', 'stopped']);
-    }
+  test('it is handed only the parts it named in its needs and wants: asking for another throws, by name', () => {
+    const w = world();
+    w.registry.lend('where', () => api('where'));
+    w.registry.lend('mail', () => api('mail'));
+    let asks: (id: NotchFeatureId) => unknown = () => null;
+    w.registry.add(feature('moves', (ctx) => { asks = (id) => ctx.use(id); return { api: api('moves') }; }, { needs: ['where'], wants: ['mail', 'calls'] }));
+    expect(asks('where')).toEqual(api('where'));
+    expect(asks('mail')).toEqual(api('mail'));
+    // Named and not there: null, as before.
+    expect(asks('calls')).toBeNull();
+    expect(() => asks('agents')).toThrow('[notch] moves asked for agents, which is not in its needs or wants');
+    // Whoever holds the registry may ask for any.
+    expect(w.registry.use('agents')).toBeNull();
+  });
+
+  test('what nothing gathers yet is not in the contract: naming it does not compile', () => {
+    // @ts-expect-error rows in Home are not in the contract until the registry gathers them
+    const rows: NotchFeature<never> = { api: api('moves'), homeRows: () => [] };
+    // @ts-expect-error nor is what a row opens
+    const open: NotchFeature<never> = { api: api('moves'), open: async () => {} };
+    // @ts-expect-error nor are rows in Settings
+    const settings: NotchFeature<never> = { api: api('moves'), settingsRows: () => [] };
+    // @ts-expect-error nor is what was done today
+    const done: NotchFeature<never> = { api: api('moves'), done: () => [] };
+    // @ts-expect-error nor is taking it back
+    const undo: NotchFeature<never> = { api: api('moves'), undo: () => null };
+    // @ts-expect-error nor is a page coming up
+    const hello: NotchFeature<never> = { api: api('moves'), hello: () => {} };
+    expect([rows, open, settings, done, undo, hello]).toHaveLength(6);
   });
 });
 

@@ -17,12 +17,11 @@
  *                   stopped; a part that was never made has nothing here.
  *
  * It also gathers what Home asks of the features. Today that is the quiet
- * links at its foot. A feature that says it has rows in Home, rows in
- * Settings, something done today, an undo or a hello is refused for now:
- * those are still put together by hand in `real.ts`, in an order of their
- * own, and a feature that named one here would be silently left out of it.
+ * links at its foot. Rows in Home, rows in Settings, what was done today, an
+ * undo and a hello are still put together by hand in `real.ts`, in an order
+ * of their own, and are not in the contract until they are gathered here.
  */
-import type { NotchApis, NotchContext, NotchFeature, NotchFeatureDef, NotchFeatureId } from './feature.ts';
+import type { NotchApis, NotchContext, NotchFeature, NotchFeatureDef, NotchFeatureId, NotchTickOptions } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchButton } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
@@ -44,7 +43,7 @@ export interface NotchRegistryDeps {
 
 export interface NotchRegistry {
   /** The scheduler: runs something by the clock until the notch is stopped, or until what comes back is called. */
-  every(name: string, everyMs: number, run: () => void | Promise<void>): () => void;
+  every(name: string, everyMs: number, run: () => void | Promise<void>, options?: NotchTickOptions): () => void;
   /** The inbox, once it is made. Features are made after it, and it is stopped before them. */
   setInbox(inbox: NotchInbox): void;
   /** A part that is not a feature yet, reachable by its id until it is. Asked each time, so one made later is found. */
@@ -66,9 +65,6 @@ export interface NotchRegistry {
   stop(): void;
 }
 
-/** What a feature may say it has that nothing gathers yet. */
-const NOT_GATHERED = ['homeRows', 'open', 'settingsRows', 'done', 'undo', 'hello'] as const;
-
 export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   const { log } = deps;
   let inbox: NotchInbox | null = null;
@@ -78,25 +74,35 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   const lent = new Map<NotchFeatureId, () => unknown>();
   const parts: (() => void)[] = [];
 
-  function every(name: string, everyMs: number, run: () => void | Promise<void>): () => void {
+  function every(name: string, everyMs: number, run: () => void | Promise<void>, options: NotchTickOptions = {}): () => void {
     if (stopped) return () => {};
     // One that fails at every look is not said at every look: the first time, with where it failed, and then
     // once a minute with how often it failed in between.
     let saidAt: number | null = null;
     let unsaid = 0;
     const failed = (error: unknown): void => {
-      const at = Date.now();
-      if (saidAt !== null && at - saidAt < NOTCH_TICK_FAILURE_SAID_MS) { unsaid++; return; }
-      const why = error instanceof Error ? error.message : String(error);
-      const where = saidAt === null && error instanceof Error && error.stack ? `\n${error.stack}` : '';
-      log(`[notch] ${name} failed${unsaid > 0 ? ` (and ${unsaid} more ${unsaid === 1 ? 'time' : 'times'} since that was last said)` : ''}: ${why}${where}`);
-      saidAt = at;
-      unsaid = 0;
+      // Nothing gets out of here, not even a log that cannot be written: out of a timer it would end the
+      // brain, and out of a run that failed later it would be a rejection nobody hears.
+      try {
+        const at = Date.now();
+        if (saidAt !== null && at - saidAt < NOTCH_TICK_FAILURE_SAID_MS) { unsaid++; return; }
+        const why = error instanceof Error ? error.message : String(error);
+        const where = saidAt === null && error instanceof Error && error.stack ? `\n${error.stack}` : '';
+        log(`[notch] ${name} failed${unsaid > 0 ? ` (and ${unsaid} more ${unsaid === 1 ? 'time' : 'times'} since that was last said)` : ''}: ${why}${where}`);
+        saidAt = at;
+        unsaid = 0;
+      } catch { /* said as well as it could be */ }
     };
+    /** A run that came back with a promise and has not ended yet. */
+    let under = false;
     const timer = setInterval(() => {
+      if (options.skipWhileRunning && under) return;
       try {
         const going = run();
-        if (going && typeof going.then === 'function') going.then(undefined, failed);
+        if (going && typeof going.then === 'function') {
+          under = true;
+          going.then(() => { under = false; }, (error: unknown) => { under = false; failed(error); });
+        }
       } catch (error) {
         failed(error);
       }
@@ -122,16 +128,20 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
       log(`[notch] ${def.id} was not made: it needs ${missing.join(', ')}`);
       return null;
     }
+    // Only what it said it leans on: the list in its definition is the whole list.
+    const named = new Set<NotchFeatureId>([...(def.needs ?? []), ...(def.wants ?? [])]);
     const ctx: NotchContext = {
-      surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every, use,
+      surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every,
+      use: (id) => {
+        if (!named.has(id)) throw new Error(`[notch] ${def.id} asked for ${id}, which is not in its needs or wants`);
+        return use(id);
+      },
     };
     const feature = def.make(ctx);
     if (!feature) return null;
     // From here it is stopped with the rest, whatever fails after this.
     features.push({ id: def.id, feature });
-    const ungathered = NOT_GATHERED.filter((member) => feature[member] !== undefined);
-    if (ungathered.length > 0) throw new Error(`[notch] ${def.id} has ${ungathered.join(', ')}, which the registry does not gather yet`);
-    for (const tick of feature.ticks ?? []) every(tick.name, tick.everyMs, () => tick.run());
+    for (const tick of feature.ticks ?? []) every(tick.name, tick.everyMs, () => tick.run(), { skipWhileRunning: tick.skipWhileRunning });
     return feature.api;
   }
 
