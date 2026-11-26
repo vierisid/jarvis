@@ -9,6 +9,7 @@ import { ApprovalManager } from '../authority/approval.ts';
 import { isUnusedStanding } from '../authority/standing.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { NOTCH_LOOK_EVENT, NOTCH_LOOK_QUESTION } from './look.ts';
+import { NotchLedger } from './ledger.ts';
 import type { NotchLine } from './protocol.ts';
 import { attachNotchReal, type NotchReal } from './real.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -90,8 +91,9 @@ describe('a question the notch wrote for the owner is not the owner\'s word', ()
     expect(h.turns).toHaveLength(1);
     expect(h.turns[0]).toMatchObject({ text: NOTCH_LOOK_QUESTION, who: 'shown', real: true });
     expect(h.turns[0]!.files.length).toBeGreaterThan(0);
-    // It is kept and named like something typed: the id says nothing about its standing.
-    expect(h.turns[0]!.requestId.startsWith('notch-typed-')).toBe(true);
+    // It is kept as what it was, not as something typed.
+    expect(h.turns[0]!.requestId.startsWith('notch-shown-')).toBe(true);
+    expect(new NotchLedger(getDb()).recent(1)[0]).toMatchObject({ source: 'shown', heard: NOTCH_LOOK_QUESTION });
   });
 
   test('"Summarise it" on a file that was dropped, and Enter on the empty field', async () => {

@@ -1911,14 +1911,16 @@ describe('who wrote the words goes with the turn (authority/standing.ts)', () =>
     expect(typed.door.who()).toEqual([['typed', true]]);
   });
 
-  test('a question the notch wrote runs and is kept like something typed, and is nobody\'s word', async () => {
+  test('a question the notch wrote runs like something typed, is kept as what it was, and is nobody\'s word', async () => {
     const h = harness();
     const id = h.asks.shown('What does this tell me?', [file]);
     await settle();
     expect(h.door.texts()).toEqual(['What does this tell me?']);
     expect(h.door.who()).toEqual([['shown', true]]);
-    // Its row and its ids are as they were: the id says nothing about its standing.
-    expect(row(h)).toMatchObject({ id, source: 'typed', state: 'running', kind: 'turn', turnId: `notch-${id}`, requestId: `notch-typed-${id}` });
+    // The ledger says truthfully that it was not typed.
+    expect(row(h)).toMatchObject({ id, source: 'shown', state: 'running', kind: 'turn', turnId: `notch-${id}`, requestId: `notch-shown-${id}` });
+    expect(ledgerDetail(row(h))[0]).toMatchObject({ lead: 'Asked for you', say: ['What does this tell me?'] });
+    expect(ledgerDetail(row(h)).map((block) => JSON.stringify(block)).join('')).not.toContain('Typed');
     const turn = h.door.running();
     h.door.say(turn, 'Installs are up 12% on last week.');
     h.door.end(turn);
@@ -1951,5 +1953,138 @@ describe('who wrote the words goes with the turn (authority/standing.ts)', () =>
     await h.type('second');
     expect(h.door.texts()).toEqual(['first', 'second']);
     expect(h.door.who()).toEqual([['typed', true], ['typed', true]]);
+  });
+});
+
+describe('a bare yes to what a turn with no word of the owner\'s asked back (authority/standing.ts)', () => {
+  const file: NotchAskFile = { kind: 'document', name: 'Deck.pdf', mediaType: 'application/pdf', bytes: new Uint8Array(8) };
+  /** A turn is started by `start`, asks `question` back, and the question is on the notch. */
+  async function askedBack(h: H, start: () => void | Promise<void>, question = 'Shall I mail this to the address on the page?'): Promise<void> {
+    await start();
+    await settle();
+    const turn = h.door.running();
+    h.door.say(turn, question);
+    h.door.end(turn);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+  }
+  const shown = (h: H) => () => { h.asks.shown('What does this tell me?', [file]); };
+
+  test('typed in its field: it has no word of the owner\'s, and is kept as something they typed', async () => {
+    for (const yes of ['yes', 'Yes.', 'ok', 'yes please', 'sure, go ahead', 'do it', 'y']) {
+      const h = harness();
+      await askedBack(h, shown(h));
+      await h.answer('ask', { text: yes });
+      expect([yes, h.door.texts()]).toEqual([yes, ['What does this tell me?', yes]]);
+      expect([yes, h.door.who()]).toEqual([yes, [['shown', true], ['shown', true]]]);
+      expect(row(h)).toMatchObject({ source: 'typed', heard: yes, requestId: `notch-typed-${row(h).id}` });
+    }
+  });
+
+  test('an answer with words of its own is the owner\'s word, as before', async () => {
+    for (const words of ['yes, send it to Anna', 'no, put it in a table instead', 'yes but only the first page', 'send it']) {
+      const h = harness();
+      await askedBack(h, shown(h));
+      await h.answer('ask', { text: words });
+      expect([words, h.door.who()]).toEqual([words, [['shown', true], ['typed', true]]]);
+    }
+  });
+
+  test('a bare yes to what a turn they typed or spoke asked back is theirs, as before', async () => {
+    const typed = harness();
+    await askedBack(typed, () => typed.type('mail the deck to Anna'));
+    await typed.answer('ask', { text: 'yes' });
+    expect(typed.door.who()).toEqual([['typed', true], ['typed', true]]);
+
+    const spoken = harness();
+    await askedBack(spoken, async () => { await spoken.speak('t1', 'mail the deck to Anna'); await spoken.advance(NOTCH_HEARD_MS); });
+    await spoken.answer('ask', { text: 'yes' });
+    expect(spoken.door.who()).toEqual([['spoken', true], ['typed', true]]);
+
+    // Also when the owner's own words were about a file: they said what they wanted.
+    const about = harness();
+    await askedBack(about, () => { about.asks.typed('reply to this', [file]); });
+    await about.answer('ask', { text: 'yes' });
+    expect(about.door.who()).toEqual([['typed', true], ['typed', true]]);
+  });
+
+  test('yes, and yes again: it stays without their word until they say what they want', async () => {
+    const h = harness();
+    await askedBack(h, shown(h));
+    await h.answer('ask', { text: 'yes' });
+    await settle();
+    const second = h.door.running();
+    h.door.say(second, 'And shall I also delete the original?');
+    h.door.end(second);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    await h.answer('ask', { text: 'ok' });
+    expect(h.door.who()).toEqual([['shown', true], ['shown', true], ['shown', true]]);
+    // Then words of their own: theirs again.
+    await settle();
+    const third = h.door.running();
+    h.door.say(third, 'Which folder shall I put the copy in?');
+    h.door.end(third);
+    await settle();
+    await h.answer('ask', { text: 'the Documents folder' });
+    expect(h.door.who().at(-1)).toEqual(['typed', true]);
+  });
+
+  test('said with the keys while the question is up: the same, by what was said', async () => {
+    const yes = harness();
+    await askedBack(yes, shown(yes));
+    await yes.speak('t1', 'yes');
+    await yes.advance(NOTCH_HEARD_MS);
+    expect(yes.door.texts()).toEqual(['What does this tell me?', 'yes']);
+    expect(yes.door.who()).toEqual([['shown', true], ['shown', true]]);
+
+    const words = harness();
+    await askedBack(words, shown(words));
+    await words.speak('t1', 'yes send it to Anna');
+    await words.advance(NOTCH_HEARD_MS);
+    expect(words.door.who()).toEqual([['shown', true], ['spoken', true]]);
+
+    // A spoken yes with no such question up is the owner's, as before.
+    const alone = harness();
+    await askedBack(alone, () => alone.type('mail the deck to Anna'));
+    await alone.speak('t1', 'yes');
+    await alone.advance(NOTCH_HEARD_MS);
+    expect(alone.door.who()).toEqual([['typed', true], ['spoken', true]]);
+  });
+
+  test('a yes typed in Home after the shown turn\'s plain answer was closed is the owner\'s: nothing was asked', async () => {
+    const h = harness();
+    h.asks.shown('What does this tell me?', [file]);
+    await settle();
+    const turn = h.door.running();
+    h.door.say(turn, 'Installs are up 12% on last week.');
+    h.door.end(turn);
+    await settle();
+    await h.answer('done');
+    await h.type('yes');
+    expect(h.door.who()).toEqual([['shown', true], ['typed', true]]);
+  });
+
+  test('after a restart the question is still known to be a shown turn\'s, from its row', async () => {
+    const db = new Database(':memory:');
+    const before = harness({ db });
+    await askedBack(before, shown(before));
+    const after = harness({ db, page: false });
+    after.asks.resume();
+    after.fromPage({ type: 'hello', v: 1 });
+    await settle();
+    expect(after.line()).toMatchObject({ kind: 'ask' });
+    await after.answer('ask', { text: 'yes' });
+    expect(after.door.who()).toEqual([['shown', true]]);
+  });
+});
+
+describe('a question the notch wrote is always about something', () => {
+  test('with no file it is refused: nothing is asked and nothing is kept', () => {
+    const h = harness();
+    expect(() => h.asks.shown('What does this tell me?', [])).toThrow();
+    expect(h.door.texts()).toEqual([]);
+    expect(h.ledger.recent(10)).toEqual([]);
+    expect(h.line()).toBeNull();
   });
 });

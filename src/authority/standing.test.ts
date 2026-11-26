@@ -4,8 +4,8 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { ownerAskedOnNotch } from './app-open.ts';
-import { currentStanding, grantStanding, isUnusedStanding, mintStanding, ownersOwnWords, type TurnStanding } from './standing.ts';
-import { outsideBriefTurn, withBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
+import { NOTCH_SHOWN_SOURCE, currentStanding, grantStanding, isUnusedStanding, mintStanding, ownersOwnWords, revokeStanding, type TurnStanding } from './standing.ts';
+import { currentBriefTurn, outsideBriefTurn, withBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
 import { BriefChatTransport, type ScopedChatInput } from '../brief/chat-transport.ts';
 import { NOTCH_SWITCH } from '../notch/switch.ts';
 import { getOrCreateConversation } from '../vault/conversations.ts';
@@ -108,10 +108,33 @@ describe('a standing is made in one place and tied to one turn', () => {
   });
 });
 
+describe('a standing that was taken back', () => {
+  test('is gone for whatever still runs in the turn\'s context, with no flag of the context to set back', () => {
+    const context = bare('req-1');
+    grantStanding(context, mintStanding('typed'));
+    expect(withBriefTurn(context, () => ownerAskedOnNotch())).toBe(true);
+    revokeStanding(context);
+    expect(withBriefTurn(context, () => currentStanding())).toBeNull();
+    // It cannot be given again from what the first one was, and taking back twice is nothing.
+    revokeStanding(context);
+    expect(withBriefTurn(context, () => ownerAskedOnNotch())).toBe(false);
+    // Another turn's is its own.
+    const other = bare('req-2');
+    grantStanding(other, mintStanding('spoken'));
+    revokeStanding(context);
+    expect(withBriefTurn(other, () => ownerAskedOnNotch())).toBe(true);
+  });
+});
+
 describe('through the turn store', () => {
   afterEach(() => closeDb());
   const done = { type: 'done' as const, response: { content: '', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'x', finish_reason: 'stop' as const } };
   type Seen = { requestId: string; standing: TurnStanding | null; owners: boolean };
+  /** The context each turn ran in, as its own work could keep it. */
+  const contexts: BriefExecutionContext[] = [];
+  /** What each turn was said to hold from outside, by request id. */
+  const outside = new Map<string, string[]>();
+  beforeEach(() => { contexts.length = 0; outside.clear(); });
 
   function setup(options: { concurrency?: number; during?: (input: ScopedChatInput) => Promise<void> } = {}) {
     initDatabase(':memory:', { quiet: true });
@@ -121,6 +144,8 @@ describe('through the turn store', () => {
     const transport = new BriefChatTransport({ db: getDb(), send: (_client, message) => { sent.push(message); }, concurrency: options.concurrency,
       runner: { ready: () => true, stream: (input) => ({ onComplete: async () => {}, stream: (async function* () {
         const look = (): Seen => ({ requestId: input.requestId, standing: currentStanding(), owners: ownerAskedOnNotch() });
+        contexts.push(currentBriefTurn()!);
+        outside.set(input.requestId, input.untrustedSources ?? []);
         seen.push(look());
         // A helper agent, a retry, a tool call: all awaited inside the turn.
         await new Promise((resolve) => setTimeout(resolve, 1));
@@ -171,6 +196,71 @@ describe('through the turn store', () => {
     await h.transport.idle();
     expect(h.later).toHaveLength(1);
     expect(h.later[0]!()).toEqual({ requestId: 'r1', standing: null, owners: false });
+  });
+
+  test('nor when what it left running sets the turn\'s "over" flag back: the standing itself was taken away', async () => {
+    const h = setup();
+    h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't1', requestId: 'r1', text: 'open steam', standing: mintStanding('typed') });
+    await h.transport.idle();
+    const context = contexts[0]!;
+    expect(context.over).toBe(true);
+    // Anything that holds the context can write this. It gets nothing for it.
+    context.over = false;
+    expect(context.signal.aborted).toBe(false);
+    expect(h.later[0]!()).toEqual({ requestId: 'r1', standing: null, owners: false });
+    expect(withBriefTurn(context, () => ownerAskedOnNotch())).toBe(false);
+    // The same for a turn that failed or was stopped instead of finishing.
+    const failing = new BriefChatTransport({ db: getDb(), send: () => {}, runner: { ready: () => true, stream: () => ({ onComplete: async () => {},
+      stream: (async function* () { contexts.push(currentBriefTurn()!); throw new Error('the model went away'); })() }) } });
+    failing.submit({ conversationId: h.conversation('other'), turnId: 't2', requestId: 'r2', text: 'open steam', standing: mintStanding('spoken') });
+    await failing.idle();
+    contexts[1]!.over = false;
+    expect(withBriefTurn(contexts[1]!, () => currentStanding())).toBeNull();
+  });
+
+  test('a turn with no word of the owner\'s always holds outside content, whatever came with it', async () => {
+    const h = setup({ concurrency: 3 });
+    // No file at all: the turn is still marked, so the guard that asks after outside content is on from its first step.
+    h.transport.submit({ conversationId: h.conversation('look'), turnId: 't1', requestId: 'r-shown', text: 'yes', standing: mintStanding('shown') });
+    h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't2', requestId: 'r-typed', text: 'open steam', standing: mintStanding('typed') });
+    h.transport.submit({ conversationId: h.conversation('desk'), turnId: 't3', requestId: 'r-plain', text: 'hello' });
+    // Named like a shown turn and handed a look-alike: it is no shown turn, and is marked as nothing.
+    h.transport.submit({ conversationId: h.conversation('fake'), turnId: 'notch-4', requestId: 'notch-shown-4', text: 'yes', standing: { origin: 'shown' } });
+    await h.transport.idle();
+    expect(outside.get('r-shown')).toEqual([NOTCH_SHOWN_SOURCE]);
+    expect(outside.get('r-typed')).toEqual([]);
+    expect(outside.get('r-plain')).toEqual([]);
+    expect(outside.get('notch-shown-4')).toEqual([]);
+  });
+
+  test('a standing that cannot be tied to its turn is said in the log, and the turn runs with none', async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const h = setup({ during: async (input) => { if (input.requestId === 'r0') await held; } });
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (...parts: unknown[]) => { errors.push(parts.map(String).join(' ')); };
+    try {
+      // Used up while the turn waits its place behind another: the turn store
+      // checked it at the door, and it is gone when the turn starts.
+      h.transport.submit({ conversationId: h.conversation('desk'), turnId: 't0', requestId: 'r0', text: 'something long' });
+      const standing = mintStanding('typed');
+      h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't1', requestId: 'r1', text: 'open steam', standing });
+      expect(grantStanding(bare('elsewhere'), standing)).toBe(true);
+      release();
+      await h.transport.idle();
+      expect(h.seen.filter((one) => one.requestId === 'r1').map((one) => one.owners)).toEqual([false, false]);
+      expect(errors.filter((line) => line.includes('standing that could not be tied'))).toHaveLength(1);
+      // A turn with none, and one whose standing is tied, say nothing.
+      errors.length = 0;
+      h.transport.submit({ conversationId: h.conversation('a'), turnId: 't2', requestId: 'r2', text: 'hello' });
+      await h.transport.idle();
+      h.transport.submit({ conversationId: h.conversation('b'), turnId: 't3', requestId: 'r3', text: 'hello', standing: mintStanding('typed') });
+      await h.transport.idle();
+      expect(errors.filter((line) => line.includes('standing'))).toEqual([]);
+    } finally {
+      console.error = original;
+    }
   });
 
   test('a turn that was stopped has none from the moment it is stopped', async () => {

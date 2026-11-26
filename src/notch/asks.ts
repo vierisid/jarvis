@@ -22,6 +22,7 @@
  */
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { mintStanding, type TurnStanding } from '../authority/standing.ts';
+import { isBareAffirmation } from '../agents/realtime-taint.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import { notchNameDoubt, notchNamed, type NotchNameDoubt } from './names.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
@@ -47,7 +48,7 @@ export const NOTCH_LAST_ANSWER_MS = 10 * 60_000;
 export const NOTCH_NOT_CAUGHT = 'I did not catch that.';
 const WAITING_FOR_YES = 'Waiting for your yes.';
 /** The heading of an instruction's own sheet: how it came. */
-const asWhat = (source: NotchAskSource): string => (source === 'spoken' ? 'You said' : source === 'offered' ? 'You said yes to' : 'You typed');
+const asWhat = (source: NotchAskSource): string => (source === 'spoken' ? 'You said' : source === 'offered' ? 'You said yes to' : source === 'shown' ? 'Asked for you' : 'You typed');
 const NOT_SAVED = 'Not saved.';
 /** A memory whose question was cut off by something else: the person never got to answer it. */
 const NOT_SAVED_CUT = 'I did not save that: something came up while I was asking. Say it again.';
@@ -264,9 +265,10 @@ export interface NotchAsks {
   typed(text: string, files?: NotchAskFile[]): string;
   /**
    * A question the notch wrote for the person, about files they showed it: a
-   * circle with nothing said, a button on a dropped file. It runs and is kept
-   * like something typed, and carries no word of the owner's
-   * (authority/standing.ts): they did not write it.
+   * circle with nothing said, a button on a dropped file. It runs like
+   * something typed, is kept as what it was, and carries no word of the
+   * owner's (authority/standing.ts): they did not write it. It is always
+   * about something: with no file it throws, and nothing is asked.
    */
   shown(text: string, files: NotchAskFile[]): string;
   /** Something the notch offered was taken with a yes: it runs as an instruction (./notice.ts). */
@@ -310,8 +312,14 @@ export interface NotchAskHow {
 interface Live {
   id: string;
   source: NotchAskSource;
-  /** The notch wrote these words for the person (`shown`): the turn has no word of the owner's. */
-  shown?: boolean;
+  /**
+   * These words answer a question that a turn with no word of the owner's
+   * asked back. A bare yes among them agrees to what that turn proposed and
+   * says nothing of its own, so it has no word of the owner's either.
+   */
+  answersUnsaid?: boolean;
+  /** This ran with no word of the owner's: a question the notch wrote, or such a yes. */
+  unsaid?: boolean;
   /** When it was made: the typing was sent, or the talk keys went down. */
   at: number;
   phase: NotchAskState;
@@ -474,7 +482,7 @@ export function ledgerWord(row: Pick<NotchAskRow, 'state' | 'kind'>): string {
 export function ledgerDetail(row: NotchAskRow): NotchBlock[] {
   const blocks: NotchBlock[] = [];
   const said = row.heard || 'Nothing was caught.';
-  blocks.push({ kind: 'row', lead: row.source === 'spoken' ? 'Heard' : row.source === 'offered' ? 'Offered' : 'Typed', say: [said], small: clock(row.createdAt) });
+  blocks.push({ kind: 'row', lead: row.source === 'spoken' ? 'Heard' : row.source === 'offered' ? 'Offered' : row.source === 'shown' ? 'Asked for you' : 'Typed', say: [said], small: clock(row.createdAt) });
   if (row.understood) blocks.push({ kind: 'row', lead: 'Understood', say: [row.understood] });
   if (row.did.length > 0) blocks.push({ kind: 'row', lead: 'Did', say: [row.did.join(' ')] });
   const end = row.state === 'running' ? 'Still running.'
@@ -730,7 +738,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       try {
         // Who wrote the words goes with the turn, made here and nowhere else
         // (authority/standing.ts). An offer that was taken has none, as before.
-        const standing = ask.source === 'offered' ? null : mintStanding(ask.shown ? 'shown' : ask.source);
+        ask.unsaid = ask.source === 'shown' || (ask.answersUnsaid === true && isBareAffirmation(ask.meant ?? ask.heard));
+        const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source);
         await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}) });
         // Kept with the turn now: not held here as well.
         ask.files = undefined;
@@ -1103,7 +1112,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             ledger.seen(ask.id);
             forget(ask);
             const said = reply.act === 'ask' ? (reply.text ?? '').trim() : '';
-            if (said) typed(said);
+            // A bare yes to what a turn with no word of the owner's proposed has none either.
+            if (said) typed(said, undefined, 'typed', unsaid(ask));
             return 'settled';
           }
           // How long the hands had been still when the answer came: asked before it is shown.
@@ -1180,6 +1190,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // now is its answer, and the question has been seen.
     for (const other of [...live.values()]) {
       if (other === ask || other.phase !== 'done' || inbox.showing() !== itemId(other.id)) continue;
+      // Said with the keys instead of typed in its field: the same answer to the same question.
+      if (unsaid(other) && /\?\s*$/.test((other.answer ?? '').trim())) ask.answersUnsaid = true;
       ledger.seen(other.id);
       forget(other);
       inbox.remove(itemId(other.id));
@@ -1293,14 +1305,17 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
   }
 
-  function typed(text: string, files?: NotchAskFile[], shown = false): string {
+  /** Whether an instruction ran, or will run, with no word of the owner's (authority/standing.ts). */
+  const unsaid = (ask: Live): boolean => ask.source === 'shown' || ask.unsaid === true;
+
+  function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answersUnsaid = false): string {
     endWalks();
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
-    ledger.open(id, 'typed', text);
-    const ask = make(id, 'typed', 'heard', text);
+    ledger.open(id, source, text);
+    const ask = make(id, source, 'heard', text);
     if (files?.length) ask.files = files;
-    if (shown) ask.shown = true;
+    if (answersUnsaid) ask.answersUnsaid = true;
     begin(ask);
     return id;
   }
@@ -1341,7 +1356,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
 
   return {
     typed: (text, files) => typed(text, files),
-    shown: (text, files) => typed(text, files, true),
+    shown: (text, files) => {
+      if (!files.length) throw new Error('A question the notch wrote is always about something: no file came with it.');
+      return typed(text, files, 'shown');
+    },
     offered,
     home,
     handsOn() {

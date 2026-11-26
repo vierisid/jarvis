@@ -121,13 +121,15 @@ export const OWNER_DIRECT_ROUTING_NOTE =
   + 'They see your reply as one line on their screen, so answer in one short sentence when you can.';
 
 /**
- * The same for a turn from the notch whose words the owner did not write:
- * they circled something without a word, or pressed a button on a file. Fixed
- * text. It keeps the one line and gives no authorization: nothing was said.
+ * The same for a turn from the notch with no word of the owner's: they circled
+ * something without a word, pressed a button on a file, or answered only
+ * "yes" to what such a turn asked back. Fixed text. It keeps the one line and
+ * gives no authorization: nothing was said.
  */
 export const OWNER_SHOWN_ROUTING_NOTE =
-  'This request came from the owner\'s own computer: they pointed at something on their screen or handed over a file, '
-  + 'and the words of the request were written for them by this product. They asked for an answer about it and nothing else. '
+  'This request came from the owner\'s own computer, and it is not an instruction they wrote out: either this product wrote the question for them, '
+  + 'after they pointed at something on their screen or pressed a button on a file, or it is only their yes to a question asked about such a thing. '
+  + 'It asks for an answer, or agrees to what was last proposed, and nothing more. '
   + 'They see your reply as one line on their screen, so answer in one short sentence when you can.';
 
 export type ConvSystemContext = {

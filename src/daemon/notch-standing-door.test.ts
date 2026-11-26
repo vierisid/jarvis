@@ -10,7 +10,7 @@ import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { ownerAskedOnNotch } from '../authority/app-open.ts';
 import { ApprovalManager } from '../authority/approval.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
-import { currentStanding } from '../authority/standing.ts';
+import { NOTCH_SHOWN_SOURCE, currentStanding } from '../authority/standing.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
 import { BriefAttachmentProvider } from '../brief/attachments.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
@@ -64,6 +64,8 @@ function setup() {
   orch.setTaintGating(buildTaintGating(undefined));
   orch.createPrimary(role);
 
+  /** What the next turns answer, in order. After them: the plain answer. */
+  const replies: string[] = [];
   /** What each turn was, as seen from inside it. */
   const turns: { text: string; requestId: string; who: string | null; owners: boolean; note: string | undefined; outside: string[]; asked: boolean[] }[] = [];
   const transport = new BriefChatTransport({
@@ -77,7 +79,7 @@ function setup() {
       }
       turns.push({ text: input.text, requestId: input.requestId, who: currentStanding()?.origin ?? null, owners: ownerAskedOnNotch(), note: notchTurnNote(),
         outside: input.untrustedSources ?? [], asked });
-      yield { type: 'text' as const, text: 'Installs are up 12%.' };
+      yield { type: 'text' as const, text: replies.shift() ?? 'Installs are up 12%.' };
       yield done;
     })() }) },
   });
@@ -94,10 +96,17 @@ function setup() {
   asks = attachNotchAsks(inbox, { ledger: new NotchLedger(getDb()), turns: deps.turns, modelReady: () => true, log: () => {} });
   stop = () => asks.stop();
   /** Until the turn the notch started has run to its end. */
-  const ran1 = async (): Promise<void> => {
-    for (let i = 0; i < 200 && turns.length === 0; i++) { await new Promise((resolve) => setTimeout(resolve, 5)); await transport.idle(); }
+  const ran1 = async (count = 1): Promise<void> => {
+    for (let i = 0; i < 200 && turns.length < count; i++) { await new Promise((resolve) => setTimeout(resolve, 5)); await transport.idle(); }
+    await new Promise((resolve) => setTimeout(resolve, 10));
   };
-  return { asks, transport, turns, ran, approvals, ran1, said: (): string => (surface.current().line?.say ?? []).map((part) => (typeof part === 'string' ? part : '')).join('') };
+  /** Types `text` into the field of the question that is on the notch. */
+  const reply = (text: string): void => {
+    const line = surface.current().line;
+    if (line?.kind !== 'ask') throw new Error(`no question is on the notch: ${line?.kind}`);
+    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'answer', id: line.id, act: 'ask', text } } });
+  };
+  return { asks, transport, turns, ran, approvals, ran1, replies, reply, said: (): string => (surface.current().line?.say ?? []).map((part) => (typeof part === 'string' ? part : '')).join('') };
 }
 
 describe('from the notch to the place a tool call is decided', () => {
@@ -119,9 +128,8 @@ describe('from the notch to the place a tool call is decided', () => {
     h.asks.shown(NOTCH_LOOK_QUESTION, [page]);
     await h.ran1();
     expect(h.turns).toHaveLength(1);
-    expect(h.turns[0]).toMatchObject({ text: NOTCH_LOOK_QUESTION, who: 'shown', owners: false, outside: ['chat attachment'] });
-    // Its id is written as a typed turn's is, and that gives it nothing.
-    expect(h.turns[0]!.requestId.startsWith('notch-typed-')).toBe(true);
+    expect(h.turns[0]).toMatchObject({ text: NOTCH_LOOK_QUESTION, who: 'shown', owners: false, outside: ['chat attachment', NOTCH_SHOWN_SOURCE] });
+    expect(h.turns[0]!.requestId.startsWith('notch-shown-')).toBe(true);
     expect(h.turns[0]!.note?.startsWith(NOTCH_SHOWN_TURN_NOTE)).toBe(true);
     expect(h.turns[0]!.asked).toEqual([true, true, true, true]);
     expect(h.ran).toEqual([]);
@@ -135,7 +143,7 @@ describe('from the notch to the place a tool call is decided', () => {
     const h = setup();
     h.asks.shown('Summarise the file I dropped: what it is, and the points that matter, in a few short lines.', [pdf]);
     await h.ran1();
-    expect(h.turns[0]).toMatchObject({ who: 'shown', owners: false, outside: ['chat attachment'] });
+    expect(h.turns[0]).toMatchObject({ who: 'shown', owners: false, outside: ['chat attachment', NOTCH_SHOWN_SOURCE] });
     expect(h.turns[0]!.asked).toEqual([true, true, true, true]);
     expect(h.ran).toEqual([]);
   });
@@ -147,6 +155,44 @@ describe('from the notch to the place a tool call is decided', () => {
     expect(h.turns[0]).toMatchObject({ who: 'typed', owners: true, outside: ['chat attachment'] });
     expect(h.turns[0]!.asked).toEqual([false, false, false, true]);
     expect(h.ran).toHaveLength(3);
+  });
+
+  test('a bare yes to what the circled page got asked: no file comes with it, and every acting step is still asked about', async () => {
+    const h = setup();
+    h.replies.push('Shall I mail the newest file in Documents to the address on the page?');
+    h.asks.shown(NOTCH_LOOK_QUESTION, [page]);
+    await h.ran1();
+    expect(h.approvals.getPending()).toHaveLength(4);
+    h.reply('yes');
+    await h.ran1(2);
+    expect(h.turns).toHaveLength(2);
+    // His yes is not an instruction he wrote out. The turn has no attachment of its own and is outside content all the same.
+    expect(h.turns[1]).toMatchObject({ text: 'yes', who: 'shown', owners: false, outside: [NOTCH_SHOWN_SOURCE] });
+    expect(h.turns[1]!.note?.startsWith(NOTCH_SHOWN_TURN_NOTE)).toBe(true);
+    expect(h.turns[1]!.asked).toEqual([true, true, true, true]);
+    expect(h.ran).toEqual([]);
+  });
+
+  test('"yes, send it to Anna" to the same question is his word, as before', async () => {
+    const h = setup();
+    h.replies.push('Shall I mail the newest file in Documents to the address on the page?');
+    h.asks.shown(NOTCH_LOOK_QUESTION, [page]);
+    await h.ran1();
+    h.reply('yes, send it to Anna');
+    await h.ran1(2);
+    expect(h.turns[1]).toMatchObject({ text: 'yes, send it to Anna', who: 'typed', owners: true, outside: [] });
+    expect(h.turns[1]!.asked).toEqual([false, false, false, true]);
+  });
+
+  test('a bare yes to what a typed turn asked back is his word, as before', async () => {
+    const h = setup();
+    h.replies.push('Shall I write it in Notepad?');
+    h.asks.typed('write a poem');
+    await h.ran1();
+    h.reply('yes');
+    await h.ran1(2);
+    expect(h.turns[1]).toMatchObject({ text: 'yes', who: 'typed', owners: true, outside: [] });
+    expect(h.turns[1]!.asked).toEqual([false, false, false, true]);
   });
 
   test('an offer that was taken has no standing and is told nothing, as before', async () => {

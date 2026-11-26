@@ -20,7 +20,9 @@
  *   4. whoever asks (`currentStanding`) is answered from the context the code
  *      is running in. A helper agent, a retry and a tool call run inside the
  *      turn and so inside its context. Work the turn started and did not wait
- *      for keeps the context and loses the standing when the turn is over.
+ *      for keeps the context and loses the standing when the turn is over:
+ *      the store takes it back (`revokeStanding`), so that does not rest on a
+ *      flag of the context that anything holding the context could write.
  *
  * It is kept in memory only. A restart ends every turn that was running
  * (vault/chat-turns.ts, recover), so there is nothing to carry across one.
@@ -36,6 +38,16 @@
  * "Saying it is the approval" is about what the owner said. A `shown` turn has
  * a standing, so that it is known to come from the notch, and no owner's word:
  * it is judged like any other turn (`ownerAskedOnNotch` in app-open.ts).
+ * It is never judged more lightly than a typed one: the turn store marks every
+ * shown turn as holding outside content, whatever came with it
+ * (`NOTCH_SHOWN_SOURCE`), so the guard that asks after outside content was
+ * read is on from its first step.
+ *
+ * A bare yes is the one thing the owner writes that is `shown` too: typed or
+ * said in answer to a question that a shown turn asked back, it says nothing
+ * of its own, and what it agrees to was proposed by a turn that had read
+ * somebody else's text (notch/asks.ts). An answer with a word of its own is
+ * the owner's. This holds until the turn's words are read for what they cover.
  */
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
 import { notchEnabled } from '../notch/switch.ts';
@@ -46,6 +58,12 @@ export type StandingOrigin = 'typed' | 'spoken' | 'shown';
 export interface TurnStanding {
   readonly origin: StandingOrigin;
 }
+
+/**
+ * The outside content every `shown` turn is marked as holding, beside any
+ * attachment it has: its request was not written by the owner.
+ */
+export const NOTCH_SHOWN_SOURCE = 'notch request the owner did not write';
 
 const ORIGINS: ReadonlySet<string> = new Set<StandingOrigin>(['typed', 'spoken', 'shown']);
 
@@ -83,6 +101,14 @@ export function grantStanding(context: BriefExecutionContext, standing: unknown)
   minted.delete(standing);
   granted.set(context, standing);
   return true;
+}
+
+/**
+ * Takes a turn's standing back. For the turn store, when the turn ends:
+ * whatever still runs with the turn's context reads none from then on.
+ */
+export function revokeStanding(context: BriefExecutionContext): void {
+  granted.delete(context);
 }
 
 /**

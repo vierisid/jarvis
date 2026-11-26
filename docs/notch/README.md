@@ -225,10 +225,15 @@ What holds for all of them:
     Whoever asks is answered from the context the code runs in
     (`currentStanding`): a helper agent, a retry and a tool call run inside
     the turn and have it; work the turn did not wait for has none once the
-    turn is over, and detached work never had it. One standing is one turn:
+    turn is over, because the turn store takes the standing back when the
+    turn ends (`revokeStanding`), whatever is later written on the context;
+    and detached work never had it. One standing is one turn:
     it is used up when it is tied, an object that only looks like one is
     dropped, and submitting a turn a second time changes nothing about the
-    first. A dashboard socket has no field to send one in. Ids that begin
+    first. One that cannot be tied when its turn starts is said in the log,
+    and the turn runs with none. Five files name the module at all, and the
+    sites test fails when a sixth does. A dashboard socket has no field to
+    send one in. Ids that begin
     `notch-` are still refused from a socket, so that it cannot take an id
     the notch is about to use, and they give a turn nothing: a turn inside
     the brain that names itself `notch-typed-...` is judged like any other.
@@ -240,14 +245,30 @@ What holds for all of them:
     with nothing said (84), a button on a dropped or received file, Enter on
     its empty field (`NotchAsks.shown`). The owner said nothing there, so a
     shown turn has no owner's word (40, 44). It is judged like a dashboard
-    turn that carries the same attachment: the answer comes as before, and
-    any step that acts is asked about, because the attachment is outside
-    content. It is told so in its own note (`NOTCH_SHOWN_TURN_NOTE`,
-    `OWNER_SHOWN_ROUTING_NOTE`), which keeps the one line and drops "their
-    asking is their approval". Words typed in the file's field, or said with
-    the keys held over a circle or a file, are the owner's as before, and so
-    is the typed answer to a question Jarvis asked back. A shown turn is
-    kept in the ledger as typed, and its id is written as a typed turn's.
+    turn that holds outside content: the answer comes as before, and any
+    step that acts is asked about. That does not rest on what came with it:
+    the turn store marks every shown turn as holding outside content
+    (`NOTCH_SHOWN_SOURCE`), so it is never judged more lightly than a typed
+    turn, and `shown` with no file is refused. It has a note of its own
+    (`NOTCH_SHOWN_TURN_NOTE`, `OWNER_SHOWN_ROUTING_NOTE`), written for it
+    sentence by sentence: it keeps the one line, says nothing of "their
+    words" or of asking being approval, and knows the file may be one
+    somebody sent. Words typed in the file's field, or said with the keys
+    held over a circle or a file, are the owner's as before, and so is an
+    answer with words of its own to a question Jarvis asked back. A shown
+    question is kept in the ledger as what it was ("Asked for you", the
+    fourth way an instruction comes), and its ids say `notch-shown-`.
+    One thing the owner writes is shown too, for now: **a bare yes to what
+    a shown turn asked back** ("Shall I mail this to...?", "yes"), typed in
+    the question's field or said with the keys while it is up
+    (`isBareAffirmation`, the matcher the dashboard's carry uses). It agrees
+    to what a turn that had read somebody else's text proposed and says
+    nothing of its own, so it runs with no owner's word and every acting
+    step is asked about; "yes", "yes" stays so until he says what he wants.
+    "Yes, send it to Anna" is his word, and so is a bare yes to what a turn
+    he typed or spoke asked back. This is an interim rule: it is replaced
+    when the boundary after outside content reads what his words cover
+    (fixes/01, C3 and C4).
 40. **Opening an app is not asked about.** Decided by the owner on 13
     November 2026, with the operating system as the measure: it does not ask
     before it opens an app; it asks before a delete, a payment, or a program

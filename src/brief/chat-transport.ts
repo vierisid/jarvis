@@ -19,7 +19,7 @@ import type { BriefProvider } from './providers.ts';
 import type { BriefChatEvent, BriefSendTurn, BriefTurnRef } from './contracts.ts';
 import type { BriefCapabilities } from './capabilities.ts';
 import { currentBriefTurn, withBriefTurn, type BriefExecutionContext } from './chat-context.ts';
-import { grantStanding, isUnusedStanding, type TurnStanding } from '../authority/standing.ts';
+import { NOTCH_SHOWN_SOURCE, grantStanding, isUnusedStanding, revokeStanding, type TurnStanding } from '../authority/standing.ts';
 
 type Client = ServerWebSocket<unknown>;
 export interface ScopedChatInput extends BriefTurnRef {
@@ -324,7 +324,11 @@ export class BriefChatTransport implements BriefProvider {
     // turn leaves running keeps it, and can tell (chat-context.ts).
     const context: BriefExecutionContext = { ...identity, signal, progress };
     // The standing the notch gave this turn, tied to this one object.
-    if (standing) grantStanding(context, standing);
+    const stands = standing ? grantStanding(context, standing) : false;
+    if (standing && !stands) console.error('[BriefChat] A turn was handed a standing that could not be tied to it. It runs with none.');
+    // A request the owner did not write is outside content by itself,
+    // whatever its caller attached (authority/standing.ts).
+    const shown = stands && standing?.origin === 'shown';
     try {
       if (signal.aborted || isTerminalTurn(this.repository.get(turn).state)) return;
       this.emit(this.repository.start(turn));
@@ -340,7 +344,7 @@ export class BriefChatTransport implements BriefProvider {
           ...(text === null ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: ref.mediaType, data: Buffer.from(bytes).toString('base64') } }] : []),
         ]);
         const untrustedSources = [...(files.length ? ['chat attachment'] : []), ...(holdsForward ? [FORWARDED_MESSAGE_SOURCE] : []),
-          ...(holdsGuest ? [GUEST_MESSAGE_SOURCE] : [])];
+          ...(holdsGuest ? [GUEST_MESSAGE_SOURCE] : []), ...(shown ? [NOTCH_SHOWN_SOURCE] : [])];
         const { stream, onComplete } = this.deps.runner.stream({ ...identity, text: turn.text, history, signal,
           ...(files.length ? { attachmentContent } : {}),
           ...(untrustedSources.length ? { untrustedSources } : {}),
@@ -387,6 +391,7 @@ export class BriefChatTransport implements BriefProvider {
       for (const event of this.repository.finishEvents(turn, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? undefined : error instanceof ConversationRequestError ? { code: 'attachment_unavailable', message: error.message } : briefChatFailure(error, toolsRan))) this.emit(event);
     } finally {
       context.over = true;
+      revokeStanding(context);
     }
   }
 }

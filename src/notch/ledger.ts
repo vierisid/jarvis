@@ -17,8 +17,14 @@
  */
 import type { Database } from 'bun:sqlite';
 
-/** How an instruction came: typed in Home, spoken with the talk keys, or offered by the notch and taken with a yes (./notice.ts). */
-export type NotchAskSource = 'typed' | 'spoken' | 'offered';
+/**
+ * How an instruction came: typed in Home, spoken with the talk keys, offered
+ * by the notch and taken with a yes (./notice.ts), or shown: a question the
+ * notch wrote for the person about something they circled without a word or
+ * a file they pressed a button on. A brain from before `shown` reads such a
+ * row as typed.
+ */
+export type NotchAskSource = 'typed' | 'spoken' | 'offered' | 'shown';
 
 /**
  *   listening     spoken: the keys are down
@@ -78,7 +84,7 @@ function parse(row: Stored): NotchAskRow {
     if (Array.isArray(value)) did = value.filter((item): item is string => typeof item === 'string');
   } catch { /* an unreadable list is an empty one */ }
   return {
-    id: row.id, createdAt: row.created_at, source: row.source === 'spoken' ? 'spoken' : row.source === 'offered' ? 'offered' : 'typed',
+    id: row.id, createdAt: row.created_at, source: row.source === 'spoken' ? 'spoken' : row.source === 'offered' ? 'offered' : row.source === 'shown' ? 'shown' : 'typed',
     state: row.state as NotchAskState, heard: row.heard, kind: row.kind === 'turn' || row.kind === 'remember' || row.kind === 'notch' ? row.kind : null,
     understood: row.understood, did, answer: row.answer, note: row.note,
     conversationId: row.conversation_id, turnId: row.turn_id, requestId: row.request_id,
