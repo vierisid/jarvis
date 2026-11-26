@@ -717,7 +717,10 @@ answer back".
 111. **Nobody's mail is written in a name unseen.** What the taker's chase sends is on the sheet
     the taker says yes to, to whom, and the follow-up in full with when it goes, as for a chase
     they start. Since 26 November 2026 the taker's yes burns the chase's fuse of five seconds
-    before the first mail goes: Esc in it takes nothing, and the giver is told nothing.
+    before the first mail goes: Esc in it takes nothing, and the giver is told nothing. When Send
+    was pressed on that mail and nothing confirmed it, the job is taken all the same, so that one
+    person has it: the taker is told the mail may have gone, and their chase asks about it next
+    and looks in the mailbox before it sends anything again.
 112. **The history that travels is what the notch wrote down**, step by step, the newest twelve.
     It arrives as text, is shown as text, and is kept as the other person's: "Sam: Nudged Dana
     by email."

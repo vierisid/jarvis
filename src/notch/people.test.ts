@@ -157,7 +157,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   /** This side's calendar: what is in it, or null when it cannot be read. `hold` keeps a reading waiting. */
   const timeState: { events: MailCalendarEvent[] | null; hold: Promise<void> | null; reads: number } = { events: [], hold: null, reads: 0 };
   /** This side's chases, as the chases part keeps them, and whether a first mail can go from here. */
-  const chaseState: { list: NotchChase[]; canBegin: boolean; fuse?: 'undo' | 'lost' } = { list: [], canBegin: true };
+  const chaseState: { list: NotchChase[]; canBegin: boolean; fuse?: 'undo' | 'lost'; unsure?: boolean } = { list: [], canBegin: true };
   const liveChase = (chase: NotchChase): boolean => chase.state === 'on' || chase.state === 'stuck';
   const chasesFake: NotchJobChases = {
     handable: () => chaseState.list.filter(liveChase),
@@ -176,6 +176,8 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
       if (chaseState.fuse === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 1, extras: {} };
       if (chaseState.fuse === 'lost') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
       if (!chaseState.canBegin) return { ok: false, parts: ['I could not send it: no mailbox here. Nothing was started.'], ms: 1, extras: { mood: 'sorry' } };
+      // Send was pressed and nothing confirmed it: a chase here all the same, stuck on that mail (./standing.ts).
+      if (chaseState.unsure) { chase.state = 'stuck'; chaseState.list.push(chase); return { ok: true, unsure: true, parts: ['The first mail may have gone.'], ms: 1, extras: {} }; }
       chase.nudges = 1; chase.steps.push({ at: server.now(), text: `Nudged ${chase.name.split(' ')[0]} by email.` }); chaseState.list.push(chase);
       return { ok: true, parts: ['On it.'], ms: 1, extras: {} };
     },
@@ -3753,6 +3755,21 @@ describe('a job that changes hands', () => {
       expect(sam.chaseState.list[0]!.state).toBe('on');
       expect(sam.engine.inbox.length).toBe(0);
     }
+  });
+
+  // It was "I could not send it. It stays with Sam", and the taker's second yes sent the mail again.
+  test('its first mail may have gone: it is taken, one person has it, and the truth about the mail is said', async () => {
+    const { sam, leo } = await handedOver();
+    await sam.done();
+    await sam.done();
+    leo.chaseState.unsure = true;
+    await leo.yes();
+    expect(leo.said()).toBe('Yours now. Sam knows. The first mail to Dana may have gone: Gmail did not confirm it. I ask you about it next.');
+    expect(leo.chaseState.list.map((one) => one.state)).toEqual(['stuck']);
+    await leo.done();
+    await settle();
+    if (!sam.said()) await sam.tap();
+    expect(sam.chaseState.list[0]!.state).toBe('handed');
   });
 
   test('it is not taken when its first mail cannot go, or when the taker is on that person already', async () => {

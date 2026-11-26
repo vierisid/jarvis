@@ -236,6 +236,12 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
         keep(`job-in:${job.id}`, { peer: from.id, chase: draft.id, what });
         settle();
         log('[notch] a job was taken from somebody, with its history');
+        // Its first mail may have gone or not: it is taken all the same, so that one person has it, and
+        // the truth is said. Its own question comes next, and it looks before it sends again (./standing.ts).
+        if (begun.unsure) {
+          await stage.say(['Yours now', told.ok ? ['. ', em(from.name), ' knows.'] : ['. I could not tell ', em(from.name), ' yet.'], ' The first mail to ', em(first(job.name)), ' may have gone: Gmail did not confirm it. I ask you about it next.'].flat(), 6200, { mood: 'careful', who: from.name });
+          return 'settled';
+        }
         await stage.say(told.ok ? ['Yours now. ', em(first(job.name)), ' hears from you next. ', em(from.name), ' knows.'] : ['Yours now. I could not tell ', em(from.name), ' yet.'], 4200, { mood: 'proud', mark: 'check', who: from.name });
         return 'settled';
       },

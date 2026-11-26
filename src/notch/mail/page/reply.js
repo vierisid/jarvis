@@ -2,10 +2,10 @@
 //   "write"    start the reply (to everyone when it has people in copy), check who it
 //              goes to, and write args.text into it. Gmail keeps it as a draft. Not sent.
 //   "send"     press Send on the reply being written, once, and wait for Gmail to say it went.
-//              The answer says whether Send was pressed (`pressed`) and whether Gmail said so
-//              (`ok`). Neither is "sent": that is asked of the thread afterwards.
-//   "discard"  throw the reply being written away. Nothing is left in Drafts. Only a reply
-//              that holds args.text, or no words at all, is thrown away: anything else is
+//              The answer says whether Send was pressed (`pressed`) and whether Gmail said,
+//              after the press, that it went (`ok`).
+//   "discard"  throw the reply being written away. Nothing is left in Drafts. Only the reply
+//              "write" opened and marked is thrown away, whatever it holds: any other is
 //              somebody's, and it is left where it is.
 //
 // A reply that is already open when "write" begins was not opened here: it is the owner's
@@ -60,18 +60,33 @@ const goesToTheExpected = (frame) => {
 // The words of this refusal are MAIL_WHY_DRAFT_THERE in ../mailbox.ts: the draft is then left alone.
 const DRAFT_THERE = 'a reply is already being written in that thread';
 const flat = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+// The mark "write" leaves on the reply it opened, on the text and on its frame: "discard" runs in
+// the same page later and has to know that reply from one somebody else began. It is gone with
+// the page: a reply of ours left from an earlier visit is then nobody's to throw away, and stays.
+const MARK = 'data-jarvis-reply';
+const ours = (box, frame) => box.getAttribute(MARK) === thread || frame.getAttribute(MARK) === thread;
+// Gmail's own word that a mail went, counted: in the places it speaks through, and on the whole
+// page. Only a count that goes up after Send was pressed is Gmail saying so about this mail. A
+// mail in the thread that says "your message has been sent" was there before.
+const heard = () => {
+  const count = (text) => (String(text || '').match(/message sent|your message has been sent/gi) || []).length;
+  return {
+    live: count([...document.querySelectorAll('[role="alert"], [aria-live]')].map((node) => node.innerText || node.textContent || '').join('\n')),
+    all: count(document.body.innerText),
+  };
+};
 
 if (step === 'discard') {
   const box = editable();
   if (!box) return { ok: true, discarded: false, why: 'no reply is being written' };
   const frame = frameOf(box);
   if (!frame) return { ok: false, why: 'the frame of the reply was not found' };
-  // Only what was written here is thrown away, or a reply with no words in it. A reply that
-  // holds other words is somebody's draft (the owner's own, half written): it used to be
-  // thrown away with the rest when a step before this one failed.
-  const wanted = flat(args.text);
-  const ours = !!wanted && flat(box.innerText).startsWith(wanted);
-  if (!ours && written(box)) return { ok: false, why: 'the reply being written is not the one that was written here', kept: true };
+  // Only the reply that "write" opened is thrown away, and that one whatever it holds: a write
+  // that went wrong half way leaves words that are not the ones meant, and they must not stay
+  // to block the thread. A reply without the mark is somebody's (the owner's own, half
+  // written, or one that begins with our words and goes on with theirs): it used to be thrown
+  // away with the rest when a step before this one failed.
+  if (!ours(box, frame)) return { ok: false, why: 'the reply being written is not the one that was written here', kept: true };
   // The bin of this reply, and of no other: a thread can hold more than one thing with a bin.
   const bin = [...frame.querySelectorAll('div[role="button"]')].find((node) => visible(node) && /^discard draft/i.test(node.getAttribute('aria-label') || node.getAttribute('data-tooltip') || ''));
   if (!bin) return { ok: false, why: 'no way to discard was found' };
@@ -87,28 +102,31 @@ if (step === 'write') {
   // goes to: a draft whose people the owner had changed was answered "not the expected
   // people", and whoever asked then threw it away.
   const before = editable();
-  if (before) return { ok: false, why: DRAFT_THERE, opened: false, held: written(before).length };
+  if (before) return { ok: false, why: DRAFT_THERE };
   // To everyone when there are people in copy, to the one who wrote otherwise. Gmail names the two buttons itself.
   const all = expected.size > 1;
   const button = [...document.querySelectorAll(all ? 'span.ams.bkG' : 'span.ams.bkH')].find(visible)
     || [...document.querySelectorAll('div[role="button"], span[role="link"]')].find((node) => visible(node) && (all ? /^reply (to )?all$/i : /^reply$/i).test((node.getAttribute('aria-label') || node.textContent || '').trim()));
-  if (!button) return { ok: false, why: 'no way to reply was found', opened: false };
+  if (!button) return { ok: false, why: 'no way to reply was found' };
   press(button);
   let box = null;
   for (let tries = 0; tries < 40 && !box; tries++) { await sleep(250); box = editable(); }
-  if (!box) return { ok: false, why: 'the reply did not open', opened: false };
-  // From here on a reply is open that was not before: `opened` says so, whatever else is answered.
+  if (!box) return { ok: false, why: 'the reply did not open' };
   const frame = frameOf(box);
-  if (!frame) return { ok: false, why: 'the frame of the reply was not found', opened: true };
+  if (!frame) return { ok: false, why: 'the frame of the reply was not found' };
   // Pressing Reply can bring up a draft Gmail had kept for the thread. Words in it are
   // somebody's: nothing is written into it. Written at its start, the new words went out with
   // the old ones after them: the same text twice in one mail, or the owner's unfinished
   // sentence sent in their name. Asked before who it goes to, for the reason above.
   const already = written(box);
-  if (already) return { ok: false, why: DRAFT_THERE, opened: true, held: already.length };
+  if (already) return { ok: false, why: DRAFT_THERE };
+  // A reply this script opened, with no words in it: it is marked as the one "discard" may
+  // throw away, before anything is written, so that a write that fails half way is not left.
+  box.setAttribute(MARK, thread);
+  frame.setAttribute(MARK, thread);
   // Gmail fills in who it goes to a moment after the reply opens.
   for (let tries = 0; tries < 12 && !goesToTheExpected(frame); tries++) await sleep(250);
-  if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', opened: true, people: addressedIn(frame).size, expected: expected.size };
+  if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', people: addressedIn(frame).size, expected: expected.size };
   box.focus();
   // The caret at the very start, with nothing selected: text typed over a selection replaces it.
   const caret = document.createRange();
@@ -127,11 +145,11 @@ if (step === 'write') {
   await sleep(300);
   const now = flat(box.innerText);
   const wanted = flat(args.text);
-  if (!wanted || !now.startsWith(wanted)) return { ok: false, why: 'what is in the reply is not what was written', opened: true, before: was, after: now.length };
+  if (!wanted || !now.startsWith(wanted)) return { ok: false, why: 'what is in the reply is not what was written', before: was, after: now.length };
   // Gmail says so, in the frame or beside it, once it has kept the draft.
   let saved = false;
   for (let tries = 0; tries < 16 && !saved; tries++) { await sleep(250); saved = /draft saved/i.test(document.body.innerText || ''); }
-  return { ok: true, written: true, opened: true, saved, people: expected.size };
+  return { ok: true, written: true, saved, people: expected.size };
 }
 
 if (step === 'send') {
@@ -144,21 +162,19 @@ if (step === 'send') {
   if (!wanted || !flat(box.innerText).startsWith(wanted)) return { ok: false, why: 'the reply is not the one that was shown', pressed: false };
   const send = [...frame.querySelectorAll('div[role="button"]')].find((node) => visible(node) && /^send\b/i.test(node.getAttribute('aria-label') || node.getAttribute('data-tooltip') || ''));
   if (!send) return { ok: false, why: 'no way to send was found', pressed: false };
-  // Gmail's own words, and only when they were not on the page before Send was pressed: a mail in
-  // the thread that says "your message has been sent" is not Gmail saying so about this one.
-  const says = () => /message sent|your message has been sent/i.test(document.body.innerText || '');
-  const stale = says();
+  const was = heard();
   press(send);
   const open = () => document.contains(box) && visible(box);
   let said = false;
-  // The reply closing is not Gmail saying it went: it closes when it is thrown away too. Once it
-  // has closed, the words are waited for a little longer and no more.
-  for (let tries = 0, shut = 0; tries < 60 && !said && shut < 8; tries++) {
+  // The reply closing is not Gmail saying it went: it closes when it is thrown away too, and
+  // Gmail closes it at once on Send, before it says anything. The words are waited for in full.
+  for (let tries = 0; tries < 60 && !said; tries++) {
     await sleep(250);
-    said = !stale && says();
-    if (!open()) shut++;
+    const now = heard();
+    said = now.live > was.live || now.all > was.all;
   }
-  // Not "sent": Gmail said so, or did not. Whether it went is asked of the thread (../mailbox.ts, `sent`).
+  // Yes: Gmail said, after the press, that it went. No, with `pressed`: it may have gone all the
+  // same, and whoever asked looks in the thread (../mailbox.ts, `sent`).
   return said ? { ok: true, pressed: true, said: true, closed: !open() } : { ok: false, why: 'Gmail did not say it was sent', pressed: true, said: false, closed: !open() };
 }
 

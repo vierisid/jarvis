@@ -800,7 +800,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
         inbox, db: deps.calls.db, settings, log,
         listen: deps.calls.listen, stt: deps.calls.stt, think: deps.calls.think,
         // The follow-up goes the way a chase's mail goes: in the thread with that person, or as a new mail.
-        mail: layer ? { find: (who) => layer.standing.find(who), send: (plan) => layer.standing.send(plan), owner: () => layer.standing.owner() } : undefined,
+        mail: layer ? { find: (who) => layer.standing.find(who), send: (plan) => layer.standing.send(plan), went: (plan, since) => layer.standing.went(plan, since), owner: () => layer.standing.owner() } : undefined,
         paused: asleep,
         onPause: emergency ? (listener) => { emergency.subscribe((state) => listener(state !== 'normal')); } : undefined,
         eye: (on) => { eyeCall = on; paintEye(); },

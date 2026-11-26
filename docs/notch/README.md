@@ -672,20 +672,36 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     November 2026): ten replies were turned down in eleven minutes by the key
     that everywhere else means back. Under every draft is the link "Not
     needed", which is the no in words. Left alone, a line folds and waits.
-62. **Sent means it is the last word in its thread.** Gmail saying "Message
-    sent" is not taken for it: the thread is read again, and the reply is
-    called sent when the owner's mail, sent since the yes, is its last
-    message. If it cannot be sent the line says so and says where the draft
-    is. A reply is never left half written: when a step fails, or something
+62. **Sent means it is the last word in its thread.** For a reply, Gmail
+    saying "Message sent" is not taken for it: the thread is read again, and
+    the reply is called sent when the owner's mail, sent since the yes and
+    beginning with the reply's own words, is its last message
+    (`MailReplySession.sent`). If it cannot be sent the line says so and
+    says where the draft is. When Send was pressed and neither Gmail nor the
+    thread says it went, that is what is said: it may have gone, and the
+    owner is told to look before sending it again.
+    A reply is never left half written: when a step fails, or something
     else takes the notch between the draft and the fuse, what was put in
-    Gmail is taken out again. The same holds for a chase's mail and for a
-    mail of its own (the review of 26 November 2026): a nudge in a thread is
-    sent when the thread shows it, a new mail when the Sent folder does.
-    Both had taken Gmail's words for it, looked for anywhere on the page, and
-    a nudge the reply closing too. When Send was pressed and nothing shows
-    the mail, it may have gone all the same: that is what is said, and it is
-    never sent a second time on the strength of it. A send the page refused
-    before pressing anything sent nothing, and is said as that.
+    Gmail is taken out again. Only what was put there: the reply that was
+    opened for it is marked on the page, and only a marked reply is thrown
+    away, whatever it holds. A reply that was open before is somebody's,
+    the owner's own or one that begins with the same words: it is never
+    written into and never thrown away (rule 156), and when taking a draft
+    away does not work the line says that one may be left in the thread.
+    A chase's mail and a mail of its own are called sent on Gmail's word,
+    by the choice of 17 November 2026: a mail that went is not called "not
+    confirmed" and then sent again. What counts as Gmail's word was put
+    right on 26 November 2026: it is said after Send was pressed (the words
+    are counted before and after, in the places Gmail speaks through and on
+    the page), and the reply closing is not it. It had been the words
+    anywhere on the page. When Gmail says nothing, the thread is asked, or
+    the Sent folder for a mail of its own, a few times. When neither says it
+    went, the mail may have gone all the same: it is said as that, never as
+    "could not be sent", and before it is sent again by any way (a chase's
+    "try again", the follow-up of a call) the mailbox is asked whether it
+    went, and a mail that is there is counted and not sent twice
+    (`Mailbox.went`). A send the page refused before pressing anything sent
+    nothing, and is said as that.
 63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a reply
     speaks up by itself the mailbox is asked whether it is still an answer to
@@ -1675,17 +1691,25 @@ applied).
     to someone who has just answered. A step is quiet: written in the
     chase's log, not said. After the second mail it comes back and asks:
     call them (handed back, and nothing more is written), wait until
-    Monday, or let it go. A follow-up that could not be sent is said, with
-    "Try again". An answer says "Done." once, also while it was stuck.
-    A chase that somebody had taken and hands back asks too (26 November
-    2026): "Leo handed Sam's answer back. What now?", with "Send the
-    follow-up" (a fuse, then the mail that was shown), wait until Monday, or
-    let it go. It used to be under way again at once, and its follow-up
-    went a wait later with nobody having said so since it left. And why a
-    chase is stuck is kept with it (`stuck_why`): after a restart the
-    question is asked again as it was. It had been kept in memory only, so
-    a stuck chase asked nothing after a restart and stood in the way of a
-    new one for that person.
+    Monday, or let it go. An answer says "Done." once, also while it was
+    stuck. Since 26 November 2026:
+    a question whose answer can send a mail is a sheet with that mail on
+    it, word for word, and the yes burns the chase's fuse first ("try
+    again" had none), and not at all while everything is stopped.
+    A mail that could not be sent is said, with "try again". A mail on
+    which Send was pressed and that nothing confirmed is said as "may have
+    gone", for the first mail too: the chase is then kept and asks, where
+    it used to say "Nothing was started". "Try again" on such a mail looks
+    in the mailbox first: when the mail is there it is counted and nothing
+    is sent, when the mailbox cannot say nothing is sent either.
+    A chase that somebody had taken and hands back asks: "Leo handed Sam's
+    answer back. What now?", with the follow-up to send, wait until Monday,
+    or let it go. It used to be under way again at once, and its follow-up
+    went a wait later with nobody having said so since it left.
+    Why a chase is stuck is kept with it (`stuck_why`), with the moment to
+    look from: after a restart the question is asked again as it was. It
+    had been kept in memory only, so a stuck chase asked nothing after a
+    restart and stood in the way of a new one for that person.
 118. **Stop ends a chase for good.** A chase that was stopped, dropped or
     handed back is never taken up again, by the clock or by a late answer
     (`NotchStandingStore.move` changes a state only from the one it was
@@ -1695,9 +1719,9 @@ applied).
     that person when there is one (`Mailbox.reply`), and as a new mail when
     the thread will not take it or there is none (`Mailbox.write`). A new
     mail is sent only when Gmail's writing window holds exactly that mail,
-    to exactly that one person (`page/compose-send.js`), and it is called
-    sent only when the Sent folder shows it, as rule 62 has it since 26
-    November 2026. It was called sent when Gmail said so.
+    to exactly that one person (`page/compose-send.js`). It is called sent
+    when Gmail says so after Send was pressed, or, when Gmail says nothing,
+    when the Sent folder shows it (rule 62, 26 November 2026).
 120. **An agent is a workflow, made by the product's own composer.** "Every
     Monday send Sam the numbers" (`agentSentence`) is read back with its
     schedule as a word that can be changed. One yes builds it with the same

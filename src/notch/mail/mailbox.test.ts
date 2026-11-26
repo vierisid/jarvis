@@ -6,7 +6,7 @@ import { MailSignedOut, MailTabTurn } from './tab.ts';
 const T1 = '19a1b2c3d4e5f601';
 const NOW = Date.UTC(2026, 10, 14, 9, 0);
 const row = (id: string, last = 'leo@lumen.example') => ({ id, people: [{ name: 'Sam Rossi', address: 'sam@northwind.example' }, { name: 'Leo', address: last }], count: 2, draft: false, subject: 'Deck' });
-const printed = (id: string, from = 'Leo Bianchi <leo@lumen.example>', at = NOW) => ({ id, subject: 'Deck', messages: [{ from, to: 'Sam Rossi <sam@northwind.example>', cc: '', at, text: 'Does Thursday work?', files: [] }] });
+const printed = (id: string, from = 'Leo Bianchi <leo@lumen.example>', at = NOW, text = 'Does Thursday work?') => ({ id, subject: 'Deck', messages: [{ from, to: 'Sam Rossi <sam@northwind.example>', cc: '', at, text, files: [] }] });
 
 /** A tab that is somewhere, and answers the page scripts the mailbox runs. */
 function tab(options: { up?: boolean; signedOut?: boolean; lists?: Record<string, unknown[]>; reply?: (args: Record<string, unknown>) => unknown; open?: boolean; threads?: (ids: string[]) => unknown[] } = {}) {
@@ -134,26 +134,49 @@ describe('one reply through the tab', () => {
     expect(order.lastIndexOf('reply')).toBeLessThan(order.indexOf('threads'));
   });
 
-  test('after a send, says whether the mailbox shows it as the last word, to the minute', async () => {
-    const mine = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', NOW)) });
+  test('after a send, says whether the mailbox shows it as the last word, to the minute, and by how it begins', async () => {
+    const me = 'Sam Rossi <sam@northwind.example>';
+    const mine = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW, 'Hi Leo,\n\nThursday  works.\nSam\n\nOn Monday Leo wrote: Does Thursday work?')) });
     const sent = await browserMailbox(mine.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW + 40_000));
     expect(sent).toBe(true);
     const theirs = tab({ up: true });
     expect(await browserMailbox(theirs.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW))).toBe(false);
     const gone = tab({ up: true, threads: () => [] });
     expect(await browserMailbox(gone.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW))).toBeNull();
+    // The owner answered by hand in the same minute: a mail of theirs, and not the one that was sent.
+    // "An owner mail in the last two minutes" was taken for ours.
+    const byHand = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW, 'Leo, call me instead.')) });
+    expect(await browserMailbox(byHand.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW))).toBe(false);
+  });
+
+  // Before anything is sent a second time, it is asked whether the first one went.
+  test('a mail that may have gone is looked for: anywhere in its thread, since then, by how it begins', async () => {
+    const me = 'Sam Rossi <sam@northwind.example>';
+    const ask = { to: 'leo@lumen.example', thread: T1, subject: 'Deck', text: plan.text };
+    // It went, and Leo has answered since: it is no longer the last word, and it is still there.
+    const answered = tab({ up: true, threads: (ids) => ids.map((id) => ({ id, subject: 'Deck', messages: [printed(id, me, NOW, plan.text).messages[0]!, printed(id, undefined, NOW + 60_000, 'Fine.').messages[0]!] })) });
+    expect(await browserMailbox(answered.page, new MailTabTurn()).went(ask, NOW)).toBe(true);
+    expect(await browserMailbox(tab({ up: true }).page, new MailTabTurn()).went(ask, NOW)).toBe(false);
+    expect(await browserMailbox(tab({ up: true, threads: () => [] }).page, new MailTabTurn()).went(ask, NOW)).toBeNull();
+    // An older mail of the owner's with the same words is not this one.
+    const older = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW - 3_600_000, plan.text)) });
+    expect(await browserMailbox(older.page, new MailTabTurn()).went(ask, NOW)).toBe(false);
   });
 });
 
 // A chase's first mail to someone there is no thread with (pass 11): one new
 // mail, to one person, sent only when the writing window holds exactly it.
 describe('writing a new mail to one person', () => {
+  const plan = { to: 'leo@lumen.example', subject: 'The contract', text: 'Hi Leo,\n\nA quick nudge on this: could you get back to me by Friday?\n\nThanks,\nSam' };
   /** A tab whose writing window says what it holds, and whose Send answers as told. */
   function writing(options: {
     window?: Record<string, unknown>;
     sent?: Record<string, unknown> | Error;
-    /** What the Sent folder shows each time it is asked: the mail, nothing of it, or it cannot be read. The last answer stands. */
-    folder?: ('shows' | 'empty' | 'old' | 'unreadable')[];
+    /**
+     * What the Sent folder shows each time it is asked: the mail, nothing of it, an old one, one
+     * with the same subject and other words, or it cannot be read. The last answer stands.
+     */
+    folder?: ('shows' | 'empty' | 'old' | 'other' | 'unreadable')[];
   } = {}) {
     const calls: { name: string; args?: unknown }[] = [];
     const folder = [...(options.folder ?? ['shows'])];
@@ -162,6 +185,7 @@ describe('writing a new mail to one person', () => {
       go: async (site, path) => { calls.push({ name: `go ${site}`, args: path }); },
       run: async <T>(name: string, args?: unknown) => {
         calls.push({ name, args });
+        if (name === 'where') return { up: true } as T;
         if (name === 'shape-compose') return (options.window ?? { subject: 12, body: 40, send: true }) as T;
         if (name === 'compose-send') {
           if (options.sent instanceof Error) throw options.sent;
@@ -175,78 +199,96 @@ describe('writing a new mail to one person', () => {
           // Another mail to the same person is in Sent too: only the one with this subject counts.
           return { there: true, rows: [{ ...row('19a1b2c3d4e5f6ff'), subject: 'Lunch' }, ...(shown === 'empty' ? [] : [{ ...row(T1), subject: 'The  contract' }])] } as T;
         }
-        if (name === 'threads') return (args as { ids: string[] }).ids.map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', shown === 'old' ? NOW - 3_600_000 : NOW)) as T;
+        if (name === 'threads') return (args as { ids: string[] }).ids.map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', shown === 'old' ? NOW - 3_600_000 : NOW, shown === 'other' ? 'Leo, about the contract: call me.' : plan.text)) as T;
         throw new Error(`no such script: ${name}`);
       },
     };
     return { page, calls, names: () => calls.map((call) => call.name), box: () => browserMailbox(page, new MailTabTurn(), { now: () => NOW + 30_000, sleep: async () => {} }) };
   }
-  const plan = { to: 'leo@lumen.example', subject: 'The contract', text: 'Hi Leo,\n\nA quick nudge on this: could you get back to me by Friday?\n\nThanks,\nSam' };
+  const silent = { sent: false, pressed: true, why: 'Gmail did not say it was sent' };
 
-  test('the writing window is opened with the mail in it, checked, Send is pressed once, and the Sent folder is asked', async () => {
-    const { page, calls, names } = writing();
-    expect(await browserMailbox(page, new MailTabTurn(), { now: () => NOW + 30_000 }).write(plan)).toEqual({ ok: true });
-    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail', 'owner', 'go', 'list', 'threads', 'go mail']);
+  test('the writing window is opened with the mail in it, checked, and Send is pressed once', async () => {
+    const { box, calls, names } = writing();
+    expect(await box().write(plan)).toEqual({ ok: true });
+    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail']);
     // Who it goes to, what it is called and what it says travel in the address that opens the window.
     const opened = String(calls[0]!.args);
     expect(opened.startsWith('/mail/u/0/?view=cm&fs=1&tf=1&to=leo%40lumen.example&su=The%20contract&body=Hi%20Leo')).toBe(true);
     // Send is told exactly which mail it may send, and to whom.
     expect(calls[2]!.args).toEqual({ subject: 'The contract', to: 'leo@lumen.example' });
-    // The Sent folder is asked for what went to that person today, and only the thread with this subject is read.
-    expect(decodeURIComponent((calls[5]!.args as { place: string }).place)).toContain('in:sent to:leo@lumen.example newer_than:1d');
-    expect(calls[7]!.args).toEqual({ ids: [T1] });
     // The tab is left on the list again for whoever reads next.
-    expect(calls[8]!.args).toBe('/mail/u/0/#inbox');
+    expect(calls[3]!.args).toBe('/mail/u/0/#inbox');
   });
 
-  // README 62: Gmail saying "Message sent" is not taken for it. A new mail was, and a mail that
-  // did not go was written down as sent.
-  test('Gmail says it went and the Sent folder does not show it: not called sent, and it may have gone', async () => {
-    for (const folder of [['empty'], ['old']] as const) {
+  // The hardening audit, 17 November 2026, kept: a mail that went is not called "not confirmed"
+  // and then sent again. Gmail saying so after the press is enough, whatever the folder shows yet.
+  test('Gmail says it went: sent, whatever the Sent folder shows yet, and the folder is not asked', async () => {
+    for (const folder of [['empty'], ['unreadable']] as const) {
       const { box, names } = writing({ folder: [...folder] });
-      expect(await box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
-      // Asked more than once: the folder takes a moment to show a mail.
-      expect(names().filter((name) => name === 'list')).toHaveLength(MAIL_SENT_ASKS);
+      expect(await box().write(plan)).toEqual({ ok: true });
+      expect(names()).not.toContain('list');
     }
-    expect(MAIL_WHY_UNSURE.length).toBeLessThanOrEqual(80);
   });
 
-  test('the Sent folder shows it a moment later: sent', async () => {
-    const { box, names } = writing({ folder: ['empty', 'shows'] });
+  test('Gmail says nothing: the Sent folder is asked, and a mail it shows is sent, and not sent again', async () => {
+    const { box, calls, names } = writing({ sent: silent });
+    expect(await box().write(plan)).toEqual({ ok: true });
+    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail', 'owner', 'go', 'list', 'threads', 'go mail']);
+    // The Sent folder is asked for what went to that person, and only the thread with this subject is read.
+    expect(decodeURIComponent((calls[5]!.args as { place: string }).place)).toContain('in:sent to:leo@lumen.example newer_than:');
+    expect(calls[7]!.args).toEqual({ ids: [T1] });
+  });
+
+  test('Gmail says nothing and the Sent folder shows it a moment later: sent', async () => {
+    const { box, names } = writing({ sent: silent, folder: ['empty', 'shows'] });
     expect(await box().write(plan)).toEqual({ ok: true });
     expect(names().filter((name) => name === 'list')).toHaveLength(2);
   });
 
-  test('Gmail says nothing and the Sent folder shows it: sent, and not sent again', async () => {
-    const { box } = writing({ sent: { sent: false, pressed: true, why: 'Gmail did not say it was sent' } });
-    expect(await box().write(plan)).toEqual({ ok: true });
+  test('Gmail says nothing and the Sent folder does not show it: it may have gone, and when to look from is kept', async () => {
+    for (const folder of [['empty'], ['old'], ['other'], ['unreadable']] as const) {
+      const { box } = writing({ sent: silent, folder: [...folder] });
+      expect(await box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true, since: NOW + 30_000 });
+    }
+    // Asked more than once: the folder takes a moment to show a mail.
+    const asked = writing({ sent: silent, folder: ['empty'] });
+    await asked.box().write(plan);
+    expect(asked.names().filter((name) => name === 'list')).toHaveLength(MAIL_SENT_ASKS);
+    expect(MAIL_WHY_UNSURE.length).toBeLessThanOrEqual(80);
   });
 
-  test('the Sent folder cannot be read: Gmail\'s own word stands when it gave it, and not when it did not', async () => {
-    expect(await writing({ folder: ['unreadable'] }).box().write(plan)).toEqual({ ok: true });
-    expect(await writing({ folder: ['unreadable'], sent: { sent: false, pressed: true, why: 'Gmail did not say it was sent' } }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
+  test('a mail of its own that may have gone is looked for in the Sent folder', async () => {
+    const ask = { to: 'Leo@Lumen.example', thread: null, subject: 'The contract', text: plan.text };
+    expect(await writing().box().went(ask, NOW)).toBe(true);
+    expect(await writing({ folder: ['other'] }).box().went(ask, NOW)).toBe(false);
+    expect(await writing({ folder: ['empty'] }).box().went(ask, NOW)).toBe(false);
+    expect(await writing({ folder: ['unreadable'] }).box().went(ask, NOW)).toBeNull();
   });
 
   test('a writing window that does not hold the mail is not sent from', async () => {
     for (const window of [{ subject: 3, body: 40, send: true }, { subject: 12, body: 0, send: true }, { subject: 12, body: 40, send: false }, { subject: null, body: null, send: false }]) {
       const { page, names } = writing({ window });
-      expect(await browserMailbox(page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the writing window did not open as expected' });
+      expect(await browserMailbox(page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the writing window did not open as expected', pressed: false });
       expect(names()).not.toContain('compose-send');
     }
   });
 
   test('a send the page refused before pressing anything sent nothing: the reason is given, and the Sent folder is not asked', async () => {
-    const refused = writing({ sent: { sent: false, why: 'it does not go to the one expected person' } });
-    expect(await refused.box().write(plan)).toEqual({ ok: false, why: 'it does not go to the one expected person' });
+    const refused = writing({ sent: { sent: false, pressed: false, why: 'it does not go to the one expected person' } });
+    expect(await refused.box().write(plan)).toEqual({ ok: false, why: 'it does not go to the one expected person', pressed: false });
     expect(refused.names()).not.toContain('list');
-    const silent = writing({ sent: { sent: false, why: '' } });
-    expect(await silent.box().write(plan)).toEqual({ ok: false, why: 'Gmail did not say it was sent' });
+  });
+
+  // Only a page that says it did not press is believed. It was the other way round for a new mail.
+  test('a page that does not say whether it pressed: the mail may have gone, and the Sent folder says', async () => {
+    expect(await writing({ sent: { sent: false, why: '' } }).box().write(plan)).toEqual({ ok: true });
+    expect(await writing({ sent: { sent: false, why: '' }, folder: ['empty'] }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true, since: NOW + 30_000 });
   });
 
   test('a page that went away while Send was pressed: the mail may have gone, and the Sent folder says', async () => {
     const gone = new Error('the tab left https://mail.google.com/mail/u/0/?view=cm for elsewhere');
     expect(await writing({ sent: gone }).box().write(plan)).toEqual({ ok: true });
-    expect(await writing({ sent: gone, folder: ['empty'] }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
+    expect(await writing({ sent: gone, folder: ['empty'] }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true, since: NOW + 30_000 });
   });
 
   test('a mail to several people the owner named goes to exactly those, and Send is told so', async () => {

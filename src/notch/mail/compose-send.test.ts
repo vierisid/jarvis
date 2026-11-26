@@ -19,7 +19,7 @@ async function compose(args: { subject: string; to: string | string[] }, window:
   const subject = { ...node({}, window.subject ?? 'Following up on our call'), closest: () => form };
   const send = {
     ...node({ 'aria-label': 'Send ‪(Ctrl-Enter)‬' }),
-    dispatchEvent: (event: { type: string }) => { if (event.type === 'click') { pressed++; if (window.sends !== false) body.innerText = 'Message sent'; } return true; },
+    dispatchEvent: (event: { type: string }) => { if (event.type === 'click') { pressed++; if (window.sends !== false) body.innerText += '\nMessage sent'; } return true; },
   };
   const document = { body, querySelectorAll: (selector: string) => (selector.includes('subjectbox') ? [subject] : selector.includes('role="button"') ? [send] : []) };
   class Mouse { constructor(readonly type: string) {} }
@@ -76,7 +76,9 @@ describe('pressing Send on a new mail', () => {
   test('the answer says whether Send was pressed', async () => {
     expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'] })).said).toMatchObject({ sent: true, pressed: true });
     expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], sends: false })).said).toMatchObject({ sent: false, pressed: true });
-    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['leo@lumen.example'] })).said).not.toHaveProperty('pressed');
+    // Said outright, not left out: a missing word about it is read as "may have gone".
+    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['leo@lumen.example'] })).said).toMatchObject({ sent: false, pressed: false });
+    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], subject: 'Another mail' })).said).toMatchObject({ sent: false, pressed: false });
   });
 
   // The words were looked for anywhere on the page: a mail that itself says them was called sent.
@@ -84,5 +86,11 @@ describe('pressing Send on a new mail', () => {
     const { said, pressed } = await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], sends: false, holds: 'Hi Sam, your message has been sent to the team.' });
     expect(said).toMatchObject({ sent: false, pressed: true });
     expect(pressed).toBe(1);
+  });
+
+  // One yes or no for "the words were there before" threw a real confirmation away with them.
+  test('a mail that itself says "message sent", and Gmail saying so afresh after the press: sent', async () => {
+    const { said } = await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], holds: 'Hi Sam, your message has been sent to the team.' });
+    expect(said).toMatchObject({ sent: true, pressed: true });
   });
 });

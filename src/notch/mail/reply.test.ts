@@ -39,12 +39,19 @@ function thread(options: {
   mail?: string;
   /** A bin that belongs to something else in the thread. */
   strayBin?: boolean;
+  /** Gmail says it went only after this many waits: the reply itself closes at once. */
+  saysAfter?: number;
+  /** What is typed lands as other words: a write that goes wrong half way. */
+  garbles?: boolean;
 } = {}) {
   const window = new Window();
   const document = window.document;
   // What is shown has a place on the page: that is how the script tells.
   Object.defineProperty(window.HTMLElement.prototype, 'offsetParent', { configurable: true, get(this: { isConnected: boolean; parentElement: unknown }) { return this.isConnected ? this.parentElement : null; } });
   const pressed = { reply: 0, send: 0, bin: 0, stray: 0 };
+  /** The page's clock: each wait of the script is one tick, and what was set to happen at a tick happens then. */
+  let ticks = 0;
+  const later: { at: number; fn: () => void }[] = [];
   document.body.innerHTML = `
     <h2 data-legacy-thread-id="${THREAD}">Deck</h2>
     <div data-legacy-message-id="m1"><span email="${LEO}">Leo</span><div>${options.mail ?? 'Does Thursday work?'}</div></div>
@@ -65,7 +72,8 @@ function thread(options: {
     frame?.querySelector('.send')?.addEventListener('click', () => {
       pressed.send++;
       if (options.closes !== false) frame.remove();
-      if (options.says !== false) document.body.insertAdjacentHTML('beforeend', '<div class="toast">Message sent</div>');
+      const say = (): void => { document.body.insertAdjacentHTML('beforeend', '<div class="toast" role="alert">Message sent</div>'); };
+      if (options.says !== false) { if (options.saysAfter) later.push({ at: ticks + options.saysAfter, fn: say }); else say(); }
     });
   };
   if (options.open) { replies.innerHTML = frameOf(options.open); wire(); }
@@ -79,22 +87,27 @@ function thread(options: {
     const box = document.querySelector('[contenteditable="true"]');
     if (!box || name !== 'insertText') return true;
     const line = document.createElement('div');
-    line.textContent = value ?? '';
+    line.textContent = options.garbles ? 'something else entirely' : value ?? '';
     box.insertBefore(line, box.querySelector('.gmail_signature'));
     return true;
   };
   const run = (step: string, args: { to?: string[]; cc?: string[]; text?: string } = {}) =>
     new AsyncFunction('args', 'document', 'window', 'MouseEvent', 'getSelection', 'setTimeout', source)(
       { do: step, thread: THREAD, to: args.to ?? [LEO], cc: args.cc ?? [], text: args.text ?? TEXT },
-      document, window, window.MouseEvent, () => window.getSelection(), (fn: () => void) => { fn(); return 0; });
+      document, window, window.MouseEvent, () => window.getSelection(), (fn: () => void) => {
+        ticks++;
+        for (const due of later.filter((one) => one.at <= ticks)) { later.splice(later.indexOf(due), 1); due.fn(); }
+        fn();
+        return 0;
+      });
   const box = () => document.querySelector('[contenteditable="true"]');
   return { run, pressed, box, words: (): string[] => [...(box()?.children ?? [])].filter((node) => !node.className).map((node) => node.textContent ?? '') };
 }
 
 describe('writing a reply into its thread', () => {
-  test('a thread with no reply open: Reply is pressed, the words are written, and it says it opened one', async () => {
+  test('a thread with no reply open: Reply is pressed, and the words are written', async () => {
     const page = thread();
-    expect(await page.run('write')).toMatchObject({ ok: true, written: true, opened: true });
+    expect(await page.run('write')).toMatchObject({ ok: true, written: true });
     expect(page.pressed.reply).toBe(1);
     expect(page.words()).toEqual(['Hi Leo,', 'Thursday works.', 'Sam']);
   });
@@ -103,26 +116,26 @@ describe('writing a reply into its thread', () => {
   // people" when the owner had changed who it goes to, and whoever asked then threw it away.
   test('the owner\'s own draft, to other people: it is a draft that is there, said before who it goes to is looked at', async () => {
     const page = thread({ open: { to: ['anna@acme.example', 'tony@acme.example'], lines: ['Anna, about Thursday: I would rather'] } });
-    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE, opened: false });
+    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE });
     expect(page.pressed.reply).toBe(0);
     expect(page.words()).toEqual(['Anna, about Thursday: I would rather']);
   });
 
   test('a reply that was open before, even with no words in it, is not written into', async () => {
     const page = thread({ open: { to: [LEO] } });
-    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE, opened: false });
+    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE });
     expect(page.words()).toEqual([]);
   });
 
   test('a draft Gmail brings up when Reply is pressed, with words and other people: a draft that is there', async () => {
     const page = thread({ reply: { to: ['anna@acme.example'], lines: ['Half a sentence'] } });
-    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE, opened: true });
+    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE });
     expect(page.words()).toEqual(['Half a sentence']);
   });
 
   test('an empty reply that goes to somebody else is refused for that, and nothing is written', async () => {
     const page = thread({ reply: { to: ['anna@acme.example'] } });
-    expect(await page.run('write')).toMatchObject({ ok: false, why: 'the reply does not go to exactly the expected people', opened: true });
+    expect(await page.run('write')).toMatchObject({ ok: false, why: 'the reply does not go to exactly the expected people' });
     expect(page.words()).toEqual([]);
   });
 });
@@ -136,9 +149,31 @@ describe('throwing a reply away', () => {
     expect(page.box()).toBeNull();
   });
 
-  test('an earlier one of ours that did not go is thrown away too: it begins with the same words', async () => {
-    const page = thread({ open: { to: [LEO], lines: ['Hi Leo,', 'Thursday works.', 'Sam'] } });
-    expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE });
+  // It was told apart by how it begins. A draft that begins with our words and goes on with the
+  // owner's is the owner's, and so is one that only looks like ours: neither is thrown away.
+  test('a reply this visit did not open is left, even when it begins with the same words', async () => {
+    for (const lines of [['Hi Leo,', 'Thursday works.', 'Sam'], ['Hi Leo,', 'Thursday works.', 'Sam', 'PS: and bring the contract, I will explain on the day why']]) {
+      const page = thread({ open: { to: [LEO], lines } });
+      expect(await page.run('write')).toMatchObject({ ok: false, why: MAIL_WHY_DRAFT_THERE });
+      expect(await page.run('discard')).toMatchObject({ ok: false, kept: true });
+      expect(page.pressed.bin).toBe(0);
+      expect(page.words()).toEqual(lines);
+    }
+  });
+
+  // A write that went wrong half way left words that were not ours to the letter. Discard saw
+  // "not ours" and kept them, and that draft then stood in the way of every later reply.
+  test('what a failed write left behind is thrown away, whatever it holds', async () => {
+    const page = thread({ garbles: true });
+    expect(await page.run('write')).toMatchObject({ ok: false, why: 'what is in the reply is not what was written' });
+    expect(page.words()).toEqual(['something else entirely', 'something else entirely', 'something else entirely']);
+    expect(await page.run('discard')).toMatchObject({ ok: true, discarded: true });
+    expect(page.box()).toBeNull();
+  });
+
+  test('the owner goes on writing in the reply that was written here: it is still the one this visit opened', async () => {
+    const page = thread();
+    await page.run('write');
     expect(await page.run('discard')).toMatchObject({ ok: true, discarded: true });
   });
 
@@ -176,6 +211,22 @@ describe('pressing Send on a reply', () => {
     await page.run('write');
     expect(await page.run('send')).toMatchObject({ ok: true, pressed: true, said: true, closed: true });
     expect(page.pressed.send).toBe(1);
+  });
+
+  // Gmail closes the reply at once on Send and says so a moment later. The wait was cut to two
+  // seconds after the reply closed: a mail that went was answered "Gmail did not say".
+  test('Gmail says it went well after the reply has closed: that is still Gmail saying so', async () => {
+    const page = thread({ saysAfter: 40 });
+    await page.run('write');
+    expect(await page.run('send')).toMatchObject({ ok: true, pressed: true, said: true });
+  });
+
+  // One yes or no for "the words were there before" threw away a real confirmation whenever a
+  // mail in the thread happened to hold the same words.
+  test('the words stand in the thread already, and Gmail says them afresh: that counts', async () => {
+    const page = thread({ mail: 'Your message has been sent to the team. Does Thursday work?' });
+    await page.run('write');
+    expect(await page.run('send')).toMatchObject({ ok: true, pressed: true, said: true });
   });
 
   test('the reply closing is not Gmail saying it went', async () => {

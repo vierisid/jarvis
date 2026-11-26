@@ -480,8 +480,13 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         if (!wrote.ok) {
           log(`[notch] a reply could not be put in its thread: ${wrote.why}`);
           // Whatever got as far as the page is taken away again: nothing half written is left behind.
-          await reply.discard().catch(() => {});
-          await stage.say(['I could not put the reply in the thread, so nothing was sent. It is kept here.'], 4600, { mood: 'worried', mark: 'fail', src: 'mail' });
+          // When that does not work the truth is said: a draft left in the thread stands in the way
+          // of every later reply to it, and the owner has to know where to look.
+          const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
+          if (!gone.ok) log(`[notch] what was begun in the thread could not be taken away: ${gone.why}`);
+          await stage.say(gone.ok
+            ? ['I could not put the reply in the thread, so nothing was sent. It is kept here.']
+            : ['I could not put the reply in the thread, so nothing was sent. A draft may be left in that thread in Gmail. The reply is kept here.'], gone.ok ? 4600 : 6200, { mood: 'worried', mark: 'fail', src: 'mail' });
           return 'waits';
         }
         let went: 'done' | 'undo' | 'lost';

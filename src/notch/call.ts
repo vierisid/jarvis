@@ -112,6 +112,12 @@ export interface NotchCallNotes {
   also?: { name: string; address: string }[];
   /** When the follow-up went, or null. */
   sentAt: number | null;
+  /**
+   * Send was pressed on the follow-up at this moment and nothing confirmed
+   * it: it may have gone. Before it is sent again the mailbox is asked
+   * whether it did, from then.
+   */
+  unsureSince?: number;
 }
 
 export interface NotchCallRow {
@@ -348,8 +354,10 @@ export interface NotchCallDeps {
   /** The owner's mail, for the follow-up: who a name is, and one mail sent. Not given where there is no way to the mailbox. */
   mail?: {
     find(who: string): Promise<{ name: string; address: string; thread: { id: string; subject: string } | null } | null>;
-    /** `also`: more people the same mail goes to. With them it is a mail of its own, never a reply in a thread. */
-    send(plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string }>;
+    /** `also`: more people the same mail goes to. With them it is a mail of its own, never a reply in a thread. On a no, only `pressed: false` says nothing went. */
+    send(plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }): Promise<{ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number }>;
+    /** Whether a mail that may have gone did, asked before it is sent again. Null when that cannot be told. */
+    went?(plan: { address: string; thread: string | null; subject: string; text: string }, since: number): Promise<boolean | null>;
     owner(): string;
   };
   /** Everything is stopped: nothing is listened to. */
@@ -670,26 +678,59 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         }
         // Yes: the follow-up goes, after the moment in which it can be taken back.
         if (!sendable() || !notes.to || !deps.mail) continue;
+        const also = (notes.also ?? []).map((one) => one.address);
+        const plan = {
+          address: notes.to.address, ...(also.length > 0 ? { also } : {}), thread: also.length > 0 ? null : notes.to.thread,
+          subject: (also.length > 0 ? '' : notes.to.subject) || NOTCH_CALL_SUBJECT, text: callFollowup(notes, owner),
+        };
+        const gone = async (): Promise<void> => {
+          notes.sentAt = now();
+          delete notes.unsureSince;
+          store.set(id, { notes });
+        };
+        if (notes.unsureSince) {
+          // The last try pressed Send and nothing confirmed it. Before it is sent again the mailbox
+          // is asked whether it went: one that is there is counted, and is not sent twice.
+          const looking = stage.id();
+          stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
+          let there: boolean | null = null;
+          try { there = (await deps.mail.went?.(plan, notes.unsureSince)) ?? null; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
+          if (there === true) {
+            await gone();
+            log('[notch] a call\'s follow-up that may have gone had gone: it is not sent again');
+            await stage.say(['It had gone: it is in your mail. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
+            return;
+          }
+          if (there === null) {
+            await stage.say(['I cannot see whether it went, so I am not sending it again. Look in your mail first.'], 5200, { mood: 'careful' });
+            return;
+          }
+        }
         const went = await stage.fuse(['Sending to ', em(whom()), '…'], NOTCH_CALL_FUSE_MS, { src: 'mail' });
         if (went !== 'done') { if (went === 'undo') await stage.say(['Not sent. It is kept with the call.'], 3000); return; }
-        const also = (notes.also ?? []).map((one) => one.address);
-        let sent: { ok: true } | { ok: false; why: string };
+        const before = now();
+        let sent: { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number };
         try {
-          sent = await deps.mail.send({
-            address: notes.to.address, ...(also.length > 0 ? { also } : {}), thread: also.length > 0 ? null : notes.to.thread,
-            subject: (also.length > 0 ? '' : notes.to.subject) || NOTCH_CALL_SUBJECT, text: callFollowup(notes, owner),
-          });
+          sent = await deps.mail.send(plan);
         } catch (error) {
           if (error instanceof NotchStageEnded) throw error;
-          sent = { ok: false, why: 'the mailbox could not be reached' };
+          sent = { ok: false, why: 'the mailbox could not be reached', pressed: false };
+        }
+        if (!sent.ok && sent.pressed !== false) {
+          // Send was pressed, or it is not known that it was not: it may have gone. It was said "I
+          // could not send it", and the next yes sent it a second time.
+          notes.unsureSince = sent.since ?? before;
+          store.set(id, { notes });
+          log('[notch] a call\'s follow-up may have gone: nothing confirmed it');
+          await stage.say(['It may have gone: Gmail did not confirm it. Before I send it again I look whether it did. It is kept with the call.'], 6200, { mood: 'careful' });
+          return;
         }
         if (!sent.ok) {
           log('[notch] a call\'s follow-up could not be sent');
           await stage.say(['I could not send it: ', oneLine(sent.why, 80), '. It is kept with the call.'], 5200, { mood: 'sorry', mark: 'fail' });
           return;
         }
-        notes.sentAt = now();
-        store.set(id, { notes });
+        await gone();
         log('[notch] a call\'s follow-up was sent');
         await stage.say(['Sent to ', em(whom()), '.'], 2600, { mood: 'happy', mark: 'check', src: 'mail' });
         return;

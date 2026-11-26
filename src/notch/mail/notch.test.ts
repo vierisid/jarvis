@@ -81,6 +81,7 @@ function harness(rows: MailProposalRow[], options: {
     reader: async () => null,
     write: async () => ({ ok: true }),
     search: async () => [],
+    went: async () => null,
     reply: async (plan, work) => {
       plans.push(plan);
       const session: MailReplySession = {
@@ -385,6 +386,18 @@ describe('a prepared reply on the notch', () => {
     expect(h.did).toEqual(['write', 'discard']);
     expect(h.said()).toBe('I could not put the reply in the thread, so nothing was sent. It is kept here.');
     expect(h.line()).toMatchObject({ kind: 'say', mark: 'fail' });
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  // The result of taking it away was not looked at: "nothing half written is left" was said of a
+  // draft that was still there, and that draft then stood in the way of the next reply.
+  test('when what was begun cannot be taken away either, that is said: a draft may be left in the thread', async () => {
+    const h = harness([row()], { steps: { write: { ok: false, why: 'what is in the reply is not what was written' }, discard: { ok: false, why: 'no way to discard was found' } } });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    expect(h.did).toEqual(['write', 'discard']);
+    expect(h.said()).toBe('I could not put the reply in the thread, so nothing was sent. A draft may be left in that thread in Gmail. The reply is kept here.');
     expect(h.store.proposal(row().id)!.state).toBe('ready');
   });
 

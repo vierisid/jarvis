@@ -107,12 +107,14 @@ const mailNamed = (person: MailPerson, asked: string): boolean => {
  * read as "not sent", and the same nudge went out again as a mail of its own
  * (the hardening audit, 17 November 2026).
  *
- * Sent means the thread shows it (README 62). Gmail saying "Message sent" was
- * taken for it here, and so was the reply closing: a nudge that had not gone
- * was written down as sent, and the chase waited a day for an answer to a
- * mail nobody got. The thread is asked now, a few times, because it takes a
- * moment to show a mail. And a send the page refused before it pressed
- * anything was called "may have gone": it had not, and it is said as it is.
+ * Gmail saying, after the press, that it went is taken for it, as that audit
+ * settled: a mail that went must not be called "not confirmed" and then be
+ * sent again. What was wrong (the review of 26 November 2026) was what
+ * counted as Gmail saying so: the words anywhere on the page, or the reply
+ * closing. The page answers for that now (./page/reply.js). When Gmail says
+ * nothing, the thread is asked, a few times, because it takes a moment to
+ * show a mail. And a send the page refused before it pressed anything was
+ * called "may have gone": it had not, and it is said as it is.
  */
 /** Why a nudge is called not sent when Send was pressed and nothing confirmed it. Short: the notch shows 80 signs of it. */
 export const NUDGE_UNSURE = 'Gmail did not confirm it went. Look in the thread before trying again';
@@ -134,27 +136,32 @@ export async function sendNudge(
     let pressed = false;
     const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
       const written = await session.write();
-      if (!written.ok) return written;
+      if (!written.ok) {
+        // A write that failed half way is taken away again. Somebody's own draft is not: the page tells them apart.
+        await session.discard();
+        return written;
+      }
       const sent = await session.send();
+      // Gmail said, after the press, that it went: it went. The thread showing it is a matter of a moment.
+      if (sent.ok) return { ok: true };
       // The page refused before it pressed Send: nothing went. What was written is taken away again.
-      if (!sent.ok && sent.pressed === false) {
+      if (sent.pressed === false) {
         await session.discard();
         return sent;
       }
       // Send was pressed, or it is not known that it was not: from here on it may be on its way.
+      // Gmail said nothing (it can take longer than is waited for): the thread is asked.
       pressed = true;
       let there = await session.sent(since);
       for (let asks = 1; there === false && asks < NUDGE_SENT_ASKS; asks++) { await sleep(NUDGE_SENT_WAIT_MS); there = await session.sent(since); }
       if (there === true) return { ok: true };
-      // The thread could not be read at all: then Gmail's own word stands, when it gave it. Not readable is not no.
-      if (sent.ok && there === null) return { ok: true };
-      // Gmail did not say it went and the thread does not show it: what is still being written is taken away.
-      if (!sent.ok) await session.discard();
-      return { ok: false, why: NUDGE_UNSURE, pressed: true };
+      // Neither Gmail nor the thread says it went: what is still being written is taken away.
+      await session.discard();
+      return { ok: false, why: NUDGE_UNSURE, pressed: true, since };
     });
     if (inThread.ok) return inThread;
-    // Send was pressed and the thread does not show it: it may have gone. That is said, and it is not sent again.
-    if (pressed) return { ok: false, why: NUDGE_UNSURE, pressed: true };
+    // Send was pressed and nothing says it went: it may have. That is said, and it is not sent again.
+    if (pressed) return { ok: false, why: NUDGE_UNSURE, pressed: true, since };
     // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
     log('[notch] a nudge could not be written in its thread, so it goes as a new mail');
   }
@@ -298,8 +305,17 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
       },
       async send(plan) {
         const box = mailbox();
-        if (!box) return { ok: false, why: 'the mailbox cannot be reached' };
+        if (!box) return { ok: false, why: 'the mailbox cannot be reached', pressed: false };
         return sendNudge(box, plan, now, log);
+      },
+      async went(plan, since) {
+        const box = mailbox();
+        if (!box) return null;
+        // In its thread when it had one, and in Sent too: a nudge the thread would not take went as a mail of its own.
+        const inThread = plan.thread ? await box.went({ to: plan.address, thread: plan.thread, subject: plan.subject, text: plan.text }, since) : false;
+        if (inThread === true) return true;
+        const inSent = await box.went({ to: plan.address, thread: null, subject: plan.subject, text: plan.text }, since);
+        return inSent === true ? true : inThread === null || inSent === null ? null : false;
       },
     },
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },
