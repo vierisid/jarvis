@@ -389,7 +389,9 @@ What holds for all of them:
     `send_message` are a send, `execute_command` a command (running a
     script in a page is one), `install_software` an install,
     `modify_settings` a change of settings; and an app open that is not
-    plain (40) is a command. No second list of tools is kept.
+    plain (40) is a command; a file handed to a page (`browser_upload_file`)
+    and a push to a remote (`site_github_push`) are a send, though the gate
+    calls them writes. No other list of tools is kept.
     *What his words asked for* is read once from his sentence, where the
     turn is made (`wordsCover`, `authority/words-cover.ts`), and goes with
     the turn (41). A fixed intent that took the sentence says it by its
@@ -410,7 +412,14 @@ What holds for all of them:
     that installs (`npm install`, `winget install`, an installer), and "turn
     on ..." for the command that sets (`reg add`, `defaults write`): he
     named the thing, not the tool; no other command is covered by those
-    words. A send whose recipients the call names goes to somebody his words
+    words. Every command in the line is held to it (split at ; & | && ||, a
+    newline, a backtick and `$(`), and each has to start with the tool that
+    installs or sets (going into a folder with `cd` may stand beside it): so
+    `npm install vite && curl ... evil` and `curl .../install.sh | sh` are
+    not covered. A setting that guards the machine (the firewall, the
+    antivirus, the execution policy, UAC, Gatekeeper, SELinux and their kin)
+    is covered only by words that name it ("turn off the firewall"), never
+    by "turn on dark mode". A send whose recipients the call names goes to somebody his words
     name ("Anna" names anna.rossi@... and "Anna Rossi", never the part after
     the @); to anybody else it is asked about, so "send Anna the file" does
     not cover a second send that something read in the turn added. "Reply"

@@ -64,7 +64,9 @@
  *     installer) is asked for by "install ...", and a command that changes
  *     a setting (`reg add`, `defaults write`) by "turn on ...": the owner
  *     named the thing, not the tool (`commandInstalls`, `commandSets`). No
- *     other command is covered by those words;
+ *     other command is covered by those words, and every command in the line
+ *     is held to it (`commandParts`). A setting that guards the machine is
+ *     covered only by words that name it (`commandSecurity`);
  *   - a send whose recipients can be read from the call must go to somebody
  *     the owner's words name: "send it to Anna" does not cover a send to
  *     somebody else in the same turn. A name is matched as a word against
@@ -253,32 +255,75 @@ export function callDeletesOrPays(toolName: string, params: Record<string, unkno
 }
 
 /**
- * A command that installs something: a package manager told to install or
- * add, an installer run. Read so that "install ..." covers the command that
- * does it, and no other command.
+ * The commands a command line runs, one by one: split at every break between
+ * commands (`;`, `&`, `|`, `&&`, `||`, a newline) and at every command run
+ * inside another (a backtick, `$(`), so that "install ..." and "turn on ..."
+ * are held to each of them. Empty parts are dropped.
  */
-const INSTALLS: readonly RegExp[] = [
-  /\b(?:npm|pnpm|yarn|bun|pip|pip3|pipx|uv|brew|apt|apt-get|dnf|yum|zypper|winget|choco|scoop|cargo|gem|go|snap|flatpak|port|conda|mamba|composer|dotnet\s+tool)\s+(?:-\S+\s+)*(?:i|install|add|upgrade|update)\b/i,
-  /\b(?:pacman|yay|paru)\s+-S|\bcode(?:\.cmd)?\s+--install-extension\b/,
-  /\bmsiexec\b[^|;&]*\s\/i\b/i,
-  /\bdpkg\s+-i\b|\brpm\s+-[iU]|\binstaller\s+-pkg\b|\bInstall-(?:Module|Package|Script)\b|\bAdd-AppxPackage\b/i,
-  /(?:^|[\s"'\\/])[\w .()-]*(?:setup|install(?:er)?)[\w .()-]*\.(?:exe|msi|pkg|dmg|deb|rpm|appimage|sh)\b/i,
-];
-
-export function commandInstalls(command: unknown): boolean {
-  return typeof command === 'string' && command.trim() !== '' && INSTALLS.some((pattern) => pattern.test(command));
+export function commandParts(command: string): string[] {
+  return command.split(/\$\(|[`;&|\n\r]/).map((part) => part.trim()).filter(Boolean);
 }
 
-/** A command that changes a setting of the system by the system's own tool for it. */
-const SETS: readonly RegExp[] = [
-  /\breg(?:\.exe)?\s+add\b|\b(?:Set|New)-ItemProperty\b|\bSet-(?:ExecutionPolicy|TimeZone|Culture|WinUserLanguageList|MpPreference|NetConnectionProfile|DnsClientServerAddress)\b/i,
-  /\bdefaults\s+write\b|\b(?:networksetup|systemsetup|pmset)\s+-\w|\bscutil\s+--set\b/i,
-  /\bgsettings\s+set\b|\bdconf\s+write\b|\btimedatectl\s+set-|\bnmcli\b[^|;&]*\b(?:on|off|up|down|modify)\b|\bxdg-settings\s+set\b/i,
-  /\b(?:powercfg|netsh)\b|\bsetx\s/i,
+/** A part that changes nothing by itself, and so may stand beside an install or a setting: going into a folder. */
+const NOTHING_BY_ITSELF = /^(?:cd|pushd|popd|chdir|set-location|sl)(?:\s+(?:"[^"]*"|'[^']*'|[^\s"']+))?$/i;
+
+/** What may stand before the program in a part and changes nothing about which program it is: sudo, and its options. */
+const BEFORE_PROGRAM = String.raw`^(?:sudo\s+(?:-\S+\s+)*)?`;
+
+/**
+ * A part that installs something: a package manager told to install or add,
+ * or an installer run, each as the program the part starts with. A download
+ * (curl, wget, iwr) installs nothing, whatever file it names.
+ */
+const INSTALLS: readonly RegExp[] = [
+  new RegExp(`${BEFORE_PROGRAM}(?:npm|pnpm|yarn|bun|pip|pip3|pipx|uv|brew|apt|apt-get|dnf|yum|zypper|winget|choco|scoop|cargo|gem|go|snap|flatpak|port|conda|mamba|composer|dotnet\\s+tool)(?:\\.exe|\\.cmd)?\\s+(?:-\\S+\\s+)*(?:i|install|add|upgrade|update)\\b`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:(?:pacman|yay|paru)\\s+-S|code(?:\\.cmd)?\\s+--install-extension\\b)`),
+  new RegExp(`${BEFORE_PROGRAM}msiexec(?:\\.exe)?\\s+(?:\\S+\\s+)*\\/i\\b`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:dpkg\\s+-i\\b|rpm\\s+-[iU]|installer\\s+-pkg\\b|Install-(?:Module|Package|Script)\\b|Add-AppxPackage\\b)`, 'i'),
+  // An installer started by its own name, or opened (a .dmg or .pkg on a Mac). Not a shell script: a script
+  // that calls itself install.sh is a script, and run by a shell it can do anything.
+  new RegExp(`${BEFORE_PROGRAM}(?:start\\s+(?:""\\s+)?|open\\s+|&\\s*)?["']?(?:[A-Za-z]:)?[\\w .()\\\\/~-]*(?:setup|install(?:er)?)[\\w .()-]*\\.(?:exe|msi|pkg|dmg|deb|rpm|appimage)["']?(?:\\s+\\/\\S+)*$`, 'i'),
 ];
 
+/** Whether a command installs something and does nothing else: every part of it installs (or only goes into a folder). */
+export function commandInstalls(command: unknown): boolean {
+  if (typeof command !== 'string' || command.trim() === '') return false;
+  const parts = commandParts(command).filter((part) => !NOTHING_BY_ITSELF.test(part));
+  return parts.length > 0 && parts.every((part) => INSTALLS.some((pattern) => pattern.test(part)));
+}
+
+/** A part that changes a setting of the system by the system's own tool for it, as the program the part starts with. */
+const SETS: readonly RegExp[] = [
+  new RegExp(`${BEFORE_PROGRAM}(?:reg(?:\\.exe)?\\s+add\\b|(?:Set|New)-ItemProperty\\b|Set-(?:ExecutionPolicy|TimeZone|Culture|WinUserLanguageList|MpPreference|NetConnectionProfile|DnsClientServerAddress)\\b)`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:defaults\\s+write\\b|(?:networksetup|systemsetup|pmset)\\s+-\\w|scutil\\s+--set\\b)`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:gsettings\\s+set\\b|dconf\\s+write\\b|timedatectl\\s+set-|nmcli\\b.*\\b(?:on|off|up|down|modify)\\b|xdg-settings\\s+set\\b)`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:powercfg|netsh|setx)(?:\\.exe)?\\s`, 'i'),
+];
+
+/** Whether a command changes settings and does nothing else: every part of it sets one (or only goes into a folder). */
 export function commandSets(command: unknown): boolean {
-  return typeof command === 'string' && command.trim() !== '' && SETS.some((pattern) => pattern.test(command));
+  if (typeof command !== 'string' || command.trim() === '') return false;
+  const parts = commandParts(command).filter((part) => !NOTHING_BY_ITSELF.test(part));
+  return parts.length > 0 && parts.every((part) => SETS.some((pattern) => pattern.test(part)));
+}
+
+/**
+ * A setting that guards the machine: the firewall, the antivirus, what
+ * scripts may run, who may make changes, which programs may open. "Turn on
+ * dark mode" names what is set; a change of one of these is covered only by
+ * words that name it (`SECURITY_NAMED`), never by the kind alone.
+ */
+const SECURITY_SETTING = /\b(?:firewall|advfirewall|MpPreference|Defender|antivirus|ExecutionPolicy|EnableLUA|ConsentPromptBehavior|UAC|SmartScreen|spctl|gatekeeper|csrutil|setenforce|selinux|apparmor|ufw|iptables|nftables|pfctl|socketfilterfw|TamperProtection|DisableRealtimeMonitoring|portproxy)\b/i;
+const SECURITY_NAMED = /\b(?:firewall|defender|antivirus|anti-virus|execution policy|uac|user account control|smartscreen|gatekeeper|sip|selinux|apparmor|ufw|iptables|security|sicurezza|antivirus)\b/i;
+
+/** Whether a command changes a setting that guards the machine. */
+export function commandSecurity(command: unknown): boolean {
+  return typeof command === 'string' && SECURITY_SETTING.test(command);
+}
+
+/** Whether the owner's words name a setting that guards the machine. */
+export function wordsNameSecurity(words: string): boolean {
+  return SECURITY_NAMED.test(words);
 }
 
 const ACT_OF: Partial<Record<ActionCategory, OwnerAct>> = {
@@ -289,12 +334,16 @@ const ACT_OF: Partial<Record<ActionCategory, OwnerAct>> = {
   modify_settings: 'settings',
 };
 
+/** Tools the gate rates `write_data` that send what they carry to another machine. */
+const SENDS_AS_WRITES: ReadonlySet<string> = new Set(['browser_upload_file', 'site_github_push']);
+
 /**
  * Which of the four kinds of act a call is: the one place that says it. The
  * categories are the ones the product's gate gave the call
  * (`resolveToolGate`: the tool's own entry, its per-call gate, an on-screen
  * control's label), with what the machine read at a raw click's place added
- * by the caller. Nothing here keeps a list of tools.
+ * by the caller. One short list is kept: the tools the gate rates as a write
+ * that send data off the machine (`SENDS_AS_WRITES`).
  */
 export function callActs(toolName: string, params: Record<string, unknown>, categories: readonly ActionCategory[]): OwnerAct[] {
   const acts = new Set<OwnerAct>();
@@ -304,6 +353,8 @@ export function callActs(toolName: string, params: Record<string, unknown>, cate
   }
   // An app told what to do, or a program that is not an app: a command by another name (app-open.ts).
   if (toolName === 'desktop_launch_app' && !plainAppOpen(toolName, params)) acts.add('command');
+  // What carries data off the machine though the gate calls it a write: a file handed to a page, a push to a remote.
+  if (SENDS_AS_WRITES.has(toolName)) acts.add('send');
   return [...acts];
 }
 
@@ -603,9 +654,12 @@ export async function ownerWord(
   const acts = callActs(toolName, params, reads);
   const command = commandText(toolName, params);
   for (const act of acts) {
+    // A setting that guards the machine is covered only by words that name it ("turn off the firewall").
+    if (act === 'settings' && now.covers.includes(act) && commandSecurity(JSON.stringify(params)) && !wordsNameSecurity(now.words)) return 'unasked-settings';
     if (now.covers.includes(act)) continue;
     // "Install ..." asks for the command that installs, "turn on ..." for the one that sets: and for no other command.
-    if (act === 'command' && command && ((now.covers.includes('install') && commandInstalls(command)) || (now.covers.includes('settings') && commandSets(command)))) continue;
+    if (act === 'command' && command && ((now.covers.includes('install') && commandInstalls(command))
+      || (now.covers.includes('settings') && commandSets(command) && (!commandSecurity(command) || wordsNameSecurity(now.words))))) continue;
     return `unasked-${act}`;
   }
   if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send') && !REPLIES.test(now.words)) {
