@@ -727,6 +727,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     const opening = chase.nudges === 0;
     // The entry that said it may have gone says that it went: no second one.
     deps.actions?.settle(mailEntry(chase, chase.nudges, 'done').ref!, 'done', { otherwise: mailEntry(chase, chase.nudges, 'done') });
+    // The yes that would have sent it again is spent on finding it: the next mail goes by the clock.
+    yesTo.delete(chase.id);
     chase.state = 'on'; chase.nudges++; chase.nextAt = now() + waitOf(chase); chase.unsure = null;
     step(chase, opening ? `Nudged ${first(chase.name)} by email.` : STEP_FOLLOWED_UP);
     store.putChase(chase);
@@ -877,6 +879,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
 
   /** It only comes back when it needs the owner: what now? */
   function chaseStuck(chase: NotchChase, why: NotchChaseStuck): void {
+    // A yes it held is spent: what goes after it asks again, and goes on that answer or by the clock.
+    yesTo.delete(chase.id);
     if (!store.stick(chase.id, ['on'], why, now())) return;
     log('[notch] a chase is stuck and asks what now');
     raise(store.chase(chase.id)!);

@@ -5,7 +5,7 @@ import { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import {
-  NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_FUSE_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
+  NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_FUSE_MS, NOTCH_CHASE_LOOK_FRESH_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
   type StandingMail, type StandingPerson,
 } from './standing.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -1429,6 +1429,48 @@ describe('what is written down of the mails of a chase', () => {
     expect(entries(again)).toHaveLength(1);
     // What the owner saw and how they decided is what was true of the yes that sent it.
     expect(entries(again)[0]).toMatchObject({ id: first.id, outcome: 'done', how: 'key', fuseMs: NOTCH_CHASE_FUSE_MS });
+  });
+
+  test('a yes to send it again that is spent on finding it: the follow-up a day later goes by the clock, not on that yes', async () => {
+    const h = harness({ waitMs: 60_000, send: [UNSURE, { ok: true }], went: [false, true] });
+    await started(h);
+    await h.pass(9000);
+    await h.standing.tick();
+    await settle();
+    expect(h.said()).toBe('The first mail to Sam may have gone: Gmail did not confirm it. What now?');
+    await h.reply('yes');
+    expect(h.line()).toMatchObject({ kind: 'send', ms: NOTCH_CHASE_FUSE_MS });
+    // The look before the fuse goes stale while it burns: the clock looks again before it sends, and finds it.
+    h.advance(NOTCH_CHASE_LOOK_FRESH_MS + 1000);
+    await h.reply('done');
+    await settle();
+    expect(h.sent).toHaveLength(1);
+    expect(entries(h)).toMatchObject([{ kind: 'chase_mail', outcome: 'done' }]);
+    await h.pass(9000);
+    h.advance(60_000);
+    await h.standing.tick();
+    await settle();
+    expect(h.sent).toHaveLength(2);
+    expect(entries(h)[1]).toMatchObject({ kind: 'chase_followup', outcome: 'done', how: 'system', fuseMs: null });
+  });
+
+  test('a yes to send it again, and then nobody can see whether it went: the chase asks again, and what goes after goes on that answer', async () => {
+    const h = harness({ waitMs: 60_000, send: [UNSURE, { ok: true }], went: [false, null, false] });
+    await started(h);
+    await h.pass(9000);
+    await h.standing.tick();
+    await settle();
+    await h.reply('yes');
+    h.advance(NOTCH_CHASE_LOOK_FRESH_MS + 1000);
+    await h.reply('done');
+    await settle();
+    expect(h.sent).toHaveLength(1);
+    // Stuck again; a day later the chase is still stuck, and the clock sends nothing on the spent yes.
+    h.advance(24 * 3_600_000);
+    await h.standing.tick();
+    await settle();
+    expect(h.sent).toHaveLength(1);
+    expect(entries(h)).toMatchObject([{ kind: 'chase_mail', outcome: 'unsure' }]);
   });
 
   test('a mail that went while the chase was stopped is written down all the same', async () => {
