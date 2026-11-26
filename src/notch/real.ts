@@ -12,7 +12,7 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import type { Database } from 'bun:sqlite';
 import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.ts';
-import { attachNotchActions } from './actions.ts';
+import { attachNotchActionsOrNone } from './actions.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
@@ -463,7 +463,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   let stopWhere: () => void = () => {};
   // What the notch does in the world, as one list that also writes the audit. Each part writes its own
   // entries, where it knows what came of a thing: this only makes the list and hands it to them.
-  const actions = deps.actions ? attachNotchActions(deps.actions.db, { audit: deps.actions.audit, log }) : null;
+  const actions = deps.actions ? attachNotchActionsOrNone(deps.actions.db, { audit: deps.actions.audit, log }) : null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,

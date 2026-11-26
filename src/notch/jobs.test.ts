@@ -508,7 +508,7 @@ describe('the record of what was done', () => {
 // On the notch
 // ---------------------------------------------------------------------------
 
-function notch(rows: string[], options: { paused?: () => boolean } = {}) {
+function notch(rows: string[], options: { paused?: () => boolean; db?: Database } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
   const port: NotchSurfacePort = {
@@ -528,7 +528,7 @@ function notch(rows: string[], options: { paused?: () => boolean } = {}) {
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const w = world(rows, { gated: true });
   const running: boolean[] = [];
-  const db = new Database(':memory:');
+  const db = options.db ?? new Database(':memory:');
   // What is written down of a job that was done (./actions.ts), in the same database.
   const actions = attachNotchActions(db, { log: () => {} });
   const jobs = attachNotchJobs(inbox, {
@@ -807,6 +807,16 @@ describe('what is written down of a job', () => {
     await settle();
     expect(n.said()).toContain('It may have landed.');
     expect(entries(n)).toMatchObject([{ kind: 'job_rounds', outcome: 'unsure' }]);
+  });
+
+  test('a job a restart cut off may have done part of it: one entry that says so, and claims no yes', () => {
+    const db = new Database(':memory:');
+    const before = new NotchJobStore(db);
+    const id = before.open('rounds', 'Pasted 4 from notepad into excel', 9);
+    before.open('undo', 'Took back', 1);
+    const n = notch(FIVE, { db });
+    expect(n.actions.since(0)).toMatchObject([{ kind: 'job_rounds', ref: `job:${id}`, outcome: 'unsure', what: 'Pasted 4 from notepad into excel', seen: 'nothing', how: 'system' }]);
+    expect(n.actions.today(0)).toEqual([]);
   });
 
   test('a job nobody said how it was asked for says so, and claims no yes', async () => {

@@ -551,8 +551,14 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       if (there === true) {
         maybeSent.delete(id);
         store.move(id, 'ready', 'sent', now());
-        // The entry that said it may have gone says that it went: no second one.
-        deps.actions?.settle(`mail:${id}`, 'done');
+        // The entry that said it may have gone says that it went: no second one. With none written down (its
+        // write had failed), it is written now, as what this yes found.
+        deps.actions?.settle(`mail:${id}`, 'done', {
+          otherwise: {
+            kind: offering ? 'mail_slot' : 'mail_reply', outcome: 'done', asked,
+            what: `${offering ? `Offer of ${offering} to` : 'Reply to'} ${who}: ${row.subject}`, target: row.to.map((person) => person.address).join(', '),
+          },
+        });
         log('[notch] a reply that may have gone had gone: it is not sent again');
         await stage.say(['It had gone: it is in the thread. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
         return 'settled';

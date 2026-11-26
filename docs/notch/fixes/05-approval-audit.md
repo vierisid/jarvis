@@ -110,10 +110,15 @@ Sent:
 a message nor a hash of it, as the audit trail keeps none for a send
 approved on the dashboard. It is kept as long as the audit trail is.
 
-Still open: whether a silent follow-up is also said the next morning
-(recommended: no; it is a row of Today now), and whether a row that may
-have gone counts in "Today: 3 things done" and in the morning's count (it
-does now).
+Still open (owner to confirm):
+
+- Whether a silent follow-up is also said the next morning (recommended:
+  no; it is a row of Today now).
+- Whether a row that may have gone counts in "Today: 3 things done" and in
+  the morning's count (it does now; the review proposes "3 done, 1 may have
+  gone").
+- Whether `notch_*` audit rows are kept out of the dashboard's 20-row
+  widget (NowRoom), so approvals are not pushed out. Not changed.
 
 ## Status
 
@@ -138,7 +143,13 @@ does now).
    and "notch: a request the system closed does not break the owner's run of approvals"
 7. pending
 8. done in "notch: one list of what the notch did, written where what came of a thing is known, in the audit trail too, and in Today"
-   (`src/notch/actions.ts`; README 262 to 268)
+   (`src/notch/actions.ts`; README 262 to 268). After review:
+   "notch: an answer, a time and a yes that go to somebody in the owner's name are written down too",
+   "notch: a yes to send a chase's mail again is spent once that mail is found or the chase asks again",
+   "notch: a thing put or an approval that may have happened is a row of Today, as rule 266 says",
+   "notch: a job that failed half way is done in part, nothing tried or never shown is not written, and taken back is the audit's last word",
+   "notch: a reply that broke off while Send was pressed is pinned as may have gone, and so is whether an audit row says it ran"
+   and "notch: a job a restart cut off may have happened, a found reply is written once, and a list that cannot be made does not stop the notch"
 9. pending
 10. pending
 

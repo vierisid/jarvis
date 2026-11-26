@@ -11,7 +11,7 @@ import { AuditTrail, type ResolutionChannel } from '../authority/audit.ts';
 import { SYSTEM_DECIDER, resolutionChannel } from '../daemon/approval-decision.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import {
-  NOTCH_ACTION_CATEGORY, NOTCH_ACTION_DECIDER, NOTCH_ACTION_SYSTEM, NOTCH_ACTION_WHAT_MAX, attachNotchActions, notchAskedHow, notchSentOutcome,
+  NOTCH_ACTION_CATEGORY, NOTCH_ACTION_DECIDER, NOTCH_ACTION_SYSTEM, NOTCH_ACTION_WHAT_MAX, attachNotchActions, attachNotchActionsOrNone, notchAskedHow, notchSentOutcome,
   type NotchActionEntry, type NotchActionKind,
 } from './actions.ts';
 import { NOTCH_NAME } from './name.ts';
@@ -275,6 +275,15 @@ describe('writing it down never stands in the way of the action', () => {
     expect(actions.record(reply())).not.toBeNull();
     expect(actions.since(0)).toHaveLength(1);
     expect(logged).toEqual(['[notch] an action was written down, but not in the audit trail: Error']);
+  });
+
+  test('a table that cannot be made: no list, one line in the log, and no throw, so the notch starts all the same', () => {
+    const lines: string[] = [];
+    const locked = { run: () => { throw new Error('database is locked'); } } as unknown as Database;
+    expect(attachNotchActionsOrNone(locked, { log: (line) => lines.push(line) })).toBeNull();
+    expect(lines).toEqual(['[notch] what the notch does cannot be written down on this brain: Error']);
+    expect(() => attachNotchActions(locked, { log: () => {} })).toThrow();
+    expect(attachNotchActionsOrNone(new Database(':memory:'), { log: () => {} })).not.toBeNull();
   });
 
   test('a log that throws does not make it throw either', () => {

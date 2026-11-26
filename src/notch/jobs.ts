@@ -120,6 +120,9 @@ function putsOf(detail: string): NotchPut[] {
 
 /** What Jarvis did where it could be seen: for Today, and for taking it back. */
 export class NotchJobStore {
+  /** The jobs a restart cut off in the middle: running when the brain went down. */
+  readonly cutOff: { id: string; kind: NotchJobKind; title: string }[] = [];
+
   constructor(private readonly db: Database, private readonly now: () => number = Date.now) {
     db.run(`CREATE TABLE IF NOT EXISTS notch_jobs (
       id TEXT PRIMARY KEY,
@@ -135,6 +138,7 @@ export class NotchJobStore {
     )`);
     db.run('CREATE INDEX IF NOT EXISTS idx_notch_jobs_created ON notch_jobs(created_at)');
     // A job that was running when the brain went down is not running now.
+    this.cutOff.push(...(db.query("SELECT id, kind, title FROM notch_jobs WHERE state = 'running'").all() as { id: string; kind: NotchJobKind; title: string }[]));
     db.run("UPDATE notch_jobs SET state = 'stopped', note = ?, ended_at = ? WHERE state = 'running'", [`${NOTCH_NAME} restarted in the middle of it.`, this.now()]);
     db.run('DELETE FROM notch_jobs WHERE created_at < ?', [this.now() - NOTCH_JOB_DAYS * 86_400_000]);
   }
@@ -599,6 +603,14 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
   const store = new NotchJobStore(deps.db, now);
   let live: LiveJob | null = null;
   let stopped = false;
+  // A job a restart cut off may have done part of its steps: that is what is written down (./actions.ts). How
+  // it was asked for went with the brain that ran it, and is not claimed.
+  for (const cut of store.cutOff) {
+    if (cut.kind !== 'rounds' && cut.kind !== 'skill') continue;
+    deps.actions?.settle(`job:${cut.id}`, 'unsure', {
+      otherwise: { kind: cut.kind === 'skill' ? 'job_skill' : 'job_rounds', what: cut.title, asked: NOTCH_JOB_UNASKED, outcome: 'unsure' },
+    });
+  }
 
   const home = (): void => { void deps.hands.act({ do: 'home' }).catch(() => {}); };
   const wake = (job: LiveJob): void => {

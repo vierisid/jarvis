@@ -220,7 +220,21 @@ const oneLine = (text: string, most: number): string => {
   return points.length <= most ? points.join('') : `${points.slice(0, most - 3).join('').trimEnd()}...`;
 };
 
-/** Makes the list on a brain that has the notch on. Throws when its table cannot be made: then the notch does not start, and says so. */
+/**
+ * The list as the notch makes it when it is attached: null when its table cannot be made. Then nothing is
+ * written down, that is said once in the log, and the notch and everything it does go on (rule 267).
+ */
+export function attachNotchActionsOrNone(db: Database, deps: NotchActionsDeps = {}): NotchActions | null {
+  try {
+    return attachNotchActions(db, deps);
+  } catch (error) {
+    const log = deps.log ?? ((line: string) => console.log(line));
+    try { log(`[notch] what the notch does cannot be written down on this brain: ${error instanceof Error ? error.name : 'error'}`); } catch { /* a log that fails says nothing */ }
+    return null;
+  }
+}
+
+/** Makes the list on a brain that has the notch on. Throws when its table cannot be made (`attachNotchActionsOrNone` does not). */
 export function attachNotchActions(db: Database, deps: NotchActionsDeps = {}): NotchActions {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));

@@ -2965,7 +2965,8 @@ owner had before them when it was decided (a line, a sheet, the letter on
 paper, nothing) and for how long the fuse burnt, how it was decided (the
 yes key, words that were said or typed, a pick, a fuse that burnt out with
 no yes asked, or the system: a clock, or an earlier yes that covers it),
-when, and what came of it: done, not done, may have been done, taken back.
+when, and what came of it: done, done in part (a job that failed half
+way), not done, may have been done, taken back.
 
 262. **One action is one entry, and it is written where what came of it is
     known.** Not at the yes: a yes that is taken back in its fuse, or a fuse
@@ -2974,7 +2975,10 @@ when, and what came of it: done, not done, may have been done, taken back.
     it went, it did not go, or it may have gone. So "not sent" in the list
     means the owner's yes stood and the thing still did not happen. What
     was refused before anything was tried (everything is stopped, Gmail
-    cannot be reached) is said on the notch and is not in the list.
+    cannot be reached, the computer is not connected) is said on the notch
+    and is not in the list. A brain that comes up and finds a job that was
+    running when it went down writes that it may have happened; how it was
+    asked for went with that brain, and is not claimed.
 263. **A thing that changes changes its entry.** A mail that may have gone
     and is found in the thread at the next yes, a mail that did not go and
     is sent on a second try, a job that was stopped and gone on with, a
@@ -2989,7 +2993,12 @@ when, and what came of it: done, not done, may have been done, taken back.
     `notch` when the owner decided it there, and `system` when nobody did
     just then: a follow-up by the clock, a promise that was kept. A change
     to the entry is a further row of the same audit entry, whose outcome is
-    the last word. An approval said yes to on the notch is not written to
+    the last word: `succeeded`, `failed` (also for a job done in part),
+    `not_started` for a send that did not go, `unknown` for one that may
+    have, and `undone` once it is taken back (an outcome added to the audit
+    trail for this, 26 November 2026). A yes to send a chase's mail again
+    that is spent on finding it gone already covers nothing after it: the
+    next mail goes by the clock, and is written so. An approval said yes to on the notch is not written to
     the audit from here: the product's own decision function has written it
     (rule 20). The list only keeps what that does not hold: what was before
     the owner, and the fuse.
@@ -3006,12 +3015,15 @@ when, and what came of it: done, not done, may have been done, taken back.
     follow-up of a call, what was sent to somebody, an answer to a
     workflow, an agent that was changed, run or let go. And anything that
     may have gone, whatever it is, with "may have gone" as its small word:
-    that is the one thing the owner has to look at. What was not done is
+    that is the one thing the owner has to look at. A thing put and an
+    approval that may have happened are such rows; a job that may have is
+    its own row, which keeps its Undo. What was not done is
     not a row of what was done. None of the new rows has Undo (rule 218).
 267. **Writing it down never stands in the way of the thing.** A list that
     cannot be written to, or an audit trail that throws, is said in the log
     and nowhere else, and the mail goes, the job is done, the agent is made
-    all the same.
+    all the same. A table that cannot be made when the notch is attached is
+    one line in the log: the notch starts, and writes nothing down.
 268. **It is kept as long as the audit trail is.** Nothing is cleared. The
     table is made when the notch is attached: with the switch off there is
     no table and nothing is written.
@@ -3036,8 +3048,9 @@ What is written down, and where:
 | An agent made | its sentence on a line | yes key, or said | none | the agent's own |
 | An agent's rung, pause, run now, let go | its card, or a line | a pick, or yes key | none | new |
 | A job done in a window | a line, a sheet, or nothing ("run it") | yes key, a pick, or said | none | the job's own |
+| A job a restart cut off | not known | the system | none | the job's own |
 | A thing put where the owner pointed | its line, or nothing ("put it here") | yes key, or said | none | the job's own |
-| A promise that was kept | its fuse on a line, or nothing | the fuse, or the system | its window | the promise's own |
+| A promise kept after its window burnt out on the notch | its fuse on a line | the fuse | its window | the promise's own |
 | An answer to a workflow | the question on a line | yes key, or a pick | 3 s | new |
 | A yes to an approval | a line, or a sheet with the exact action | yes key, or said | 3 s | the approval's own |
 
@@ -3062,7 +3075,9 @@ What is not done, or not proven:
   tool call, and those have their own audit. What is sent back at the end
   is written, as above.
 - **An instruction to the assistant is not in the list.** What a turn does
-  is audited by the product as ever, tool by tool.
+  is audited by the product as ever, tool by tool. So is a promise the
+  notch never showed (kept while no notch was up), and one a restart cut
+  off: whether the notch showed it before is not known.
 - **After a restart a reply that may have gone is not looked for** (the
   note of what may have gone is kept only while the brain runs, see the
   mail section). Its entry still says "may have gone". A second yes that
@@ -3071,9 +3086,12 @@ What is not done, or not proven:
   was no moment at which what came of it was known.
 - **"Today: 3 things done" counts a row that may have gone**, and so does
   the morning's count. It is the owner's to say whether such a row is
-  counted.
+  counted (one proposal: "3 done, 1 may have gone").
 - **The dashboard shows the audit entries as it shows any**: by tool name
-  and category. It has no sentence for them. The sentence is in Today.
+  and category. It has no sentence for them. The sentence is in Today. The
+  last twenty rows on the dashboard's first page are any rows, so a busy
+  notch can push approvals off it. Whether `notch_` rows are kept out of it
+  is the owner's to say.
 
 ## A manner that is learned
 

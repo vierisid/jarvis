@@ -2189,6 +2189,14 @@ describe('what is written down of a reply (the list of what the notch did)', () 
       expect(h.actions.today(0)).toEqual([]);
     });
 
+    test('found at the next yes when its entry had not been written: it is written then, once, as done', async () => {
+      const h = await unsure(true);
+      h.db.run('DELETE FROM notch_actions');
+      await again(h);
+      expect(h.said()).toBe('It had gone: it is in the thread. I did not send it again.');
+      expect(entries(h)).toMatchObject([{ kind: 'mail_reply', outcome: 'done', ref: `mail:${row().id}`, what: 'Reply to Leo: Deck for Thursday?' }]);
+    });
+
     test('the mailbox cannot say: nothing is sent, and the entry still says it may have gone', async () => {
       const h = await unsure(null);
       await again(h);
