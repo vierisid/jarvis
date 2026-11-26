@@ -145,7 +145,9 @@ export async function applyApprovalDecision(
   const denied = guardedApprovalWrite(deps.assertCurrent, () => approvalManager.deny(requestId, decidedBy));
   if (!denied) return { status: 'already_decided' };
   auditDecision(deps, denied, 'deny', decidedBy);
-  deferredExecutor.recordDenial(denied);
+  // What is learnt from a no is that the owner does not want this. A request the brain closed
+  // itself is nobody's no: it does not break the run of approvals the owner has given.
+  if (decidedBy !== SYSTEM_DECIDER) deferredExecutor.recordDenial(denied);
   wsService?.broadcastApprovalUpdate(denied);
   return { status: 'denied', request: denied };
 }

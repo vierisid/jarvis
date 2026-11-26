@@ -7,7 +7,7 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
-import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_CHANNEL, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, CHANNEL_APPROVE_REFUSED_PAYMENT, LITERAL_TEXT_CHANNELS, NOTCH_DECIDER, notificationApprovalDecision } from './approval-decision.ts';
+import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, CHANNEL_APPROVE_REFUSED_CHANNEL, CHANNEL_APPROVE_REFUSED_LOOK_ALIKE, CHANNEL_APPROVE_REFUSED_PAYMENT, LITERAL_TEXT_CHANNELS, NOTCH_DECIDER, SYSTEM_DECIDER, notificationApprovalDecision } from './approval-decision.ts';
 import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalToast } from '../authority/approval-delivery.ts';
 
 function makeRequest(mgr: ApprovalManager, overrides?: { toolName?: string; executionMode?: 'inline' | 'deferred' }) {
@@ -88,6 +88,23 @@ describe('applyApprovalDecision', () => {
     expect(await applyApprovalDecision('approve', req.id, NOTCH_DECIDER, { ...deps, auditTrail: audit })).toMatchObject({ status: 'approved', executed: true });
     expect(mgr.getRequest(req.id)!.decided_by).toBe('notch');
     expect(getDb().query('SELECT channel FROM audit_trail WHERE approval_id = ?').get(req.id)).toEqual({ channel: 'notch' });
+  });
+
+  // A request the brain closed itself (its instruction was over) is nobody's no. It was told to
+  // the learner as one, and broke the run of approvals the owner had given for that tool.
+  test('a request closed by the system is denied and audited as the system, and the learner is not told of a no', async () => {
+    const learnt: boolean[] = [];
+    executor.setLearner({ recordDecision: (_category: string, _tool: string, approved: boolean) => { learnt.push(approved); } } as never);
+    const audit = new AuditTrail();
+    const closed = makeRequest(mgr);
+    expect(await applyApprovalDecision('deny', closed.id, SYSTEM_DECIDER, { ...deps, auditTrail: audit })).toMatchObject({ status: 'denied' });
+    expect(mgr.getRequest(closed.id)).toMatchObject({ status: 'denied', decided_by: 'system' });
+    expect(getDb().query('SELECT channel FROM audit_trail WHERE approval_id = ?').get(closed.id)).toEqual({ channel: 'system' });
+    expect(learnt).toEqual([]);
+    // A no somebody gave is still learnt from.
+    const refused = makeRequest(mgr);
+    await applyApprovalDecision('deny', refused.id, NOTCH_DECIDER, { ...deps, auditTrail: audit });
+    expect(learnt).toEqual([false]);
   });
 
   test('approve executes the deferred action and broadcasts', async () => {
