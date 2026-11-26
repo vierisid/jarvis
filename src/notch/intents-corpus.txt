@@ -88,18 +88,21 @@ put a meeting with Sam on my calendar for Friday => turn
 add the call with Leo to my calendar => turn
 paste => turn
 # schedules
-every weekday at 9 send me the news => agents: Make an agent from a sentence.  ## wrong: agents, read back as Monday to Friday at 9:00
-every morning at 6 send me the weather => agents: Make an agent from a sentence.  ## wrong: agents, read back as every day at 6:00
-every night at 11 back up my notes => agents: Make an agent from a sentence.  ## wrong: agents, read back as every day at 23:00
+# How each of these is read back is in "@ when agent" below: Monday to Friday at 9:00, day at 6:00, day at 23:00.
+every weekday at 9 send me the news => agents: Make an agent from a sentence.
+every morning at 6 send me the weather => agents: Make an agent from a sentence.
+every night at 11 back up my notes => agents: Make an agent from a sentence.
 every day at 5.10 send me the news => agents: Make an agent from a sentence.
 every Monday send Sam the numbers => agents: Make an agent from a sentence.
-every monday at 9am and friday at 4pm send the report => agents: Make an agent from a sentence.  ## wrong: turn (two times are no schedule the notch can say; never rewritten into one)
+# Two times are no schedule the notch can say, and neither is every 2 weeks: never rewritten into one it can, the
+# sentence goes to the assistant as it was said.
+every monday at 9am and friday at 4pm send the report => turn
 every hour check my inbox => turn
 daily standup notes should go to the team => turn
 every evening I go for a run => turn
 weekly review of my tasks please => agents: Make an agent from a sentence.
 can you make an agent that replies to new leads => agents: Make an agent from a sentence.
-every 2 weeks on tuesday at 14:30 send the invoice => agents: Make an agent from a sentence.  ## wrong: turn (every 2 weeks is no schedule the notch can say; never rewritten into every day)
+every 2 weeks on tuesday at 14:30 send the invoice => turn
 remind me every day at 8 to take my pills => turn
 # mail and standing
 tell me when Sam replies => standing: Keep an eye on mail from one person.
@@ -458,20 +461,21 @@ email Sam the numbers => turn
 dì ad Anna che sono in ritardo => turn
 
 # ===============================================================================================================
-# What a time is read as. Each reader there is today has its own table.
+# What a time is read as. One reader reads them all (when.ts); each part that asks it has its own table here.
 # ===============================================================================================================
 
-# The schedule in a sentence that asks for an agent (agents.ts, scheduleIn):  schedule | what is left as the job
+# The schedule in a sentence that asks for an agent (agents.ts, scheduleIn; when.ts, readSchedule):  schedule | what is left as the job
 @ when agent
-every weekday at 9 send me the news => day at 9:00 | send me the news  ## wrong: Monday to Friday at 9:00 | send me the news
-every morning at 6 send me the weather => day at 18:00 | send me the weather  ## wrong: day at 6:00 | send me the weather
-every night at 11 back up my notes => day at 11:00 | back up my notes  ## wrong: day at 23:00 | back up my notes
-every 2 weeks on tuesday at 14:30 send the invoice => day at 14:30 | every 2 weeks on tuesday send the invoice  ## wrong: no schedule the notch can say (not read; never rewritten into every day)
-every monday at 9am and friday at 4pm send the report => Monday at 9:00 | and friday at 4pm send the report  ## wrong: no schedule the notch can say (not read; the second time is not left in the job)
+every weekday at 9 send me the news => Monday to Friday at 9:00 | send me the news
+every morning at 6 send me the weather => day at 6:00 | send me the weather
+every night at 11 back up my notes => day at 23:00 | back up my notes
+# "no agent": no schedule the notch can say, so nothing is read out of the sentence and nothing is made of it.
+every 2 weeks on tuesday at 14:30 send the invoice => no agent
+every monday at 9am and friday at 4pm send the report => no agent
 every day at 5.10 send me the news => day at 17:10 | send me the news
 every day at 6am send me the weather => day at 6:00 | send me the weather
 every day at 12am rotate the logs => day at 0:00 | rotate the logs
-every day at noon send me the news => day at 9:00 | at noon send me the news  ## wrong: day at 12:00 | send me the news (found by this corpus, not in the design: a time that is not read is never 9:00 with its words left in the job)
+every day at noon send me the news => day at 12:00 | send me the news
 every Monday send Sam the numbers => Monday at 9:00 | send Sam the numbers
 every friday at 16:30 send the report => Friday at 16:30 | send the report
 every evening send me a summary => day at 18:00 | send me a summary
@@ -484,25 +488,44 @@ every 5 minutes check the server => no agent
 every other day water the plants => no agent
 every month send the invoice => no agent
 every weekend tidy my downloads => no agent
-every day at 25 send me the news => day at 9:00 | at 25 send me the news  ## wrong: no schedule the notch can say (found by this corpus, not in the design: an hour that is none is never 9:00 with its words left in the job)
+every day at 25 send me the news => no agent
 remind me every day at 8 to take my pills => no agent
 can you make an agent that every day at 5.10 sends me the news => day at 17:10 | send me the news
+# Asked for as an agent, with a schedule the notch cannot say: read back whole, as it was put, with no schedule lit.
+can you make an agent that every 2 weeks sends the invoice => no schedule | every 2 weeks sends the invoice
+every monday and friday at 9 send the report => Monday and Friday at 9:00 | send the report
+every week on friday at 16:00 send the report => Friday at 16:00 | send the report
+every evening at 7 send me a summary => day at 19:00 | send me a summary
+every day at 6 in the morning send me the weather => day at 6:00 | send me the weather
+every morning at 6pm send me the weather => no agent
+every other monday at 9 send the report => no agent
+every monday at 9, friday at 4pm send the report => no agent
+every day send me the news at 5.10 => day at 17:10 | send me the news
 ogni lunedì manda i numeri a Sam => no agent
 ogni giorno feriale alle 9 mandami le notizie => no agent
 
-# The lit word of a taught job's schedule, as the brain reads it back (teach.ts, parseSchedule)
+# The lit word of a taught job's schedule, as the brain reads it back (teach.ts, parseSchedule; when.ts, readWhen).
+# It is the notch's own writing, so an hour is what it says: nothing is guessed.
 @ when teach
 Monday at 9:00 => Mon 9:00
 day at 9:00 => every day 9:00
 Friday at 16.30 => Fri 16:30
-monday at 9 => not read
-weekday at 9:00 => not read  ## wrong: Monday to Friday 9:00 (weekday is a schedule of its own, and what is stored is read back)
-weekdays at 9:00 => not read  ## wrong: Monday to Friday 9:00 (weekday is a schedule of its own, and what is stored is read back)
-every Monday at 9:00 => not read
+# Was "not read", and not marked: the one reader reads a time the same way wherever it is given.
+monday at 9 => Mon 9:00
+weekday at 9:00 => Monday to Friday 9:00
+weekdays at 9:00 => Monday to Friday 9:00
+Monday to Friday at 9:00 => Monday to Friday 9:00
+# Was "not read", and not marked: "every" before the day says nothing the line did not.
+every Monday at 9:00 => Mon 9:00
 Monday at 25:00 => not read
-morning at 6:00 => not read
+# Was "not read", and not marked: every morning is every day, and the hour is the morning's.
+morning at 6:00 => every day 6:00
+day at 6:00 => every day 6:00
+every 2 weeks at 9:00 => not read
+month at 9:00 => not read
 
-# The evening's "move it to", counted from Wednesday 18 November 2026, 10:00 (day.ts, notchMoveAt)
+# The evening's "move it to", counted from Wednesday 18 November 2026, 10:00 (day.ts, notchMoveAt; when.ts, readWhen).
+# One moment, in the notch's own writing: a time by the week is none.
 @ when move
 tomorrow at 9:00 => Thu 2026-11-19 9:00
 Friday at 9:00 => Fri 2026-11-20 9:00
@@ -510,27 +533,35 @@ next week => Mon 2026-11-23 9:00
 today at 20:00 => Wed 2026-11-18 20:00
 today at 9:00 => not read
 wednesday at 9:00 => Wed 2026-11-25 9:00
-tomorrow at 9 => not read
+# Was "not read", and not marked: an hour with no minutes is an hour.
+tomorrow at 9 => Thu 2026-11-19 9:00
 tomorrow morning => not read
 next friday at 9:00 => not read
 friday at 6:00 => Fri 2026-11-20 6:00
+every friday at 9:00 => not read
+weekday at 9:00 => not read
 
-# A day and a time said over a line (said.ts, saidWhen):  day time part-of-day
+# A day and a time said over a line (said.ts, saidWhen; when.ts, whenSaid):  day time part-of-day
 @ when said
 friday at 10 => Friday 10:00 -
 half past 9 => - 9:30 -
 quarter to 10 => - 9:45 -
 3 pm => - 15:00 -
-# A bare "at 6" as the afternoon is not marked: whether it stays so, lit as a guess, is an open question (design, decision 3).
+# A bare "at 6" is the afternoon: that stays (README, 262). Said over a line the afternoon goes to seven, in a sentence to six.
 at 6 => - 18:00 -
-at 6 in the morning => - 18:00 -  ## wrong: - 6:00 - ("morning" and "night" set the half of the day)
+at 6 in the morning => - 6:00 -
 monday morning => Monday - morning
 friday afternoon => Friday - afternoon
 tomorrow at noon => tomorrow 12:00 -
 10 thirty => - 10:30 -
-every weekday at 9 => - 9:00 -  ## wrong: Monday to Friday at 9:00 (weekday is read, not passed over)
-every morning at 6 => - 18:00 -  ## wrong: - 6:00 - ("morning" and "night" set the half of the day)
-night at 11 => - 11:00 -  ## wrong: - 23:00 - ("morning" and "night" set the half of the day)
+every weekday at 9 => Monday to Friday 9:00 -
+# The mark said "- 6:00 -". Every morning is every day, so the day is said too: left out, the line would keep the day it had.
+every morning at 6 => day 6:00 -
+night at 11 => - 23:00 -
+# A schedule that cannot be said is not read at all: no word of it is used, so it answers no line.
+every 2 weeks at 9 => - - -
+morning at 6pm => - - -
+at 7 => - 19:00 -
 
 # What the page makes of a value typed into a lit word, before the brain sees it (ui readers.ts). The word that
 # is changed says "Monday at 9:00" (sched), "Thursday at 10:00" (daytime), "Friday" (day).

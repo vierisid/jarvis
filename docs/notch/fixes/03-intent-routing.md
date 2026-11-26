@@ -146,5 +146,15 @@ Each of these is how it is built now, and one line to change.
   Every intent has `act` (none, answer, screen, send, create, command, install, settings) and `first` (acts,
   yes, fuse) for point 1 to read. Nothing reads them yet.
 - C4 classifier: pending.
-- C5 one When: pending.
+- C5 one When: done in "notch: one reader of a time, which refuses what it cannot read instead of rewriting it"
+  (src/notch/when.ts; `NotchWhen` is the one type, read by `readSchedule` for a sentence, `readWhen` for a
+  whole value, `whenSaid` for words said over a line). agents.ts `scheduleIn`, teach.ts `parseSchedule` and
+  `nextScheduled`, day.ts `notchMoveAt` and said.ts `saidWhen` all ask it. 5 routing rows and 13 time values
+  lost their mark; the page's 9 are C6. Kept strings stay as they were: "Monday at 9:00" and "day at 9:00" are
+  read by the new reader, so no stored row is rewritten.
+  Rows that were not marked and changed, each to a reading that is right: the lit word of a job now reads
+  "monday at 9", "every Monday at 9:00" and "morning at 6:00"; "move it to" reads "tomorrow at 9". The page
+  never sent those forms, so nobody sees a difference until C6.
+  Found on the way, and fixed: an agent's own sentence was read again as a person's words, so "Every day at
+  6:00" stood on its card as 18:00. What the notch wrote is now read as written (`exact`).
 - C6 page sends raw text: pending.

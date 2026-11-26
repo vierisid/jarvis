@@ -132,7 +132,16 @@ describe('what was said, as an answer to the line that was up', () => {
     expect(saidAbout(when, 'at three')).toEqual([{ act: 'word', word: 'when', value: 'Thursday at 15:00' }]);
     expect(saidAbout(when, 'Friday')).toEqual([{ act: 'word', word: 'when', value: 'Friday at 10:00' }]);
     const every = offer(['Do it every ', word('when', 'Monday at 9:00', ['Monday at 9:00', 'day at 9:00'], { read: 'sched' }), '?'], { yes: 'yes' });
-    expect(saidAbout(every, 'every Friday at eight')).toBeNull();
+    // "Every" is read with the day it stands before (./when.ts), and a weekday is Monday to Friday.
+    expect(saidAbout(every, 'every Friday at eight')).toEqual([{ act: 'word', word: 'when', value: 'Friday at 8:00' }]);
+    expect(saidAbout(every, 'every weekday at nine')).toEqual([{ act: 'word', word: 'when', value: 'Monday to Friday at 9:00' }]);
+    expect(saidAbout(every, 'every morning at six')).toEqual([{ act: 'word', word: 'when', value: 'day at 6:00' }]);
+    expect(saidAbout(every, 'make it every night at eleven')).toEqual([{ act: 'word', word: 'when', value: 'day at 23:00' }]);
+    // A schedule the notch cannot say changes nothing on the line: it is not made into one that is near it.
+    for (const no of ['every 2 weeks at nine', 'every other Friday at eight', 'every month', 'every morning at 6 pm']) expect(saidAbout(every, no)).toBeNull();
+    // And a word that takes one day, or one moment, takes no time by the week.
+    expect(saidAbout(by, 'every weekday')).toBeNull();
+    expect(saidAbout(when, 'every Friday at ten')).toBeNull();
     expect(saidAbout(every, 'Friday at eight')).toEqual([{ act: 'word', word: 'when', value: 'Friday at 8:00' }]);
   });
 

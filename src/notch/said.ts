@@ -36,6 +36,7 @@
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { routeByIntents, type NotchIntent } from './intents.ts';
+import { sayDays, whenSaid, whenWords } from './when.ts';
 
 /** One answer to a line, as the page would have sent it, without the line's id. */
 export interface NotchSaid {
@@ -71,11 +72,6 @@ export function notchLineWords(line: NotchLine): NotchWord[] {
   return found.filter((word, at) => found.findIndex((other) => other.name === word.name) === at);
 }
 
-const NUMBERS: Record<string, number> = {
-  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
-};
-const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-
 /** Words that carry no meaning of their own in an answer to a line. */
 const SMALL = new Set([
   'a', 'an', 'the', 'it', 'its', 'that', 'this', 'one', 'option', 'them', 'him', 'her', 'me', 'i', 'you', 'we', 'us',
@@ -87,18 +83,17 @@ const SMALL = new Set([
 
 /** What was said, as plain small-letter words. Numbers said as words are digits, "p.m." is "pm". */
 export function saidWords(said: string): string[] {
-  return said.toLowerCase()
-    .replace(/\b([ap])\.\s?m\b\.?/g, '$1m')
-    .replace(/o'clock/g, ' ')
-    .replace(/[’']/g, '')
-    .replace(/(\d)[.:h](\d{2})\b/g, '$1:$2')
-    .replace(/[^\p{L}\p{N}: ]+/gu, ' ')
-    .split(/\s+/).filter(Boolean)
-    .map((word) => (word in NUMBERS ? String(NUMBERS[word]) : word));
+  return whenWords(said);
 }
 
 interface SaidWhen {
+  /**
+   * The day that was said, as the notch says one: "Friday", "today",
+   * "tomorrow", and by the week "day" (every day) or "Monday to Friday".
+   */
   day: string | null;
+  /** The day is several, or comes round every week: no one day for a word that takes one. */
+  many: boolean;
   time: string | null;
   /** "morning" or "afternoon", when no hour was said with it. */
   part: 'morning' | 'afternoon' | null;
@@ -107,73 +102,28 @@ interface SaidWhen {
   used: Set<number>;
 }
 
-const DAY_SAID: Record<string, string> = {
-  mon: 'Monday', tue: 'Tuesday', tues: 'Tuesday', wed: 'Wednesday', weds: 'Wednesday', thu: 'Thursday', thur: 'Thursday', thurs: 'Thursday',
-  fri: 'Friday', sat: 'Saturday', sun: 'Sunday', today: 'today', tomorrow: 'tomorrow',
-  ...Object.fromEntries(DAYS.map((day) => [day, day[0]!.toUpperCase() + day.slice(1)])),
-};
+/**
+ * How late a bare hour is still the afternoon when it is said over a line:
+ * seven, one later than in a sentence (./when.ts). Nobody meets at seven in
+ * the night.
+ */
+export const NOTCH_SAID_AFTERNOON_TO = 7;
 
 /**
  * The day and the time in what was said, with which of its words they used.
  * "friday at 10" is Friday at 10:00, "half past 9" is 9:30, "3 pm" is 15:00,
- * and an hour from 1 to 7 with no "am" is the afternoon: nobody meets at
- * three in the night. "Friday afternoon" names no hour: the day, and the
- * part of it.
+ * and an hour from 1 to 7 with no "am", "morning" or "night" beside it is
+ * the afternoon. "Friday afternoon" names no hour: the day, and the part of
+ * it. Read by the one reader of a time (./when.ts): "every weekday at 9" is
+ * Monday to Friday at 9:00, "at 6 in the morning" is 6:00, and a schedule
+ * that cannot be said ("every 2 weeks at 9") is not read at all.
  */
 export function saidWhen(words: readonly string[]): SaidWhen {
-  const used = new Set<number>();
-  const dayAt = new Set<number>();
-  let day: string | null = null;
-  let time: string | null = null;
-  let part: SaidWhen['part'] = null;
-  for (let at = 0; at < words.length; at++) {
-    if (used.has(at)) continue;
-    const word = words[at]!;
-    if (!day && word in DAY_SAID) { day = DAY_SAID[word]!; used.add(at); dayAt.add(at); continue; }
-    if (!part && (word === 'morning' || word === 'afternoon')) { part = word; used.add(at); continue; }
-    if (time) continue;
-    const next = words[at + 1];
-    const after = words[at + 2];
-    // "half past 9", "quarter past 9", "quarter to 10".
-    if ((word === 'half' || word === 'quarter') && (next === 'past' || next === 'to') && after && /^\d{1,2}$/.test(after)) {
-      let hour = Number(after);
-      let minute = word === 'half' ? 30 : 15;
-      if (next === 'to') { hour -= 1; minute = 60 - minute; }
-      const half = isHalf(words[at + 3]) ? words[at + 3] : undefined;
-      const read = clock(hour, minute, half);
-      if (read) { time = read; for (let more = 0; more < (half ? 4 : 3); more++) used.add(at + more); }
-      continue;
-    }
-    if (word === 'noon' || word === 'midday') { time = '12:00'; used.add(at); continue; }
-    const whole = /^(\d{1,2})(?::(\d{2}))?(am|pm)?$/.exec(word);
-    if (!whole) continue;
-    let minute = whole[2] ? Number(whole[2]) : 0;
-    let took = 0;
-    // "9 30", "10 thirty", "9 fifteen", "9 forty five".
-    if (!whole[2] && !whole[3]) {
-      const spoken = next === 'thirty' ? 30 : next === 'fifteen' ? 15 : next === 'forty' && after === '5' ? 45 : next && /^(00|15|30|45)$/.test(next) ? Number(next) : null;
-      if (spoken !== null) { minute = spoken; took = next === 'forty' ? 2 : 1; }
-    }
-    let half: string | undefined = whole[3];
-    if (!half && isHalf(words[at + 1 + took])) { half = words[at + 1 + took]; took += 1; }
-    const read = clock(Number(whole[1]), minute, half);
-    if (!read) continue;
-    time = read;
-    for (let more = 0; more <= took; more++) used.add(at + more);
-  }
-  // A part of the day with an hour said beside it adds nothing but which half: "3 in the afternoon".
-  if (part && time) part = null;
-  return { day, time, part, dayAt, used };
-}
-
-const isHalf = (word: string | undefined): word is 'am' | 'pm' => word === 'am' || word === 'pm';
-
-function clock(hour: number, minute: number, half?: string): string | null {
-  let h = hour;
-  if (half === 'pm' && h < 12) h += 12;
-  if (half === 'am' && h === 12) h = 0;
-  if (!half && h >= 1 && h <= 7) h += 12;
-  return h >= 0 && h < 24 && minute >= 0 && minute < 60 ? `${h}:${String(minute).padStart(2, '0')}` : null;
+  const read = whenSaid(words, { guessTo: NOTCH_SAID_AFTERNOON_TO });
+  const many = read.days !== null && (read.every || read.days.length !== 1);
+  const day = read.rel ?? (read.days === null ? null : sayDays(read.days));
+  const time = read.hour === null ? null : `${read.hour}:${String(read.minute).padStart(2, '0')}`;
+  return { day, many, time, part: read.part, dayAt: read.dayAt, used: read.used };
 }
 
 /** The words of a choice or a value that carry its meaning. All of them when none does ("Go on"). */
@@ -255,6 +205,8 @@ function saidValue(word: NotchWord, words: readonly string[]): { value: string; 
   // A day, or a day and a time, read as when it is typed.
   if (word.read === 'day' || word.read === 'dayTime' || word.read === 'sched') {
     const when = saidWhen(words);
+    // A word that takes one day, or one moment, takes no time by the week: "every weekday" is not a day to meet on.
+    if (when.many && word.read !== 'sched') return null;
     if (word.read === 'day') return when.day ? { value: when.day, used: when.dayAt } : null;
     if (!when.day && !when.time && !when.part) return null;
     const [day, time] = word.value.split(' at ');

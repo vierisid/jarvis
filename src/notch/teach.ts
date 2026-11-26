@@ -33,6 +33,7 @@ import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import { findRounds, roundsApps, roundsCopy, roundsToDo, watchKeysOk, type Rounds, type WatchStep } from './rounds.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
 import { routeByIntents, type NotchIntent } from './intents.ts';
+import { nextWhen, readWhen, sayWhen, type NotchWhen } from './when.ts';
 
 /** How long a teaching may last. The desktop app takes its hooks out at the same time by itself. */
 export const NOTCH_TEACH_MAX_MS = 10 * 60_000;
@@ -136,35 +137,23 @@ export function undoRequest(text: string): boolean {
   return new RegExp(`^${LEAD}(?:undo|take (?:it|that) back|annulla)(?: (?:it|that|this|the paste|my paste|your paste|the last (?:one|thing|paste)))?[\\s.!]*$`, 'i').test(text.trim());
 }
 
-/** When a job is done by the week: on one day, or every day, at a time. */
-export interface NotchSchedule { day: number | null; hour: number; minute: number }
+/** When a job is done by the week: on its days, at a time. The one type for a time (./when.ts). */
+export type NotchSchedule = NotchWhen;
 
-const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-
-/** Reads "Monday at 9:00" and "day at 9:00", as the notch's lit word writes them. */
+/**
+ * Reads the lit word of a job's schedule, and a schedule that was kept:
+ * "Monday at 9:00", "day at 9:00", "Monday to Friday at 9:00", "weekday at
+ * 9:00". By the one reader of a time (./when.ts), as the notch's own
+ * writing: the hour is what it says. Null when it is no time by the week.
+ */
 export function parseSchedule(text: string): NotchSchedule | null {
-  const found = /^\s*([a-z]+) at (\d{1,2})[:.](\d{2})\s*$/i.exec(text);
-  if (!found) return null;
-  const name = found[1]!.toLowerCase();
-  const hour = Number(found[2]);
-  const minute = Number(found[3]);
-  if (hour > 23 || minute > 59) return null;
-  if (name === 'day') return { day: null, hour, minute };
-  const day = DAYS.indexOf(name);
-  return day < 0 ? null : { day, hour, minute };
+  const read = readWhen(text, { exact: true });
+  return read && read.days.length > 0 ? read : null;
 }
 
 /** The next time after `after`, on this machine's clock. */
 export function nextScheduled(schedule: NotchSchedule, after: number): number {
-  const at = new Date(after);
-  at.setSeconds(0, 0);
-  at.setHours(schedule.hour, schedule.minute);
-  for (let tries = 0; tries < 9; tries++) {
-    if (at.getTime() > after && (schedule.day === null || at.getDay() === schedule.day)) return at.getTime();
-    at.setDate(at.getDate() + 1);
-    at.setHours(schedule.hour, schedule.minute, 0, 0);
-  }
-  return at.getTime();
+  return nextWhen(schedule, after);
 }
 
 /** How a shortcut is said: "Ctrl + C", "Enter". */
@@ -681,7 +670,9 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     for (;;) {
       const answer = await stage.answer(id, ['yes', 'no', 'fold', 'word']);
       if (answer.act === 'word') {
-        if (answer.word === 'when' && parseSchedule(answer.value ?? '')) when = answer.value!;
+        // Kept as the notch says it: "weekday at 9:00" stands on the line as "Monday to Friday at 9:00".
+        const read = answer.word === 'when' ? parseSchedule(answer.value ?? '') : null;
+        if (read) when = sayWhen(read);
         // Said again as it stands: a value that is not a time of the week does not stay on the line.
         stage.surface.update(id, { say: say() });
         continue;

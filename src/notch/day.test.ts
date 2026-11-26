@@ -359,7 +359,14 @@ describe('what slipped today', () => {
     // Today, when the hour is still ahead.
     expect(notchMoveAt('today at 20:00', EVENING)).toBe(at(16, 20));
     expect(notchMoveAt('today at 9:00', EVENING)).toBeNull();
-    for (const no of ['', 'soon', 'tomorrow', 'tomorrow at 25:00', 'tomorrow at 9:75', 'Friday', 'in an hour', 'tomorrow at nine']) expect(notchMoveAt(no, EVENING)).toBeNull();
+    // Read by the one reader of a time (./when.ts): an hour said as a word, or with no minutes, is an hour.
+    expect(notchMoveAt('tomorrow at nine', EVENING)).toBe(at(17, 9));
+    expect(notchMoveAt('tomorrow at 9', EVENING)).toBe(at(17, 9));
+    // As the notch writes it, the hour is what it says: six is six in the morning.
+    expect(notchMoveAt('Friday at 6:00', EVENING)).toBe(at(20, 6));
+    for (const no of ['', 'soon', 'tomorrow', 'tomorrow at 25:00', 'tomorrow at 9:75', 'Friday', 'in an hour', 'next friday at 9:00', 'tomorrow at 9:00 and friday at 10:00',
+      // A time by the week is no one moment.
+      'every Friday at 9:00', 'weekday at 9:00', 'day at 9:00', 'Monday and Friday at 9:00']) expect(notchMoveAt(no, EVENING)).toBeNull();
   });
 
   test('in the evening it is offered before the line that counts the day, and yes moves it', async () => {

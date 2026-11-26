@@ -89,21 +89,32 @@ describe('what is said to start, to end and to run a showing', () => {
 
 describe('a time of the week', () => {
   test('it is read as the lit word writes it, and nothing else is', () => {
-    expect(parseSchedule('Monday at 9:00')).toEqual({ day: 1, hour: 9, minute: 0 });
-    expect(parseSchedule('Friday at 16:30')).toEqual({ day: 5, hour: 16, minute: 30 });
-    expect(parseSchedule('day at 7:05')).toEqual({ day: null, hour: 7, minute: 5 });
-    for (const bad of ['', 'Monday', 'at 9:00', 'Funday at 9:00', 'Monday at 25:00', 'Monday at 9:75', 'every Monday at 9:00']) expect(parseSchedule(bad)).toBeNull();
+    expect(parseSchedule('Monday at 9:00')).toEqual({ days: [1], hour: 9, minute: 0 });
+    expect(parseSchedule('Friday at 16:30')).toEqual({ days: [5], hour: 16, minute: 30 });
+    expect(parseSchedule('day at 7:05')).toEqual({ days: [0, 1, 2, 3, 4, 5, 6], hour: 7, minute: 5 });
+    // A weekday is Monday to Friday, and what the notch writes for it is read back.
+    expect(parseSchedule('weekday at 9:00')).toEqual({ days: [1, 2, 3, 4, 5], hour: 9, minute: 0 });
+    expect(parseSchedule('Monday to Friday at 9:00')).toEqual({ days: [1, 2, 3, 4, 5], hour: 9, minute: 0 });
+    // As the notch writes it, the hour is what it says: six is six in the morning.
+    expect(parseSchedule('day at 6:00')).toEqual({ days: [0, 1, 2, 3, 4, 5, 6], hour: 6, minute: 0 });
+    expect(parseSchedule('every Monday at 9:00')).toEqual({ days: [1], hour: 9, minute: 0 });
+    for (const bad of ['', 'Monday', 'at 9:00', 'Funday at 9:00', 'Monday at 25:00', 'Monday at 9:75', 'every 2 weeks at 9:00', 'month at 9:00', 'tomorrow at 9:00', 'next week',
+      'Monday at 9:00 and Friday at 16:00']) expect(parseSchedule(bad)).toBeNull();
   });
 
   test('the next time is the next one after now, on that day', () => {
     // Wednesday 18 November 2026, 10:00.
     const wed = new Date(2026, 10, 18, 10, 0, 0).getTime();
-    expect(new Date(nextScheduled({ day: 1, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 23, 9, 0, 0));
-    expect(new Date(nextScheduled({ day: 3, hour: 16, minute: 0 }, wed))).toEqual(new Date(2026, 10, 18, 16, 0, 0));
+    expect(new Date(nextScheduled({ days: [1], hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 23, 9, 0, 0));
+    expect(new Date(nextScheduled({ days: [3], hour: 16, minute: 0 }, wed))).toEqual(new Date(2026, 10, 18, 16, 0, 0));
     // The same day, an hour that has passed: next week.
-    expect(new Date(nextScheduled({ day: 3, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 25, 9, 0, 0));
-    expect(new Date(nextScheduled({ day: null, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 19, 9, 0, 0));
-    expect(new Date(nextScheduled({ day: null, hour: 11, minute: 30 }, wed))).toEqual(new Date(2026, 10, 18, 11, 30, 0));
+    expect(new Date(nextScheduled({ days: [3], hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 25, 9, 0, 0));
+    const every = [0, 1, 2, 3, 4, 5, 6];
+    expect(new Date(nextScheduled({ days: every, hour: 9, minute: 0 }, wed))).toEqual(new Date(2026, 10, 19, 9, 0, 0));
+    expect(new Date(nextScheduled({ days: every, hour: 11, minute: 30 }, wed))).toEqual(new Date(2026, 10, 18, 11, 30, 0));
+    // Monday to Friday, asked on a Friday evening: Monday, not the weekend.
+    const fri = new Date(2026, 10, 20, 18, 0, 0).getTime();
+    expect(new Date(nextScheduled({ days: [1, 2, 3, 4, 5], hour: 9, minute: 0 }, fri))).toEqual(new Date(2026, 10, 23, 9, 0, 0));
   });
 });
 

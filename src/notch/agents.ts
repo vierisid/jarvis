@@ -31,6 +31,7 @@ import type { NotchInbox } from './inbox.ts';
 import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
 import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readSchedule, readWhen, sayWhen } from './when.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -48,7 +49,6 @@ export const NOTCH_AGENT_GOOD_RUNS = 5;
 export const NOTCH_AGENT_TICK_MS = 30_000;
 
 const LEAD = '(?:(?:ok(?:ay)?|hey|jarvis|please|now|and|then|so)[,\\s]+)*';
-const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 /** How a request is put when it is put politely. A request put as a question is still a request. */
 const POLITE = "(?:(?:can|could|would|will) you(?: please)?|please|i (?:want|need)(?: you)? to|i(?: would|'d) like(?: you)? to)\\s+";
 const MAKE = '(?:make|create|build|set up|add|give)(?: me)?';
@@ -75,38 +75,17 @@ function plainVerb(job: string): string {
 /**
  * The schedule a description names, wherever it stands in it, and the
  * description without it: "sends me the news every day at 5.10" is "day at
- * 17:10" and "sends me the news". An hour from one to six with no "am" is
- * the afternoon: nobody means five in the morning by "at 5.10". Null when
- * it names none the notch can say.
+ * 17:10" and "sends me the news". Read by the one reader of a time
+ * (./when.ts): a weekday is Monday to Friday, "morning" and "night" say
+ * which half of the day, and an hour from one to six with none of them is
+ * the afternoon. Null when it names none the notch can say: "every 2 weeks",
+ * two times, an hour that is none. Such a schedule is never made into one
+ * that is near it. `stored`: the words are the notch's own ("Every day at
+ * 6:00, ..."), and an hour in them is what it says.
  */
-function scheduleIn(text: string): { when: string; rest: string } | null {
-  let rest = text;
-  let day: string | null = null;
-  let time: string | null = null;
-  const named = rest.match(/\b(?:every|each)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|day|morning|evening|night|week|weekday)\b|\b(daily|weekly)\b/i);
-  if (named) {
-    const name = (named[1] ?? named[2])!.toLowerCase();
-    day = DAYS.includes(name) ? cap(name) : name === 'week' || name === 'weekly' ? 'Monday' : 'day';
-    if (name === 'evening') time = '18:00';
-    if (name === 'night') time = '21:00';
-    rest = rest.replace(named[0], ' ');
-  }
-  const at = rest.match(/\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])/i) ?? (day ? rest.match(/(?:^|\s)(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])/i) : null);
-  if (at) {
-    let hour = Number(at[1]);
-    const half = (at[3] ?? '').toLowerCase().replace(/\./g, '');
-    if (half === 'pm' && hour < 12) hour += 12;
-    else if (half === 'am' && hour === 12) hour = 0;
-    else if (!half && hour >= 1 && hour <= 6) hour += 12;
-    if (hour <= 23 && Number(at[2] ?? '0') <= 59) {
-      time = `${hour}:${at[2] ?? '00'}`;
-      rest = rest.replace(at[0], ' ');
-      day ??= 'day';
-    }
-  }
-  if (!day) return null;
-  rest = rest.replace(/\s+,/g, ',').replace(/^[,\s]+|[,\s]+$/g, '').replace(/\s+/g, ' ');
-  return { when: `${day} at ${time ?? '9:00'}`, rest };
+function scheduleIn(text: string, stored = false): { when: string; rest: string } | null {
+  const read = readSchedule(text, { exact: stored });
+  return read && read !== 'unsaid' ? { when: sayWhen(read.when), rest: read.rest } : null;
 }
 
 /**
@@ -114,7 +93,9 @@ function scheduleIn(text: string): { when: string; rest: string } | null {
  * day at 5.10 sends me the news", "I want an agent that replies to new
  * leads", "when an invoice is 7 days late, chase it": an agent is asked for.
  * Null when it is not. A question about something is never one ("when is my
- * next call?"), and neither is "tell me when", which is an eye.
+ * next call?"), and neither is "tell me when", which is an eye. `stored`:
+ * the sentence is one the notch wrote itself and reads again (an agent's own
+ * sentence, one that somebody sent): an hour in it is what it says.
  *
  * The owner's first agent, 17 November 2026, began "Can you make an agent
  * that..." and was not taken as one: it went to the assistant, which built a
@@ -122,7 +103,7 @@ function scheduleIn(text: string): { when: string; rest: string } | null {
  * in the dashboard. However it is put, asking for an agent is asking the
  * notch.
  */
-export function agentSentence(text: string): AgentSentence | null {
+export function agentSentence(text: string, stored = false): AgentSentence | null {
   let said = text.trim().replace(/[’`]/g, "'").replace(/\s+/g, ' ');
   const words = said ? said.split(' ').length : 0;
   if (words < 3 || words > 45) return null;
@@ -148,7 +129,7 @@ export function agentSentence(text: string): AgentSentence | null {
   // Said without the word agent, it is one only when it begins with its schedule: "I run every
   // day" is something a person says about themselves.
   if (!made && !/^(?:every|each|daily|weekly)\b/i.test(rest)) return null;
-  const schedule = scheduleIn(rest);
+  const schedule = scheduleIn(rest, stored);
   if (schedule) {
     const job = told ? plainVerb(schedule.rest) : schedule.rest;
     // Said without the word agent, what follows the schedule has to be
@@ -278,7 +259,7 @@ export function agentName(typed: string): string | null {
 
 /** When an agent runs, as its card says it: "Every Monday at 9:00". Null for one that waits for something to happen. */
 export function agentRuns(sentence: string): string | null {
-  const when = agentSentence(sentence)?.when ?? null;
+  const when = agentSentence(sentence, true)?.when ?? null;
   return when ? `Every ${when}` : null;
 }
 
@@ -430,7 +411,9 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
           const answer = await stage.answer(lineId, ['yes', 'no', 'fold', 'word']);
           if (answer.act === 'word') {
             const value = (answer.value ?? '').trim();
-            if (answer.word === 'when' && /^[a-z]+ at \d{1,2}[:.]\d{2}$/i.test(value)) sentence.when = `${cap(value.split(' ')[0]!.toLowerCase() === 'day' ? 'day' : value.split(' ')[0]!)}${value.slice(value.indexOf(' '))}`.replace(/^Day /, 'day ');
+            // A time as the notch writes one, read by the one reader (./when.ts). One that is none leaves the word as it was.
+            const read = answer.word === 'when' ? readWhen(value, { exact: true }) : null;
+            if (read && read.days.length > 0) sentence.when = sayWhen(read);
             stage.surface.update(lineId, { say: line() });
             continue;
           }
@@ -808,7 +791,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     take(sentence) {
       if (stopped) return false;
       // Read as any sentence is. One that does not read as a schedule or as "an agent that" is taken as it stands.
-      const asked = agentSentence(sentence) ?? { when: null, job: sentence.trim().replace(/[.!?\s]+$/, '') };
+      const asked = agentSentence(sentence, true) ?? { when: null, job: sentence.trim().replace(/[.!?\s]+$/, '') };
       if (!asked.job) return false;
       make(asked, true);
       return true;

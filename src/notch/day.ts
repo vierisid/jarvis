@@ -28,6 +28,7 @@ import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { notchCalendarChanges, type NotchMeeting } from './soon.ts';
 import type { NotchStage } from './stage.ts';
+import { readWhen, whenMoment } from './when.ts';
 
 /** The hour from which the evening line may be said, on this machine's clock. */
 export const NOTCH_EVENING_HOUR = 18;
@@ -121,26 +122,15 @@ const SLIPPED_CHARS = 60;
  * The moment a time is, as the evening's word says it: "tomorrow at 9:00",
  * "Friday at 15:30", "today at 20:00", "next week" (Monday at nine). The next
  * such moment after `now`, on this machine's clock. Null when the words are
- * no such time, or the moment is not ahead.
+ * no such time, or the moment is not ahead. Read by the one reader of a time
+ * (./when.ts), as the notch's own writing: the hour is what it says. It is
+ * one moment, so a time by the week ("every Monday at 9:00", "weekday at
+ * 9:00") is none.
  */
 export function notchMoveAt(value: string, now: number): number | null {
-  const said = value.trim().toLowerCase().replace(/\s+/g, ' ');
-  const at = new Date(now);
-  const set = (days: number, hour: number, minute: number): number => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(hour, minute, 0, 0); return d.getTime(); };
-  if (said === 'next week') return set(((8 - at.getDay()) % 7) || 7, 9, 0);
-  const parts = /^(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday) at (\d{1,2}):(\d{2})$/.exec(said);
-  if (!parts) return null;
-  const hour = Number(parts[2]), minute = Number(parts[3]);
-  if (hour > 23 || minute > 59) return null;
-  let days = 0;
-  if (parts[1] === 'tomorrow') days = 1;
-  else if (parts[1] !== 'today') {
-    const wanted = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].indexOf(parts[1]!);
-    // The next such day: a day named on that day itself means a week on.
-    days = ((wanted - at.getDay() + 7) % 7) || 7;
-  }
-  const moment = set(days, hour, minute);
-  return moment > now ? moment : null;
+  if (/^\s*(?:every|each)\b/i.test(value)) return null;
+  const read = readWhen(value, { exact: true });
+  return read ? whenMoment(read, now) : null;
 }
 
 /** The line about what slipped: one thing by its words, several by their number, and where to as a word that can be changed. */

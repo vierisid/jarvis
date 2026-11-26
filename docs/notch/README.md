@@ -1870,7 +1870,8 @@ applied).
       "I want", "set up a new", "new agent:"), with the word agent,
       workflow, automation, routine or bot, put as a question or not. The
       schedule may stand anywhere in it, a time may be written "5.10", and
-      an hour from one to six with no "am" is the afternoon. "An agent that
+      an hour from one to six with no "am" is the afternoon (unless
+      "morning" or "night" says otherwise, since 26 November: 262). "An agent that
       sends…" is read back as what to do: "Every day at 17:10, send…". One
       asked for with no schedule is read back as it was put: "An agent that
       replies to new leads."
@@ -3339,6 +3340,31 @@ other.
     line is "answer": what it sets off is the line's, and whoever reads the
     field has to ask what the line was about. An instruction that no intent
     took covers nothing by this table.
+262. **One reader of a time, and it refuses what it cannot read** (26
+    November 2026, `src/notch/when.ts`). There were four: the schedule in a
+    sentence that asks for an agent, the lit word of a shown job's schedule,
+    the evening's "move it to", and a day and a time said over a line. Each
+    rewrote what it did not know: "every weekday at 9" ran at weekends,
+    "every morning at 6" at 18:00, "every night at 11" at 11:00, "every 2
+    weeks" every day, "every day at noon" at 9:00, and of "every Monday at
+    9am and Friday at 4pm" only the first was kept. Now one type holds a
+    time (`NotchWhen`: the days, the hour, the minute) and one reader makes
+    it. A weekday is Monday to Friday, and is read back so: "Every Monday to
+    Friday at 9:00, send me the news." "Morning", "afternoon", "evening"
+    and "night" say which half of the day an hour is in, as "am" and "pm"
+    do, and an hour that contradicts them is no time ("every morning at
+    6pm"). A bare hour from one to six with none of them is still the
+    afternoon ("at 6" is 18:00, "at 5.10" is 17:10); said over a line it
+    is so up to seven, as it was. Every word of a schedule is read or it is
+    no schedule: "every 2 weeks", "every other day", "every month", a
+    second time, an hour that is none ("at 25"). Then nothing is made of
+    it: the sentence goes to the assistant as it was said, an agent that
+    was asked for by name is read back whole with no schedule lit, and a
+    line keeps the time it had. Several days are one schedule ("every
+    Monday and Friday at 9", "every week on Friday"). What the notch wrote
+    itself is read as written: "day at 6:00" on a line, on an agent's card
+    or in a sentence somebody sent is six in the morning, where a bare six
+    in a person's words is the afternoon.
 
 What is not done, or not proven:
 
@@ -3358,8 +3384,14 @@ What is not done, or not proven:
   typed "do it again" asks first even with the job's window right behind
   it. That is the safe side. Said with the talk keys, nothing takes the
   keyboard.
-- **Schedules are read as before**: "every weekday at 9" is still every
-  day. One reader of a time is a later step.
+- **A schedule the notch cannot say goes to the assistant.** "Every 2 weeks
+  on Tuesday send the invoice" is no agent of the notch's: the sentence
+  runs as an instruction, as "every hour check my inbox" always did.
+  Whether the notch should say "I cannot keep that one" and make nothing
+  is the owner's to say.
+- **The page still reads a typed value before the brain sees it.** "Month"
+  typed into a schedule is still Monday there. The page handing over what
+  was typed, for the one reader to read, is a later step.
 
 ## Your organisation
 

@@ -66,6 +66,7 @@ import { attachNotchStanding } from './standing.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import { NotchLearnedStore, attachNotchTeach, parseSchedule } from './teach.ts';
+import { sayDays } from './when.ts';
 
 const HERE = import.meta.dir;
 const CORPUS = join(HERE, 'intents-corpus.txt');
@@ -557,7 +558,7 @@ const WHEN: Record<string, (text: string) => string> = {
   // The lit word of a taught job's schedule, as the brain reads it back (./teach.ts).
   teach: (text) => {
     const read = parseSchedule(text);
-    return !read ? 'not read' : `${read.day === null ? 'every day' : DAY_NAMES[read.day]} ${read.hour}:${two(read.minute)}`;
+    return !read ? 'not read' : `${read.days.length === 7 ? 'every day' : read.days.length === 1 ? DAY_NAMES[read.days[0]!] : sayDays(read.days)} ${read.hour}:${two(read.minute)}`;
   },
   // The evening's "move it to" word, counted from Wednesday 18 November 2026, 10:00 (./day.ts).
   move: (text) => {
@@ -583,7 +584,7 @@ const WHEN: Record<string, (text: string) => string> = {
 
 /** [rows, rows marked wrong] of each section of the file. */
 const ROWS: Record<string, [number, number]> = {
-  '@ route': [128, 19],
+  '@ route': [128, 14],
   '@ route job': [37, 4],
   '@ route job front': [6, 0],
   '@ route shown': [3, 0],
@@ -604,16 +605,16 @@ const ROWS: Record<string, [number, number]> = {
   '@ route job spoken': [1, 0],
   '@ route browser': [7, 4],
   '@ route alone': [9, 0],
-  '@ when agent': [26, 7],
-  '@ when teach': [9, 2],
-  '@ when move': [10, 0],
-  '@ when said': [13, 4],
+  '@ when agent': [35, 0],
+  '@ when teach': [13, 0],
+  '@ when move': [12, 0],
+  '@ when said': [16, 0],
   '@ when page-sched': [12, 4],
   '@ when page-daytime': [4, 2],
   '@ when page-day': [4, 2],
   '@ when page-free': [2, 1],
 };
-const TOTALS = { routing: 297, routingWrong: 27, times: 80, timesWrong: 22 };
+const TOTALS = { routing: 297, routingWrong: 22, times: 98, timesWrong: 9 };
 
 const read = corpus();
 /** For every routing row, the intents that matched its sentence when it was decided, the one that took it first. */
