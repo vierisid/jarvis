@@ -717,7 +717,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       server: async (decision) => {
         if ((decision.host ?? '').toLowerCase() !== mine.toLowerCase()) return null;
         // No key answers this, so no key can have come too soon. The link takes no yes before a line could have been read: it waits that long.
-        await stage.wait(PEER_READ_MS + 100);
+        // A stage that ended in that time gives no yes: the sign-in is not answered for a script that is gone.
+        try { await stage.wait(PEER_READ_MS + 100); } catch { return null; }
         return { choice: 'yes' };
       },
       page: async (decision) => (decision.url && (await setup.signIn(decision.url, login, made.password)) ? {} : null),

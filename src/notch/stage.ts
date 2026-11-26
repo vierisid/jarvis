@@ -65,6 +65,8 @@ export class NotchStage {
   private stopped = false;
   private unasked: boolean;
   private readonly timers = new Set<unknown>();
+  /** The waits for time that are under way: each fails when the stage ends. */
+  private readonly sleepers = new Set<() => void>();
   private readonly waiters = new Set<{ take(answer: NotchAnswer): boolean; fail(): void }>();
   /**
    * Answers nobody was waiting for when they came. Two can arrive back to
@@ -125,6 +127,10 @@ export class NotchStage {
     this.stopped = true;
     for (const timer of this.timers) this.clock.clearTimeout(timer);
     this.timers.clear();
+    // A wait for time fails like any other wait. It used to be left as it was, with its timer
+    // cleared: a script that was in one never came back, and held whatever it held for good.
+    for (const fail of [...this.sleepers]) fail();
+    this.sleepers.clear();
     for (const waiter of [...this.waiters]) waiter.fail();
     for (const waiter of [...this.openWaiters]) waiter.fail();
   }
@@ -160,11 +166,14 @@ export class NotchStage {
   wait(ms: number): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.stopped) { reject(new NotchStageEnded()); return; }
+      const fail = (): void => { reject(new NotchStageEnded()); };
       const timer = this.clock.setTimeout(() => {
         this.timers.delete(timer);
+        this.sleepers.delete(fail);
         if (this.stopped) reject(new NotchStageEnded()); else resolve();
       }, ms);
       this.timers.add(timer);
+      this.sleepers.add(fail);
     });
   }
 

@@ -539,11 +539,6 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     stage.answer(putting, ['stop']).then(() => { stopped = true; }, () => {});
     /** How the fuse ended: only a fuse that was seen to burn out lets the reply go. */
     let went = 'lost' as 'done' | 'undo' | 'lost';
-    // A wait on the stage never comes back once the stage has ended (its timer is cleared, and
-    // nothing fails it). Between two looks at the thread that left the tab's turn taken for good
-    // and forgot that Send had been pressed. This fails when the stage ends, and the wait with it.
-    const over = stage.answer(stage.id(), []);
-    over.catch(() => {});
     /** `back`: a picked time was taken back. The line with the times comes up again, once the thread is let go. */
     const ended = await (async (): Promise<NotchItemEnd | 'back'> => {
     try {
@@ -564,7 +559,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         leftover: 'keep',
         asks: MAIL_SENT_LOOKS,
         waitMs: MAIL_SENT_LOOK_MS,
-        wait: async (ms) => { await Promise.race([stage.wait(ms), over]); },
+        // A stage that ends between two looks fails this wait, and the looking ends there (./send.ts).
+        wait: (ms) => stage.wait(ms),
         now,
       });
       if (end.state === 'not_sent' && end.at === 'stopped') {
