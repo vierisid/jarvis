@@ -140,6 +140,18 @@ const OTHER_HOW = new RegExp(`^(?:${[
   '(?:come|wie|comment|¿?c[oó]mo) (?!stai|sta\\b|va\\b|state|andiamo|geht es|geht.s|ça va|ca va|allez|vas-tu|est[aá]s|est[aá] usted|vai\\b|vão)[\\p{L}\\p{N}\'’-]+ \\S+',
 ].join('|')})`, 'u');
 
+/**
+ * Whether a question itself points at the screen: it says "this", "these" or "here", or names a thing only a
+ * screen has ("the export button", "the settings menu", "il pulsante esporta"). Such a question is answered by pointing at once. One
+ * that does not ("how do I cook rice", "where is my phone", "how do I add a page") is read first by the
+ * model that reads what the fixed words miss (./intent-read.ts), on its words and the app's name alone, and
+ * the window is read only when that says the question is about what is in front.
+ */
+const POINTS_AT = /(?<![\p{L}\p{N}])(?:this|these|here|questo|questa|questi|queste|qui|qua|buttons?|menus?|tabs?|icons?|settings?|options?|preferences|toolbar|checkbox|slider|toggle|dialog|shortcut|window|field|panel|pulsant[ei]|bottone|bottoni|tast[oi]|impostazioni|opzioni|men[uù]|schede?|icon[ae]|finestra|campo|pannello)(?![\p{L}\p{N}])/iu;
+export function pointsAtScreen(text: string): boolean {
+  return POINTS_AT.test(text.replace(/[’`´]/g, "'"));
+}
+
 /** Words said before the question itself: "so, where is…", "hey Pillow, how do I…", "can you show me…". */
 const OPENERS = /^(?:(?:hey|hi|hello|ok|okay|so|and|then|but|also|well|um+|uh+|hm+|oh|ah|yes|yeah|wait|actually|right|now|please|sorry|listen|quick question|one more thing|by the way|jarvis|pillow|ciao|ehi|allora|scusa|poi|bitte|hola|salut)\b[,.!:;]*\s*)+/;
 const ASKING = /^(?:(?:can|could|would|will) you (?:please |just |quickly )?(?:tell me |explain )?|please |tell me |do you know |i (?:want|need|would like|'d like) to (?:know|see|find out) |i(?:'m| am) (?:wondering|trying to (?:find|figure) out) |i wonder |any idea )+/;

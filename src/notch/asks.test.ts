@@ -18,7 +18,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await P
 /** A turn store that does what it is told, turn by turn. */
 function fakeDoor() {
   const listeners = new Set<(event: BriefChatEvent) => void>();
-  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string }; who?: string | null; real?: boolean }>();
+  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string }; who?: string | null; real?: boolean; asksFor?: unknown }>();
   let sequence = 0;
   let busy = false;
   let ready = true;
@@ -36,7 +36,7 @@ function fakeDoor() {
       if (busy) throw Object.assign(new Error('Conversation already has an active turn'), { status: 409 });
       if (turns.has(turn.turnId)) return;
       turns.set(turn.turnId, { ref: { conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId }, text: turn.text, state: 'running', reply: '',
-        who: turn.standing?.origin ?? null, real: isUnusedStanding(turn.standing) });
+        who: turn.standing?.origin ?? null, real: isUnusedStanding(turn.standing), asksFor: 'asksFor' in turn ? turn.asksFor : 'not given' });
     },
     cancel(ref) { if (turns.get(ref.turnId)?.state === 'running') emit(ref.turnId, { kind: 'terminal', state: 'cancelled' }); },
     onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -55,6 +55,8 @@ function fakeDoor() {
     end: (turnId: string, state: 'completed' | 'failed' | 'cancelled' = 'completed', error?: { code: string; message: string }) =>
       emit(turnId, { kind: 'terminal', state, ...(error ? { error } : {}) }),
     texts: (): string[] => [...turns.values()].map((turn) => turn.text),
+    /** What each turn was said to ask for, as the door was told: 'not given' when it was told nothing. */
+    asksFor: (): unknown[] => [...turns.values()].map((turn) => turn.asksFor),
     /** Who wrote the words of each turn, as the door was told, and whether what it was told is the notch's own mint. */
     who: (): [string | null, boolean][] => [...turns.values()].map((turn) => [turn.who ?? null, turn.real === true]),
   };
@@ -380,7 +382,7 @@ describe('a name that may have been misheard is read back before anything runs',
   test('a name that is exactly somebody of the organisation is not read back as somebody it is close to', async () => {
     // "Ana" is close to Anna Rossi, whom the owner writes with. Without an Ana in the organisation it is read back.
     const asked: string[] = [];
-    const read = (text: string) => { asked.push(text); return Promise.resolve({ did: 'Ask Ana for a file.', run: () => {} }); };
+    const read = (text: string) => { asked.push(text); return Promise.resolve({ hit: { did: 'Ask Ana for a file.', run: () => {} }, asksFor: null, how: 'read' as const, ms: 0 }); };
     const without = harness({ deps: { people, read } });
     await without.speak('t1', 'I need the notes from Ana');
     await without.advance(NOTCH_HEARD_MS);
@@ -1782,7 +1784,8 @@ describe('words for somebody of the organisation, read by the model', () => {
       read: (text) => {
         if (!/\bLeo\b/.test(text)) return null;
         asked.push(text);
-        return new Promise((resolve, reject) => { answer = resolve; fail = reject; });
+        // What the reading gives is a hit, or none: here it says nothing of what the sentence asks for.
+        return new Promise((resolve, reject) => { answer = (meant) => resolve({ hit: meant, asksFor: null, how: 'read', ms: 0 }); fail = reject; });
       },
       ...more,
     } });
@@ -2106,7 +2109,7 @@ describe('a reply to a question the assistant asked back', () => {
           if (scene(text) || (how?.reply && text !== 'pause')) return null;
           return { did: `The notch took: ${text}`, run: () => { seen.ran.push(text); } };
         },
-        read: (text) => { if (scene(text)) return null; seen.read.push(text); return Promise.resolve({ did: `Read: ${text}`, run: () => { seen.ran.push(`read ${text}`); } }); },
+        read: (text) => { if (scene(text)) return null; seen.read.push(text); return Promise.resolve({ hit: { did: `Read: ${text}`, run: () => { seen.ran.push(`read ${text}`); } }, asksFor: null, how: 'read' as const, ms: 0 }); },
         remember: async (what) => { seen.remembered.push(what); return { ok: true, said: 'Kept.', understood: what }; },
         point: Object.assign(async (question: string) => { seen.pointed.push(question); return null; }, { goesOn: (text: string) => !scene(text) }),
         ...more,
@@ -2231,5 +2234,138 @@ describe('a reply to a question the assistant asked back', () => {
         expect([how, words, asked]).toEqual([how, words, [words]]);
       }
     }
+  });
+});
+
+describe('a sentence the fixed words miss is read once, before it runs', () => {
+  /** A notch whose reader answers what it is told to, and that notes what was asked of it, what was pointed at and in what order. */
+  function reading(answers: Record<string, { acts: string[] | null; hit?: string }>, more: Partial<NotchAsksDeps> = {}) {
+    const seen = { read: [] as { text: string; how: unknown }[], pointed: [] as string[], ran: [] as string[], order: [] as string[] };
+    const h = harness({
+      deps: {
+        side: (text) => (text === 'settings' ? { did: 'Show the settings.', run: () => { seen.ran.push('settings'); } } : null),
+        read: (text, how) => {
+          seen.read.push({ text, how });
+          seen.order.push(`read ${text}`);
+          const told = answers[text];
+          if (!told) return null;
+          return Promise.resolve({
+            hit: told.hit ? { did: told.hit, run: () => { seen.ran.push(told.hit!); } } : null,
+            asksFor: told.acts ? { acts: told.acts as never, by: 'reading' as const } : null,
+            how: told.acts ? 'read' as const : 'late' as const, ms: told.acts ? 700 : 2500,
+          });
+        },
+        point: Object.assign(async (question: string) => { seen.pointed.push(question); seen.order.push(`point ${question}`); return null; }, { goesOn: (text: string) => text === 'go on' }),
+        remember: async (what) => ({ ok: true, said: 'Kept.', understood: what }),
+        ...more,
+      },
+    });
+    return { h, seen };
+  }
+
+  test('a question that is not about the screen: nothing of the window is read, and it runs as an instruction', async () => {
+    const { h, seen } = reading({ 'how do I cook rice': { acts: [] }, 'where is my phone': { acts: ['send'] } });
+    await h.type('how do I cook rice');
+    expect(seen.read.map((one) => one.text)).toEqual(['how do I cook rice']);
+    expect(seen.pointed).toEqual([]);
+    expect(h.door.texts()).toEqual(['how do I cook rice']);
+    h.door.say(h.door.running(), 'Rinse it, then two parts water.');
+    h.door.end(h.door.running());
+    await settle();
+    await h.advance(20_000);
+    await h.type('where is my phone');
+    expect(seen.pointed).toEqual([]);
+    expect(h.door.texts()).toEqual(['how do I cook rice', 'where is my phone']);
+  });
+
+  test('a question the reading says is about the screen is answered by pointing, after the reading and not before', async () => {
+    const { h, seen } = reading({ 'come faccio a esportare in PDF': { acts: ['screen'] } });
+    await h.type('come faccio a esportare in PDF');
+    expect(seen.order).toEqual(['read come faccio a esportare in PDF', 'point come faccio a esportare in PDF']);
+  });
+
+  test('a question that itself points at the screen waits for no model, and neither does going on with a walk', async () => {
+    for (const words of ['where is the export button', 'how do I export this as PDF', 'how do I change it here', 'go on']) {
+      const { h, seen } = reading({ [words]: { acts: [] } });
+      await h.type(words);
+      expect([words, seen.read, seen.pointed]).toEqual([words, [], [words]]);
+    }
+  });
+
+  test('a sentence that was not read in time, or by a model that failed: as before there was a reading', async () => {
+    // Not read: a "how do I" is answered by pointing, as it always was, and then runs as an instruction.
+    const late = reading({ 'how do I cook rice': { acts: null } });
+    await late.h.type('how do I cook rice');
+    expect(late.seen.pointed).toEqual(['how do I cook rice']);
+    expect(late.h.door.texts()).toEqual(['how do I cook rice']);
+    expect(late.h.door.asksFor()).toEqual(['not given']);
+    // A reader that throws, and one whose promise fails: the same.
+    for (const read of [(() => { throw new Error('no reader'); }) as never, (() => Promise.reject(new Error('no model'))) as never]) {
+      const broken = reading({}, { read });
+      await broken.h.type('what is the weather in Rome');
+      expect(broken.h.door.texts()).toEqual(['what is the weather in Rome']);
+      expect(broken.h.door.asksFor()).toEqual(['not given']);
+      expect(broken.h.said()).toContain('what is the weather in Rome');
+    }
+  });
+
+  test('what the sentence asks for goes with its turn, and only when it was read', async () => {
+    const { h } = reading({ 'send Sam the numbers by email': { acts: ['send'] }, 'what is the weather in Rome': { acts: [] } });
+    await h.type('send Sam the numbers by email');
+    expect(h.door.asksFor()).toEqual([{ acts: ['send'], by: 'reading' }]);
+    h.door.say(h.door.running(), 'Sent.');
+    h.door.end(h.door.running());
+    await settle();
+    await h.advance(20_000);
+    await h.type('what is the weather in Rome');
+    expect(h.door.asksFor()).toEqual([{ acts: ['send'], by: 'reading' }, { acts: [], by: 'reading' }]);
+    await h.advance(20_000);
+  });
+
+  test('with no model set up nothing is asked: the sentence is refused as it was', async () => {
+    const { h, seen } = reading({ 'how do I cook rice': { acts: [] } }, { modelReady: () => false });
+    await h.type('how do I cook rice');
+    expect(seen.read).toEqual([]);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'refused' });
+  });
+
+  test('the fixed words are not put to the model, and neither is a memory, a reply or something shown with a file', async () => {
+    const { h, seen } = reading({});
+    await h.type('settings');
+    await h.advance(0);
+    expect(seen.ran).toEqual(['settings']);
+    await h.type('remember that Leo likes tea');
+    await h.advance(20_000);
+    h.asks.shown('what is in this picture', [{ kind: 'image', name: 'a.png', mediaType: 'image/png', bytes: new Uint8Array([1]) }]);
+    await settle();
+    expect(seen.read).toEqual([]);
+  });
+
+  test('the reading is told how the words came, and never that they are a reply: a reply is not read at all', async () => {
+    const { h, seen } = reading({ impostazioni: { acts: [], hit: 'Show the settings.' } });
+    await h.type('impostazioni');
+    await h.advance(0);
+    expect(seen.read).toHaveLength(1);
+    expect(seen.read[0]!.how).toMatchObject({ source: 'typed' });
+    expect((seen.read[0]!.how as { reply?: boolean }).reply).toBeUndefined();
+    // What the table placed is done by the notch itself: no turn, and the ledger says what was done.
+    expect(seen.ran).toEqual(['Show the settings.']);
+    expect(h.door.texts()).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'done', kind: 'notch', did: ['Show the settings.'] });
+  });
+
+  test('everything is stopped while a sentence is read: what the reading placed is not done', async () => {
+    let paused = false;
+    let answer: (got: unknown) => void = () => {};
+    const ran: string[] = [];
+    const h = harness({ deps: { paused: () => paused, read: () => new Promise((resolve) => { answer = resolve as never; }) } });
+    await h.type('impostazioni');
+    paused = true;
+    answer({ hit: { did: 'Show the settings.', run: () => { ran.push('settings'); } }, asksFor: { acts: [], by: 'intent' }, how: 'read', ms: 900 });
+    await settle();
+    await h.advance(0);
+    expect(ran).toEqual([]);
+    expect(row(h)).toMatchObject({ state: 'refused' });
   });
 });

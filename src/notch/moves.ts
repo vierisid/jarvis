@@ -21,7 +21,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchStage } from './stage.ts';
 import type { NotchAct } from './surface.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 
@@ -238,6 +238,7 @@ export function attachNotchMoves(deps: NotchMovesDeps): NotchMoves {
   const intents: NotchIntent[] = [{
     id: 'moves.open', feature: 'moves', says: 'show how the notch moves', band: 'open', act: 'none', first: 'acts',
     examples: ['how do you move', 'show me how you move'],
+    read: readAs('show me how you move'),
     match(text) {
       return movesRequest(text) ? { did: 'Show how the notch moves.', run: () => { deps.inbox.present('moves', (stage) => open(stage)); } } : null;
     },

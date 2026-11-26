@@ -933,6 +933,15 @@ Under them the model now reads what they leave (`src/notch/people-read.ts`).
      anything runs ("Is that Lea Rossi?"). When somebody of the organisation has that very
      name, that is who was named, and nothing is asked. Two people the owner writes with who
      both have the name are still asked about.
+153. **One model for one sentence** (26 November 2026). Every sentence the fixed words miss is
+     now read once, by one question that asks what it is of everything the notch does itself
+     (docs/notch/README.md, 263). When it names somebody here, the question of 141 is part of
+     that one, word for word (`NOTCH_PEOPLE_READ_KINDS`, `reads` in `src/notch/people.ts`): the
+     same people by number, the same parse, the same doing (142 to 147), the same eight seconds
+     and the same middle tier (148), counted as `notch_intent_people`. It is never asked as
+     well: `read` alone is asked only where there is no reader of every sentence. Turning the
+     words of "tell Leo I love him" to the reader (145) is still its own question: those are
+     fixed words, which no reader is asked about.
 
 ### Where it stops
 

@@ -30,8 +30,9 @@ import type { NotchBlock, NotchButton, NotchPart } from './protocol.ts';
 import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
-import { whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
-import type { NotchIntent, NotchIntentHit } from './intents.ts';
+import { pointsAtScreen, whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
+import type { NotchAsksFor, NotchIntent, NotchIntentHit } from './intents.ts';
+import type { NotchRead } from './intent-read.ts';
 import { runItRequest } from './teach.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
@@ -89,7 +90,12 @@ export interface NotchTurnDoor {
    * NotchFilesNotKept when the files could not be kept: then nothing was
    * started.
    */
-  submit(turn: BriefTurnRef & { text: string; files?: NotchAskFile[]; standing?: TurnStanding }): void | Promise<void>;
+  /**
+   * `asksFor`: what the sentence asks for, as the reading of it said (./intents.ts, `NotchAsksFor`): the kinds
+   * of act its words cover. Only there when the sentence was read. Not there: it was not read, and its words
+   * cover nothing by this field.
+   */
+  submit(turn: BriefTurnRef & { text: string; files?: NotchAskFile[]; standing?: TurnStanding; asksFor?: NotchAsksFor }): void | Promise<void>;
   cancel(turn: BriefTurnRef): void;
   onEvent(listener: (event: BriefChatEvent) => void): () => void;
   /** Where a turn stands now, and its whole stored reply. Null when there is no such turn. */
@@ -143,14 +149,17 @@ export interface NotchAsksDeps {
    */
   side?: (text: string, how?: NotchAskHow) => NotchSided | null;
   /**
-   * Words for somebody of the organisation that none of the fixed words
-   * fit ("can you get me the logo from Leo"): one short question to the
-   * model says what is meant (./people-read.ts), and the notch then does it
-   * itself, as with `side`. Null at once when the words name nobody there,
-   * so that nothing else waits for it; a promise of null when they are for
-   * nobody after all, and are then an instruction like any other.
+   * A sentence that none of the fixed words fit: one short question to the
+   * model says whether it is one of the things the notch does itself, said
+   * another way ("impostazioni", "can you get me the logo from Leo"), and
+   * what kinds of act it asks for (./intent-read.ts). With a `hit` the
+   * notch does it itself, as with `side`. Without one the sentence is an
+   * instruction like any other, and what it asks for goes with its turn.
+   * Null at once when nothing is to be waited for: the sentence is then as
+   * it was before there was a reading. It never takes longer than its
+   * deadline, and a reading that failed says so in what it gives.
    */
-  read?: (text: string) => Promise<{ did: string; run(): void } | null> | null;
+  read?: (text: string, how?: NotchAskHow) => Promise<NotchRead | null> | null;
   /**
    * The talk keys went down, and what is on the notch is about to make way
    * for the listening: told before it does, so that what is said can be
@@ -379,8 +388,10 @@ interface Live {
   named?: boolean;
   /** What was heard with that name put right: this is what runs. What was heard stays as it was heard. */
   meant?: string;
-  /** What the model makes of words that name somebody of the organisation (`read`): asked once, whoever runs it. Null: not asked for these. */
-  reading?: Promise<{ did: string; run(): void } | null> | null;
+  /** What the model makes of a sentence the fixed words missed (`read`): asked once, whoever runs it. Null: not asked for these. */
+  reading?: Promise<NotchRead | null> | null;
+  /** And what it made of it, once it has. Null: it was not read. */
+  got?: NotchRead | null;
   /** When it began to be carried out. */
   began?: number;
   /** What goes with the words: what was circled on the screen, a file that was dropped. */
@@ -651,6 +662,17 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     return ask.routed;
   }
 
+  /**
+   * Whether these words are answered by pointing with nothing read first: they go on with a walk that stopped
+   * before its end, or they ask where or how and themselves point at the screen ("this", "here", "the export
+   * button"). Fixed words, like any other: they wait for no model.
+   */
+  function pointsAtOnce(ask: Live): boolean {
+    const point = deps.point;
+    if (!point || ask.reply || ask.files?.length) return false;
+    return point.goesOn?.(ask.heard) === true || (whereQuestion(ask.heard) && pointsAtScreen(ask.heard));
+  }
+
   function refuse(ask: Live, note: string): void {
     if (ledger.refused(ask.id, note)) { ask.phase = 'refused'; ask.note = note; } else sync(ask);
   }
@@ -674,16 +696,22 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // a showing runs, "undo that" after a job. They are claimed like anything
     // else, so they too happen once.
     let side: { did: string; run(): void } | null = !ask.files?.length ? sided(ask) : null;
-    // Words for somebody of the organisation that are none of the fixed ones: read by the model, once, and
-    // then done by the notch itself like the others. Nothing is claimed while it reads, so the person can
-    // still turn it away or say something else; and whoever comes back from the reading second finds it run.
-    // Not for "remember that Leo ...": that is something to keep, read back whole in its own way.
-    if (!side && !ask.reply && !ask.files?.length && deps.read && !(deps.remember && rememberSentence(ask.heard))) {
+    // A sentence that is none of the fixed words: read by the model, once (./intent-read.ts). When it is one
+    // of the things the notch does itself, said another way, it is then done by the notch like the others.
+    // Nothing is claimed while it reads, so the person can still turn it away or say something else; and
+    // whoever comes back from the reading second finds it run.
+    // Not for a reply to a question the assistant asked back: that is the answer. Not for "remember that Leo
+    // ...": that is something to keep, read back whole in its own way. And not for a question that itself
+    // points at the screen ("where is the export button", "how do I export this"), or that goes on with a
+    // walk: those are answered by pointing at once, as they always were, and wait for no model. With no model
+    // set up nothing is asked: the sentence is refused below, as it was.
+    if (!side && !ask.reply && !ask.files?.length && deps.read && deps.modelReady() && !(deps.remember && rememberSentence(ask.heard)) && !pointsAtOnce(ask)) {
       if (ask.reading === undefined) {
-        try { ask.reading = deps.read(ask.meant ?? ask.heard); } catch { ask.reading = null; }
+        try { ask.reading = deps.read(ask.meant ?? ask.heard, { source: ask.source, at: ask.at }); } catch { ask.reading = null; }
       }
       if (ask.reading) {
-        side = await ask.reading.catch(() => null);
+        ask.got = await ask.reading.catch(() => null);
+        side = ask.got?.hit ?? null;
         if (ask.phase !== 'heard') return;
         if (deps.paused?.()) { refuse(ask, 'Everything is stopped. Wake me first.'); return; }
       }
@@ -788,7 +816,9 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         // took most of these words for itself and they never came here.)
         ask.unsaid = ask.source === 'shown' || (ask.answersUnsaid === true && (isBareAffirmation(ask.meant ?? ask.heard) || notchBareGoAhead(ask.meant ?? ask.heard)));
         const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source);
-        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}) });
+        // What the sentence asks for, when it was read: it goes with the turn (./intents.ts, `NotchAsksFor`).
+        const asksFor = ask.got?.asksFor ?? null;
+        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}), ...(asksFor ? { asksFor } : {}) });
         // Kept with the turn now: not held here as well.
         ask.files = undefined;
       } catch (error) {
@@ -821,7 +851,12 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // that says so, not in its way: it can be stopped like anything running.
     const point = deps.point;
     // "Go on" after a walk that stopped before its end is that walk again, from where the person is.
-    if (point && !ask.reply && !ask.files?.length && (whereQuestion(ask.heard) || point.goesOn?.(ask.heard) === true)) {
+    // A "where is" or "how do I" that does not itself point at the screen was read first (above), and the
+    // reading said whether it is about the window in front. When it is not ("how do I cook rice"), nothing of
+    // that window is read and nothing of it is sent: the question is an instruction like any other. When the
+    // sentence was not read (no model, too slow), it is answered by pointing, as before there was a reading.
+    const aboutScreen = pointsAtOnce(ask) || !ask.got?.asksFor || ask.got.asksFor.acts.includes('screen');
+    if (point && !ask.reply && !ask.files?.length && aboutScreen && (whereQuestion(ask.heard) || point.goesOn?.(ask.heard) === true)) {
       ask.activity = 'Looking for it in the window.';
       const stop = new AbortController();
       ask.walk = () => stop.abort();

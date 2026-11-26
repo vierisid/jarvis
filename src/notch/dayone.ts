@@ -69,7 +69,7 @@ import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchMapNode, NotchMapSource, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { realNotchClock, type NotchClock, type NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -796,6 +796,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   }, {
     id: 'dayone.start', feature: 'dayOne', says: 'start day one again', band: 'open', act: 'none', first: 'acts',
     examples: ['day one', 'show me around'],
+    read: readAs('day one'),
     match(text) {
       if (stopped) return null;
       return dayOneRequest(text) ? { did: 'Start day one.', run: () => again() } : null;
@@ -803,6 +804,7 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
   }, {
     id: 'dayone.around', feature: 'dayOne', says: 'look around: the map of what is here', band: 'open', act: 'none', first: 'acts',
     examples: ['look around'],
+    read: readAs('look around'),
     match(text) {
       if (stopped) return null;
       return aroundRequest(text) && deps.around ? { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } } : null;

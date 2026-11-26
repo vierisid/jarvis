@@ -25,7 +25,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import { mailToneFacts } from './mail/notch.ts';
 import type { NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const cut = (text: string, most: number): string => {
@@ -151,6 +151,8 @@ export function attachNotchMemory(deps: NotchMemoryDeps): NotchMemory {
   const intents: NotchIntent[] = [{
     id: 'memory.open', feature: 'memory', says: 'show what is remembered, or what is known about one person', band: 'open', act: 'none', first: 'acts',
     examples: ['what do you remember', 'what do you know about Sam'],
+    // The whole of it. What is known about one person is asked for in the fixed words.
+    read: readAs('what do you remember'),
     match(text) {
       const asked = memoryRequest(text);
       return asked ? { did: 'Show what is remembered.', run: () => { deps.inbox.present('memory', (stage) => open(stage, asked.about)); } } : null;

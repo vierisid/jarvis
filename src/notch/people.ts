@@ -78,7 +78,7 @@ import { PEER_AGENT_SENTENCE_MAX, PEER_FILE_WHAT_MAX, PEER_LOOK_APP_MAX, PEER_LO
 import type { PeerNote } from '../peers/notes.ts';
 import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const cap = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
@@ -273,6 +273,16 @@ export interface NotchPeople {
    * no model to ask; a promise of null when it is for nobody after all.
    */
   read(text: string): Promise<{ did: string; run(): void } | null> | null;
+  /**
+   * The same, for the one reading of a sentence the fixed words missed (./intent-read.ts), which asks about
+   * the people and about everything else the sentence could be in one question, so that no sentence is read
+   * by two models in a row. Gives the people the sentence names, for the question, and what the model's
+   * answer comes to: the parse, the checks and the doing are the ones `read` has. Null at once when the
+   * sentence names nobody here, names somebody beside them who is not here, or is an entry for the owner's
+   * own calendar: then it is no word for anybody, whatever is read out of it. `id`: the intent of the table
+   * that the reading is.
+   */
+  reads(text: string): { names: string[]; take(raw: string): { id: string; did: string; run(): void } | null } | null;
   /** The people by name, for reading back a name that was heard and is close to one of theirs. */
   names(): { name: string }[];
   /** Who a file can be sent to: nobody while files are not set up, or while nothing can go out. */
@@ -1615,6 +1625,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   const intents: NotchIntent[] = [{
     id: 'people.org', feature: 'people', says: 'open the organisation', band: 'open', act: 'none', first: 'acts',
     examples: ['my organisation', 'invite someone'],
+    read: readAs('my organisation'),
     match(text) {
       const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
       if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
@@ -1788,11 +1799,39 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     return { did: `Show ${one.name} what was circled.`, run: () => sendLook(one) };
   }
 
+  /** The intent of the table that each kind of reading is: the thing the fixed words do, by its name there. */
+  const READ_AS: Record<Exclude<PeopleReading['kind'], 'none'>, string> = {
+    tell: 'people.say', ask: 'people.say', do: 'people.request', 'file-from': 'people.file', 'file-to': 'people.give', time: 'people.time', look: 'people.show',
+  };
+
+  function reads(text: string): { names: string[]; take(raw: string): { id: string; did: string; run(): void } | null } | null {
+    if (calendarEntry(text)) return null;
+    const all = others();
+    const named = peopleNamed(text, all);
+    if (all.length === 0 || named.length === 0) return null;
+    // "Send Leo and Bob the deck", and Bob is nobody here: it goes to all who were named or to nobody.
+    if (peopleStranger(text, all)) { log('[notch] a sentence about somebody names somebody else as well, who is not here: not read as a word for anybody'); return null; }
+    const list = all.filter((_one, at) => named.includes(at));
+    return {
+      names: list.map((one) => one.name),
+      take(raw) {
+        const read = peopleReadParse(raw, list.length, text);
+        // Which form it is, never the words: what somebody is told is in no log.
+        log(`[notch] a sentence about somebody was read by the model as: ${read ? read.kind : 'nothing it can be'}`);
+        if (!read || read.kind === 'none') return null;
+        const hit = act({ read, list });
+        return hit ? { id: READ_AS[read.kind], did: hit.did, run: hit.run } : null;
+      },
+    };
+  }
+
   /**
    * Words for somebody here that none of the fixed words fit: "can you get
    * me the logo from Leo", "hey, I need Leo to know I am late". Null at once
    * when the sentence names nobody here, so that a sentence about anything
-   * else waits for nothing.
+   * else waits for nothing. Asked only where there is no reader of every
+   * sentence (./intent-read.ts): where there is one, the same question is
+   * part of that one (`reads`), and this is not asked as well.
    */
   function read(text: string): Promise<{ did: string; run(): void } | null> | null {
     if (!deps.think) return null;
@@ -2621,7 +2660,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   setup?.onChange(() => { inbox.refresh(); });
 
   return {
-    row, rows, open, server, route, intents: () => intents, read, look, tick,
+    row, rows, open, server, route, intents: () => intents, read, reads, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
     fileTargets: () => (files && link.account().engine === 'up' && link.account().signedIn ? others().map((one) => ({ id: one.id, name: one.name })) : []),
     sendFile(to, file) { const one = person(to); if (!files || !one) return false; files.send(one, file); return true; },

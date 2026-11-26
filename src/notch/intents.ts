@@ -101,6 +101,29 @@
  * "Do it", said to "Shall I send it?", is not the job that was shown. Only
  * an intent marked `inReply` is still asked: "pause", which pauses whatever
  * is on the notch, and "undo", which takes back the notch's last paste.
+ *
+ * ## A sentence the fixed words miss (`read`, `NotchAsksFor`)
+ *
+ * The fixed words are English, with a little Italian, and they are exact.
+ * A sentence that none of them fits is read once by a small model
+ * (./intent-read.ts), which may say that it is one of the intents here, in
+ * other words or another language: "impostazioni", "tienimi d'occhio la
+ * risposta di Sam". The model proposes and this table disposes. An intent
+ * can be read only when it says how (`read`): from what the model filled in
+ * (`slots`) it gives the fixed words that say the same thing, and those
+ * words are then put to the table like any sentence. So a reading passes
+ * every check a fixed match does, because it is one: the order of the
+ * bands, the state the intent needs, the reply rule, the line or the fuse
+ * before anything goes. An intent without `read` is only ever its fixed
+ * words: the control word, an answer to what is up, anything that sets the
+ * hands to work at once on a thing that is held or was just pasted.
+ *
+ * For a sentence that no intent takes, the same reading says what kinds of
+ * act the sentence asks for (`NotchAsksFor`): that is the answer to "what do
+ * the owner's words cover" for an instruction, and it goes with the turn
+ * (./asks.ts, `asksFor`). When the sentence was not read (no model, too
+ * slow, an answer that is none) there is no such answer, and the words
+ * cover nothing, as before.
  */
 
 /** What kind of act an intent is. See the top of this file. */
@@ -158,7 +181,63 @@ export interface NotchIntent {
   inReply?: boolean;
   /** The fast path: the part's own fixed words. Null when the sentence is not this intent now. */
   match(text: string, how?: NotchIntentHow): NotchIntentHit | null;
+  /**
+   * How a reading of a sentence that the fixed words missed can be this intent (./intent-read.ts). Not there:
+   * only the fixed words are it.
+   */
+  read?: NotchIntentRead;
 }
+
+/** How an intent is reached from a reading of a sentence. See the top of this file. */
+export interface NotchIntentRead {
+  /** What the model fills in, by name, each with one line that says what it is. None: the intent needs nothing but its name. */
+  slots?: Readonly<Record<string, string>>;
+  /**
+   * The fixed words that say the same thing, built from what was filled in: they are put to the table, and
+   * have to be taken by this intent. Null when what was filled in is not something this intent can take: a
+   * name the sentence does not have, a time that is none. `sentence` is what the owner said.
+   */
+  words(slots: Readonly<Record<string, string>>, sentence: string): string | null;
+}
+
+/** An intent that needs nothing filled in: it is read as these fixed words. */
+export const readAs = (words: string): NotchIntentRead => ({ words: () => words });
+
+/** The words of something, as they are told apart: small letters, and nothing but letters and digits. */
+const plainWords = (text: string): string[] => text.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}@.]+/gu, ' ').replace(/(^|\s)[.]+|[.]+(?=\s|$)/g, ' ').split(/\s+/).filter(Boolean);
+
+/**
+ * Whether every word of `value` stands in the sentence the owner said. What a reading fills in is taken only
+ * when it does: a name, or what an agent is to do, comes out of the owner's own words and is never the
+ * model's. "Sam" is in "avvisami quando Sam risponde"; "Eve" is not.
+ */
+export function saidIn(sentence: string, value: string): boolean {
+  const have = new Set(plainWords(sentence));
+  const want = plainWords(value);
+  // "Sams", as speech writes "Sam's" down, is Sam.
+  return want.length > 0 && want.every((word) => have.has(word) || have.has(`${word}s`));
+}
+
+/**
+ * The kinds of act a sentence can ask for, as a reading of it says them. The acts of an intent (`NotchIntentAct`)
+ * without "none" and "answer", which are not things a sentence asks for.
+ */
+export type NotchSentenceAct = 'send' | 'command' | 'install' | 'settings' | 'screen' | 'create';
+export const NOTCH_SENTENCE_ACTS: readonly NotchSentenceAct[] = ['send', 'command', 'install', 'settings', 'screen', 'create'];
+
+/**
+ * What an instruction asks for, as far as it was read. This is the one field the check of "did the owner ask
+ * for this?" reads for a sentence that no intent took (docs/notch/fixes/01-owner-word.md):
+ *
+ *   acts   the kinds of act the sentence asks for. Empty: it asks for none (a question to be answered).
+ *          "screen" is something in the window in front: where a thing is, how to do something there.
+ *   by     who said so. 'intent': an intent of the table took the sentence, and `acts` is that intent's own
+ *          act (never the model's word). 'reading': no intent took it, and the model read it.
+ *
+ * Null, or not there: the sentence was not read (no model, too slow, a reply, an answer that was none). Then
+ * its words cover nothing, and whoever asks has to treat it as it did before there was a reading.
+ */
+export interface NotchAsksFor { acts: readonly NotchSentenceAct[]; by: 'intent' | 'reading' }
 
 /** A part that has words of its own. */
 export interface NotchIntentSource { intents(): readonly NotchIntent[] }

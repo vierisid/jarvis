@@ -90,6 +90,13 @@ Each of these is how it is built now, and one line to change.
   with Leo: it goes to the assistant as an entry to make.
 - An eye ("tell me when Sam replies") is kept at once with nothing asked, as it always was. It is the one
   intent that creates something with no line first and no live context (`alone` says why).
+- C4: a sentence that names somebody of the organisation is read in the same one question, but keeps the
+  eight seconds and the middle tier people.read had (`notch_intent_people`), not 2.5 s on the low tier.
+- C4: "how do I ..." and "where is ..." with no word that points at the screen ("how do I add a page")
+  point only when the reading says they are about the window in front. Before, every such question read the
+  window. When the reading is late or fails, they point as before.
+- C4: no "One moment" is shown while a sentence is read (2.5 s at most); the words stay up, as they did
+  while people.read read.
 
 
 ## What C1 found that the design had wrong or did not have
@@ -116,6 +123,17 @@ Each of these is how it is built now, and one line to change.
   the whole sentence, and two narrow guards cover the calendar entry and the "daily ... should" statement.
 - "Get the reply from support" (A4) is still a chase: it shows its own line, and whether a name the notch does
   not know may be chased is not settled. It is not marked.
+
+## What C4 found that the design had wrong
+
+- "It replaces two calls": it replaces people.read in the notch, but people.read stays where there is no
+  reader (tests, a notch built without `readIntent`), and the turning of fixed words to the reader ("tell
+  Leo I love him") stays its own call: those are fixed words, which the reader is never asked about.
+- The design's `never` list as "none" examples was not enough: a reading names an intent only through that
+  intent's own fixed words (`read.words`), re-put to the table, so the state, bands, reply rule, decision 5
+  and line or fuse are the same code as a fixed match, not a second copy of them.
+- A question that names a screen thing in Italian ("dov'e il pulsante esporta") had to point at once as it
+  did; the list of words that point at the screen has the Italian ones.
 
 ## Status
 
@@ -145,7 +163,11 @@ Each of these is how it is built now, and one line to change.
   or, with a job shown, about a sentence that begins as the job's words.
   Every intent has `act` (none, answer, screen, send, create, command, install, settings) and `first` (acts,
   yes, fuse) for point 1 to read. Nothing reads them yet.
-- C4 classifier: pending.
+- C4 classifier: done in "notch: a sentence the fixed words miss is read once by a small model, which can
+  only pick an intent the table then places" (src/notch/intent-read.ts; `read` on intents; `NotchAsksFor` on
+  the turn; people.read folded in as `reads`; the screen gate `pointsAtScreen`). All 20 C4 routing rows and
+  the 2 C4-with-C5 rows lost their mark; 15 rows were added (a model that obeys the sentence, a wrong model,
+  the job read in front and fresh, replies that are not read). Every missed row now says "read+".
 - C5 one When: done in "notch: one reader of a time, which refuses what it cannot read instead of rewriting it"
   (src/notch/when.ts; `NotchWhen` is the one type, read by `readSchedule` for a sentence, `readWhen` for a
   whole value, `whenSaid` for words said over a line). agents.ts `scheduleIn`, teach.ts `parseSchedule` and

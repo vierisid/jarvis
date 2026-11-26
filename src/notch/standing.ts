@@ -38,7 +38,7 @@ import type { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { routeByIntents, saidIn, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -76,6 +76,15 @@ function whoOf(raw: string): string {
   const name = raw.trim().replace(/[.,;:!?]+$/, '').replace(/'s$/i, '');
   if (!name || name.split(/\s+/).length > 3 || name.split(/\s+/).some((part) => NOT_A_NAME.test(part)) || !/^[\p{L}][\p{L}\s.'-]*$/u.test(name)) return '';
   return name.replace(/\s+/g, ' ');
+}
+
+/**
+ * Who a reading of a sentence named (./intent-read.ts), when it is somebody: a name or an address that
+ * stands in the owner's own sentence. '' otherwise: the model names nobody the owner did not.
+ */
+function readWho(named: string | undefined, sentence: string): string {
+  const who = whoOf(named ?? '');
+  return who && saidIn(sentence, who) ? who : '';
 }
 
 /**
@@ -1099,6 +1108,11 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     id: 'standing.eye', feature: 'standing', says: 'keep an eye on mail from one person, and say when they reply', band: 'command', act: 'create', first: 'acts',
     alone: 'an eye only ever tells the owner, it is said as it is kept, and it is taken back from its row in Home',
     examples: ['tell me when Sam replies', 'let me know if Anna writes back'],
+    read: {
+      slots: { who: 'the person whose reply is waited for, by the name or the address the sentence gives them' },
+      // Somebody the sentence itself names, and nobody else.
+      words: (slots, sentence) => (readWho(slots.who, sentence) ? `tell me when ${readWho(slots.who, sentence)} replies` : null),
+    },
     match(text) {
       if (stopped) return null;
       const eye = eyeRequest(text);
@@ -1108,6 +1122,20 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     // A chase writes to somebody by itself until it has the answer: it is shown as a line that takes a yes.
     id: 'standing.chase', feature: 'standing', says: 'chase one person for an answer until it is there', band: 'command', act: 'create', first: 'yes',
     examples: ["get Sam's answer on the contract by Friday", 'chase Leo until he answers'],
+    read: {
+      slots: {
+        who: 'the person who is to be chased for an answer, by the name or the address the sentence gives them',
+        about: 'what the answer is about, in the owner\'s own words, when that was said; leave it out otherwise',
+        by: 'the day it is wanted by, in English ("Friday", "tomorrow", "next week"), when one was said; leave it out otherwise',
+      },
+      words(slots, sentence) {
+        const who = readWho(slots.who, sentence);
+        const about = (slots.about ?? '').replace(/[.!?\s]+$/, '').trim();
+        const by = slots.by ? chaseDay(slots.by) : '';
+        if (!who || (about && (!saidIn(sentence, about) || /\b(?:by|until)\b/i.test(about))) || (slots.by && !by)) return null;
+        return `get ${who}'s answer${about ? ` on ${about}` : ''}${by ? ` by ${by}` : ''}`;
+      },
+    },
     match(text) {
       if (stopped) return null;
       const chase = chaseRequest(text);

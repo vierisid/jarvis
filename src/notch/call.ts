@@ -56,7 +56,7 @@ import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
 import { NOTCH_TALK_FILLER, notchTalkSignOff, pcmToWav } from './talk.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 export const NOTCH_CALL_EVENT = 'notch.call';
 
@@ -973,6 +973,7 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
       return intents ??= [{
         id: 'calls.open', feature: 'calls', says: 'show what came out of the last call', band: 'open', act: 'none', first: 'acts',
         examples: ['the call', 'show my last call'],
+        read: readAs('the call'),
         match(text) {
           if (stopped || !callRequest(text)) return null;
           return { did: 'Show what came out of the last call.', run: () => { deps.inbox.present('calls', open); } };

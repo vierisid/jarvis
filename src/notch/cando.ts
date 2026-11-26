@@ -19,7 +19,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const talk: NotchPart = { key: 'talk' };
@@ -122,6 +122,7 @@ export function attachNotchCanDo(deps: { inbox: NotchInbox }): NotchCanDo {
   const intents: NotchIntent[] = [{
     id: 'cando.open', feature: 'canDo', says: 'show what the notch can do', band: 'open', act: 'none', first: 'acts',
     examples: ['what can you do', 'help', 'how does this work'],
+    read: readAs('what can you do'),
     match(text) {
       return canDoRequest(text) ? { did: 'Show what the notch can do.', run: () => { deps.inbox.present('can-do', (stage) => open(stage)); } } : null;
     },

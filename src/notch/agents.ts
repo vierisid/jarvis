@@ -30,8 +30,8 @@ import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
-import { readSchedule, readWhen, sayWhen } from './when.ts';
+import { readAs, routeByIntents, saidIn, type NotchIntent } from './intents.ts';
+import { readSchedule, readWhen, sayWhen, sayWhenPlain } from './when.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -753,6 +753,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   const intents: NotchIntent[] = [{
     id: 'agents.list', feature: 'agents', says: 'show the agents', band: 'open', act: 'none', first: 'acts',
     examples: ['my agents', 'show me my agents'],
+    read: readAs('my agents'),
     match(text) {
       if (stopped) return null;
       return agentsListRequest(text) ? { did: 'Show the agents.', run: () => { deps.inbox.present('agents', (stage) => open(stage)); } } : null;
@@ -762,6 +763,20 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     id: 'agents.make', feature: 'agents', says: 'make an agent from a sentence that says when and what', band: 'command', act: 'create', first: 'yes',
     examples: ['every Monday send Sam the numbers', 'can you make an agent that replies to new leads'],
     never: ['daily standup notes should go to the team', 'every evening I go for a run', 'remind me every day at 8 to take my pills'],
+    // A sentence in another language, or put another way: the model says when and what, and the notch reads
+    // its own kind of schedule out of that (./when.ts). What it is to do has to be the owner's own words.
+    read: {
+      slots: {
+        when: 'the schedule, in English, as "<day> at <H:MM>" on a 24-hour clock: "Monday at 9:00", "day at 18:00" (every day), "weekday at 9:00" (Monday to Friday), "Monday and Friday at 9:00". An hour from 1 to 6 with no word for the morning or the night is the afternoon ("at 6" is 18:00). With no hour said, 9:00. Only a day of the week and an hour: for anything else ("every 2 weeks", "every month", "every hour", two times) the intent is "none"',
+        job: 'what it is to do, in the owner\'s own words and language, without the schedule',
+      },
+      words(slots, sentence) {
+        const when = readWhen(slots.when ?? '', { exact: true });
+        const job = (slots.job ?? '').replace(/[.!?\s]+$/, '').trim();
+        if (!when || when.days.length === 0 || !job || !saidIn(sentence, job)) return null;
+        return `every ${sayWhenPlain(when)} ${job}`;
+      },
+    },
     match(text) {
       if (stopped) return null;
       const asked = agentSentence(text);

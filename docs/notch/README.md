@@ -1091,6 +1091,20 @@ listed under the invariants.
     is somebody else's. The read runs beside the working line, so it can be
     stopped.
 
+    **Only a question about the screen reads the window** (26 November
+    2026). "How do I cook rice" and "where is my phone" begin like one, and
+    used to send the window's list of what is in it, or a picture of it, to
+    the model before the question ran. Now a question that itself points at
+    the screen ("this", "here", "the export button", the settings menu:
+    `pointsAtScreen` in `src/notch/point.ts`), or that goes on with a walk,
+    is answered by pointing at once, as before. Any other is first read with
+    every sentence the fixed words miss (263), on its words and the app's
+    name alone, and the window is read only when that reading says the
+    question is about what is in front ("screen"). When it says not, nothing
+    of the window is read or sent and the question is an instruction like
+    any other. When it was not read (no model, too slow, a failure), it is
+    answered by pointing, as it was before there was a reading.
+
     **A window that says nothing about what is in it is looked at.** The
     list above works where a program tells of its own buttons: OBS, Notepad,
     a file window, Settings. A page in a browser, the many apps built on a
@@ -3257,6 +3271,7 @@ other.
 | The lists the parts hand over, and the one resolver | `src/notch/real.ts` (`notchIntents`, `notchSide`) |
 | Asked once for an instruction, and the reply rule | `src/notch/asks.ts` (`sided`, `reply`) |
 | What every sentence means, pinned row by row | `src/notch/intents-corpus.txt`, `intents-corpus.test.ts` |
+| A sentence the fixed words miss, read once | `src/notch/intent-read.ts`, wired in `src/notch/real.ts` (`notchRead`) and `src/daemon/notch-asks.ts` (`readIntent`) |
 
 255. **A sentence is put to the table once.** The answer is kept on the
     instruction (`routed`), and where its line is drawn, whether a name in
@@ -3365,16 +3380,68 @@ other.
     itself is read as written: "day at 6:00" on a line, on an agent's card
     or in a sentence somebody sent is six in the morning, where a bare six
     in a person's words is the afternoon.
+263. **A sentence the fixed words miss is read once, by a small model**
+    (the owner, 26 November 2026: on every such sentence, and measure
+    afterwards; `src/notch/intent-read.ts`). The fixed words stay first and
+    wait for nothing (docs/peers/README.md, 140): a sentence an intent takes
+    is never put to a model. Any other is asked about once, before it runs:
+    is it one of the things the notch does itself, said another way or in
+    another language ("impostazioni" is the settings, "avvisami quando Sam
+    risponde" is an eye on Sam's answer, "fallo di nuovo" is the job), and
+    what kinds of act does it ask for. The model sees the rules (the same for
+    every sentence, made from the table), the NAME of the app in front, the
+    colleagues the sentence itself names, and the sentence, cut to 600
+    letters, between marks it cannot close. Never a window's title or what
+    is in it, never a picture, never memory or mail. The smallest tier, 2.5
+    seconds, counted as `notch_intent`; a sentence that names somebody here
+    keeps the eight seconds and the middle tier it had (`notch_intent_people`,
+    docs/peers/README.md, 153). After the deadline, on a failure, with no
+    model, or on an answer in no form, the sentence goes on as an
+    instruction exactly as before. Three sentences in a row not read in time
+    and nothing is asked for five minutes. The log says how long each took,
+    which intent and which acts, never the words. Not read: a reply to a
+    question the assistant asked back (257), "remember that ...", something
+    sent with a file, a question that itself points at the screen (85).
+264. **The model proposes, the table disposes.** Only an intent that says
+    how it is read (`read` in `src/notch/intents.ts`) can be named: the
+    things to open, an eye and a chase, an agent, "watch me", the job, and
+    a word for somebody here. Never the control word, an answer to what is
+    up, or anything done at once to what is held. What the model fills in
+    has to stand in the owner's own sentence (a name, what an agent is to
+    do, a number) or be a time the one reader can read (262), and it is
+    turned into the intent's own fixed words, which are put to the table
+    like any sentence. So a reading meets every check a fixed match meets,
+    because it is one: the bands, the state the intent needs, the reply
+    rule, decision 5 for the job, the line or the fuse before anything goes.
+    A sentence an intent must never take is not that intent, and a plain
+    question is never made into something that sends, creates or acts. Any
+    other answer is "none". A sentence that tells the model what to answer
+    can at most select one of these intents, and the table places it or not.
+265. **Every sentence read says what it asks for** (`NotchAsksFor` in
+    `src/notch/intents.ts`, `asksFor` on the turn in `src/notch/asks.ts`):
+    the kinds of act among send, command, install, settings, screen and
+    create. When an intent took the sentence it is that intent's own act,
+    never the model's word (`by: 'intent'`); when none did it is the model's
+    list (`by: 'reading'`), and an act it is not sure of is left out. A plain
+    question asks for nothing but, at most, the screen. A sentence that was
+    not read has no list at all, which is not the same as an empty one: its
+    words then cover nothing, as before. It goes with the turn to the notch's
+    door (`src/daemon/notch-asks.ts`) and stops there: the check of what the
+    owner's words cover (docs/notch/fixes/01-owner-word.md) takes it from
+    that place.
 
 What is not done, or not proven:
 
-- **The fixed words are still English, with a little Italian.** "Fallo",
-  "impostazioni", "tienimi d'occhio la risposta di Sam" go to the assistant.
-  The reading of a sentence the fixed words miss is the next step.
-- **The reading of words that name somebody is still its own call**
-  (`src/notch/people-read.ts`). It is kept from the calendar entry and from
-  a sentence that begins as the words for a shown job, one by one: it has
-  not been given the sentences an intent must never take.
+- **The fixed words are still English, with a little Italian.** Other
+  languages are now read by the model (263), so they wait for it: about 1.6
+  seconds measured for calls of this size, at most 2.5. With no model they
+  go to the assistant as before.
+- **How long the reading takes on the owner's machine is not measured.** It
+  is counted under `notch_intent` and logged per sentence, so that whether a
+  plain English question with nothing up may skip it can be decided.
+- **No "One moment" is shown while a sentence is read.** The words stay up
+  as they were heard, and Esc turns spoken ones away, as with the reading
+  of words about people.
 - **Whether a draft that is open should give way to "settings" and "undo"
   is not decided.** It takes whatever is said that is no question, and
   since the bands that includes "day one" and "look around", which used to

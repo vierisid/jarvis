@@ -285,7 +285,10 @@ function turnDoor(transport: BriefChatTransport, db: Database, attachments: () =
     ready: () => transport.readiness() === 'ready',
     conversation: () => notchConversation(transport),
     async submit(turn) {
-      const { files, ...rest } = turn;
+      // `asksFor`: what the sentence asks for, as the reading of it said (notch/intents.ts, `NotchAsksFor`). It
+      // arrives here with the turn and stops here: nothing reads it yet. The check of what the owner's words
+      // cover (docs/notch/fixes/01-owner-word.md) takes it from this place.
+      const { files, asksFor: _asksFor, ...rest } = turn;
       if (!files?.length) { transport.submit(rest); return; }
       // What was circled on the screen, or a file that was dropped: kept as the
       // turn's attachments, which is where the model reads a file as outside
@@ -387,6 +390,15 @@ export function notchAskDeps(options: NotchAskOptions): NonNullable<NotchRealDep
     db: options.db,
     turns,
     modelReady: () => notchModelReady(options.llm()),
+    // A sentence that none of the fixed words fit is read once before it runs (notch/intent-read.ts): the
+    // smallest tier, a short answer, and counted under its own name so that what the owner waits for it can be
+    // measured (the owner, 26 November 2026: on every such sentence, and measure afterwards). A sentence that
+    // names somebody of the organisation is asked of the middle tier, which read such sentences before: its
+    // answer may hold the words that go to them. It is what the owner has just said, so it does not wait
+    // behind the assistant's own work.
+    readIntent: (messages, more) => runWithOrigin('user', async () =>
+      (await options.llm().chatTier(more.tier === 'people' ? 'medium' : 'low', more.tier === 'people' ? 'notch_intent_people' : 'notch_intent', messages,
+        { max_tokens: more.tier === 'people' ? 320 : 200, temperature: 0, signal: more.signal })).content),
     // "Where is…?" (pass 9): the window the person is in is read on their
     // machine, a model picks the element that answers, and that machine draws
     // a ring round it. Nothing is read with watching switched off.

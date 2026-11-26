@@ -26,7 +26,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -282,12 +282,14 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
   const intents: NotchIntent[] = [{
     id: 'prefs.settings', feature: 'prefs', says: 'open the settings of the notch', band: 'open', act: 'none', first: 'acts',
     examples: ['settings', 'show me the settings'],
+    read: readAs('settings'),
     match(text) {
       return prefsRequest(text) ? { did: 'Show the settings.', run: () => { deps.inbox.present('settings', async (stage) => { await settings(stage); }); } } : null;
     },
   }, {
     id: 'prefs.connections', feature: 'prefs', says: 'open what is connected', band: 'open', act: 'none', first: 'acts',
     examples: ['connections'],
+    read: readAs('connections'),
     match(text) {
       return connectionsRequest(text) ? { did: 'Show the connections.', run: () => { deps.inbox.present('connections', (stage) => connections(stage)); } } : null;
     },

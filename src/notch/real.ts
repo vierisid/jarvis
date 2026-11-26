@@ -69,6 +69,7 @@ import { notchBeforeNotes } from './before.ts';
 import type { NotchPart } from './protocol.ts';
 import { notchSaidFeature } from './said.ts';
 import { whereQuestion } from './point.ts';
+import { createNotchIntentReader, type IntentReadPeople, type NotchIntentReader, type NotchIntentReaderDeps, type NotchRead } from './intent-read.ts';
 import { createNotchRegistry } from './registry.ts';
 
 export { NOTCH_TICK_FAILURE_SAID_MS } from './registry.ts';
@@ -170,6 +171,12 @@ export interface NotchRealDeps {
     understand?: NotchAsksDeps['understand'];
     /** "Where is…?" answered by pointing at it on the screen (pass 9). */
     point?: NotchAsksDeps['point'];
+    /**
+     * One small question to the model about a sentence that none of the fixed words fit (./intent-read.ts).
+     * `tier` 'people': the sentence names somebody of the organisation, and is asked of the tier that read
+     * such sentences before. Not given: only words about people are read, by `peers.think`.
+     */
+    readIntent?: NotchIntentReaderDeps['think'];
     /** Puts an approval in plain words, from its tool and arguments alone. */
     describeApproval?: (request: ApprovalRequest) => Promise<string | null>;
     /** What on the screen an approval would land on, as that machine reads it now. Shown to the person only. */
@@ -368,18 +375,41 @@ export function notchSide(routers: NotchSideRouters, text: string, how?: NotchAs
   return resolveIntent(notchIntents(routers), text, how);
 }
 
+/** What a reading of a sentence is made from (`notchRead`). */
+export interface NotchReadParts {
+  teach: { begins(text: string): boolean } | null;
+  people: { read(text: string): Promise<NotchIntentHit | null> | null; reads(text: string): IntentReadPeople | null } | null;
+  /** The one reader of a sentence the fixed words missed (./intent-read.ts), and the parts whose intents it may name. Not given: only words about people are read, as before there was one. */
+  reader?: NotchIntentReader | null;
+  routers?: NotchSideRouters;
+  /** The name of the app in front, when the notch is looking at it. The name, and nothing else of the window. */
+  app?: () => string | null;
+}
+
 /**
- * Words that name somebody of the organisation and that no intent took: what the model makes of them
- * (./people-read.ts), or null when it is not asked. It is not asked about a sentence that begins as the words
- * for a job that was shown ("continue with the draft to Sam"): that sentence is for the assistant, and a
- * reading of it could send a word to Sam. The notch calls this, and so does the corpus.
+ * A sentence that no intent took: what the model makes of it (./intent-read.ts), or null when it is not
+ * asked and nothing waits. One question for one sentence: whether it is one of the things the notch does
+ * itself, said another way; when it names somebody of the organisation, whether it is a word, a question or
+ * a file for them (the reading ./people.ts used to ask for by itself, now part of the same question); and
+ * what kinds of act it asks for. The answer selects among the intents of the table and the table places it.
+ *
+ * A sentence that begins as the words for a job that was shown ("continue with the draft to Sam") is not
+ * read as a word for anybody: that sentence is for the assistant, and a reading of it could send a word to
+ * Sam. Neither is an entry for the owner's own calendar, nor a sentence that names somebody who is not here
+ * beside somebody who is (./people.ts, `reads`). The notch calls this, and so does the corpus.
  */
-export function notchRead(
-  parts: { teach: { begins(text: string): boolean } | null; people: { read(text: string): Promise<NotchIntentHit | null> | null } | null },
-  text: string,
-): Promise<NotchIntentHit | null> | null {
-  if (parts.teach?.begins(text)) return null;
-  return parts.people?.read(text) ?? null;
+export function notchRead(parts: NotchReadParts, text: string, how?: NotchAskHow): Promise<NotchRead | null> | null {
+  const about = parts.teach?.begins(text) ? null : parts.people;
+  if (!parts.reader || !parts.routers) {
+    // No reader of every sentence: words that name somebody are still read, in the question they always had.
+    const reading = about?.read(text) ?? null;
+    return reading ? reading.then((hit) => ({ hit, asksFor: null, how: 'read' as const, ms: 0 })) : null;
+  }
+  // After sentences that were not read in time the reading rests: nothing is asked, and nothing waits.
+  if (parts.reader.resting()) return null;
+  let app: string | null = null;
+  try { app = parts.app?.() ?? null; } catch { app = null; }
+  return parts.reader.read({ text, how, table: notchIntents(parts.routers), app, people: about?.reads(text) ?? null });
 }
 
 /**
@@ -602,6 +632,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   if (deps.asks) {
     const emergency = deps.emergency;
     const pauseWords = emergency ? notchPauseWords(emergency, log) : null;
+    const readIntent = deps.asks.readIntent;
+    const intentReader = readIntent ? createNotchIntentReader({ think: readIntent, log }) : null;
     asks = attachNotchAsks(inbox, {
       ledger: new NotchLedger(deps.asks.db),
       turns: deps.asks.turns,
@@ -617,10 +649,16 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       // before an agent, because "tell me when" and "get Sam's answer" are theirs.
       // The parts are read when something is said, not now: several of them are made further down.
       side: (text, how) => notchSide({ pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine }, text, how),
-      // After all of them: words that name somebody of the organisation and are none of the fixed ones are
-      // read by the model (./people-read.ts). Only what `side` left: while day one waits to hear the person,
-      // whatever they say is its answer and never gets here.
-      read: (text) => notchRead({ teach, people }, text),
+      // After all of them: a sentence that is none of the fixed words is read by the model, once
+      // (./intent-read.ts): is it one of these things said another way, is it a word for somebody of the
+      // organisation, and what does it ask for. Only what `side` left: while day one waits to hear the
+      // person, whatever they say is its answer and never gets here. The model is told the sentence and the
+      // name of the app in front, when the notch is looking at it and the person is not on the desktop.
+      read: (text, how) => notchRead({
+        teach, people, reader: intentReader,
+        routers: { pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine },
+        app: () => (where && where.onDesktop() !== true ? where.front()?.name ?? null : null),
+      }, text, how),
       keys: () => saidLine.keys(),
       // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
       people: () => mail?.store.people() ?? [],

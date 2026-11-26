@@ -32,7 +32,7 @@ import {
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import { findRounds, roundsApps, roundsCopy, roundsToDo, watchKeysOk, type Rounds, type WatchStep } from './rounds.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
-import { routeByIntents, type NotchIntent } from './intents.ts';
+import { readAs, routeByIntents, type NotchIntent } from './intents.ts';
 import { nextWhen, readWhen, sayWhen, type NotchWhen } from './when.ts';
 
 /** How long a teaching may last. The desktop app takes its hooks out at the same time by itself. */
@@ -859,6 +859,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     // What is shown is kept only on "done", said or pressed on the line that is up all the while: Esc throws it away.
     id: 'teach.watch', feature: 'teach', says: 'watch a job being shown, to learn it', band: 'command', act: 'create', first: 'yes',
     examples: ['watch me', 'let me show you'],
+    read: readAs('watch me'),
     over: ['said.answer'],
     match(text) {
       if (stopped) return null;
@@ -882,6 +883,20 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     never: ['do it by email', 'do that tomorrow morning instead', 'continue with the draft to Sam', 'finish it by Friday', 'run the same report as last week',
       'repeat that please, I did not hear', 'do this for all the files in downloads', 'do them one at a time please', 'carry on with the summary',
       'do the same for the other file', 'do it on the other file', 'do the other thing', 'do it for me', 'do it with me', 'continue with the rest', 'do it at 5'],
+    // "Fallo", "continua", "vai avanti": the same words in another language. Not a sentence that begins as
+    // the English words for the job: the fixed words had that one, and found more in it than the job
+    // ("do it by email"). What a reading comes to is asked first or done at once exactly as the fixed words
+    // are (README, 258).
+    read: {
+      slots: { count: 'how many more times, or on how many rows, as a number, when one was said; leave it out otherwise' },
+      words(slots, sentence) {
+        if (runItBegins(sentence)) return null;
+        if (slots.count === undefined) return 'do it again';
+        // A number the sentence has, as digits: none is made up.
+        const count = /^\d{1,3}$/.test(slots.count) && new RegExp(`(?<!\\d)${slots.count}(?!\\d)`).test(sentence) ? Number(slots.count) : 0;
+        return count >= 1 ? `run it on ${count}` : null;
+      },
+    },
     over: ['said.answer'],
     match(text) {
       if (stopped) return null;

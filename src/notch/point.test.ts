@@ -3,7 +3,7 @@ import {
   NOTCH_POINT_MAX_ELEMENTS, NOTCH_POINT_MAX_STEPS, NOTCH_POINT_MS, NOTCH_POINT_SETTLE_MS, NOTCH_POINT_SETTLE_STEP_MS, NOTCH_POINT_UNCHANGED_MS, NOTCH_POINT_WAIT_MS,
   NOTCH_POINT_CLOSE_H, NOTCH_POINT_CLOSE_W, NOTCH_POINT_PICTURE_MAX, NOTCH_POINT_SYSTEM, POINT_SEEN,
   createNotchPoint, pointBlind, pointBox, pointBoxRect, pointChoice, pointChosen, pointCloseMessages, pointCloseUp, pointGoOn, pointLabel, pointMessages, pointPlace,
-  pointSeen, pointSeenChoice, pointSeenMessages, pointSentence, pointVerb, pointWindow, whereKind, whereQuestion,
+  pointSeen, pointSeenChoice, pointSeenMessages, pointSentence, pointVerb, pointWindow, pointsAtScreen, whereKind, whereQuestion,
 } from './point.ts';
 import type { PointMessage, PointSeen, PointWindow } from './point.ts';
 
@@ -79,6 +79,16 @@ describe('a question about where something is on the screen', () => {
       'Send Leo the numbers', 'close this window', 'somewhere over the rainbow', 'tell me where we are with Lumen', 'where?', '',
       'what is two plus two', `where is ${'x'.repeat(300)}`, 'how are we doing on installs', 'how many replies wait', 'start recording',
     ]) expect(whereQuestion(no)).toBe(false);
+  });
+});
+
+describe('a question that itself points at the screen', () => {
+  // These are answered by pointing at once; any other "where" or "how" is read first (./intent-read.ts).
+  test('this, here, or a thing only a screen has, in English and Italian', () => {
+    for (const yes of ['where is the export button', 'how do I export this as PDF', 'how do I change it here', 'where is the settings menu', "dov'è il pulsante esporta",
+      'Non trovo il tasto salva', 'dove trovo le impostazioni', 'how do I turn on this toggle']) expect([yes, pointsAtScreen(yes)]).toEqual([yes, true]);
+    for (const no of ['how do I cook rice', 'where is my phone', 'where are you from', 'how to say hello in Japanese', 'come si dice ciao in giapponese',
+      'how do I add a page', 'come faccio a esportare in PDF', 'is there a way to lose weight fast']) expect([no, pointsAtScreen(no)]).toEqual([no, false]);
   });
 });
 

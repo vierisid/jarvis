@@ -143,9 +143,12 @@ export function peopleIndirect(verb: string, words: string): boolean {
   return false;
 }
 
-export const NOTCH_PEOPLE_READ_SYSTEM = [
-  `You read one sentence that the owner of this computer said or typed to their assistant, ${NOTCH_NAME}. The sentence names one or more colleagues. Each colleague has a ${NOTCH_NAME} of their own on their own laptop, and the two can pass things to each other.`,
-  'Say what the owner wants, as one of these kinds:',
+/**
+ * The kinds a sentence about a colleague can be, each with what it is and how it is said. One list, read by
+ * the model in both places it is asked: here, and in the one reading of a sentence the fixed words missed
+ * (./intent-read.ts), which asks this and what else the sentence could be in one question.
+ */
+export const NOTCH_PEOPLE_READ_KINDS: readonly string[] = [
   '- "tell": a message for the colleague to read. Anything the owner wants them to know, hear or be told. "tell Leo hi", "can you let Leo know I am late", "say thanks to Leo for me", "remind Leo about the review".',
   '- "ask": a question for the colleague that can be answered with yes or no, or by picking one of the things named in it. "ask Leo if Thursday works", "check with Leo whether he is coming", "ask Leo: Thursday or Friday?". Any other question to the colleague ("ask Leo how he is", "ask Leo what he thinks of the deck") is a "tell": they read it and answer in their own words.',
   '- "file-from": the owner wants a file that the colleague has. "get me the logo from Leo", "I need the Q3 numbers from Leo", "can Leo send me the contract", "ask Leo for the latest deck".',
@@ -153,8 +156,11 @@ export const NOTCH_PEOPLE_READ_SYSTEM = [
   `- "do": something for the colleague's ${NOTCH_NAME} to find out or to do on the colleague's laptop. Only when their ${NOTCH_NAME}, laptop or computer is what is asked. "ask Leo's ${NOTCH_NAME} what changed in the last deck", "restart the server on Leo's laptop", "can you check on Leo's computer whether the build passed".`,
   '- "time": a time for the owner and the colleague to meet or talk. "find half an hour with Leo", "when can Leo and I talk", "I need a call with Leo this week".',
   '- "look": the owner wants the colleague to see what the owner has just circled or pointed at on the screen. "show this to Leo", "Leo should see this", "send Leo what I circled".',
-  '- "none": anything else. An email, a text message or a call by another service; a calendar entry; a reminder for the owner; a question about the colleague ("what did Leo say?", "when did Leo last write?"); something to be looked up or done on the owner\'s own computer; or a sentence in which the colleague is only mentioned.',
-  'The words:',
+];
+/** What is "none" of them. */
+export const NOTCH_PEOPLE_READ_NONE = 'An email, a text message or a call by another service; a calendar entry; a reminder for the owner; a question about the colleague ("what did Leo say?", "when did Leo last write?"); something to be looked up or done on the owner\'s own computer; or a sentence in which the colleague is only mentioned.';
+/** How the words that go to the colleague are written, and whom it can be for. */
+export const NOTCH_PEOPLE_READ_WORDS: readonly string[] = [
   '- For "tell" and "ask", "words" is the message as the colleague will read it: from the owner, said to them. Turn it to the reader. "tell Leo I love him" gives "I love you". "tell Leo his deck is great" gives "Your deck is great". "tell Leo to call me" gives "Call me." "ask Leo if he is coming tomorrow" gives "Are you coming tomorrow?" "ask Leo how he is" gives "How are you?"',
   '- Keep the owner\'s own words, in their order, wherever you can. Change only what has to change so that it reads as said to the colleague. Leave out the words that only say what is to be done with it ("can you", "tell", "let him know that", "for me"). Add nothing that was not said: no greeting, no name, no sign-off, no reason, no politeness of your own, no fact of your own.',
   '- A "he", "she" or "they" that means somebody else stays as it is. "tell Leo that Anna lost her keys" gives "Anna lost her keys."',
@@ -163,6 +169,15 @@ export const NOTCH_PEOPLE_READ_SYSTEM = [
   `- For "do", "words" is what their ${NOTCH_NAME} is to do or to find out, said to it: "Restart the server.", "What changed in the last deck?"`,
   '- For "time", "minutes" is how long it is to be, and 30 when that was not said.',
   '- "to" is the numbers of the colleagues it is for, from the list. Only "file-to" can be for more than one. When it is also for somebody who is not in the list, or it is not clear for whom it is, the kind is "none".',
+];
+
+export const NOTCH_PEOPLE_READ_SYSTEM = [
+  `You read one sentence that the owner of this computer said or typed to their assistant, ${NOTCH_NAME}. The sentence names one or more colleagues. Each colleague has a ${NOTCH_NAME} of their own on their own laptop, and the two can pass things to each other.`,
+  'Say what the owner wants, as one of these kinds:',
+  ...NOTCH_PEOPLE_READ_KINDS,
+  `- "none": anything else. ${NOTCH_PEOPLE_READ_NONE}`,
+  'The words:',
+  ...NOTCH_PEOPLE_READ_WORDS,
   'Answer with JSON and nothing else, in one of these forms:',
   '{"kind":"tell","to":[1],"words":"I love you"}',
   '{"kind":"ask","to":[1],"words":"Are you coming tomorrow?"}',
