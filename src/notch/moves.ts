@@ -21,6 +21,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchStage } from './stage.ts';
 import type { NotchAct } from './surface.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 
@@ -197,6 +198,8 @@ export interface NotchMovesDeps {
 
 export interface NotchMoves {
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** The library, as a sheet. Comes back when it is closed. */
   open(stage: NotchStage): Promise<void>;
 }
@@ -232,10 +235,16 @@ export function attachNotchMoves(deps: NotchMovesDeps): NotchMoves {
     }
   }
 
-  return {
-    route(text) {
+  const intents: NotchIntent[] = [{
+    id: 'moves.open', feature: 'moves', says: 'show how the notch moves', band: 'open', act: 'none', first: 'acts',
+    examples: ['how do you move', 'show me how you move'],
+    match(text) {
       return movesRequest(text) ? { did: 'Show how the notch moves.', run: () => { deps.inbox.present('moves', (stage) => open(stage)); } } : null;
     },
+  }];
+  return {
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     open,
   };
 }

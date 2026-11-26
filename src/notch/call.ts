@@ -56,6 +56,7 @@ import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
 import { NOTCH_TALK_FILLER, notchTalkSignOff, pcmToWav } from './talk.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 export const NOTCH_CALL_EVENT = 'notch.call';
 
@@ -403,6 +404,8 @@ export interface NotchCalls {
   setWord(name: string, value: string): boolean;
   /** "What did we agree in the call", "show my last call": the notes are asked for. */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   store: NotchCallStore;
   /** Takes away what has been kept long enough. Called every hour. */
   sweep(): void;
@@ -439,6 +442,7 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
   const log = deps.log ?? ((line: string) => console.log(line));
   const store = new NotchCallStore(deps.db);
   let stopped = false;
+  let intents: NotchIntent[] | null = null;
   let live: Live | null = null;
   /** The calls that are over and are being written down: their last pieces still arrive. */
   const closing = new Set<Live>();
@@ -963,9 +967,17 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
       return false;
     },
 
-    route(text) {
-      if (stopped || !callRequest(text)) return null;
-      return { did: 'Show what came out of the last call.', run: () => { deps.inbox.present('calls', (stage) => this.open(stage, 'calls')); } };
+    route(text) { return routeByIntents(this.intents(), text); },
+    intents() {
+      const open = (stage: NotchStage): Promise<void> => this.open(stage, 'calls');
+      return intents ??= [{
+        id: 'calls.open', feature: 'calls', says: 'show what came out of the last call', band: 'open', act: 'none', first: 'acts',
+        examples: ['the call', 'show my last call'],
+        match(text) {
+          if (stopped || !callRequest(text)) return null;
+          return { did: 'Show what came out of the last call.', run: () => { deps.inbox.present('calls', open); } };
+        },
+      }];
     },
 
     sweep() {

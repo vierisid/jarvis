@@ -82,6 +82,7 @@ import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot
 import type { MailProposalRow, MailStore, MailTone } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
 import type { MailLook, MailWatch } from './watch.ts';
+import { routeByIntents, type NotchIntent } from '../intents.ts';
 
 /** How long the owner has to take a yes back before the reply goes out. */
 export const MAIL_FUSE_MS = 5000;
@@ -213,6 +214,8 @@ export interface NotchMail {
    * draft is in hand, or the words are a question.
    */
   route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
 }
 
 /** The one thing mail is in the inbox. */
@@ -861,7 +864,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
    * ago, is what that reply is to say: it is written again with it and comes
    * back up. Has no effect until `run`.
    */
-  function route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null {
+  function slot(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null {
     // A time said over the line of free times picks it: "Friday at ten works". Meant only by what was
     // said with the keys that took that line off, as for a draft.
     const line = slotsUp;
@@ -881,6 +884,9 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         };
       }
     }
+    return null;
+  }
+  function steer(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null {
     const hand = inHand;
     if (!hand || !mailSteer(text)) return null;
     // A draft that has left the notch is still meant only by what was said
@@ -907,5 +913,17 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     };
   }
 
-  return { sync, arrived, speak, newSince: (at) => unseen().filter((row) => row.createdAt >= at).length, told, homeRow, open, route };
+  const intents: NotchIntent[] = [{
+    // The reply is written with that time and shown under its fuse, which can be taken back.
+    id: 'mail.slot', feature: 'mail', says: 'a time said over the line of free times picks it for the reply', band: 'up', act: 'send', first: 'line',
+    examples: ['Friday at ten works'],
+    match: slot,
+  }, {
+    // Only the draft on the notch is written again: nothing is sent by it.
+    id: 'mail.steer', feature: 'mail', says: 'what is said with a draft open is what that reply is to say', band: 'up', act: 'none', first: 'acts',
+    examples: ['decline it, we are full until January'],
+    match: steer,
+  }];
+  const route = (text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null => routeByIntents(intents, text, how);
+  return { sync, arrived, speak, newSince: (at) => unseen().filter((row) => row.createdAt >= at).length, told, homeRow, open, route, intents: () => intents };
 }

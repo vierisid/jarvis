@@ -78,6 +78,7 @@ import { PEER_AGENT_SENTENCE_MAX, PEER_FILE_WHAT_MAX, PEER_LOOK_APP_MAX, PEER_LO
 import type { PeerNote } from '../peers/notes.ts';
 import type { PeerSetupLike, SetupHosted, SetupJoined, SetupStep } from '../peers/setup.ts';
 import type { PeerRequestRow, PeerStore, PeerSentRow } from '../peers/store.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const cap = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
@@ -263,6 +264,8 @@ export interface NotchPeople {
   server(stage: NotchStage): Promise<void>;
   /** Words the notch acts on itself: "tell Leo ...", "ask Leo ...", "show my organisation". */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /**
    * Words for somebody here that none of the fixed words fit ("can you get
    * me the logo from Leo"): read by the model, and then done as the fixed
@@ -1597,59 +1600,88 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     });
   }
 
-  function route(text: string): { did: string; run(): void } | null {
-    const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
-    if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
-      return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
-    }
-    // A job that changes hands: "hand Dana's answer to Leo", "ask Leo for it back".
-    const job = jobSaid(text);
-    if (job) return job;
-    // An agent of the owner's own, sent to somebody: "send Tony to Leo". Before a file is looked for under that name.
+  type Hit = { did: string; run(): void };
+  /** One of the things this part does, as an intent of the one table. Every send here is shown under a fuse that can be taken back. */
+  const sends = (id: string, says: string, examples: string[], match: (text: string) => Hit | null): NotchIntent =>
+    ({ id: `people.${id}`, feature: 'people', says, band: 'command', act: 'send', first: 'line', examples, match });
+  const intents: NotchIntent[] = [{
+    id: 'people.org', feature: 'people', says: 'open the organisation', band: 'open', act: 'none', first: 'acts',
+    examples: ['my organisation', 'invite someone'],
+    match(text) {
+      const said = text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+      if (/^(?:(?:please|ok|okay|hey|jarvis)[,\s]+)*(?:(?:make|create|start|set up|show|open)(?: me)? (?:an|my|our|the) organi[sz]ation|(?:my|our) organi[sz]ation|invite (?:someone|somebody)(?: to (?:my|our|the) organi[sz]ation)?|connect (?:with|to) (?:someone|somebody|another (?:jarvis|pillow))|join (?:an|the) organi[sz]ation)$/.test(said)) {
+        return { did: 'Open the organisation.', run: () => { inbox.present('people', (stage) => open(stage)); } };
+      }
+      return null;
+    },
+  },
+  // A job that changes hands: "hand Dana's answer to Leo", "ask Leo for it back".
+  sends('job', 'hand a job that is under way to somebody, or ask for it back', ["hand Dana's answer to Leo", 'ask Leo for it back'], (text) => jobSaid(text)),
+  // An agent of the owner's own, sent to somebody: "send Tony to Leo". Before a file is looked for under that name.
+  sends('agent', 'send somebody one of my agents', ['send Tony to Leo'], (text) => {
     const agent = agentShared(text);
-    if (agent) {
-      if (agent.agent) { const one = agent.agent; return { did: `Send ${agent.person.name} the agent ${one.name}.`, run: () => shareAgent(agent.person, one) }; }
-      return { did: 'Say which agents there are.', run: () => { inbox.present('people-agent', (stage) => stage.say(agent.none!, 3800, { mood: 'confused' })); } };
-    }
-    // What was circled on the screen, shown to somebody: "send this to Leo".
+    if (!agent) return null;
+    if (agent.agent) { const one = agent.agent; return { did: `Send ${agent.person.name} the agent ${one.name}.`, run: () => shareAgent(agent.person, one) }; }
+    return { did: 'Say which agents there are.', run: () => { inbox.present('people-agent', (stage) => stage.say(agent.none!, 3800, { mood: 'confused' })); } };
+  }),
+  // What was circled on the screen, shown to somebody: "send this to Leo".
+  sends('show', 'show somebody what was circled on the screen', ['send this to Leo'], (text) => {
     const seen = showed(text);
-    if (seen) return { did: `Show ${seen.name} what was circled.`, run: () => sendLook(seen) };
+    return seen ? { did: `Show ${seen.name} what was circled.`, run: () => sendLook(seen) } : null;
+  }),
+  {
     // The rule for one person, said: "let Leo have answers without asking", "ask me every time for Leo".
-    const rule = ruled(text);
-    if (rule) {
+    // The engine asks about the change, and that question is the line.
+    id: 'people.rule', feature: 'people', says: 'change what one person may have without my being asked', band: 'command', act: 'settings', first: 'line',
+    examples: ['let Leo have answers without asking', 'ask me every time for Leo'],
+    match(text) {
+      const rule = ruled(text);
+      if (!rule) return null;
       return {
         did: rule.to === 'answers' ? `Let ${rule.person.name} have answers without asking.` : `Ask me every time for ${rule.person.name}.`,
         run: () => { inbox.present('people-rule', async (stage) => { await setRule(stage, rule.person, rule.to); }); },
       };
-    }
-    // A time with somebody: the two calendars are compared, and neither person sees the other's.
+    },
+  },
+  // A time with somebody: the two calendars are compared, and neither person sees the other's.
+  sends('time', 'find a time with somebody by comparing the two calendars', ['find a time with Sam for 30 minutes', 'book an hour with Leo'], (text) => {
     const when = timed(text);
-    if (when) return { did: `Find a time with ${when.person.name}: ${when.minutes} minutes`, run: () => times.find(when.person, when.minutes) };
-    // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
+    return when ? { did: `Find a time with ${when.person.name}: ${when.minutes} minutes`, run: () => times.find(when.person, when.minutes) } : null;
+  }),
+  // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
+  sends('give', 'send somebody a file of mine', ['send Leo the deck'], (text) => {
     const mine = files ? handed(text) : null;
-    if (mine) {
-      const file = peerPlain(mine.file, PEER_FILE_WHAT_MAX);
-      // "Leo", "Leo and Anna", "Leo, Anna and Sam".
-      const names = mine.people.map((one) => one.name);
-      const to = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
-      if (file) return { did: `Send ${to} a file of mine: ${file}`, run: () => files!.give(mine.people, file) };
-    }
-    // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
+    if (!mine) return null;
+    const file = peerPlain(mine.file, PEER_FILE_WHAT_MAX);
+    // "Leo", "Leo and Anna", "Leo, Anna and Sam".
+    const names = mine.people.map((one) => one.name);
+    const to = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
+    return file ? { did: `Send ${to} a file of mine: ${file}`, run: () => files!.give(mine.people, file) } : null;
+  }),
+  // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
+  sends('request', "ask somebody's Jarvis for something, or for a file of theirs", ["get me the budget from Leo's laptop"], (text) => {
     const wanted = requested(text);
-    if (wanted) {
-      const theirs = `${wanted.person.name}'s ${NOTCH_NAME}`;
-      // A file of theirs: their Pillow looks for it, and they say there whether it goes.
-      const file = wanted.file && files ? peerPlain(wanted.file, PEER_FILE_WHAT_MAX) : '';
-      if (file) return { did: `Ask ${theirs} for a file: ${file}`, run: () => files!.want(wanted.person, file) };
-      const asked = cap(peerPlain(wanted.words, NOTCH_PEOPLE_SAY_MAX));
-      if (!asked) return { did: `Ask ${theirs} something.`, run: () => { inbox.present('people-what', (stage) => stage.say(['Ask ', em(theirs), ' what? Say it after the name.'], 3200, { mood: 'confused' })); } };
-      return { did: `Ask ${theirs}: ${asked}`, run: () => request(wanted.person, asked) };
-    }
+    if (!wanted) return null;
+    const theirs = `${wanted.person.name}'s ${NOTCH_NAME}`;
+    // A file of theirs: their Pillow looks for it, and they say there whether it goes.
+    const file = wanted.file && files ? peerPlain(wanted.file, PEER_FILE_WHAT_MAX) : '';
+    if (file) return { did: `Ask ${theirs} for a file: ${file}`, run: () => files!.want(wanted.person, file) };
+    const asked = cap(peerPlain(wanted.words, NOTCH_PEOPLE_SAY_MAX));
+    if (!asked) return { did: `Ask ${theirs} something.`, run: () => { inbox.present('people-what', (stage) => stage.say(['Ask ', em(theirs), ' what? Say it after the name.'], 3200, { mood: 'confused' })); } };
+    return { did: `Ask ${theirs}: ${asked}`, run: () => request(wanted.person, asked) };
+  }),
+  sends('file', 'ask somebody for a file of theirs', ['ask Leo for the deck'], (text) => {
     const theirs = files ? fromPerson(text) : null;
-    if (theirs) {
-      const file = peerPlain(theirs.file, PEER_FILE_WHAT_MAX);
-      if (file) return { did: `Ask ${theirs.person.name}'s ${NOTCH_NAME} for a file: ${file}`, run: () => files!.want(theirs.person, file) };
-    }
+    if (!theirs) return null;
+    const file = peerPlain(theirs.file, PEER_FILE_WHAT_MAX);
+    return file ? { did: `Ask ${theirs.person.name}'s ${NOTCH_NAME} for a file: ${file}`, run: () => files!.want(theirs.person, file) } : null;
+  }),
+  sends('say', 'tell somebody something, or ask them something', ["tell Anna I'm late", 'ask Leo if he is coming'], (text) => said(text)),
+  ];
+  const route = (text: string): Hit | null => routeByIntents(intents, text);
+
+  /** A word to somebody, or a question for them: "tell Anna I'm late", "ask Leo if he is coming". */
+  function said(text: string): Hit | null {
     const to = addressed(text);
     if (!to) return null;
     if (/^['\u2019]s\b/i.test(to.words)) return null;
@@ -2572,7 +2604,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   setup?.onChange(() => { inbox.refresh(); });
 
   return {
-    row, rows, open, server, route, read, look, tick,
+    row, rows, open, server, route, intents: () => intents, read, look, tick,
     names: () => others().map((one) => ({ name: one.name })),
     fileTargets: () => (files && link.account().engine === 'up' && link.account().signedIn ? others().map((one) => ({ id: one.id, name: one.name })) : []),
     sendFile(to, file) { const one = person(to); if (!files || !one) return false; files.send(one, file); return true; },

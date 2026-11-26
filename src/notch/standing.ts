@@ -38,6 +38,7 @@ import type { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -453,6 +454,8 @@ export interface NotchStanding {
   store: NotchStandingStore;
   /** What the notch does itself with these words: an eye, or a chase. Null when they are an instruction like any other. Has no effect until `run`. */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** The rows on Home: what is watched for, and what is chased. */
   rows(): NotchBlock[];
   /** Opens the list a Home row leads to. */
@@ -1091,16 +1094,29 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
   for (const chase of stuckBefore) raise(chase);
   if (stuckBefore.length) log(`[notch] ${stuckBefore.length} stuck chase(s) ask again after a restart`);
 
-  return {
-    store,
-    route(text) {
+  const intents: NotchIntent[] = [{
+    // An eye only ever tells the owner: nothing goes out and nothing acts by itself, so it is kept with nothing asked.
+    id: 'standing.eye', feature: 'standing', says: 'keep an eye on mail from one person, and say when they reply', band: 'command', act: 'none', first: 'acts',
+    examples: ['tell me when Sam replies', 'let me know if Anna writes back'],
+    match(text) {
       if (stopped) return null;
       const eye = eyeRequest(text);
-      if (eye) return { did: 'Keep an eye on mail from one person.', run: () => { void keepEye(eye.who); } };
-      const chase = chaseRequest(text);
-      if (chase) return { did: 'Chase one person for an answer.', run: () => { void askChase(chase); } };
-      return null;
+      return eye ? { did: 'Keep an eye on mail from one person.', run: () => { void keepEye(eye.who); } } : null;
     },
+  }, {
+    // A chase writes to somebody by itself until it has the answer: it is shown as a line that takes a yes.
+    id: 'standing.chase', feature: 'standing', says: 'chase one person for an answer until it is there', band: 'command', act: 'create', first: 'line',
+    examples: ["get Sam's answer on the contract by Friday", 'chase Leo until he answers'],
+    match(text) {
+      if (stopped) return null;
+      const chase = chaseRequest(text);
+      return chase ? { did: 'Chase one person for an answer.', run: () => { void askChase(chase); } } : null;
+    },
+  }];
+  return {
+    store,
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     rows() {
       const rows: NotchBlock[] = [];
       const chases = store.chases();

@@ -31,6 +31,7 @@ import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 import { whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
+import type { NotchIntent, NotchIntentHit } from './intents.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
 export const NOTCH_HEARD_MS = 900;
@@ -135,8 +136,11 @@ export interface NotchAsksDeps {
    * "Watch me", "done" while it watches, "run it on nine rows", "undo that".
    * Null when they are an instruction like any other. `did` is what the
    * ledger says was done; `run` does it, and shows what it shows by itself.
+   * Asked once for an instruction, and the answer is kept on it: with the
+   * intent that took the words, when the table of intents says which
+   * (./intents.ts).
    */
-  side?: (text: string, how?: NotchAskHow) => { did: string; run(): void } | null;
+  side?: (text: string, how?: NotchAskHow) => NotchSided | null;
   /**
    * Words for somebody of the organisation that none of the fixed words
    * fit ("can you get me the logo from Leo"): one short question to the
@@ -303,6 +307,9 @@ export interface NotchAsks {
   stop(): void;
 }
 
+/** What the notch does itself with some words, and the intent of the one table that took them, when it is known. */
+export type NotchSided = NotchIntentHit & { intent?: NotchIntent };
+
 /** How some words came: typed or spoken, and when the typing was sent or the talk keys went down. */
 export interface NotchAskHow {
   source: NotchAskSource;
@@ -337,6 +344,12 @@ interface Live {
   missed: NotchMissReason | null;
   /** Listening stopped by itself at the limit: the words are asked about before they are acted on. */
   cut?: boolean;
+  /**
+   * What the notch does itself with these words (`side`): asked once, when the words are first looked at, and
+   * kept, so that where its line is drawn, whether a name in it is checked and what is run all go by the same
+   * answer. Null: none of the notch's own words. Not there yet: not asked.
+   */
+  routed?: NotchSided | null;
   /** A name in what was heard has been read back and answered (./names.ts): it is not asked about again. */
   named?: boolean;
   /** What was heard with that name put right: this is what runs. What was heard stays as it was heard. */
@@ -607,6 +620,12 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     return turns;
   }
 
+  /** What the notch does itself with these words: asked once for an instruction, and kept on it. */
+  function sided(ask: Live): NotchSided | null {
+    if (ask.routed === undefined) ask.routed = deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null;
+    return ask.routed;
+  }
+
   function refuse(ask: Live, note: string): void {
     if (ledger.refused(ask.id, note)) { ask.phase = 'refused'; ask.note = note; } else sync(ask);
   }
@@ -629,7 +648,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     // and what is running does not stand in their way: "done" is said while
     // a showing runs, "undo that" after a job. They are claimed like anything
     // else, so they too happen once.
-    let side = !ask.files?.length ? deps.side?.(ask.heard, { source: ask.source, at: ask.at }) ?? null : null;
+    let side: { did: string; run(): void } | null = !ask.files?.length ? sided(ask) : null;
     // Words for somebody of the organisation that are none of the fixed ones: read by the model, once, and
     // then done by the notch itself like the others. Nothing is claimed while it reads, so the person can
     // still turn it away or say something else; and whoever comes back from the reading second finds it run.
@@ -946,7 +965,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     for (;;) {
       if (ask.source !== 'spoken' && ask.phase === 'heard') {
         // Words the notch acts on itself show what they set off, not a line of work.
-        if (!ask.files?.length && !deps.paused?.() && deps.side?.(ask.heard, { source: ask.source, at: ask.at })) {
+        if (!ask.files?.length && !deps.paused?.() && sided(ask)) {
           await run(ask, stage);
           continue;
         }
@@ -1003,7 +1022,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             // 'I heard "send the notes to Ana". Is that Anna Rossi?'. Not for words the notch acts on
             // itself, which find who is meant in their own way, and not for a memory, which is read back whole.
             if (!ask.named && deps.people && !ask.files?.length && !deps.paused?.()
-              && !deps.side?.(ask.heard, { source: ask.source, at: ask.at }) && !(deps.remember && rememberSentence(ask.heard))) {
+              && !sided(ask) && !(deps.remember && rememberSentence(ask.heard))) {
               let doubt: NotchNameDoubt | null = null;
               try { doubt = notchNameDoubt(ask.heard, deps.people()); } catch { doubt = null; }
               // Close to somebody the owner writes with, and exactly somebody of the organisation: that is who was

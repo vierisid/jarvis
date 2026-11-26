@@ -30,6 +30,7 @@ import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -309,6 +310,8 @@ export interface NotchAgents {
   store: NotchAgentStore;
   /** What the notch does itself with these words: an agent is made, or the list is shown. Null otherwise. Has no effect until `run`. */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** Home's row about the agents, when there are any. */
   row(): NotchBlock | null;
   open(stage: NotchStage): Promise<void>;
@@ -755,14 +758,27 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     }
   }
 
-  return {
-    store,
-    route(text) {
+  const intents: NotchIntent[] = [{
+    id: 'agents.list', feature: 'agents', says: 'show the agents', band: 'open', act: 'none', first: 'acts',
+    examples: ['my agents', 'show me my agents'],
+    match(text) {
       if (stopped) return null;
-      if (agentsListRequest(text)) return { did: 'Show the agents.', run: () => { deps.inbox.present('agents', (stage) => open(stage)); } };
+      return agentsListRequest(text) ? { did: 'Show the agents.', run: () => { deps.inbox.present('agents', (stage) => open(stage)); } } : null;
+    },
+  }, {
+    // The sentence is read back as a line, with its schedule lit, and only "make agent" makes it.
+    id: 'agents.make', feature: 'agents', says: 'make an agent from a sentence that says when and what', band: 'command', act: 'create', first: 'line',
+    examples: ['every Monday send Sam the numbers', 'can you make an agent that replies to new leads'],
+    match(text) {
+      if (stopped) return null;
       const asked = agentSentence(text);
       return asked ? { did: 'Make an agent from a sentence.', run: () => make(asked) } : null;
     },
+  }];
+  return {
+    store,
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     row() {
       const count = store.list().length;
       const waiting = pending();

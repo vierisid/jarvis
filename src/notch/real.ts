@@ -15,6 +15,7 @@ import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
 import type { NotchAskFile, NotchAskHow, NotchAsks, NotchAsksDeps } from './asks.ts';
+import { notchIntentTable, resolveIntent, type NotchIntent, type NotchIntentSource, type NotchRouted } from './intents.ts';
 import { NotchLedger } from './ledger.ts';
 import { attachNotchLook, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
 import { attachNotchTalk } from './talk.ts';
@@ -339,27 +340,27 @@ export interface NotchReal {
   stop(): void;
 }
 
-/** One of the parts that has words of its own. */
-interface NotchSideRouter { route(text: string, how?: NotchAskHow): { did: string; run(): void } | null }
-
 /** The parts that have words of their own, as they stand when something is said. Null: that part was not made. */
 export interface NotchSideRouters {
-  dayOne: NotchSideRouter | null; mail: NotchSideRouter | null; put: NotchSideRouter | null; teach: NotchSideRouter | null;
-  people: NotchSideRouter | null; standing: NotchSideRouter | null; agents: NotchSideRouter | null; memory: NotchSideRouter | null;
-  calls: NotchSideRouter | null; prefs: NotchSideRouter | null; moves: NotchSideRouter; canDo: NotchSideRouter; saidLine: NotchSideRouter;
+  dayOne: NotchIntentSource | null; mail: NotchIntentSource | null; put: NotchIntentSource | null; teach: NotchIntentSource | null;
+  people: NotchIntentSource | null; standing: NotchIntentSource | null; agents: NotchIntentSource | null; memory: NotchIntentSource | null;
+  calls: NotchIntentSource | null; prefs: NotchIntentSource | null; moves: NotchIntentSource; canDo: NotchIntentSource; saidLine: NotchIntentSource;
+}
+
+/** The one table of intents (./intents.ts), from the lists the parts hand over, in this order. */
+export function notchIntents(routers: NotchSideRouters): NotchIntent[] {
+  const { dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine } = routers;
+  // After everything that has words of its own: what was said over a line that is up answers that line.
+  return notchIntentTable([dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine].map((part) => part?.intents()));
 }
 
 /**
- * Words the notch acts on itself: which part takes them, asked in this order, or null when none does and
- * they are an instruction like any other. The one place that decides it: the notch calls this, and so does
- * the corpus of what every sentence means (./intents-corpus.test.ts).
+ * Words the notch acts on itself: which intent of the table takes them, or null when none does and they
+ * are an instruction like any other. The one place that decides it: the notch calls this, and so does the
+ * corpus of what every sentence means (./intents-corpus.test.ts).
  */
-export function notchSide(routers: NotchSideRouters, text: string, how?: NotchAskHow): { did: string; run(): void } | null {
-  const { dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine } = routers;
-  return dayOne?.route(text) ?? mail?.route(text, how) ?? put?.route(text) ?? teach?.route(text) ?? people?.route(text) ?? standing?.route(text) ?? agents?.route(text)
-    ?? memory?.route(text) ?? calls?.route(text) ?? prefs?.route(text) ?? moves.route(text) ?? canDo.route(text)
-    // After everything that has words of its own: what was said over a line that is up answers that line.
-    ?? saidLine.route(text, how) ?? null;
+export function notchSide(routers: NotchSideRouters, text: string, how?: NotchAskHow): NotchRouted | null {
+  return resolveIntent(notchIntents(routers), text, how);
 }
 
 /**

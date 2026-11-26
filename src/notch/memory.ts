@@ -25,6 +25,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import { mailToneFacts } from './mail/notch.ts';
 import type { NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const cut = (text: string, most: number): string => {
@@ -57,6 +58,8 @@ export interface NotchMemoryDeps {
 
 export interface NotchMemory {
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** The sheet. With `about`, only what is known about that one. Comes back when it is closed. */
   open(stage: NotchStage, about?: string | null): Promise<void>;
   /** How many facts are remembered. */
@@ -145,11 +148,17 @@ export function attachNotchMemory(deps: NotchMemoryDeps): NotchMemory {
     }
   }
 
-  return {
-    route(text) {
+  const intents: NotchIntent[] = [{
+    id: 'memory.open', feature: 'memory', says: 'show what is remembered, or what is known about one person', band: 'open', act: 'none', first: 'acts',
+    examples: ['what do you remember', 'what do you know about Sam'],
+    match(text) {
       const asked = memoryRequest(text);
       return asked ? { did: 'Show what is remembered.', run: () => { deps.inbox.present('memory', (stage) => open(stage, asked.about)); } } : null;
     },
+  }];
+  return {
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     open,
     count: () => facts().length,
   };

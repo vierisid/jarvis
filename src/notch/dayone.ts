@@ -69,6 +69,7 @@ import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchMapNode, NotchMapSource, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { realNotchClock, type NotchClock, type NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -180,6 +181,8 @@ export interface NotchDayOne {
   cameUp(): void;
   /** Words the notch acts on itself: "day one", "look around", and whatever is said while the talking step waits to hear it. */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** A look was taken. True when day one was waiting for one: it is the lesson, and nothing else comes of it. */
   shown(looked: { app: string; things: { name?: string }[] }): boolean;
   /** Nothing was made out of what was said. True when day one was waiting to hear something: it says what is true. */
@@ -773,6 +776,36 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     present();
   }
 
+  const intents: NotchIntent[] = [{
+    id: 'dayone.answer', feature: 'dayOne', says: 'what is said while day one waits to hear what the person does', band: 'up', act: 'none', first: 'acts',
+    examples: ['I run a small bakery'],
+    match(text) {
+      if (stopped) return null;
+      if (hearing && on('talk')) {
+        // Whatever they say now is the answer to "tell me what you do".
+        return { did: `Told ${NOTCH_NAME} what they do, on day one.`, run: () => { told = cut(text, 400); present(); } };
+      }
+      // Step 11 waits to be asked where something is. Such a question is answered as ever, by pointing, and
+      // day one only notes that it was asked: nothing is taken from it here. It is noted here, in the intent
+      // that is asked about every sentence, and so once for each: a sentence is resolved once (./asks.ts).
+      if (asking && on('whereIs') && deps.isWhere?.(text)) { asked = true; shown = null; }
+      return null;
+    },
+  }, {
+    id: 'dayone.start', feature: 'dayOne', says: 'start day one again', band: 'open', act: 'none', first: 'acts',
+    examples: ['day one', 'show me around'],
+    match(text) {
+      if (stopped) return null;
+      return dayOneRequest(text) ? { did: 'Start day one.', run: () => again() } : null;
+    },
+  }, {
+    id: 'dayone.around', feature: 'dayOne', says: 'look around: the map of what is here', band: 'open', act: 'none', first: 'acts',
+    examples: ['look around'],
+    match(text) {
+      if (stopped) return null;
+      return aroundRequest(text) && deps.around ? { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } } : null;
+    },
+  }];
   return {
     again,
     cameUp() {
@@ -797,19 +830,8 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
       }
       clock.setTimeout(() => present(false), NOTCH_DAY_ONE_AFTER_MS);
     },
-    route(text) {
-      if (stopped) return null;
-      if (hearing && on('talk')) {
-        // Whatever they say now is the answer to "tell me what you do".
-        return { did: `Told ${NOTCH_NAME} what they do, on day one.`, run: () => { told = cut(text, 400); present(); } };
-      }
-      // Step 11 waits to be asked where something is. Such a question is answered as ever, by pointing, and
-      // day one only notes that it was asked: nothing is taken from it here.
-      if (asking && on('whereIs') && deps.isWhere?.(text)) { asked = true; shown = null; }
-      if (dayOneRequest(text)) return { did: 'Start day one.', run: () => again() };
-      if (aroundRequest(text) && deps.around) return { did: 'Look around.', run: () => { deps.inbox.present('around', async (stage) => { await around(stage); }); } };
-      return null;
-    },
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     shown(looked) {
       if (stopped || !looking || !on('show')) return false;
       showed = cut(looked.things.find((thing) => (thing.name ?? '').trim())?.name ?? looked.app ?? '', 40) || 'that';

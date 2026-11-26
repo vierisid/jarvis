@@ -26,6 +26,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
@@ -134,6 +135,8 @@ export interface NotchPrefsDeps {
 
 export interface NotchPrefs {
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** The settings sheet. `leave` when what was pressed there takes the notch for itself (day one again): Home does not come back over it. */
   settings(stage: NotchStage): Promise<'leave' | void>;
   connections(stage: NotchStage): Promise<void>;
@@ -275,12 +278,23 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
     }
   }
 
-  return {
-    route(text) {
-      if (prefsRequest(text)) return { did: 'Show the settings.', run: () => { deps.inbox.present('settings', async (stage) => { await settings(stage); }); } };
-      if (connectionsRequest(text)) return { did: 'Show the connections.', run: () => { deps.inbox.present('connections', (stage) => connections(stage)); } };
-      return null;
+  // Opening a sheet changes nothing: what is changed there is changed by the person's own hand on it.
+  const intents: NotchIntent[] = [{
+    id: 'prefs.settings', feature: 'prefs', says: 'open the settings of the notch', band: 'open', act: 'none', first: 'acts',
+    examples: ['settings', 'show me the settings'],
+    match(text) {
+      return prefsRequest(text) ? { did: 'Show the settings.', run: () => { deps.inbox.present('settings', async (stage) => { await settings(stage); }); } } : null;
     },
+  }, {
+    id: 'prefs.connections', feature: 'prefs', says: 'open what is connected', band: 'open', act: 'none', first: 'acts',
+    examples: ['connections'],
+    match(text) {
+      return connectionsRequest(text) ? { did: 'Show the connections.', run: () => { deps.inbox.present('connections', (stage) => connections(stage)); } } : null;
+    },
+  }];
+  return {
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     settings,
     connections,
     sound,

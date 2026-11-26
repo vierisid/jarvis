@@ -12,10 +12,10 @@
  * Nothing here is a stand-in for the deciding itself. The routers are the
  * product's own, made with `attachNotch...`, and which of them takes a
  * sentence is decided by the product's own resolver: `notchSide` of
- * ./real.ts, the one function the notch itself calls. Step C2 of the fix
- * replaces the body of that function with the table of intents; this corpus
- * keeps calling the product's resolver, whatever it is then, and never has a
- * copy of the order. The sentence is typed into Home or said with the talk
+ * ./real.ts, the one function the notch itself calls. It asks the table of
+ * intents (./intents.ts) that the parts hand their words to, and says which
+ * intent took the sentence; this corpus names the part that intent is of,
+ * and never has a copy of the order. The sentence is typed into Home or said with the talk
  * keys and goes through the real ./asks.ts, and "where is" goes through the
  * real ./point.ts. Only the ends are stand-ins: no model, no network, no
  * desktop app. What a router would do (`run`) is not done, with one
@@ -37,7 +37,7 @@ import { PeerStore } from '../peers/store.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
 import { READ as PAGE_READ, readLive } from '../../ui/src/notch/surface/readers.ts';
 import { agentSentence, attachNotchAgents } from './agents.ts';
-import { attachNotchAsks, type NotchAskHow, type NotchTurnDoor } from './asks.ts';
+import { attachNotchAsks, type NotchAskHow, type NotchSided, type NotchTurnDoor } from './asks.ts';
 import { attachNotchCalls } from './call.ts';
 import { attachNotchCanDo } from './cando.ts';
 import { notchMoveAt } from './day.ts';
@@ -56,7 +56,8 @@ import { createNotchPoint, whereKind, whereQuestion } from './point.ts';
 import { attachNotchPrefs } from './prefs.ts';
 import type { NotchLine, NotchWord } from './protocol.ts';
 import { attachNotchPut } from './put.ts';
-import { notchSide, type NotchSideRouters } from './real.ts';
+import { NOTCH_INTENT_ACTS_GUARDED, type NotchIntent } from './intents.ts';
+import { notchIntents, notchSide, type NotchSideRouters } from './real.ts';
 import { attachNotchSaid, saidWhen, saidWords } from './said.ts';
 import { NotchSettings } from './settings.ts';
 import { attachNotchStanding } from './standing.ts';
@@ -207,7 +208,6 @@ async function world(contexts: ReadonlySet<Context>) {
   /** What was seen of the deciding: who the resolver said took the words, each time it was asked, and what was reached after it. */
   const seen = {
     sides: [] as { text: string; router: Router | null; did: string }[],
-    took: null as { text: string; router: Router; did: string } | null,
     /** How often the model that reads words about people was really asked. */
     asked: 0,
     remembered: [] as string[],
@@ -269,27 +269,15 @@ async function world(contexts: ReadonlySet<Context>) {
   }
 
   // --- what was decided, as it is decided ---
-  // Each router is handed to the product's resolver as it is, with a note taken of which one answered. What it
-  // would do is not done: the row says who took the words. A taught job done again is the exception (see above).
-  const noted = (router: Router, real: { route(text: string, how?: NotchAskHow): { did: string; run(): void } | null } | null) => (real ? {
-    route(text: string, how?: NotchAskHow) {
-      // Asked the way the resolver asked: with `how` only when it was given, and on the router itself.
-      const hit = how === undefined ? real.route(text) : real.route(text, how);
-      if (!hit) return null;
-      seen.took = { text, router, did: hit.did };
-      return { did: hit.did, run: router === 'teach' && hit.did === JOB_AGAIN ? () => { seen.ran++; hit.run(); } : quiet };
-    },
-  } : null);
-  const routers: NotchSideRouters = {
-    dayOne: noted('dayOne', dayOne), mail: noted('mail', mail), put: noted('put', put), teach: noted('teach', teach), people: noted('people', people),
-    standing: noted('standing', standing), agents: noted('agents', agents), memory: noted('memory', memory), calls: noted('calls', calls),
-    prefs: noted('prefs', prefs), moves: noted('moves', moves)!, canDo: noted('canDo', canDo)!, saidLine: noted('saidLine', saidLine)!,
-  };
-  const side = (text: string, how?: NotchAskHow): { did: string; run(): void } | null => {
-    seen.took = null;
+  // The parts are handed to the product's resolver as they are, and the resolver says which intent took the
+  // words: the row names the part that intent is of. What it would do is not done. A taught job done again is
+  // the exception (see above).
+  const routers: NotchSideRouters = { dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine };
+  const side = (text: string, how?: NotchAskHow): NotchSided | null => {
     const hit = notchSide(routers, text, how);
-    seen.sides.push({ text, router: hit ? seen.took!.router : null, did: hit?.did ?? '' });
-    return hit;
+    seen.sides.push({ text, router: hit ? hit.intent.feature as Router : null, did: hit?.did ?? '' });
+    if (!hit) return null;
+    return { ...hit, run: hit.intent.id === 'teach.run' && hit.did === JOB_AGAIN ? () => { seen.ran++; hit.run(); } : quiet };
   };
   const front = contexts.has('browser') ? BROWSER_WINDOW : SHEET_WINDOW;
   const point = createNotchPoint({
@@ -418,7 +406,7 @@ async function world(contexts: ReadonlySet<Context>) {
     return `${row.state}: ${row.note ?? ''}`.trim();
   };
 
-  return { decide, seen, stop: () => { for (const stop of stops) { try { stop(); } catch { /* it is over either way */ } } db.close(); } };
+  return { decide, seen, table: (): NotchIntent[] => notchIntents(routers), stop: () => { for (const stop of stops) { try { stop(); } catch { /* it is over either way */ } } db.close(); } };
 }
 
 // --- the file ---
@@ -587,18 +575,99 @@ describe('the file itself', () => {
   });
 });
 
+describe('the table of intents, as the parts hand it over', () => {
+  /** Every intent there is, with where it stands, what kind of act it is, and whether it acts at once. Changed by hand. */
+  const TABLE: Record<string, string> = {
+    'dayone.answer': 'up none acts',
+    'dayone.start': 'open none acts',
+    'dayone.around': 'open none acts',
+    'mail.slot': 'up send line',
+    'mail.steer': 'up none acts',
+    'put.here': 'command screen acts',
+    'teach.done': 'up none acts',
+    'teach.watch': 'command create line',
+    'teach.undo': 'command screen acts',
+    'teach.run': 'command screen acts',
+    'people.org': 'open none acts',
+    'people.job': 'command send line',
+    'people.agent': 'command send line',
+    'people.show': 'command send line',
+    'people.rule': 'command settings line',
+    'people.time': 'command send line',
+    'people.give': 'command send line',
+    'people.request': 'command send line',
+    'people.file': 'command send line',
+    'people.say': 'command send line',
+    'standing.eye': 'command none acts',
+    'standing.chase': 'command create line',
+    'agents.list': 'open none acts',
+    'agents.make': 'command create line',
+    'memory.open': 'open none acts',
+    'calls.open': 'open none acts',
+    'prefs.settings': 'open none acts',
+    'prefs.connections': 'open none acts',
+    'moves.open': 'open none acts',
+    'cando.open': 'open none acts',
+    'said.answer': 'up none acts',
+  };
+  /**
+   * Intents that answer what is up on the notch: their examples are the rows of the sections that put it up. And
+   * a job that changes hands, which needs a chase under way that no state here has (./people.test.ts has those).
+   */
+  const ELSEWHERE = new Set(['dayone.answer', 'mail.slot', 'mail.steer', 'teach.done', 'said.answer', 'people.job']);
+
+  test('every intent is in it once, and says where it stands, what kind of act it is and whether it acts at once', async () => {
+    const made = await world(new Set(['job', 'held']));
+    try {
+      const table = made.table();
+      expect(Object.fromEntries(table.map((one) => [one.id, `${one.band} ${one.act} ${one.first}`]))).toEqual(TABLE);
+      expect(table.length).toBe(Object.keys(TABLE).length);
+      for (const one of table) {
+        expect([one.id, /^[a-z]+\.[a-z]+$/.test(one.id), one.says.length > 10, one.examples.length > 0]).toEqual([one.id, true, true, true]);
+      }
+    } finally { made.stop(); }
+  });
+
+  test('what acts on the screen, sends or creates shows a line first, or names the live context its words are about', async () => {
+    const made = await world(new Set(['job', 'held']));
+    try {
+      const guarded = made.table().filter((one) => NOTCH_INTENT_ACTS_GUARDED.includes(one.act));
+      expect(guarded.length).toBeGreaterThan(10);
+      for (const one of guarded) expect([one.id, one.first === 'line' || (one.live ?? '').length > 10]).toEqual([one.id, true]);
+      // And the other way: a live context is named only by what acts at once.
+      for (const one of made.table()) if (one.live !== undefined) expect([one.id, one.first]).toEqual([one.id, 'acts']);
+    } finally { made.stop(); }
+  });
+
+  test('every example of an intent is taken by that intent, with a job taught and a thing held', async () => {
+    const made = await world(new Set(['job', 'held']));
+    try {
+      const table = made.table();
+      const differs: string[] = [];
+      for (const one of table.filter((each) => !ELSEWHERE.has(each.id))) {
+        for (const example of one.examples) {
+          const first = table.find((each) => each.match(example) !== null);
+          if (first !== one) differs.push(`${one.id}: ${JSON.stringify(example)} is taken by ${first?.id ?? 'none'}`);
+        }
+      }
+      expect(differs).toEqual([]);
+    } finally { made.stop(); }
+  });
+});
+
 describe('how often the routers are asked', () => {
-  // wrong: once. asks.ts asks the whole chain in three places, and one sentence passes two of them: where its line
-  // is drawn (typed) or its name is checked (spoken), and again where it is run. Day one's route notes "asked" as
-  // it goes, so a router that is not pure is a trap. Step C2 resolves once and keeps the answer on the instruction.
-  const ASKED_TODAY = 2;
+  // Once. asks.ts looks at what the notch does itself in three places, and one sentence passes two of them: where
+  // its line is drawn (typed) or its name is checked (spoken), and again where it is run. It used to ask the whole
+  // chain each time, and day one's route notes "asked" as it goes. Now the table is asked once for an instruction
+  // and the answer is kept on it.
+  const ASKED_TODAY = 1;
   for (const [how, sentence, gives] of [
     ['typed', 'what is the weather in Rome', 'turn'],
     ['typed', 'settings', 'prefs: Show the settings.'],
     ['spoken', 'what is the weather in Rome', 'turn'],
     ['spoken', 'settings', 'prefs: Show the settings.'],
   ] as const) {
-    test(`for one sentence, ${how}, that gives "${gives}": twice`, async () => {
+    test(`for one sentence, ${how}, that gives "${gives}": once`, async () => {
       const made = await world(new Set(how === 'spoken' ? ['spoken'] as const : []));
       try {
         expect(await made.decide(sentence)).toBe(gives);

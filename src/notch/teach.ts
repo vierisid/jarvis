@@ -32,6 +32,7 @@ import {
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import { findRounds, roundsApps, roundsCopy, roundsToDo, watchKeysOk, type Rounds, type WatchStep } from './rounds.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 /** How long a teaching may last. The desktop app takes its hooks out at the same time by itself. */
 export const NOTCH_TEACH_MAX_MS = 10 * 60_000;
@@ -358,6 +359,8 @@ export interface NotchTeach {
    * when they are an instruction like any other.
    */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** Home's row about the jobs it was shown, when there are any, and the sheet it opens. */
   row(): NotchBlock | null;
   open(stage: NotchStage): Promise<void>;
@@ -759,18 +762,36 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     }
   }
 
-  return {
-    watching: () => session !== null,
-    route(text) {
+  const intents: NotchIntent[] = [{
+    id: 'teach.done', feature: 'teach', says: 'the showing is over', band: 'up', act: 'none', first: 'acts',
+    examples: ['done', "that's it"],
+    match(text) {
+      if (stopped || !session || !teachDoneWord(text)) return null;
+      const mine = session;
+      return { did: 'Ended the showing.', run: () => { if (session === mine && !mine.ended) { mine.ended = 'done'; wake(); } } };
+    },
+  }, {
+    // What is shown is kept only on "done", said or pressed on the line that is up all the while: Esc throws it away.
+    id: 'teach.watch', feature: 'teach', says: 'watch a job being shown, to learn it', band: 'command', act: 'create', first: 'line',
+    examples: ['watch me', 'let me show you'],
+    match(text) {
       if (stopped) return null;
-      if (session && teachDoneWord(text)) {
-        const mine = session;
-        return { did: 'Ended the showing.', run: () => { if (session === mine && !mine.ended) { mine.ended = 'done'; wake(); } } };
-      }
-      if (watchMeRequest(text)) return { did: 'Began watching what you show me.', run: watch };
-      if (undoRequest(text)) {
-        return { did: 'Took back my last paste.', run: () => { if (!deps.jobs.undoLast()) tell(['Nothing of mine to undo.'], 'look', 2800); } };
-      }
+      return watchMeRequest(text) ? { did: 'Began watching what you show me.', run: watch } : null;
+    },
+  }, {
+    id: 'teach.undo', feature: 'teach', says: 'take back the last thing the notch pasted', band: 'command', act: 'screen', first: 'acts',
+    live: 'the last paste the notch made itself: with none, nothing is touched',
+    examples: ['undo', 'undo that', 'take it back'],
+    match(text) {
+      if (stopped || !undoRequest(text)) return null;
+      return { did: 'Took back my last paste.', run: () => { if (!deps.jobs.undoLast()) tell(['Nothing of mine to undo.'], 'look', 2800); } };
+    },
+  }, {
+    id: 'teach.run', feature: 'teach', says: 'do the job that was shown again, or go on with it', band: 'command', act: 'screen', first: 'acts',
+    live: 'a job that was shown or begun by hand',
+    examples: ['run it on nine rows', 'do it again', 'do the rest'],
+    match(text) {
+      if (stopped) return null;
       const run = runItRequest(text);
       // Only when there is something it could mean: otherwise the words are an instruction like any other.
       if (run && (fresh || store.all().length > 0 || deps.catcher?.()?.last())) {
@@ -778,6 +799,11 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       }
       return null;
     },
+  }];
+  return {
+    watching: () => session !== null,
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     row() {
       const n = store.all().length;
       return n === 0 ? null : { kind: 'row', id: 'learned', say: [em(n === 1 ? '1 job' : `${n} jobs`), ' you showed me.'], go: true };

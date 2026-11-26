@@ -19,6 +19,7 @@ import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
 const talk: NotchPart = { key: 'talk' };
@@ -106,6 +107,8 @@ export function canDoRequest(text: string): boolean {
 
 export interface NotchCanDo {
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** The sheet. With `yes`, it has that word as its way on (day one ends on it). Comes back when it is closed. */
   open(stage: NotchStage, more?: { yes?: string }): Promise<void>;
 }
@@ -116,10 +119,16 @@ export function attachNotchCanDo(deps: { inbox: NotchInbox }): NotchCanDo {
     stage.put({ id, kind: 'sheet', say: ['What I can do'], blocks: canDoBlocks(), mood: 'look', ...(more.yes ? { yes: more.yes, stay: true, no: 'close' } : {}) });
     await stage.answer(id, ['yes', 'no']);
   }
-  return {
-    route(text) {
+  const intents: NotchIntent[] = [{
+    id: 'cando.open', feature: 'canDo', says: 'show what the notch can do', band: 'open', act: 'none', first: 'acts',
+    examples: ['what can you do', 'help', 'how does this work'],
+    match(text) {
       return canDoRequest(text) ? { did: 'Show what the notch can do.', run: () => { deps.inbox.present('can-do', (stage) => open(stage)); } } : null;
     },
+  }];
+  return {
+    route: (text) => routeByIntents(intents, text),
+    intents: () => intents,
     open,
   };
 }

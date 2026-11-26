@@ -35,6 +35,7 @@
  */
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 /** One answer to a line, as the page would have sent it, without the line's id. */
 export interface NotchSaid {
@@ -323,6 +324,8 @@ export interface NotchSaidLine {
   keys(): void;
   /** What the notch does itself with words said over a line: they answer it. Has no effect until `run`. */
   route(text: string, how?: { source: 'spoken' | 'typed' | 'offered'; at: number }): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
 }
 
 export interface NotchSaidDeps {
@@ -349,16 +352,11 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));
   let up: { item: string; line: NotchLine; at: number } | null = null;
-  return {
-    keys() {
-      const item = deps.inbox.showing();
-      const line = deps.line();
-      // A line of something that waits for an answer. Mail reads what is said over its own lines (./mail/notch.ts).
-      up = item && line && (line.kind === 'offer' || line.kind === 'sheet') && line.src !== 'mail' && !deps.skip?.(item)
-        ? { item, line: structuredClone(line), at: now() }
-        : null;
-    },
-    route(text, how) {
+  const intents: NotchIntent[] = [{
+    // What the yes sets off is the line's own: the line was shown, and this is its answer.
+    id: 'said.answer', feature: 'saidLine', says: 'what is said over a line that is up answers that line: its yes, its no, or a new value for one of its lit words', band: 'up', act: 'none', first: 'acts',
+    examples: ['yes do it', 'not now', 'make it Friday at ten'],
+    match(text, how) {
       const was = up;
       // Meant only by what was said with the keys that took the line off: not by what is typed, and not by the next thing said.
       if (!was || !how || how.source !== 'spoken' || Math.abs(how.at - was.at) > NOTCH_SAID_KEYS_MS) return null;
@@ -374,6 +372,18 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
         },
       };
     },
+  }];
+  return {
+    keys() {
+      const item = deps.inbox.showing();
+      const line = deps.line();
+      // A line of something that waits for an answer. Mail reads what is said over its own lines (./mail/notch.ts).
+      up = item && line && (line.kind === 'offer' || line.kind === 'sheet') && line.src !== 'mail' && !deps.skip?.(item)
+        ? { item, line: structuredClone(line), at: now() }
+        : null;
+    },
+    route: (text, how) => routeByIntents(intents, text, how),
+    intents: () => intents,
   };
 }
 

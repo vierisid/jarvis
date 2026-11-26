@@ -41,6 +41,7 @@ import type { NotchInbox } from './inbox.ts';
 import { actRefusal, type NotchJobHands, type NotchJobs, type NotchPut as NotchPutPlace } from './jobs.ts';
 import { lookCount, type NotchLooked, type NotchThing } from './look.ts';
 import type { NotchPart, NotchWord } from './protocol.ts';
+import { routeByIntents, type NotchIntent } from './intents.ts';
 
 /** How long a thing that was shown is held. */
 export const NOTCH_HOLD_MS = 90_000;
@@ -232,6 +233,8 @@ export interface NotchPutter {
    * instruction like any other.
    */
   route(text: string): { did: string; run(): void } | null;
+  /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
+  intents(): readonly NotchIntent[];
   /** What is held now, if anything. */
   held(): NotchHeld | null;
   stop(): void;
@@ -366,7 +369,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
     });
   }
 
-  return {
+  const made: NotchPutter = {
     shown(sidecarId, looked) {
       if (stopped || looked.refused) return false;
       const target = looked.how === 'click' && looked.at && takesAThing(looked.things[0]) ? looked.at : null;
@@ -415,7 +418,21 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       }
       return false;
     },
-    route(text) {
+    route(text) { return routeByIntents(this.intents(), text); },
+    intents() { return intents; },
+    held: () => (held && now() - held.at < NOTCH_HOLD_MS ? held : null),
+    stop() {
+      stopped = true;
+      held = null;
+      pending = null;
+      reading = null;
+    },
+  };
+  const intents: NotchIntent[] = [{
+    id: 'put.here', feature: 'put', says: 'put the thing that is held where the pointer or the caret is', band: 'command', act: 'screen', first: 'acts',
+    live: 'a thing that was circled is held, or is still being read',
+    examples: ['put it here', 'put it here as a table', 'paste'],
+    match(text) {
       if (stopped) return null;
       const asked = pending && now() - pending.madeAt < NOTCH_PUT_SAID_MS && held === pending.thing ? pending : null;
       const thing = asked?.thing ?? (held && now() - held.at < NOTCH_HOLD_MS ? held : null);
@@ -452,12 +469,6 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
         },
       };
     },
-    held: () => (held && now() - held.at < NOTCH_HOLD_MS ? held : null),
-    stop() {
-      stopped = true;
-      held = null;
-      pending = null;
-      reading = null;
-    },
-  };
+  }];
+  return made;
 }
