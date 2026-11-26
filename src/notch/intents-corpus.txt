@@ -1,0 +1,449 @@
+# What a sentence means today, pinned. Read by ./intents-corpus.test.ts.
+#
+# A section begins with "@ route" and the states it is under, or with "@ when" and the reader of a time.
+# A row is:   sentence => what is done with it today   ## wrong: what is meant to happen
+# The "## wrong:" part stands only on rows that are known to be wrong today (docs/notch/fixes/03-intent-routing.md).
+# Such a row is pinned as it behaves now. The step that fixes it changes that row and takes the mark away.
+#
+# What is done with a sentence, as the test writes it:
+#   <router>: <what the ledger says>   one of the thirteen routers of real.ts took it (dayOne, mail, put, teach,
+#                                      people, standing, agents, memory, calls, prefs, moves, canDo, saidLine)
+#   turn                               none took it: it goes to the assistant as an instruction
+#   remember: <fact>                   none took it: it is written to memory
+#   read+...                           it names somebody of the organisation, so the model was asked first what it
+#                                      means (people.read). Here that model always answers "for nobody".
+#   point(how|where; ...)+turn         it reads as a question about the window in front: the window was read and
+#                                      what is named went to the model before the turn began
+#
+# The states (none named: nothing taught, nothing held, nothing up, Leo, Anna and Sam in the organisation, a
+# spreadsheet in front, typed into Home):
+#   job      a job was taught once, some time ago (nothing of it is fresh, and its window is not in front)
+#   held     a thing that was circled is held
+#   draft    a draft of a mail reply is open on the notch
+#   line     an offer is up on the notch: "Every day at 9:00, send me the news." with the key "make agent"
+#   dayone   day one is on its talking step, waiting to hear the person
+#   reply    the assistant has just asked "Shall I send it?" and the sentence is typed into that line as the reply
+#   spoken   said with the talk keys held, not typed
+#   browser  a browser is in front: a window that says too little about itself, so it can only be looked at
+#   alone    no organisation: there is nobody whose Jarvis this one talks to
+
+# ---------------------------------------------------------------------------------------------------------------
+# Nothing taught, nothing held, nothing up. Typed.
+# ---------------------------------------------------------------------------------------------------------------
+@ route
+# replies and short commands
+do it => turn
+yes do it => turn
+do it. => turn
+do it again => turn
+do that tomorrow morning instead => turn
+do this for all the files in downloads => turn
+do it by email => turn
+do them one at a time please => turn
+yes send it => turn
+send it => turn
+continue => turn
+go on => turn
+keep going => turn
+carry on with the summary => turn
+continue with the draft to Sam => read+turn
+go on, tell me more => turn
+finish it => turn
+finish it by Friday => turn
+run it => turn
+run the same report as last week => turn
+repeat that => turn
+repeat that please, I did not hear => turn
+take over => turn
+do the next one => turn
+do the rest => turn
+do 3 more => turn
+undo => teach: Took back my last paste.
+undo that => teach: Took back my last paste.
+done => turn
+that's it => turn
+watch me => teach: Began watching what you show me.
+# "stop" is not marked: whether it becomes a control word is not decided. Today it is an instruction to the assistant.
+stop => turn
+pause => turn  ## wrong: pauses at once, with or without a model (a control word)
+ok => turn
+no not now => turn
+put it here => turn
+put a meeting with Sam on my calendar for Friday => people: Find a time with Sam: 30 minutes  ## wrong: turn (a calendar entry is asked for; not a comparing of calendars with Sam's machine)
+paste => turn
+# schedules
+every weekday at 9 send me the news => agents: Make an agent from a sentence.  ## wrong: agents, read back as Monday to Friday at 9:00
+every morning at 6 send me the weather => agents: Make an agent from a sentence.  ## wrong: agents, read back as every day at 6:00
+every night at 11 back up my notes => agents: Make an agent from a sentence.  ## wrong: agents, read back as every day at 23:00
+every day at 5.10 send me the news => agents: Make an agent from a sentence.
+every Monday send Sam the numbers => agents: Make an agent from a sentence.
+every monday at 9am and friday at 4pm send the report => agents: Make an agent from a sentence.  ## wrong: turn (two times are no schedule the notch can say; never rewritten into one)
+every hour check my inbox => turn
+daily standup notes should go to the team => agents: Make an agent from a sentence.  ## wrong: turn (says what should happen to notes; asks for no agent)
+every evening I go for a run => turn
+weekly review of my tasks please => agents: Make an agent from a sentence.
+can you make an agent that replies to new leads => agents: Make an agent from a sentence.
+every 2 weeks on tuesday at 14:30 send the invoice => agents: Make an agent from a sentence.  ## wrong: turn (every 2 weeks is no schedule the notch can say; never rewritten into every day)
+remind me every day at 8 to take my pills => turn
+# mail and standing
+tell me when Sam replies => standing: Keep an eye on mail from one person.
+let me know if Anna writes back => standing: Keep an eye on mail from one person.
+tell me when the build answers => turn
+get Sam's answer on the contract by Friday => standing: Chase one person for an answer.
+get me the answer to question five => turn
+chase Leo until he answers => standing: Chase one person for an answer.
+get the reply from support => standing: Chase one person for an answer.  ## wrong: turn ("support" is nobody to chase)
+email Sam the numbers => read+turn
+reply to Anna that Friday works => read+turn
+# people
+tell Anna I'm late => people: Tell Anna: I'm late
+tell Leo to call me => people: Tell Leo: To call me
+ask Leo if he is coming => people: Ask Leo: If he is coming
+tell Sam about the meeting on Slack => people: Tell Sam: About the meeting on Slack
+tell Leo and Anna hi => read+turn
+ask Leo for the deck => people: Ask Leo's Pillow for a file: the deck
+send Leo the deck => people: Send Leo a file of mine: the deck
+send Tony to Leo => people: Send Leo the agent Tony.
+send Leo my regards => read+turn
+get me the budget from Leo's laptop => people: Ask Leo's Pillow for a file: the budget
+message Anna => people: Tell Anna something.
+find a time with Sam for 30 minutes => people: Find a time with Sam: 30 minutes
+let Leo have answers without asking => people: Let Leo have answers without asking.
+tell Annabel hi => turn
+ask anna what time it is in Rome => people: Ask Anna: What time it is in Rome
+can you tell Leo I love him => people: Tell Leo: I love him
+tell me about Leo => read+turn
+my organisation => people: Open the organisation.
+# questions
+how do I cook rice => point(how; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+how do I export this as PDF => point(how; list and picture of the window to the model)+turn
+how do you move => moves: Show how the notch moves.
+how does this work => canDo: Show what the notch can do.
+how to say hello in Japanese => point(how; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+how can I improve my sleep => point(how; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+is there a way to lose weight fast => point(how; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+where is the export button => point(where; list and picture of the window to the model)+turn
+where is my phone => point(where; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+where are you from => point(where; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+show me the settings => prefs: Show the settings.
+show me the mail from Sam => read+turn
+what can you do => canDo: Show what the notch can do.
+help => canDo: Show what the notch can do.
+what do you know about Sam => memory: Show what is remembered.
+what do you remember => memory: Show what is remembered.
+remember that Leo likes tea => remember: Leo likes tea
+remember to call Anna => read+turn
+my agents => agents: Show the agents.
+the call => calls: Show what came out of the last call.
+call => calls: Show what came out of the last call.
+settings => prefs: Show the settings.
+connections => prefs: Show the connections.
+day one => dayOne: Start day one.
+look around => dayOne: Look around.
+show me how you move => moves: Show how the notch moves.
+what next => turn
+and now? => turn
+come si dice ciao in giapponese => point(how; list and picture of the window to the model)+turn  ## wrong: turn, and nothing of the window is read or sent (the question is not about the screen)
+come faccio a esportare in PDF => point(how; list and picture of the window to the model)+turn
+# Italian
+tienimi d'occhio la risposta di Sam => read+turn  ## wrong: standing, an eye on Sam's answer, with its own line (read by the classifier)
+avvisami quando Sam risponde => read+turn  ## wrong: standing, an eye on Sam's answer, with its own line (read by the classifier)
+dì ad Anna che sono in ritardo => read+turn  ## wrong: people, a word to Anna shown under its fuse (read by the classifier)
+ogni giorno feriale alle 9 mandami le notizie => turn  ## wrong: agents, read back as Monday to Friday at 9:00 (read by the classifier)
+ogni lunedì manda i numeri a Sam => read+turn  ## wrong: agents, read back as every Monday at 9:00 (read by the classifier)
+fallo => turn
+continua => turn
+fallo di nuovo => turn
+vai avanti => turn
+guardami => teach: Began watching what you show me.
+fatto => turn
+annulla => teach: Took back my last paste.
+mettilo qui => turn
+impostazioni => turn  ## wrong: prefs, the settings open (read by the classifier)
+cosa sai fare => turn  ## wrong: canDo, the sheet of what it can do (read by the classifier)
+pausa => turn  ## wrong: pauses at once, with or without a model (a control word)
+dov'è il pulsante esporta => point(where; list and picture of the window to the model)+turn
+
+# ---------------------------------------------------------------------------------------------------------------
+# A job was taught once. From then on "do it", "continue", "go on" mean that job, for good.
+# ---------------------------------------------------------------------------------------------------------------
+@ route job
+do it => teach: Did the job again.  ## wrong: teach, but a line first ("Do it again: saves the file?"): nothing is fresh and the job's window is not in front (owner decision 5)
+yes do it => turn
+do it. => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do it again => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do that tomorrow morning instead => teach: Did the job again.  ## wrong: turn (not the taught job)
+do this for all the files in downloads => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+do it by email => teach: Did the job again.  ## wrong: turn (not the taught job)
+do them one at a time please => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+yes send it => turn
+send it => turn
+continue => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+go on => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+keep going => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+carry on with the summary => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+continue with the draft to Sam => teach: Did the job again.  ## wrong: turn (not the taught job)
+go on, tell me more => turn
+finish it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+finish it by Friday => teach: Did the job again.  ## wrong: turn (not the taught job)
+run it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+run the same report as last week => teach: Did the job again.  ## wrong: turn (not the taught job)
+# "repeat that" alone is not marked: the design does not say whether it is the job or the assistant's last answer.
+repeat that => teach: Did the job again.
+repeat that please, I did not hear => teach: Did the job again.  ## wrong: turn (not the taught job)
+take over => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do the next one => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do the rest => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do 3 more => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+undo => teach: Took back my last paste.
+done => turn
+ok => turn
+fallo => turn  ## wrong: teach, a line first (read by the classifier; the same as "do it")
+continua => turn  ## wrong: teach, a line first (read by the classifier; the same as "continue")
+fallo di nuovo => turn  ## wrong: teach, a line first (read by the classifier; the same as "do it again")
+vai avanti => turn  ## wrong: teach, a line first (read by the classifier; the same as "go on")
+finisci il resto => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+
+# ---------------------------------------------------------------------------------------------------------------
+# The assistant asked "Shall I send it?". The reply is typed into that line. A job was taught once.
+# ---------------------------------------------------------------------------------------------------------------
+@ route job reply
+do it => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+yes do it => turn
+do it by email => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+do that tomorrow morning instead => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+continue => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+continue with the draft to Sam => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+go on => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+go on, tell me more => turn
+finish it by Friday => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+run the same report as last week => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+repeat that please, I did not hear => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+yes send it => turn
+send it => turn
+no not now => turn
+ok => turn
+# Not marked: the design gives the rule (a reply skips every intent that is not open in a reply) and does not yet
+# say which intents are. Under that rule "tell Anna instead" is the answer, not a word to Anna.
+undo => teach: Took back my last paste.
+done => turn
+settings => prefs: Show the settings.
+tell Anna instead => people: Tell Anna: Instead
+pause => turn  ## wrong: pauses at once, with or without a model (a control word)
+
+# The same reply with nothing ever taught: it is the answer, as it should be.
+@ route reply
+do it => turn
+yes do it => turn
+continue => turn
+send it => turn
+no not now => turn
+settings => prefs: Show the settings.
+
+# ---------------------------------------------------------------------------------------------------------------
+# A thing that was circled is held.
+# ---------------------------------------------------------------------------------------------------------------
+@ route held
+put it here => put: Put what you showed me where you pointed.
+paste => put: Put what you showed me where you pointed.
+mettilo qui => put: Put what you showed me where you pointed.
+put it here as a table => put: Put what you showed me where you pointed.
+put a meeting with Sam on my calendar for Friday => people: Find a time with Sam: 30 minutes  ## wrong: turn (a calendar entry is asked for; not a comparing of calendars with Sam's machine)
+put the kettle on => turn
+send this to Leo => people: Show Leo what was circled.
+do it => turn
+
+# ---------------------------------------------------------------------------------------------------------------
+# A draft of a reply is open, and the talk keys take it off the notch: what is said is what the reply is to say.
+# Whether "settings", "undo" and "continue" should rank above the draft is an open question (design, decision 9):
+# these rows are pinned and not marked.
+# ---------------------------------------------------------------------------------------------------------------
+@ route draft spoken
+decline it, we are full until January => mail: Write the reply again, as told.
+settings => mail: Write the reply again, as told.
+undo => mail: Write the reply again, as told.
+continue => mail: Write the reply again, as told.
+do it => turn
+tell Anna I'm late => mail: Write the reply again, as told.
+what did he ask for? => turn
+send it => turn
+yes => turn
+pause => mail: Write the reply again, as told.  ## wrong: pauses at once, with or without a model (a control word)
+
+# ---------------------------------------------------------------------------------------------------------------
+# An offer is up ("Every day at 9:00, send me the news." / make agent), and the talk keys are held over it.
+# ---------------------------------------------------------------------------------------------------------------
+@ route line spoken
+yes do it => saidLine: Said yes to the line that was up.
+do it => saidLine: Said yes to the line that was up.
+go ahead => saidLine: Said yes to the line that was up.
+make agent => saidLine: Said yes to the line that was up.
+not now => saidLine: Said no to the line that was up.
+make it Friday at ten => saidLine: Changed the line that was up: Friday at 10:00.
+yes => turn
+open the Friday report => turn
+settings => prefs: Show the settings.
+
+# The same offer, and a job was taught once: "do it" is the job, not the yes.
+@ route line job spoken
+do it => teach: Did the job again.  ## wrong: saidLine, the yes to the line that is up (what is up ranks before a command)
+yes do it => saidLine: Said yes to the line that was up.
+go ahead => saidLine: Said yes to the line that was up.
+
+# ---------------------------------------------------------------------------------------------------------------
+# Day one waits to hear the person: whatever is said is its answer. Meant.
+# ---------------------------------------------------------------------------------------------------------------
+@ route dayone spoken
+I run a small bakery => dayOne: Told Pillow what they do, on day one.
+do it => dayOne: Told Pillow what they do, on day one.
+settings => dayOne: Told Pillow what they do, on day one.
+tell Anna I'm late => dayOne: Told Pillow what they do, on day one.
+
+# ---------------------------------------------------------------------------------------------------------------
+# Said, with nothing up.
+# ---------------------------------------------------------------------------------------------------------------
+@ route spoken
+do it => turn
+tell Anna I'm late => people: Tell Anna: I'm late
+remember that Leo likes tea => remember: Leo likes tea
+settings => prefs: Show the settings.
+pause => turn  ## wrong: pauses at once, with or without a model (a control word)
+yes do it => turn
+
+@ route job spoken
+do it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+
+# ---------------------------------------------------------------------------------------------------------------
+# A browser is in front: the window names nothing in it, so a picture of it is what goes to the model.
+# ---------------------------------------------------------------------------------------------------------------
+@ route browser
+how do I cook rice => point(how; picture of the window to the model)+turn  ## wrong: turn, and no picture of the window is taken or sent (the question is not about the screen)
+how can I improve my sleep => point(how; picture of the window to the model)+turn  ## wrong: turn, and no picture of the window is taken or sent (the question is not about the screen)
+where is my phone => point(where; picture of the window to the model)+turn  ## wrong: turn, and no picture of the window is taken or sent (the question is not about the screen)
+come si dice ciao in giapponese => point(how; picture of the window to the model)+turn  ## wrong: turn, and no picture of the window is taken or sent (the question is not about the screen)
+how do I export this as PDF => point(how; picture of the window to the model)+turn
+where is the export button => point(where; picture of the window to the model)+turn
+what is the weather in Rome => turn
+
+# ---------------------------------------------------------------------------------------------------------------
+# No organisation: the same words about people go to the assistant, an eye, or a chase.
+# ---------------------------------------------------------------------------------------------------------------
+@ route alone
+tell Anna I'm late => turn
+ask Leo for the deck => turn
+send Leo the deck => turn
+find a time with Sam for 30 minutes => turn
+put a meeting with Sam on my calendar for Friday => turn
+tell me when Sam replies => standing: Keep an eye on mail from one person.
+get Sam's answer on the contract by Friday => standing: Chase one person for an answer.
+email Sam the numbers => turn
+dì ad Anna che sono in ritardo => turn
+
+# ===============================================================================================================
+# What a time is read as. Each reader there is today has its own table.
+# ===============================================================================================================
+
+# The schedule in a sentence that asks for an agent (agents.ts, scheduleIn):  schedule | what is left as the job
+@ when agent
+every weekday at 9 send me the news => day at 9:00 | send me the news  ## wrong: Monday to Friday at 9:00 | send me the news
+every morning at 6 send me the weather => day at 18:00 | send me the weather  ## wrong: day at 6:00 | send me the weather
+every night at 11 back up my notes => day at 11:00 | back up my notes  ## wrong: day at 23:00 | back up my notes
+every 2 weeks on tuesday at 14:30 send the invoice => day at 14:30 | every 2 weeks on tuesday send the invoice  ## wrong: no schedule the notch can say (not read; never rewritten into every day)
+every monday at 9am and friday at 4pm send the report => Monday at 9:00 | and friday at 4pm send the report  ## wrong: no schedule the notch can say (not read; the second time is not left in the job)
+every day at 5.10 send me the news => day at 17:10 | send me the news
+every day at 6am send me the weather => day at 6:00 | send me the weather
+every day at 12am rotate the logs => day at 0:00 | rotate the logs
+every day at noon send me the news => day at 9:00 | at noon send me the news  ## wrong: day at 12:00 | send me the news (found by this corpus, not in the design: a time that is not read is never 9:00 with its words left in the job)
+every Monday send Sam the numbers => Monday at 9:00 | send Sam the numbers
+every friday at 16:30 send the report => Friday at 16:30 | send the report
+every evening send me a summary => day at 18:00 | send me a summary
+every night back up my notes => day at 21:00 | back up my notes
+every week send Sam the numbers => Monday at 9:00 | send Sam the numbers
+weekly review of my tasks please => Monday at 9:00 | review of my tasks please
+daily standup notes should go to the team => day at 9:00 | standup notes should go to the team
+every hour check my inbox => no agent
+every 5 minutes check the server => no agent
+every other day water the plants => no agent
+every month send the invoice => no agent
+every weekend tidy my downloads => no agent
+every day at 25 send me the news => day at 9:00 | at 25 send me the news  ## wrong: no schedule the notch can say (found by this corpus, not in the design: an hour that is none is never 9:00 with its words left in the job)
+remind me every day at 8 to take my pills => no agent
+can you make an agent that every day at 5.10 sends me the news => day at 17:10 | send me the news
+ogni lunedì manda i numeri a Sam => no agent
+ogni giorno feriale alle 9 mandami le notizie => no agent
+
+# The lit word of a taught job's schedule, as the brain reads it back (teach.ts, parseSchedule)
+@ when teach
+Monday at 9:00 => Mon 9:00
+day at 9:00 => every day 9:00
+Friday at 16.30 => Fri 16:30
+monday at 9 => not read
+weekday at 9:00 => not read
+weekdays at 9:00 => not read
+every Monday at 9:00 => not read
+Monday at 25:00 => not read
+morning at 6:00 => not read
+
+# The evening's "move it to", counted from Wednesday 18 November 2026, 10:00 (day.ts, notchMoveAt)
+@ when move
+tomorrow at 9:00 => Thu 2026-11-19 9:00
+Friday at 9:00 => Fri 2026-11-20 9:00
+next week => Mon 2026-11-23 9:00
+today at 20:00 => Wed 2026-11-18 20:00
+today at 9:00 => not read
+wednesday at 9:00 => Wed 2026-11-25 9:00
+tomorrow at 9 => not read
+tomorrow morning => not read
+next friday at 9:00 => not read
+friday at 6:00 => Fri 2026-11-20 6:00
+
+# A day and a time said over a line (said.ts, saidWhen):  day time part-of-day
+@ when said
+friday at 10 => Friday 10:00 -
+half past 9 => - 9:30 -
+quarter to 10 => - 9:45 -
+3 pm => - 15:00 -
+# A bare "at 6" as the afternoon is not marked: whether it stays so, lit as a guess, is an open question (design, decision 3).
+at 6 => - 18:00 -
+at 6 in the morning => - 18:00 -  ## wrong: - 6:00 - ("morning" and "night" set the half of the day)
+monday morning => Monday - morning
+friday afternoon => Friday - afternoon
+tomorrow at noon => tomorrow 12:00 -
+10 thirty => - 10:30 -
+every weekday at 9 => - 9:00 -
+every morning at 6 => - 18:00 -  ## wrong: - 6:00 - ("morning" and "night" set the half of the day)
+night at 11 => - 11:00 -  ## wrong: - 23:00 - ("morning" and "night" set the half of the day)
+
+# What the page makes of a value typed into a lit word, before the brain sees it (ui readers.ts). The word that
+# is changed says "Monday at 9:00" (sched), "Thursday at 10:00" (daytime), "Friday" (day).
+@ when page-sched
+month => Monday at 9:00  ## wrong: refused (a month is not a Monday)
+money at 9 => Monday at 9:00  ## wrong: refused
+sunset => Sunday at 9:00  ## wrong: refused
+weekday at 9 => refused
+every morning at 6 => refused
+every 2 weeks => refused
+tue 14:30 => Tuesday at 14:30
+friday at 6pm => Friday at 18:00
+6 => day at 18:00
+sat => Saturday at 9:00
+day at 9:00 => day at 9:00
+march => refused
+
+@ when page-daytime
+month => Monday at 10:00  ## wrong: refused (a month is not a Monday)
+tomorrow at 6 => tomorrow at 18:00
+fri 10 => Friday at 10:00
+satisfied => Saturday at 10:00  ## wrong: refused
+
+@ when page-day
+month => Monday  ## wrong: refused (a month is not a Monday)
+monday => Monday
+tmrw => tomorrow
+saturn => Saturday  ## wrong: refused
+
+# A sentence typed into a word that takes one ("tell me" on a draft): the page takes characters out of it.
+@ when page-free
+Tell R&D "x < 5" => Tell RD x 5  ## wrong: Tell R&D "x < 5" (the raw text goes to the brain as it was typed)
+decline it, we are full until January => decline it, we are full until January
+
