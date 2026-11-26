@@ -3,12 +3,13 @@ import { notchApprovalWhere, notchPlaceSentence, notchPressReads, type NotchWher
 
 const request = (tool: string, args: unknown) => ({ tool_name: tool, tool_arguments: JSON.stringify(args) });
 
-function machine(reply: unknown, seen = true, allowed = true) {
+function machine(reply: unknown, seen = true, allowed = true, says = true) {
   const asked: { target: string; params: Record<string, unknown> }[] = [];
   const deps: NotchWhereDeps = {
     allowed: () => allowed,
     target: (explicit) => (typeof explicit === 'string' ? explicit : 'desk-pc'),
     seen: () => seen,
+    says: () => says,
     ask: async (target, params) => { asked.push({ target, params }); return reply; },
   };
   return { deps, asked };
@@ -111,19 +112,29 @@ describe('what a raw press would land on, for the word of the owner', () => {
     expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Button', element_name: '' }).deps)).toEqual([]);
   });
 
-  test('a screen that may not be read, or a machine that says nothing, is "could not look", not "nothing is there"', async () => {
-    // Screen awareness off: nothing is asked of the machine at all.
+  test('where it cannot look by its making, nothing is asked of the machine and the click is not held up', async () => {
+    // Screen awareness off.
     const off = machine(del, true, false);
-    expect(await notchPressReads('desktop_click', { element_id: 3 }, off.deps)).toBeNull();
-    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, off.deps)).toBeNull();
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, off.deps)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, off.deps)).toEqual([]);
     expect(off.asked).toEqual([]);
     // No machine to ask.
     const none: NotchWhereDeps = { ...machine(del).deps, target: () => null };
-    expect(await notchPressReads('desktop_click', { element_id: 3 }, none)).toBeNull();
-    // No reply, an empty one (a desktop app that cannot say, an element it no longer knows), or not an object.
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, none)).toEqual([]);
+    // A desktop app that cannot say what is at a place (a Mac, Linux): its empty reply means nothing, so it is not asked.
+    const mute = machine({}, true, true, false);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, mute.deps)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, mute.deps)).toEqual([]);
+    expect(mute.asked).toEqual([]);
+  });
+
+  test('a machine that can say and said nothing tried and failed: that is not "nothing is there"', async () => {
+    // No reply, an empty one (an element it no longer knows, a read that broke), or not an object.
     for (const reply of [null, undefined, {}, [], 'ok', { element_name: '', window_title: '', process_name: '' }]) {
-      expect(await notchPressReads('desktop_click', { element_id: 3 }, machine(reply).deps)).toBeNull();
-      expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine(reply).deps)).toBeNull();
+      const windows = machine(reply);
+      expect(await notchPressReads('desktop_click', { element_id: 3 }, windows.deps)).toBeNull();
+      expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, windows.deps)).toBeNull();
+      expect(windows.asked).toHaveLength(2);
     }
   });
 
@@ -133,7 +144,7 @@ describe('what a raw press would land on, for the word of the owner', () => {
   });
 
   test('what presses nothing, or will be refused before it runs, is not a reason to ask', async () => {
-    const off = machine(del, true, false).deps;
+    const off = machine(del).deps;
     // Not a press: nothing is clicked, whatever the screen holds.
     expect(await notchPressReads('desktop_click', { element_id: 3, action: 'get_value' }, off)).toEqual([]);
     expect(await notchPressReads('desktop_pointer', { x: 500, y: 250, action: 'scroll_down' }, off)).toEqual([]);

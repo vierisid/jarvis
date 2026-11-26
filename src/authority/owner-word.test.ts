@@ -174,7 +174,7 @@ describe('saying it is the approval', () => {
     setOwnerWordProbe(async () => { tries += 1; throw new Error('the desktop app does not know describe_target'); });
     expect(await ownerWord('desktop_click', { element_id: 9 }, gate, yes)).toBe('unseen');
     expect(tries).toBe(2);
-    // It may not look, or has nothing to look with (screen awareness off): null, both times.
+    // It can say what is at a place and said nothing, both times (an element it no longer knows, a read that broke).
     tries = 0;
     setOwnerWordProbe(async () => { tries += 1; return null; });
     expect(await ownerWord('desktop_pointer', { x: 500, y: 500 }, gate, yes)).toBe('unseen');

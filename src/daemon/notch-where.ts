@@ -29,6 +29,12 @@ export interface NotchWhereDeps {
   target(explicit: unknown, tool: string): string | null;
   /** Whether a model was shown that machine's screen recently enough to have read a place off it. */
   seen(target: string): boolean;
+  /**
+   * Whether that machine's desktop app can say what is at a place at all.
+   * Only the Windows one can; on a Mac and on Linux `describe_target` answers
+   * with nothing, every time, so its silence there says nothing.
+   */
+  says(target: string): boolean;
   /** Asks that machine what is at a place. It only reads. */
   ask(target: string, params: Record<string, unknown>): Promise<unknown>;
 }
@@ -93,14 +99,21 @@ const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle'])
  *
  * Three answers, and they are kept apart:
  *
- *   - a list (often empty): the machine looked. A place with no name, in a
- *     window it could name, reads as nothing;
- *   - null: it could not look. The screen may not be read (screen awareness
- *     off), there is no machine to ask, or the machine said nothing at all
- *     about the place (a desktop app that cannot say, an element it no longer
- *     knows). That is not "nothing is there", and the owner's word asks;
+ *   - a list (often empty): the machine looked, or it cannot look by its
+ *     making. A place with no name, in a window it could name, reads as
+ *     nothing. So does a click where nothing can be asked at all: screen
+ *     awareness is off, there is no machine to ask, or its desktop app cannot
+ *     say what is at a place (`says`). The owner's word lets those go ahead,
+ *     as a step in a turn they started. (Point 1, C3: once the owner's word
+ *     knows whether the turn has read outside content, this case is to ask in
+ *     such a turn and only there. It needs its own answer then.)
+ *   - null: it can look, tried, and was told nothing at all about the place
+ *     (an element it no longer knows, a read that broke). That is not
+ *     "nothing is there";
  *   - a throw: the asking failed (no answer in time, a desktop app too old to
- *     know the question). The owner's word asks once more.
+ *     know the question).
+ *
+ * On null or a throw the owner's word asks once more, and then asks the owner.
  *
  * A call that presses nothing, or that will be refused before it runs (no
  * place can be worked out, a click that names no element), reads as nothing.
@@ -109,9 +122,10 @@ export async function notchPressReads(toolName: string, args: Record<string, unk
   if (toolName !== 'desktop_click' && toolName !== 'desktop_pointer') return [];
   const action = typeof args.action === 'string' && args.action ? args.action : 'click';
   if (!PRESSES.has(action)) return [];
-  if (!deps.allowed()) return null;
+  // Cannot look by its making: not a failure, and not asked about (see above for C3).
+  if (!deps.allowed()) return [];
   const target = deps.target(args.target, toolName);
-  if (!target) return null;
+  if (!target || !deps.says(target)) return [];
   let params: Record<string, unknown>;
   if (toolName === 'desktop_pointer') {
     const place = pointerRequest(args, deps.seen(target));

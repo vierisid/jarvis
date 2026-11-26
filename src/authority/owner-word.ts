@@ -21,9 +21,11 @@
  *   - a command that deletes, read from its text (`commandDeletes`);
  *   - a Delete key (`keysDelete`);
  *   - for a raw click, what the machine says is at that place, read the same
- *     way as a control's label (the probe, set by the daemon). When the
- *     machine cannot be asked, or does not answer on a second try, the click
- *     is asked about: it is not pressed blind.
+ *     way as a control's label (the probe, set by the daemon). When a
+ *     machine that can say what is there fails to, also on a second try, the
+ *     click is asked about. Where nothing can be asked by its making (screen
+ *     awareness off, a Mac or Linux desktop app, no machine) the click goes
+ *     ahead like any other step.
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
@@ -154,10 +156,13 @@ export function callDeletesOrPays(toolName: string, params: Record<string, unkno
  * reads as (`delete_data`, `make_payment`, or nothing). The daemon sets it;
  * without it a raw click is judged by the call alone.
  *
- * Null means it could not look: the screen may not be read, there is no
- * machine to ask, or the machine said nothing about the place. A throw means
- * the asking failed (no answer in time, a desktop app too old to know the
- * question). Neither is "nothing is there".
+ * Null means it tried to look and was told nothing; a throw means the asking
+ * failed (no answer in time, a desktop app too old to know the question).
+ * Neither is "nothing is there". Where it cannot look by its making (screen
+ * awareness off, a desktop app that cannot say, no machine) it answers with
+ * nothing, and the click goes ahead: a step in a turn the owner started is
+ * not asked about. Point 1, C3 changes that for a turn that has read outside
+ * content, once that is known here.
  */
 export type OwnerWordProbe = (toolName: string, params: Record<string, unknown>) => Promise<readonly ActionCategory[] | null>;
 
@@ -186,7 +191,7 @@ export interface OwnerWordGate {
  *     would have let it run: a command that deletes ran unasked in a turn that
  *     had read nothing, and "a delete is asked about" has to be true.
  *   - `unseen`: it is inside such a turn and it is a raw click on a screen
- *     that could not be read, asked twice. It is asked about like `ask`,
+ *     that can be read and was not, asked twice. It is asked about like `ask`,
  *     with its own reason: a click is not pressed blind, since "Delete" and
  *     "Buy now" are found by reading what is there.
  *   - null: not such a turn, or a call whose own classifier failed. The

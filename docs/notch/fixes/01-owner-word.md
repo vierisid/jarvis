@@ -82,11 +82,14 @@ ask once more on a failure, then ask the owner (chosen).
     `xargs -0`), after a variable (`FOO=1 rm`), a forced `git push`, a
     method that removes (`.unlink()`, `.rmdir()`, `.Delete()`), and the
     command key with backspace;
-  - a raw click (`desktop_click`, `desktop_pointer`) on a screen that could
-    not be read is asked once more, then asked of the owner with its own
-    reason ("the screen could not be read..."). "Could not look" is: screen
-    awareness off, no machine to ask, an empty reply, a failure twice. A
-    place the machine looked at and had no name for still goes ahead.
+  - a raw click (`desktop_click`, `desktop_pointer`) whose look at the
+    screen failed is asked once more, then asked of the owner with its own
+    reason ("the screen could not be read..."). "Failed" is: no answer in
+    time, an error, or a Windows desktop app that said nothing about the
+    place (told apart by the machine's reported system: only the Windows app
+    can say what is at a place). Where it cannot look by its making (screen
+    awareness off, a Mac or Linux desktop app, no machine) the click goes
+    ahead as before, and so does a place it looked at and had no name for.
 - C6. README 44 and the header of `owner-word.ts`, with a dated decision.
 
 Correction to the review (review-01 F5): an accepted Noticing offer does not
@@ -104,10 +107,12 @@ focused Delete button, a button with no name.
 
 - 2026-11-26, decision 1: after outside content, ask only for unasked sends,
   commands, installs and settings (the third option above).
-- Open: whether a raw click with screen awareness off is free in a turn that
-  has read nothing. C5 asks about it always, as instructed for this step;
-  the design recommended "free in a clean turn". One line to change in
-  `ownerWord` once the turn's taint is known there (C3).
+- 2026-11-26, coordinator: a click that cannot be looked at by its making
+  is not asked about in C5. Asking there would put a question on every raw
+  click on a Mac, on Linux and with screen awareness off, against README 44.
+  C3 makes that case ask only in a turn that has read outside content, once
+  `ownerWord` knows the turn's taint (`notchPressReads` needs a fourth
+  answer for it then).
 - Open: a code-written question as a guarded turn or a tool-less read; a
   fuse line for a send he asked for; an offer starting as tainted.
 
@@ -121,6 +126,8 @@ focused Delete button, a button with no name.
   behind a wrapper or by the command key is read, and a click is not pressed
   blind". Not done under C5: Enter on a focused button is not looked at
   (needs the desktop app to say what has focus), and the other things the
-  screen says about a click (a send) are still dropped until C3.
+  screen says about a click (a send) are still dropped until C3. Narrowed
+  in "notch: a click is asked about when the look failed, not where nothing
+  can look".
 - C6 README 44 and header: pending. README 44 does not yet say that a click
-  on an unreadable screen is asked about; the header of `owner-word.ts` does.
+  whose look failed is asked about; the header of `owner-word.ts` does.

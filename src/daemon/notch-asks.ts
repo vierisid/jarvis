@@ -117,6 +117,11 @@ export const notchWhereDeps: NotchWhereDeps = {
     }
   },
   seen: (target) => lastScreenPicture(target) !== null,
+  says: (target) => {
+    const manager = getSidecarManager();
+    const os = manager ? String(findSidecar(target, manager.listSidecars())?.os ?? '').toLowerCase() : '';
+    return os === 'windows' || os === 'win32';
+  },
   async ask(target, params) {
     const manager = getSidecarManager();
     if (!manager) return null;

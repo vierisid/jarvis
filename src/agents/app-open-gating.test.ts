@@ -150,7 +150,7 @@ describe('anything asked on the notch is done without asking, except a delete or
     });
     try {
       const h = build();
-      // Screen awareness off: nothing may be read, in a turn that has read nothing either.
+      // A machine that can say what is there said nothing, twice.
       expect(String(await onNotch(() => h.run('desktop_click', { element_id: 7 }, new Set())))).toContain('AWAITING_APPROVAL');
       // No answer, twice.
       expect(String(await onNotch(() => h.run('desktop_click', { element_id: 5 }, new Set())))).toContain('AWAITING_APPROVAL');
