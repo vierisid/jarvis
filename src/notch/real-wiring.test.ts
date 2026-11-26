@@ -1,0 +1,600 @@
+/**
+ * How the notch is put together, pinned before any of it moves (fix 02, step 1).
+ *
+ * `real.test.ts` follows single things from end to end. This file pins what
+ * `real.ts` decides between the parts, with every part given at once: the
+ * order of Home's rows and of the quiet links at its foot, how Today and Undo
+ * are merged from several parts, the rows of Settings, which part hears a
+ * page come up first, which clocks run and how often, and what stop takes
+ * down, in which order.
+ *
+ * Which part takes which words is pinned by `intents-corpus.test.ts`, through
+ * the product's own `notchSide`, and is not pinned again here.
+ *
+ * A row a part shows only in a state that is long to reach (a call that is
+ * on, a job done by hand) is given by standing in for that part's one method
+ * on the object `real.ts` hands back: `real.ts` asks that same object when
+ * Home is opened, so the order it puts the answers in is the product's own.
+ */
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { ApprovalManager } from '../authority/approval.ts';
+import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
+import { PeerLink } from '../peers/link.ts';
+import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
+import { NOTCH_AGENT_TICK_MS, NotchAgentStore } from './agents.ts';
+import { NOTCH_APPROVAL_LOOK_MS } from './approvals.ts';
+import { NotchCallStore } from './call.ts';
+import { MAIL_GLANCE_MS } from './mail/attach.ts';
+import { NOTCH_FAILURE_LOOK_MS } from './news.ts';
+import { NOTCH_PEOPLE_TICK_MS } from './people.ts';
+import type { NotchBlock, NotchLine } from './protocol.ts';
+import { NOTCH_QUESTION_LOOK_MS } from './questions.ts';
+import { attachNotchReal, type NotchReal, type NotchRealDeps } from './real.ts';
+import { NOTCH_STANDING_TICK_MS, NotchStandingStore } from './standing.ts';
+import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
+import { NotchLearnedStore } from './teach.ts';
+
+const NOON = new Date(2026, 10, 26, 12, 0, 0).getTime();
+
+beforeEach(() => { initDatabase(':memory:', { quiet: true }); setSystemTime(new Date(NOON)); });
+let live: NotchReal | null = null;
+const realClear = globalThis.clearInterval;
+afterEach(() => { live?.stop(); live = null; globalThis.clearInterval = realClear; setSystemTime(); closeDb(); });
+
+const wait = async (): Promise<void> => {
+  for (let round = 0; round < 3; round++) { for (let i = 0; i < 60; i++) await Promise.resolve(); await new Promise((resolve) => setTimeout(resolve, 2)); }
+};
+
+const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map((part) => (typeof part === 'string' ? part
+  : part && typeof part === 'object' && 'em' in part ? String((part as { em: unknown }).em)
+    : part && typeof part === 'object' && 'word' in part ? `[${(part as { word: { value: string } }).word.value}]` : '')).join('');
+
+type Started = { fn: () => void; ms: number; cleared: boolean; unrefed: boolean; handle: unknown };
+
+/** Every interval started while `run` runs: how often, whether it may keep the process alive, whether it was cleared since. None runs by the clock. */
+function clocks<T>(run: () => T, cleared?: (one: Started) => void): { out: T; started: Started[] } {
+  const realSet = globalThis.setInterval;
+  const started: Started[] = [];
+  globalThis.setInterval = ((fn: () => void, ms: number) => {
+    const one: Started = { fn, ms, cleared: false, unrefed: false, handle: null };
+    one.handle = { unref() { one.unrefed = true; } };
+    started.push(one);
+    return one.handle;
+  }) as unknown as typeof setInterval;
+  // Stays in place until the test is over (the afterEach above): a handle made here is only known here.
+  globalThis.clearInterval = ((handle: unknown) => {
+    const one = started.find((each) => each.handle === handle);
+    if (one) { if (!one.cleared) cleared?.(one); one.cleared = true; } else realClear(handle as never);
+  }) as typeof clearInterval;
+  try {
+    return { out: run(), started };
+  } finally {
+    globalThis.setInterval = realSet;
+  }
+}
+
+interface Given {
+  /** Leave these out of what the notch is given. */
+  without?: (keyof NotchRealDeps | 'office.connections' | 'office.keys' | 'day.around')[];
+  /** With the clocks of the parts that have a switch for them. */
+  ticking?: boolean;
+  /** Called when an interval is cleared, and when a part is told to stop. */
+  log?: (line: string) => void;
+}
+
+/** A notch with every part given, each on a stand-in for what the product hands it. */
+function everything(given: Given = {}) {
+  const without = new Set<string>(given.without ?? []);
+  const noClock = !given.ticking;
+  let onPage: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+  const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
+  const fromPage = (message: unknown, sidecarId = 'pc'): void => onPage(sidecarId, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+  fromPage({ type: 'hello', v: 1 });
+  // The notch's own clock never runs here: a line stays until it is answered.
+  const clock = { setTimeout: (_fn: () => void, _ms: number) => ({}), clearTimeout: (_handle: unknown) => {} };
+  const db = getDb();
+  const state = { paused: false, pauseAsked: 0, emergencyHeard: 0, promisesHeard: 0, opened: [] as (string | null)[], pages: [] as string[], flows: new Map<string, boolean>(), pausedFlows: [] as string[] };
+  const emergencyListeners = new Set<(state: 'normal' | 'paused') => void>();
+  const promiseListeners = new Set<unknown>();
+  const executed: unknown[] = [];
+  const kept: { what: string; completed_at: number | null }[] = [];
+  const manager = new ApprovalManager();
+
+  const server = new FakeServer();
+  const engine = new FakeEngine(server, 'Sam0000000000000000001', 'sam');
+  const leo = new FakeEngine(server, 'Leo0000000000000000002', 'leo');
+  engine.signedIn = true;
+  leo.signedIn = true;
+  engine.contacts.set(leo.id, { deviceId: leo.id, localName: 'Leo', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+  leo.contacts.set(engine.id, { deviceId: engine.id, localName: 'Sam', ownDevice: null, serverDisplayName: 'x', createdAt: 1 });
+  const link = new PeerLink({ readMs: 0 });
+  link.attach(engine);
+  engine.dialog = link.dialog;
+  engine.notice = link.notice;
+
+  const all: NotchRealDeps = {
+    approvalManager: {
+      getPending: () => manager.getPending(), getRequest: (id) => manager.getRequest(id), createRequest: (...args) => manager.createRequest(...args),
+      getHistory: () => executed as never,
+    },
+    approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
+    openDashboard: (from) => { state.opened.push(from); },
+    emergency: {
+      getState: () => (state.paused ? 'paused' : 'normal'),
+      pause() { state.pauseAsked++; state.paused = true; for (const hear of [...emergencyListeners]) hear('paused'); },
+      resume() { state.paused = false; for (const hear of [...emergencyListeners]) hear('normal'); },
+      subscribe(listener: (state: 'normal' | 'paused') => void) {
+        emergencyListeners.add(listener);
+        return () => { emergencyListeners.delete(listener); given.log?.('stop: the pause no longer heard'); };
+      },
+    } as never,
+    promises: {
+      executor: {
+        subscribe(listener) { promiseListeners.add(listener); return () => { promiseListeners.delete(listener); given.log?.('stop: promises'); }; },
+        cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {},
+      },
+      create: () => ({ id: 'p', when_due: null }),
+      kept: () => kept,
+    },
+    questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) } as never,
+    openFailures: () => [],
+    onTaskEnded: () => false,
+    asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null, look: { port: { onEvent() {} } as never } },
+    where: { port: { onEvent() {}, dispatchRPC: async () => ({}) } },
+    mail: { db, tab: () => null, think: async () => '', noClock } as never,
+    standing: { noClock },
+    agents: {
+      db, noClock,
+      workflows: {
+        build: async () => ({ ok: false, why: 'not here' }), enable: () => ({ ok: true }), run: () => ({ ok: true }), remove: async () => true,
+        pause: (flowId: string, paused: boolean) => { if (paused) state.pausedFlows.push(flowId); state.flows.set(flowId, !paused); return true; },
+        look: (flowId: string) => (state.flows.has(flowId) ? { job: 'the numbers', enabled: state.flows.get(flowId)! } : null),
+        runs: () => [], madeSince: () => [],
+      } as never,
+    },
+    day: { db, noClock, around: { onEvent() {}, onSidecarDisconnected() {} } },
+    calls: { db, noClock, port: { onEvent() {}, onSidecarDisconnected() {} }, listen: async () => ({ listening: false }), stt: () => null, think: async () => '' } as never,
+    peers: { db, link, openPage: async () => true, noClock },
+    notice: { noClock, see: async () => null, think: async () => '' } as never,
+    jobs: {
+      db, noClock,
+      hands: { act: async () => ({ done: true }) },
+      watchPort: { onEvent() {} },
+      hold: () => {},
+      teach: {
+        recorder: { async start() { return { ok: true }; }, async stop() { return []; }, onStep() { return () => {}; } },
+        save: () => ({ ok: true, skill: 's', steps: 0, notes: [], apps: [] }),
+        describe: async () => '',
+        forget() {},
+        effect: () => ({ pays: false, deletes: false, missing: false }),
+        runSkill: async () => ({ end: { how: 'done' }, next: 0 }),
+      },
+    } as never,
+    office: {
+      memory: { list: () => [{ id: 'f1', about: 'Sam', text: 'prefers calls', source: 'chat' }], forget: () => true },
+      keys: { read: async () => ({ talk: ['ctrl', 'meta'], yes: ['meta', 'alt'], mac: false }), change: async () => ({ why: 'no' }) },
+      voice: () => ({ by: 'Whisper', language: 'English' }),
+      connections: () => [{ id: 'gmail', name: 'Gmail', state: 'on', how: 'Through your browser.' }],
+      connect: () => {},
+      openPage: (_sidecarId, page) => { state.pages.push(page); },
+    },
+    dayOne: {
+      // A brain that is set up: day one does not begin by itself.
+      fresh: () => false,
+      model: { ready: () => true, name: () => 'a model', hosted: () => false, setUp() {} },
+    },
+    clock,
+    lookMs: 3_600_000,
+    log: () => {},
+  };
+  const deps = { ...all } as Record<string, unknown>;
+  for (const name of without) {
+    if (name === 'office.connections') deps.office = { ...all.office, connections: undefined };
+    else if (name === 'office.keys') deps.office = { ...(deps.office as object), keys: undefined };
+    else if (name === 'day.around') deps.day = { ...all.day, around: undefined };
+    else delete deps[name];
+  }
+  const made = clocks(() => attachNotchReal(surface, deps as unknown as NotchRealDeps), (one) => given.log?.(`clock: ${one.ms}`));
+  const real = made.out;
+  live = real;
+  const line = (): NotchLine | null => surface.current().line;
+  const blocks = (): NotchBlock[] => { const shown = line(); return shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks as NotchBlock[] : []; };
+  return {
+    real, surface, state, started: made.started, db, executed, kept, link, fromPage, line, blocks,
+    title: (): string => text(line()?.say),
+    async open(): Promise<void> { fromPage({ type: 'open' }); await wait(); },
+    async answer(more: Record<string, unknown>): Promise<void> { fromPage({ type: 'answer', id: line()!.id, ...more }); await wait(); },
+    /** The buttons of the last block of buttons that is up. */
+    buttons: (): string[] => blocks().filter((block) => block.kind === 'buttons').flatMap((block) => (block as { buttons: { id: string; label: string }[] }).buttons.map((button) => `${button.id}: ${button.label}`)),
+  };
+}
+
+const approved = (over: Record<string, unknown>): unknown => ({
+  id: 'r', agent_id: 'a', agent_name: 'PA', tool_name: 'request_approval', tool_arguments: '{}', action_category: 'send_email',
+  urgency: 'normal', reason: 'Send the weekly update to the team', context: '', status: 'executed', execution_mode: 'deferred',
+  decided_at: NOON - 5000, decided_by: 'notch', executed_at: NOON - 4000, execution_result: 'ok', created_at: NOON - 9000,
+  execution_outcome: 'committed', ...over,
+});
+
+/** Something in every place Home reads a row from. */
+function fill(w: ReturnType<typeof everything>): void {
+  const minutes = (n: number): number => NOON - n * 60_000;
+  // A reply that is drafted, and one that was sent.
+  const mailRow = (id: string, state: string, more: Record<string, unknown> = {}): never => ({
+    id, thread: `t-${id}`, messageAt: minutes(90), state, who: { name: 'Sam Reed', address: 'sam@example.com' }, subject: 'Pricing', to: [], cc: [],
+    draft: 'Yes.', time: null, missing: '', lookFor: '', found: null, tone: '', told: '', about: '', slots: null, asked: '',
+    model: 'm', tokensIn: 1000, tokensOut: 200, createdAt: minutes(80), updatedAt: minutes(80), sentAt: null, ...more,
+  }) as never;
+  w.real.mail!.store.put(mailRow('ready-1', 'ready'));
+  w.real.mail!.store.put(mailRow('sent-1', 'sent', { sentAt: minutes(50), updatedAt: minutes(50) }));
+  // A job that was shown.
+  new NotchLearnedStore(w.db).add('shown-notepad', 'saves the file', 1);
+  // An agent on duty, a watch and a chase.
+  new NotchAgentStore(w.db).add({ flowId: 'flow-1', name: 'Tony', rung: 'asks first', sentence: 'Every Monday at 9:00, send Sam the numbers.', madeAt: minutes(40), rungAt: minutes(40), askedAt: 0, toldRun: '' });
+  w.state.flows.set('flow-1', true);
+  const standing = new NotchStandingStore(w.db);
+  standing.addEye({ id: 'eye-1', createdAt: minutes(30), name: 'Sam Reed', address: 'sam@example.com' });
+  standing.putChase({
+    id: 'chase-1', createdAt: minutes(20), name: 'Lea Roth', address: 'lea@example.com', thing: 'answer', about: 'the contract', day: 'Friday', byAt: NOON + 86_400_000,
+    thread: null, subject: 'Contract', state: 'on', nudges: 0, nextAt: NOON + 3_600_000, steps: [], updatedAt: minutes(20),
+  } as never);
+  // A call that was written down.
+  const calls = new NotchCallStore(w.db);
+  calls.open('call-1', minutes(200), false);
+  calls.set('call-1', { endedAt: minutes(190), state: 'done', notes: { summary: 'Pricing was agreed.', with: 'Sam', actions: [{ what: 'Send pricing', owner: 'mine', by: 'Friday' }], followup: '', to: null, sentAt: null } as never });
+  // An approved action and a kept promise.
+  w.executed.push(approved({ id: '1', reason: 'Sent the weekly update', executed_at: minutes(60) }));
+  w.kept.push({ what: 'Send Anna the pricing', completed_at: minutes(70) });
+  // A job done where it could be seen, and a call that is on now: each stands in for the one method Home asks.
+  w.real.jobs!.done = (since) => (minutes(10) >= since ? [{ id: 'job-1', at: minutes(10), text: 'Pasted 2 from notepad into excel', undoable: true }] : []);
+  w.real.around!.callRow = () => ({ kind: 'row', id: 'call', lead: 'Call', say: ['You are on a call. Listen and write it down'], go: true });
+}
+
+/** A block as one word: what kind it is, and which. */
+const named = (block: NotchBlock): string => {
+  const one = block as { kind: string; id?: string; lead?: string; say?: unknown; buttons?: { id: string }[] };
+  if (one.kind === 'buttons') return `buttons(${(one.buttons ?? []).map((button) => button.id).join(', ')})`;
+  if (one.kind === 'note') return `note: ${text(one.say)}`;
+  return `${one.kind}: ${one.id ?? one.lead ?? text(one.say)}`;
+};
+
+describe('Home, with every part given', () => {
+  test('its rows stand in this order, with today under them and the quiet links at the foot', async () => {
+    const w = everything();
+    await w.link.refresh();
+    fill(w);
+    await w.open();
+    expect(w.line()?.kind).toBe('ask');
+    expect(w.blocks().map(named)).toEqual([
+      'row: call',
+      'row: mail',
+      'row: see',
+      'row: learned',
+      'row: people',
+      'row: agents',
+      'row: chases',
+      'row: eyes',
+      'row: calls',
+      // Today, newest first.
+      'row: job:job-1',
+      'row: chase:chase-1',
+      'row: eye:eye-1',
+      'row: agent:flow-1',
+      'row: 11:10',
+      'row: 11:00',
+      'row: 10:50',
+      'note: Quiet from [22:00] to [07:00].',
+      'buttons(asked, quiet, memory, connections, settings, dashboard)',
+    ]);
+  });
+
+  test('today is one list out of five places, each row with the word or the Undo that is its own', async () => {
+    const w = everything();
+    fill(w);
+    await w.open();
+    const today = w.blocks().slice(9, 16).map((block) => {
+      const row = block as { lead?: string; say?: unknown; small?: string; buttons?: { id: string }[] };
+      return `${row.lead} ${text(row.say)} | ${row.buttons ? row.buttons.map((button) => button.id).join(',') : row.small}`;
+    });
+    expect(today).toEqual([
+      '11:50 Pasted 2 from notepad into excel | undo',
+      "11:40 Getting Lea's answer by Friday | undo",
+      "11:30 Watching for Sam's reply | undo",
+      '11:20 Made Tony: Every Monday at 9:00, send Sam the numbers. | undo',
+      '11:10 Replied to Sam: Pricing | sent · 1,200 tokens',
+      '11:00 Sent the weekly update | approved',
+      '10:50 Send Anna the pricing | promised',
+    ]);
+  });
+
+  test('Undo on a watch is taken back by the part that watches, and said in a line', async () => {
+    const w = everything();
+    fill(w);
+    await w.open();
+    await w.answer({ act: 'button', button: 'undo', row: 'eye:eye-1' });
+    expect(w.title()).toBe("No longer watching for Sam's reply.");
+    expect(new NotchStandingStore(w.db).eyes()).toEqual([]);
+  });
+
+  test('Undo on an agent switches it off, by the part that keeps the agents', async () => {
+    const w = everything();
+    fill(w);
+    await w.open();
+    await w.answer({ act: 'button', button: 'undo', row: 'agent:flow-1' });
+    expect(w.title()).toBe('Tony is switched off. It is still in Agents.');
+    expect(w.state.pausedFlows).toEqual(['flow-1']);
+  });
+
+  test('Undo on a job is handed to the jobs with its id, and Home leaves', async () => {
+    const w = everything();
+    fill(w);
+    const undone: string[] = [];
+    w.real.jobs!.undo = (jobId) => { undone.push(jobId); };
+    await w.open();
+    await w.answer({ act: 'button', button: 'undo', row: 'job:job-1' });
+    expect(undone).toEqual(['job-1']);
+    expect(w.line()).toBeNull();
+  });
+
+  test('a row opens the sheet of the part it belongs to', async () => {
+    const w = everything();
+    await w.link.refresh();
+    fill(w);
+    const opens: [row: string, title: string][] = [
+      ['see', 'What I see'], ['learned', 'Jobs you showed me: 1'], ['people', 'Your organisation'], ['agents', 'Your agents'],
+      ['chases', 'What I am chasing'], ['eyes', 'What I keep an eye on'], ['calls', 'After the call with Sam'],
+    ];
+    const seen: [string, string][] = [];
+    for (const [row] of opens) {
+      await w.open();
+      expect(w.line()?.kind).toBe('ask');
+      await w.answer({ act: 'go', row });
+      seen.push([row, `${w.line()?.kind}: ${w.title()}`]);
+      // Closed: Home is back under it, and is closed too.
+      await w.answer({ act: 'no' });
+      expect(w.line()?.kind).toBe('ask');
+      await w.answer({ act: 'no' });
+      expect(w.line()).toBeNull();
+    }
+    expect(seen).toEqual(opens.map(([row, title]) => [row, `sheet: ${title}`]));
+  });
+
+  test('each quiet link opens what it names over Home, and the dashboard takes the person away', async () => {
+    const w = everything();
+    await w.open();
+    expect(w.buttons()).toEqual(['asked: What you asked', 'quiet: Quiet for an hour', 'memory: Memory', 'connections: Connections', 'settings: Settings', 'dashboard: Dashboard']);
+    for (const [button, title] of [['memory', 'What I remember'], ['connections', 'Connections'], ['settings', 'Settings']] as const) {
+      await w.answer({ act: 'button', button });
+      expect([button, w.line()?.kind, w.title()]).toEqual([button, 'sheet', title]);
+      await w.answer({ act: 'no' });
+      // Home is back when it is closed.
+      expect([button, w.line()?.kind]).toEqual([button, 'ask']);
+    }
+    await w.answer({ act: 'button', button: 'dashboard' });
+    expect(w.state.opened).toEqual(['pc']);
+    expect(w.line()).toBeNull();
+  });
+
+  test('"Day one again" in Settings takes the notch: Home does not come back over it', async () => {
+    const w = everything();
+    await w.open();
+    await w.answer({ act: 'button', button: 'settings' });
+    await w.answer({ act: 'button', button: 'dayone' });
+    await wait();
+    expect(w.line()?.kind).not.toBe('ask');
+    expect(w.real.dayOne!.step()).toBe(1);
+  });
+
+  test('a link is there only when its part is', async () => {
+    const none = everything({ without: ['office', 'day', 'openDashboard'] });
+    await none.open();
+    expect(none.buttons()).toEqual(['asked: What you asked']);
+    none.real.stop();
+    // The settings need only the day's own store; the connections need to be told what is connected.
+    const some = everything({ without: ['office.connections'] });
+    await some.open();
+    expect(some.buttons()).toEqual(['asked: What you asked', 'quiet: Quiet for an hour', 'memory: Memory', 'settings: Settings', 'dashboard: Dashboard']);
+  });
+
+  test('with nothing but the asks given, Home is the field, an empty today and one link', async () => {
+    const w = everything({ without: ['office', 'day', 'openDashboard', 'where', 'mail', 'standing', 'agents', 'calls', 'peers', 'notice', 'jobs', 'dayOne', 'promises', 'emergency', 'questions'] });
+    await w.open();
+    expect(w.blocks().map(named)).toEqual(['note: Nothing done yet today.', 'buttons(asked)']);
+  });
+});
+
+describe('Settings, with every part given', () => {
+  const rows = (w: ReturnType<typeof everything>): string[] => w.blocks().map((block) => {
+    const row = block as { kind: string; lead?: string; say?: unknown; buttons?: { id: string }[] };
+    return row.kind === 'row' ? `${row.lead}: ${text(row.say)}${row.buttons ? ` (${row.buttons.map((button) => button.id).join(', ')})` : ''}` : named(block);
+  });
+
+  test('its rows stand in this order: the keys, sounds, voice, watching, noticing, calls, then the links', async () => {
+    const w = everything();
+    await w.open();
+    await w.answer({ act: 'ask', text: 'settings' });
+    expect(w.title()).toBe('Settings');
+    expect(rows(w)).toEqual([
+      'Talk: Hold [Ctrl + Win] and speak.',
+      'Yes: Tap [Win + Alt].',
+      'Sounds: My small sounds are [off].',
+      'Voice: I make out what you say with Whisper, in English. (voice)',
+      'Watching: What I see, and what I never watch.',
+      'Noticing: In the window you are in I [offer one thing].',
+      'Calls: On a call I [offer to listen], and hear [your side only].',
+      'buttons(cando, moves, dayone)',
+      'note: The keys are for this computer. Nothing spoken is kept as sound.',
+    ]);
+  });
+
+  test('a word of a row that another part owns is changed by that part, and its own word by itself', async () => {
+    const w = everything();
+    await w.open();
+    await w.answer({ act: 'ask', text: 'settings' });
+    await w.answer({ act: 'word', word: 'callside', value: 'both sides' });
+    await w.answer({ act: 'word', word: 'notice', value: 'offer nothing' });
+    await w.answer({ act: 'word', word: 'sound', value: 'on' });
+    expect(rows(w).slice(2, 7)).toEqual([
+      'Sounds: My small sounds are [on].',
+      'Voice: I make out what you say with Whisper, in English. (voice)',
+      'Watching: What I see, and what I never watch.',
+      'Noticing: In the window you are in I [offer nothing].',
+      'Calls: On a call I [offer to listen], and hear [both sides].',
+    ]);
+    expect(w.real.prefs!.sound()).toBe(true);
+  });
+
+  test('each of its links opens what it names, and the voice goes to the page where speech is set', async () => {
+    const w = everything();
+    for (const [press, title] of [[{ act: 'go', row: 'see' }, 'What I see'], [{ act: 'button', button: 'cando' }, 'What I can do'], [{ act: 'button', button: 'moves' }, 'How I move']] as const) {
+      await w.open();
+      await w.answer({ act: 'ask', text: 'settings' });
+      await w.answer(press);
+      expect(w.title()).toBe(title);
+      await w.answer({ act: 'no' });
+      // Settings is back when it is closed.
+      expect(w.title()).toBe('Settings');
+      await w.answer({ act: 'no' });
+    }
+    await w.open();
+    await w.answer({ act: 'ask', text: 'settings' });
+    await w.answer({ act: 'button', button: 'voice', row: '' });
+    expect(w.state.pages).toEqual(['speech']);
+  });
+
+  test('a row is there only when its part is', async () => {
+    const w = everything({ without: ['where', 'notice', 'calls', 'dayOne', 'office.keys'] });
+    await w.open();
+    await w.answer({ act: 'ask', text: 'settings' });
+    expect(rows(w)).toEqual([
+      'Keys: This computer cannot tell me its keys. They are in its tray menu, under Settings.',
+      'Sounds: My small sounds are [off].',
+      'Voice: I make out what you say with Whisper, in English. (voice)',
+      'buttons(cando, moves)',
+      'note: The keys are for this computer. Nothing spoken is kept as sound.',
+    ]);
+  });
+});
+
+describe('a page comes up', () => {
+  test('what waits is told of it first, and day one after', () => {
+    const w = everything();
+    const heard: string[] = [];
+    const inbox = w.real.inbox as unknown as { cameUp(): void };
+    const inboxCameUp = inbox.cameUp.bind(inbox);
+    inbox.cameUp = () => { heard.push('inbox'); inboxCameUp(); };
+    const dayOne = w.real.dayOne!;
+    const dayOneCameUp = dayOne.cameUp.bind(dayOne);
+    dayOne.cameUp = () => { heard.push('day one'); dayOneCameUp(); };
+    w.fromPage({ type: 'hello', v: 1 }, 'laptop');
+    expect(heard).toEqual(['inbox', 'day one']);
+  });
+});
+
+describe('the clocks of the notch', () => {
+  const periods = (started: Started[]): number[] => started.map((one) => one.ms).sort((a, b) => a - b);
+
+  test('with every part given: one for each part that looks by itself, each at its own pace, none keeping the brain alive', () => {
+    const w = everything({ ticking: true });
+    expect(periods(w.started)).toEqual([
+      // Asking to hear the tasks end, until the task manager is there.
+      500,
+      // Noticing.
+      2000,
+      // Questions, failures.
+      NOTCH_QUESTION_LOOK_MS, NOTCH_FAILURE_LOOK_MS,
+      // The shown jobs, the agents, the people, the eyes and chases, the day.
+      30_000, NOTCH_AGENT_TICK_MS, NOTCH_PEOPLE_TICK_MS, NOTCH_STANDING_TICK_MS, 30_000,
+      // The mailbox, and the instructions that are looked over.
+      MAIL_GLANCE_MS, 60_000,
+      // Old calls are cleared, and what waits for a yes is looked for (as often as this test asked).
+      3_600_000, 3_600_000,
+    ]);
+    expect(w.started.filter((one) => !one.unrefed)).toEqual([]);
+  });
+
+  test('the clocks a test may leave out are left out, and the others run all the same', () => {
+    const w = everything();
+    expect(periods(w.started)).toEqual([500, NOTCH_QUESTION_LOOK_MS, NOTCH_FAILURE_LOOK_MS, 60_000, 3_600_000]);
+  });
+
+  test('with nothing given, the notch looks for failures and for what waits for a yes, and no more', () => {
+    const w = everything({ ticking: true, without: ['office', 'day', 'openDashboard', 'where', 'mail', 'standing', 'agents', 'calls', 'peers', 'notice', 'jobs', 'dayOne', 'promises', 'emergency', 'questions', 'asks', 'onTaskEnded', 'lookMs'] });
+    expect(periods(w.started)).toEqual([NOTCH_APPROVAL_LOOK_MS, NOTCH_FAILURE_LOOK_MS].sort((a, b) => a - b));
+  });
+
+  test('a part that leans on another has no clock without it: no mail, no chases; no day, no calls and no noticing', () => {
+    const noMail = everything({ ticking: true, without: ['mail'] });
+    // The eyes and chases stand on the mailbox: neither has a clock.
+    expect(periods(noMail.started)).toEqual([500, 2000, NOTCH_QUESTION_LOOK_MS, NOTCH_FAILURE_LOOK_MS, 30_000, 30_000, 30_000, 30_000, 60_000, 3_600_000, 3_600_000]);
+    noMail.real.stop();
+    const noDay = everything({ ticking: true, without: ['day'] });
+    // Without the day's store there are no settings: no day, no calls, no noticing.
+    expect(periods(noDay.started)).toEqual([500, NOTCH_QUESTION_LOOK_MS, NOTCH_FAILURE_LOOK_MS, 30_000, 30_000, 30_000, 30_000, 60_000, 60_000, 3_600_000]);
+  });
+});
+
+describe('stop, with every part given', () => {
+  /** Says so when a part the notch hands back is told to stop. */
+  function watched(w: ReturnType<typeof everything>, order: string[]): void {
+    const parts: Record<string, { stop(): void } | null> = {
+      asks: w.real.asks, people: w.real.people, 'day one': w.real.dayOne, look: w.real.look, drop: w.real.drop, where: w.real.where, mail: w.real.mail,
+      presence: w.real.presence, around: w.real.around, jobs: w.real.jobs, catcher: w.real.catcher, teach: w.real.teach, put: w.real.put, notice: w.real.notice, agents: w.real.agents,
+      inbox: w.real.inbox,
+    };
+    for (const [name, part] of Object.entries(parts)) {
+      expect([name, part === null]).toEqual([name, false]);
+      const stop = part!.stop.bind(part);
+      part!.stop = () => { order.push(`stop: ${name}`); stop(); };
+    }
+  }
+
+  test('the clocks first, then what is on the notch, then each part, in this order', () => {
+    const order: string[] = [];
+    const w = everything({ ticking: true, log: (line) => order.push(line) });
+    watched(w, order);
+    w.real.stop();
+    const clocksCleared = order.filter((line) => line.startsWith('clock: '));
+    // Every clock real.ts started itself is cleared before anything else is stopped. The three that parts keep
+    // for themselves (the instructions, the people, the mailbox) go with their part.
+    expect(order.slice(0, 10).every((line) => line.startsWith('clock: '))).toBe(true);
+    expect(clocksCleared).toHaveLength(13);
+    expect(w.started.filter((one) => !one.cleared)).toEqual([]);
+    const parts = order.filter((line) => !line.startsWith('clock: '));
+    // What is on the notch ends before any part is stopped.
+    expect(parts[0]).toBe('stop: inbox');
+    // The promises and the pause only stop hearing: which of the two goes first is not pinned.
+    expect(parts.slice(1, 3).sort()).toEqual(['stop: promises', 'stop: the pause no longer heard']);
+    expect(parts.slice(3)).toEqual([
+      'stop: asks',
+      'stop: people',
+      'stop: day one',
+      'stop: look',
+      'stop: drop',
+      'stop: where',
+      'stop: mail',
+      'stop: presence',
+      'stop: around',
+      'stop: jobs',
+      'stop: catcher',
+      'stop: teach',
+      'stop: put',
+      'stop: notice',
+      'stop: agents',
+    ]);
+  });
+
+  test('after it Esc twice pauses nothing, a promise is not heard, and nothing is taken', async () => {
+    const w = everything();
+    w.fromPage({ type: 'stop' });
+    expect(w.state.pauseAsked).toBe(1);
+    w.state.paused = false;
+    w.real.stop();
+    w.fromPage({ type: 'stop' });
+    expect(w.state.pauseAsked).toBe(1);
+    expect(w.real.showing()).toBe(false);
+    await w.open();
+    expect(w.line()).toBeNull();
+    expect(w.real.inbox.present('late', async (stage) => { await stage.say(['Late.'], 1000); })).toBe(false);
+  });
+});
