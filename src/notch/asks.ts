@@ -22,6 +22,7 @@
  */
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { mintStanding, type TurnStanding } from '../authority/standing.ts';
+import { OWNER_ACTS, questionAsked, readActs, wordsCover, type OwnerAct } from '../authority/words-cover.ts';
 import { isBareAffirmation } from '../agents/realtime-taint.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import { notchNameDoubt, notchNamed, type NotchNameDoubt } from './names.ts';
@@ -341,17 +342,24 @@ export interface NotchAskHow {
   reply?: boolean;
 }
 
+/**
+ * The question some words answer, as far as the owner's word goes (authority/owner-word.ts): whether the turn
+ * that asked it had no word of the owner's, the question itself, and what the owner's words in that turn were
+ * and asked for. A bare yes agrees to what was proposed and says nothing of its own: after a turn with no word
+ * of the owner's it has none either, and after one with their word it covers what the question asked and what
+ * those words covered, and no more.
+ */
+interface NotchAnswered { unsaid: boolean; question: string; words: string; covers: readonly OwnerAct[] }
+
 interface Live {
   id: string;
   source: NotchAskSource;
-  /**
-   * These words answer a question that a turn with no word of the owner's
-   * asked back. A bare yes among them agrees to what that turn proposed and
-   * says nothing of its own, so it has no word of the owner's either.
-   */
-  answersUnsaid?: boolean;
-  /** This ran with no word of the owner's: a question the notch wrote, or such a yes. */
+  /** These words answer a question a turn asked back: which, and what stood behind it. */
+  answers?: NotchAnswered;
+  /** This ran with no word of the owner's: a question the notch wrote, or a bare yes to what a turn with none asked. */
   unsaid?: boolean;
+  /** The owner's words this ran on and the kinds of act they asked for, as its standing has them: what a yes to its question goes on. */
+  stood?: { words: string; covers: readonly OwnerAct[] };
   /** When it was made: the typing was sent, or the talk keys went down. */
   at: number;
   phase: NotchAskState;
@@ -814,11 +822,23 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         // "Continue", "run it", "go ahead" say no more than a yes does: to what a turn with no word of the
         // owner's proposed, they are not his word either. (Before a reply was always the answer, the notch
         // took most of these words for itself and they never came here.)
-        ask.unsaid = ask.source === 'shown' || (ask.answersUnsaid === true && (isBareAffirmation(ask.meant ?? ask.heard) || notchBareGoAhead(ask.meant ?? ask.heard)));
-        const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source);
+        const text = ask.meant ?? ask.heard;
+        const agrees = ask.answers !== undefined && (isBareAffirmation(text) || notchBareGoAhead(text));
+        ask.unsaid = ask.source === 'shown' || (agrees && ask.answers?.unsaid === true);
+        // What the words asked for goes with the standing (the owner's decision of 26 November 2026). A yes to
+        // what a turn with the owner's word asked back covers what that question asked and what those words
+        // covered. Anything else covers what it says itself. No fixed intent's sentence becomes a turn today
+        // (the notch does those itself), so `intent` is empty here; THE SEAM for the classifier's reading of
+        // a sentence the fixed words missed is `read`, in authority/words-cover.ts.
+        const said = agrees && ask.answers
+          ? { words: `${ask.answers.words} ${ask.answers.question}`.trim(), covers: OWNER_ACTS.filter((act) => ask.answers!.covers.includes(act) || readActs(ask.answers!.question, 'question').includes(act)), answers: true }
+          : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null }) };
+        // (A standing with no word of the owner's keeps no words and covers nothing, whatever it is handed.)
+        const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source, said);
+        if (standing && standing.origin !== 'shown') ask.stood = { words: standing.words, covers: standing.covers };
         // What the sentence asks for, when it was read: it goes with the turn (./intents.ts, `NotchAsksFor`).
         const asksFor = ask.got?.asksFor ?? null;
-        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}), ...(asksFor ? { asksFor } : {}) });
+        await turns.submit({ ...ref, text, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}), ...(asksFor ? { asksFor } : {}) });
         // Kept with the turn now: not held here as well.
         ask.files = undefined;
       } catch (error) {
@@ -1198,7 +1218,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
             const said = reply.act === 'ask' ? (reply.text ?? '').trim() : '';
             // A bare yes to what a turn with no word of the owner's proposed has none either. And typed into the
             // question's own line, it is the answer to it.
-            if (said) typed(said, undefined, 'typed', unsaid(ask), true);
+            if (said) typed(said, undefined, 'typed', answered(ask), true);
             return 'settled';
           }
           // How long the hands had been still when the answer came: asked before it is shown.
@@ -1276,7 +1296,7 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     for (const other of [...live.values()]) {
       if (other === ask || other.phase !== 'done' || inbox.showing() !== itemId(other.id)) continue;
       // Said with the keys instead of typed in its field: the same answer to the same question.
-      if (unsaid(other) && /\?\s*$/.test((other.answer ?? '').trim())) ask.answersUnsaid = true;
+      if (/\?\s*$/.test((other.answer ?? '').trim())) ask.answers = answered(other);
       // An answer that is a question, and not one that is only being read. Only the person's own words are a
       // reply: an offer that was taken, or a question the notch wrote about a file, is nobody's answer.
       if (other.asking && (ask.source === 'typed' || ask.source === 'spoken')) ask.reply = true;
@@ -1393,17 +1413,23 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
   }
 
-  /** Whether an instruction ran, or will run, with no word of the owner's (authority/standing.ts). */
-  const unsaid = (ask: Live): boolean => ask.source === 'shown' || ask.unsaid === true;
+  /**
+   * Whether an instruction ran, or will run, with no word of the owner's (authority/standing.ts): a question
+   * the notch wrote, an offer that was taken (it runs with the ordinary approvals), or a bare yes to either.
+   */
+  const unsaid = (ask: Live): boolean => ask.source === 'shown' || ask.source === 'offered' || ask.unsaid === true;
 
-  function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answersUnsaid = false, reply = false): string {
+  /** What a reply to this instruction's question answers. */
+  const answered = (ask: Live): NotchAnswered => ({ unsaid: unsaid(ask), question: questionAsked(ask.answer ?? ''), words: ask.stood?.words ?? '', covers: ask.stood?.covers ?? [] });
+
+  function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answers?: NotchAnswered, reply = false): string {
     endWalks();
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
     ledger.open(id, source, text);
     const ask = make(id, source, 'heard', text);
     if (files?.length) ask.files = files;
-    if (answersUnsaid) ask.answersUnsaid = true;
+    if (answers) ask.answers = answers;
     if (reply) ask.reply = true;
     begin(ask);
     return id;

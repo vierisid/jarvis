@@ -28,7 +28,7 @@
  * only with the notch switch on. Everywhere else `desktop_launch_app` is
  * reviewed on screen as before (authority/ui-intent.ts).
  */
-import { currentStanding, ownersOwnWords } from './standing.ts';
+import { currentStanding, ownersOwnWords, type TurnStanding } from './standing.ts';
 
 /**
  * Whether the code running now is inside a turn the owner started on the
@@ -42,6 +42,15 @@ import { currentStanding, ownersOwnWords } from './standing.ts';
  */
 export function ownerAskedOnNotch(): boolean {
   return ownersOwnWords(currentStanding());
+}
+
+/**
+ * The standing of such a turn, for what its words asked for
+ * (./owner-word.ts): null wherever `ownerAskedOnNotch` is false.
+ */
+export function ownersTurn(): TurnStanding | null {
+  const standing = currentStanding();
+  return ownersOwnWords(standing) ? standing : null;
 }
 
 /**

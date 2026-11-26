@@ -99,12 +99,32 @@ describe('one place each', () => {
     }
   });
 
+  test('what a turn\'s words cover is read off its standing in one place, and what it has read is said by the two tool loops', () => {
+    // The standing with its words leaves app-open.ts by one function, and one file asks it.
+    expect(sites(/\bownersTurn\b/)).toEqual(['src/authority/app-open.ts', 'src/authority/owner-word.ts']);
+    // Who says what a turn has read: the main agent's loop and a helper's. A third would be a new way to call a turn clean.
+    expect(product.filter((file) => file !== 'src/authority/owner-word.ts' && /\bwithOutsideContent\b/.test(read(file)))).toEqual([
+      'src/agents/orchestrator.ts',
+      'src/agents/sub-agent-runner.ts',
+    ]);
+    // And the three places a call is decided all ask the one function.
+    expect(product.filter((file) => file !== 'src/authority/owner-word.ts' && /\bownerWord\(/.test(read(file)))).toEqual([
+      'src/actions/tools/approval-tool.ts',
+      'src/agents/orchestrator.ts',
+      'src/agents/sub-agent-runner.ts',
+    ]);
+    // Nobody decides it by the bare question "did the owner ask?" any more, but the app open, which is not asked about either way.
+    expect(product.filter((file) => /\bownerAskedOnNotch\(\)/.test(read(file)))).toEqual(['src/authority/app-open.ts']);
+  });
+
   test('the test fixture that makes a standing is named by tests only, and by exactly these', () => {
     expect(product.filter((file) => NAMES_FIXTURE.test(read(file)))).toEqual([]);
     expect(namesStanding(FIXTURE, read(FIXTURE))).toBe(true);
     expect(files.filter((file) => isTest(file) && file !== 'src/authority/standing-sites.test.ts' && NAMES_FIXTURE.test(read(file)))).toEqual([
       'src/agents/app-open-gating.test.ts',
+      'src/agents/owner-word-boundary-gating.test.ts',
       'src/authority/app-open.test.ts',
+      'src/authority/owner-word-boundary.test.ts',
       'src/authority/owner-word-surfaces.test.ts',
       'src/authority/owner-word.test.ts',
       'src/daemon/notch-asks.test.ts',

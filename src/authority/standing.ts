@@ -44,19 +44,47 @@
  * read is on from its first step.
  *
  * A bare yes is the one thing the owner writes that is `shown` too: typed or
- * said in answer to a question that a shown turn asked back, it says nothing
- * of its own, and what it agrees to was proposed by a turn that had read
- * somebody else's text (notch/asks.ts). An answer with a word of its own is
- * the owner's. This holds until the turn's words are read for what they cover.
+ * said in answer to a question that a turn with no word of the owner's asked
+ * back (a shown turn, an offer that was taken, such a yes before it), it says
+ * nothing of its own, and what it agrees to was proposed by a turn that had
+ * no word of theirs (notch/asks.ts). An answer with a word of its own is the
+ * owner's.
+ *
+ * And it says what the owner's words asked for (decided by the owner on 26
+ * November 2026, owner-word.ts): `words` is the sentence, and `covers` is
+ * which of the four kinds of act that reach out or run code it asked for (a
+ * send, a command, an install, a change of settings), read from the sentence
+ * alone where the turn is made (words-cover.ts). They matter once the turn
+ * has read something the owner did not write. A bare yes to what a turn with
+ * the owner's word asked back is `answers`: the question it agrees to was not
+ * written by the owner, so the turn counts as having read outside content
+ * from its first step (owner-word.ts reads it here; the turn is not marked
+ * for the ordinary guard, which the owner's word sets aside anyway, and it
+ * runs the same way a typed turn does). It covers what the question asked
+ * and what the words before it covered.
  */
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
 import { notchEnabled } from '../notch/switch.ts';
+import { OWNER_ACTS, type OwnerAct } from './words-cover.ts';
 
 /** Who wrote the words of a turn started on the notch. */
 export type StandingOrigin = 'typed' | 'spoken' | 'shown';
 
 export interface TurnStanding {
   readonly origin: StandingOrigin;
+  /** What the owner wrote or said, and for a bare yes also the question it answers. Empty for a shown turn. */
+  readonly words: string;
+  /** The kinds of act those words asked for. Always none for a shown turn. */
+  readonly covers: readonly OwnerAct[];
+  /** The words are only a yes to a question the assistant asked back: that question is outside content, so the turn has read some from its start. */
+  readonly answers: boolean;
+}
+
+/** What the notch says of the words when it makes a standing. Left out: the words cover nothing. */
+export interface StandingWords {
+  words?: string;
+  covers?: Iterable<OwnerAct>;
+  answers?: boolean;
 }
 
 /**
@@ -78,9 +106,17 @@ const granted = new WeakMap<BriefExecutionContext, TurnStanding>();
  * (notch/asks.ts): whoever calls this says "the owner started this, on their
  * own computer, and this is who wrote its words".
  */
-export function mintStanding(origin: StandingOrigin): TurnStanding {
+export function mintStanding(origin: StandingOrigin, said: StandingWords = {}): TurnStanding {
   if (!ORIGINS.has(origin)) throw new Error('Unknown standing');
-  const standing: TurnStanding = Object.freeze({ origin });
+  // A question the code wrote is nobody's word: it has no words and covers nothing, whatever is handed in.
+  const owners = origin !== 'shown';
+  const covers = owners ? OWNER_ACTS.filter((act) => [...(said.covers ?? [])].includes(act)) : [];
+  const standing: TurnStanding = Object.freeze({
+    origin,
+    words: owners && typeof said.words === 'string' ? said.words : '',
+    covers: Object.freeze(covers),
+    answers: owners && said.answers === true,
+  });
   minted.add(standing);
   return standing;
 }

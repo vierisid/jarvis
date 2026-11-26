@@ -97,16 +97,16 @@ const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle'])
  * (authority/owner-word.ts), which lets a click go ahead unasked unless it is
  * a delete or a payment and so has to know before the click, not on a sheet.
  *
- * Three answers, and they are kept apart:
+ * Four answers, and they are kept apart:
  *
- *   - a list (often empty): the machine looked, or it cannot look by its
- *     making. A thing with no name, of a kind it could tell (a Pane, in a
- *     game or a canvas), reads as nothing. So does a click where nothing can be asked at all: screen
+ *   - a list (often empty): the machine looked. A thing with no name, of a
+ *     kind it could tell (a Pane, in a game or a canvas), reads as nothing.
+ *   - `'blind'`: nothing can be asked at all, by its making: screen
  *     awareness is off, there is no machine to ask, or its desktop app cannot
- *     say what is at a place (`says`). The owner's word lets those go ahead,
- *     as a step in a turn they started. (Point 1, C3: once the owner's word
- *     knows whether the turn has read outside content, this case is to ask in
- *     such a turn and only there. It needs its own answer then.)
+ *     say what is at a place (`says`). The owner's word lets such a click go
+ *     ahead in a turn that has read nothing, as a step in a turn they
+ *     started, and asks about it in a turn that has read outside content
+ *     (the owner's decision of 26 November 2026, authority/owner-word.ts).
  *   - null: it can look, tried, and was told nothing about the thing at the
  *     place (an element it no longer knows, a read that broke; the window
  *     round it may still be named). That is not
@@ -119,14 +119,14 @@ const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle'])
  * A call that presses nothing, or that will be refused before it runs (no
  * place can be worked out, a click that names no element), reads as nothing.
  */
-export async function notchPressReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<ActionCategory[] | null> {
+export async function notchPressReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<ActionCategory[] | 'blind' | null> {
   if (toolName !== 'desktop_click' && toolName !== 'desktop_pointer') return [];
   const action = typeof args.action === 'string' && args.action ? args.action : 'click';
   if (!PRESSES.has(action)) return [];
-  // Cannot look by its making: not a failure, and not asked about (see above for C3).
-  if (!deps.allowed()) return [];
+  // Cannot look by its making: not a failure, and its own answer.
+  if (!deps.allowed()) return 'blind';
   const target = deps.target(args.target, toolName);
-  if (!target || !deps.says(target)) return [];
+  if (!target || !deps.says(target)) return 'blind';
   let params: Record<string, unknown>;
   if (toolName === 'desktop_pointer') {
     const place = pointerRequest(args, deps.seen(target));

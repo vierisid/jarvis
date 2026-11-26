@@ -8,7 +8,8 @@
  * for a yes.
  *
  * So, in a turn the owner started on the notch with their own hands or voice,
- * a call is not asked about. Two things still are, by the owner's own words:
+ * a call is not asked about. Two things still are, always, by the owner's own
+ * words:
  *
  *   - a delete: something is removed and may not come back;
  *   - a payment: money moves.
@@ -23,29 +24,76 @@
  *   - for a raw click, what the machine says is at that place, read the same
  *     way as a control's label (the probe, set by the daemon). When a
  *     machine that can say what is there fails to, also on a second try, the
- *     click is asked about. Where nothing can be asked by its making (screen
- *     awareness off, a Mac or Linux desktop app, no machine) the click goes
- *     ahead like any other step.
+ *     click is asked about.
+ *
+ * ## After outside content: what was not asked for
+ *
+ * Decided by the owner on 26 November 2026. "Saying it is the approval" is
+ * about what they said. Once the turn has read something they did not write
+ * (a page, a file, a window, a mail, a colleague's message, memory they did
+ * not enter, the assistant's own question that they only said yes to), text
+ * in it can ask for things they never asked for. From then on, in that turn,
+ * four kinds of act are asked about again, and only when their own sentence
+ * did not ask for that kind of act:
+ *
+ *   - a send (`send_email`, `send_message`): something goes to somebody;
+ *   - a command (`execute_command`): a program or a script is run. An app
+ *     started with arguments, or a shell, a script host or an installer
+ *     started at all, is a command by another name (`plainAppOpen` says
+ *     which opens are plain);
+ *   - an install (`install_software`);
+ *   - a change of settings (`modify_settings`).
+ *
+ * Which of them a call is, is said in one place (`callActs`), from the
+ * categories the product's one gate gave the call (`resolveToolGate`) and,
+ * for a raw click, from what the machine says is at that place. What the
+ * owner's sentence asked for is read once, where the turn is made
+ * (words-cover.ts), and travels with the turn's standing (`covers`).
+ *
+ * Everything else is as it was on 13 November, also after outside content: a
+ * click, typed text, a key press, a page, a file written, a plain app opened,
+ * a helper started. "Open Notepad and write a poem" still runs with no
+ * question, and so does a turn that has read nothing, whatever it does.
+ * Asking about everything after outside content was what the owner rejected
+ * on 13 November, since opening an app is itself outside content.
+ *
+ * Three narrower things follow from the same decision:
+ *
+ *   - a command that installs (`npm install`, `winget install`, an
+ *     installer) is asked for by "install ...", and a command that changes
+ *     a setting (`reg add`, `defaults write`) by "turn on ...": the owner
+ *     named the thing, not the tool (`commandInstalls`, `commandSets`). No
+ *     other command is covered by those words;
+ *   - a send whose recipients can be read from the call must go to somebody
+ *     the owner's words name: "send it to Anna" does not cover a send to
+ *     somebody else in the same turn. A name is matched as a word against
+ *     the address or the name the call gives; "reply" names nobody and
+ *     covers whoever wrote the thing. Where the call names no recipient (a
+ *     click on Send), the kind alone decides;
+ *   - a raw click where the machine cannot look by its making (screen
+ *     awareness off, a Mac or Linux desktop app, no machine) goes ahead in a
+ *     turn that has read nothing, and is asked about in one that has: what
+ *     it lands on cannot be read, and what was read may have chosen it.
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
- * anything else: that is the price of not being asked, and it is the owner's
- * to pay. What is NOT waived: a call the product refuses outright (it stays
+ * anything else. After outside content, clicks and typed text are still not
+ * asked about, so text that was read can still drive an app by its buttons;
+ * a button that reads as Send, Delete or Buy is caught by its name. When the
+ * owner did ask for a send, what was read can still shape its wording. That
+ * is the price of not being asked, and it is the owner's to pay.
+ * What is NOT waived: a call the product refuses outright (it stays
  * refused), and a call whose own classifier failed (nothing is known about
  * it, so it is asked about).
- *
- * This also sets aside, for these turns, the guard that asks about every step
- * after outside content was read (authority/taint-gating.ts). That guard
- * exists because a page, a file or a window can carry instructions. With it
- * set aside, what such text can make the agent do is no longer held for a
- * yes unless it is a delete or a payment. The owner chose that.
  *
  * Where it applies: only inside a turn the owner started on the notch, and
  * only with the notch switch on. Dashboard chat, Telegram, background agents
  * and workflows are judged as before.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ActionCategory } from '../roles/authority.ts';
-import { ownerAskedOnNotch } from './app-open.ts';
+import { ownersTurn, plainAppOpen } from './app-open.ts';
+import type { OwnerAct } from './words-cover.ts';
 
 /** What is still asked about when the owner asked for the thing themselves. */
 export const STILL_ASKED: ReadonlySet<ActionCategory> = new Set<ActionCategory>(['delete_data', 'make_payment']);
@@ -193,19 +241,167 @@ export function callDeletesOrPays(toolName: string, params: Record<string, unkno
 }
 
 /**
- * Asks the machine what a raw click would land on, and answers with what that
- * reads as (`delete_data`, `make_payment`, or nothing). The daemon sets it;
- * without it a raw click is judged by the call alone.
- *
- * Null means it tried to look and was told nothing; a throw means the asking
- * failed (no answer in time, a desktop app too old to know the question).
- * Neither is "nothing is there". Where it cannot look by its making (screen
- * awareness off, a desktop app that cannot say, no machine) it answers with
- * nothing, and the click goes ahead: a step in a turn the owner started is
- * not asked about. Point 1, C3 changes that for a turn that has read outside
- * content, once that is known here.
+ * A command that installs something: a package manager told to install or
+ * add, an installer run. Read so that "install ..." covers the command that
+ * does it, and no other command.
  */
-export type OwnerWordProbe = (toolName: string, params: Record<string, unknown>) => Promise<readonly ActionCategory[] | null>;
+const INSTALLS: readonly RegExp[] = [
+  /\b(?:npm|pnpm|yarn|bun|pip|pip3|pipx|uv|brew|apt|apt-get|dnf|yum|zypper|winget|choco|scoop|cargo|gem|go|snap|flatpak|port|conda|mamba|composer|dotnet\s+tool)\s+(?:-\S+\s+)*(?:i|install|add|upgrade|update)\b/i,
+  /\b(?:pacman|yay|paru)\s+-S|\bcode(?:\.cmd)?\s+--install-extension\b/,
+  /\bmsiexec\b[^|;&]*\s\/i\b/i,
+  /\bdpkg\s+-i\b|\brpm\s+-[iU]|\binstaller\s+-pkg\b|\bInstall-(?:Module|Package|Script)\b|\bAdd-AppxPackage\b/i,
+  /(?:^|[\s"'\\/])[\w .()-]*(?:setup|install(?:er)?)[\w .()-]*\.(?:exe|msi|pkg|dmg|deb|rpm|appimage|sh)\b/i,
+];
+
+export function commandInstalls(command: unknown): boolean {
+  return typeof command === 'string' && command.trim() !== '' && INSTALLS.some((pattern) => pattern.test(command));
+}
+
+/** A command that changes a setting of the system by the system's own tool for it. */
+const SETS: readonly RegExp[] = [
+  /\breg(?:\.exe)?\s+add\b|\b(?:Set|New)-ItemProperty\b|\bSet-(?:ExecutionPolicy|TimeZone|Culture|WinUserLanguageList|MpPreference|NetConnectionProfile|DnsClientServerAddress)\b/i,
+  /\bdefaults\s+write\b|\b(?:networksetup|systemsetup|pmset)\s+-\w|\bscutil\s+--set\b/i,
+  /\bgsettings\s+set\b|\bdconf\s+write\b|\btimedatectl\s+set-|\bnmcli\b[^|;&]*\b(?:on|off|up|down|modify)\b|\bxdg-settings\s+set\b/i,
+  /\b(?:powercfg|netsh)\b|\bsetx\s/i,
+];
+
+export function commandSets(command: unknown): boolean {
+  return typeof command === 'string' && command.trim() !== '' && SETS.some((pattern) => pattern.test(command));
+}
+
+const ACT_OF: Partial<Record<ActionCategory, OwnerAct>> = {
+  send_email: 'send',
+  send_message: 'send',
+  execute_command: 'command',
+  install_software: 'install',
+  modify_settings: 'settings',
+};
+
+/**
+ * Which of the four kinds of act a call is: the one place that says it. The
+ * categories are the ones the product's gate gave the call
+ * (`resolveToolGate`: the tool's own entry, its per-call gate, an on-screen
+ * control's label), with what the machine read at a raw click's place added
+ * by the caller. Nothing here keeps a list of tools.
+ */
+export function callActs(toolName: string, params: Record<string, unknown>, categories: readonly ActionCategory[]): OwnerAct[] {
+  const acts = new Set<OwnerAct>();
+  for (const category of categories) {
+    const act = ACT_OF[category];
+    if (act) acts.add(act);
+  }
+  // An app told what to do, or a program that is not an app: a command by another name (app-open.ts).
+  if (toolName === 'desktop_launch_app' && !plainAppOpen(toolName, params)) acts.add('command');
+  return [...acts];
+}
+
+/** The fields of a call that say who a send goes to. */
+const RECIPIENT_KEYS = /^(?:to|cc|bcc|recipients?|receivers?|addressees?|emails?|addresses|chat|chat_?id|chat_?name|channel|channel_?id|channel_?name|phone|phone_?number|number|user|username|user_?id|contact|contacts|peer|person|handle)$/i;
+
+function recipientsOf(value: unknown, depth = 0): string[] {
+  if (typeof value === 'string') return value.split(/[;,]/).map((one) => one.trim()).filter(Boolean);
+  if (typeof value === 'number') return [String(value)];
+  if (depth > 2 || !value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) return value.flatMap((one) => recipientsOf(one, depth + 1));
+  // A person as an object: whatever it is called by.
+  return Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => /^(?:name|email|address|display_?name|id|handle|phone|number|username)$/i.test(key))
+    .flatMap(([, one]) => recipientsOf(one, depth + 1));
+}
+
+/** Who a call sends to, as far as the call says: every value of a field that names a recipient. */
+export function callRecipients(params: Record<string, unknown>): string[] {
+  return Object.entries(params).filter(([key]) => RECIPIENT_KEYS.test(key)).flatMap(([, value]) => recipientsOf(value));
+}
+
+const plain = (text: string): string => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/** Words of a sentence that name nobody. */
+const NO_NAME = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'these', 'those', 'file', 'files', 'mail', 'email', 'message', 'send', 'forward', 'reply',
+  'please', 'you', 'can', 'could', 'would', 'will', 'him', 'her', 'them', 'his', 'their', 'from', 'about', 'now', 'then', 'also', 'not', 'all', 'yes', 'shall',
+  'che', 'con', 'per', 'del', 'della', 'dei', 'gli', 'una', 'uno', 'questo', 'questa', 'invia', 'manda', 'inoltra', 'rispondi', 'messaggio', 'posta', 'non',
+  'com', 'org', 'net', 'www', 'http', 'https', 'gmail', 'outlook', 'hotmail', 'yahoo', 'icloud']);
+
+/**
+ * Whether the owner's words name this recipient. A word of theirs (three
+ * letters or more, and not one that names nobody) has to be a word of the
+ * recipient's name, or of the part of an address before the @, or begin one
+ * ("Anna" names anna.rossi@corp.example and "Anna Rossi"). An address they
+ * wrote out names itself. The part after the @ never does: "corp" in their
+ * sentence does not name everybody at corp.example.
+ */
+export function wordsName(words: string, recipient: string): boolean {
+  const said = plain(words);
+  const whole = plain(recipient).trim();
+  if (!whole) return true;
+  const address = /[^\s<>"'(),;]+@[^\s<>"'(),;]+/.exec(whole)?.[0] ?? '';
+  if (address && said.includes(address)) return true;
+  // The name beside the address and the part before the @; with no address, the whole of it.
+  const named = address ? `${whole.replace(address, ' ')} ${address.slice(0, address.indexOf('@'))}` : whole;
+  const parts = named.split(/[^\p{L}\p{N}]+/u).filter((part) => part.length >= 2);
+  // Their words with every address taken out first: the part after an @ names nobody.
+  const mine = said.replace(/[^\s<>"'(),;]+@[^\s<>"'(),;]+/g, ' ').split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3 && !NO_NAME.has(word));
+  return mine.some((word) => parts.some((part) => part === word || (word.length >= 4 && part.startsWith(word))));
+}
+
+/** Words that send to whoever wrote the thing in front, and so name nobody: a reply. */
+const REPLIES = /\b(?:reply|respond|answer|rispond\w+|risposta)\b/i;
+
+/**
+ * Whether sends to somebody the owner's words do not name are asked about.
+ * The owner's decision speaks of kinds of act; this is the stricter reading
+ * of it, chosen so that "send Anna the file" does not also cover a second
+ * send that something read in the turn added. False: the kind alone decides.
+ */
+export const RECIPIENTS_MUST_BE_NAMED = true;
+
+/**
+ * The outside content the code running now has read, as the turn's own tool
+ * loops keep it: each loop enters with its live set of marks (the main
+ * agent's turn, a helper's run), and a loop started inside another sees both.
+ */
+type Held = { marks: ReadonlySet<string>; counts: (mark: string) => boolean; above: Held | undefined };
+const held = new AsyncLocalStorage<Held>();
+
+/**
+ * Runs `run` with `marks` as what its tool loop has read. `marks` is the
+ * live set: what is read later counts from then on. `counts` leaves out the
+ * marks that are not outside content (an intent the person did not approve).
+ */
+export function withOutsideContent<T>(marks: ReadonlySet<string>, run: () => T, counts: (mark: string) => boolean = () => true): T {
+  return held.run({ marks, counts, above: held.getStore() }, run);
+}
+
+/** What has been read from outside where the code runs now. Null: nobody said, which is not "nothing". */
+export function outsideContentHeld(): string[] | null {
+  const store = held.getStore();
+  if (!store) return null;
+  const sources = new Set<string>();
+  for (let level: Held | undefined = store; level; level = level.above) {
+    for (const mark of level.marks) if (level.counts(mark)) sources.add(mark);
+  }
+  return [...sources];
+}
+
+/**
+ * Asks the machine what a raw click would land on, and answers with what that
+ * reads as (the categories a click on that name means), or nothing. The
+ * daemon sets it; without it nothing can look.
+ *
+ * Four answers, kept apart:
+ *
+ *   - a list (often empty): it looked;
+ *   - `'blind'`: it cannot look by its making (screen awareness off, a
+ *     desktop app that cannot say, no machine). The click goes ahead in a
+ *     turn that has read nothing, and is asked about in one that has;
+ *   - null: it tried to look and was told nothing;
+ *   - a throw: the asking failed (no answer in time, a desktop app too old to
+ *     know the question).
+ *
+ * Neither of the last two is "nothing is there": it is asked once more, and
+ * then the owner is asked.
+ */
+export type OwnerWordProbe = (toolName: string, params: Record<string, unknown>) => Promise<readonly ActionCategory[] | 'blind' | null>;
 
 let probe: OwnerWordProbe | null = null;
 
@@ -222,49 +418,111 @@ export interface OwnerWordGate {
   unclassified?: boolean;
 }
 
+/** What is known of the turn a call is made in, when the owner started it with words of their own. */
+export interface OwnerTurn {
+  /** Whether the turn has read something the owner did not write. */
+  outside: boolean;
+  /** The kinds of act the owner's words asked for. */
+  covers: readonly OwnerAct[];
+  /** The words themselves, for who a send may go to. */
+  words: string;
+}
+
+/**
+ * The turn the code running now belongs to, or null when it is not one the
+ * owner started on the notch with words of their own. `own`: what the caller
+ * itself has read (a helper's run), beside what the loops above it have.
+ * Where nobody says what was read, it is taken as read: not knowing is a
+ * reason to ask.
+ */
+export function currentOwnerTurn(own?: ReadonlySet<string>): OwnerTurn | null {
+  const standing = ownersTurn();
+  if (!standing) return null;
+  const above = outsideContentHeld();
+  const outside = standing.answers || (own !== undefined && own.size > 0) || (above === null ? own === undefined : above.length > 0);
+  return { outside, covers: standing.covers, words: standing.words };
+}
+
 /**
  * What the owner's word says about a call:
  *
- *   - `go`: it is inside a turn they started on the notch and nothing about it
- *     reads as a delete or a payment. It is not asked about.
+ *   - `go`: it is inside a turn they started on the notch, nothing about it
+ *     reads as a delete or a payment, and it is not one of the four kinds of
+ *     act in a turn that has read outside content, or their words asked for
+ *     it. It is not asked about.
  *   - `ask`: it is inside such a turn and it does read as a delete or a
  *     payment. It is asked about, also where the product's ordinary rules
  *     would have let it run: a command that deletes ran unasked in a turn that
  *     had read nothing, and "a delete is asked about" has to be true.
- *   - `unseen`: it is inside such a turn and it is a raw click on a screen
- *     that can be read and was not, asked twice. It is asked about like `ask`,
- *     with its own reason: a click is not pressed blind, since "Delete" and
- *     "Buy now" are found by reading what is there.
+ *   - `unseen`: it is a raw click on a screen that can be read and was not,
+ *     asked twice. It is asked about like `ask`, with its own reason: a click
+ *     is not pressed blind, since "Delete" and "Buy now" are found by reading
+ *     what is there.
+ *   - `blind`: it is a raw click where nothing can look, in a turn that has
+ *     read outside content.
+ *   - `unasked-send`, `unasked-command`, `unasked-install`,
+ *     `unasked-settings`: the turn has read outside content, the call is that
+ *     kind of act, and the owner's words did not ask for one.
+ *   - `unnamed`: the same, for a send they did ask for that goes to somebody
+ *     their words do not name.
  *   - null: not such a turn, or a call whose own classifier failed. The
  *     product's ordinary rules decide, as everywhere else.
  *
- * `asked` is for tests; the product asks `ownerAskedOnNotch`.
+ * Every answer but `go` and null is asked about, with its own reason
+ * (`ownerWordAsks`).
+ *
+ * `turn` is for tests and for a helper, which says what it has read itself;
+ * the product otherwise asks `currentOwnerTurn`. A function that answers
+ * true stands for a turn that has read nothing.
  */
-export type OwnerWord = 'go' | 'ask' | 'unseen';
+export type OwnerWord = 'go' | 'ask' | 'unseen' | 'blind' | `unasked-${OwnerAct}` | 'unnamed';
+
+const CLEAN: OwnerTurn = { outside: false, covers: [], words: '' };
 
 export async function ownerWord(
   toolName: string,
   params: Record<string, unknown>,
   gate: OwnerWordGate,
-  asked: () => boolean = ownerAskedOnNotch,
+  turn: () => OwnerTurn | boolean | null = currentOwnerTurn,
 ): Promise<OwnerWord | null> {
-  if (!asked()) return null;
+  const told = turn();
+  if (!told) return null;
+  const now = told === true ? CLEAN : told;
   if (gate.unclassified) return null;
   if (callDeletesOrPays(toolName, params, gate.categories)) return 'ask';
-  if (probe && RAW_PRESS_TOOLS.has(toolName)) {
+  let reads: readonly ActionCategory[] = gate.categories;
+  if (RAW_PRESS_TOOLS.has(toolName)) {
+    let looked: readonly ActionCategory[] | 'blind' | null = probe ? null : 'blind';
     // Asked once more when the first asking fails or sees nothing: a machine
     // that was busy answers the second time. After that it is not known what
     // is there, and not knowing is a reason to ask.
-    for (let tries = 0; tries < 2; tries += 1) {
-      let reads: readonly ActionCategory[] | null = null;
+    for (let tries = 0; probe && tries < 2 && looked === null; tries += 1) {
       try {
-        reads = await probe(toolName, params);
+        looked = await probe(toolName, params);
       } catch {
         // The machine could not say this time.
       }
-      if (reads) return reads.some((category) => STILL_ASKED.has(category)) ? 'ask' : 'go';
     }
-    return 'unseen';
+    if (looked === null) return 'unseen';
+    if (looked === 'blind') {
+      if (now.outside) return 'blind';
+    } else {
+      if (looked.some((category) => STILL_ASKED.has(category))) return 'ask';
+      // What is at the place is part of what the click does: a click on "Send" is a send.
+      reads = [...gate.categories, ...looked];
+    }
+  }
+  if (!now.outside) return 'go';
+  const acts = callActs(toolName, params, reads);
+  const command = commandText(toolName, params);
+  for (const act of acts) {
+    if (now.covers.includes(act)) continue;
+    // "Install ..." asks for the command that installs, "turn on ..." for the one that sets: and for no other command.
+    if (act === 'command' && command && ((now.covers.includes('install') && commandInstalls(command)) || (now.covers.includes('settings') && commandSets(command)))) continue;
+    return `unasked-${act}`;
+  }
+  if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send') && !REPLIES.test(now.words)) {
+    if (callRecipients(params).some((recipient) => !wordsName(now.words, recipient))) return 'unnamed';
   }
   return 'go';
 }
@@ -278,7 +536,32 @@ export const OWNER_WORD_ASKS_REASON = 'a delete or a payment is always asked abo
 /** And for a raw click on a screen that could not be read first. */
 export const OWNER_WORD_UNSEEN_REASON = 'the screen could not be read to see what this click lands on, so it is asked about';
 
+/** And for a raw click where nothing can look, after outside content was read. */
+export const OWNER_WORD_BLIND_REASON = 'this turn has read content you did not write, and what this click lands on cannot be read here, so it is asked about';
+
+const ACT_SAID: Record<OwnerAct, string> = {
+  send: 'a send',
+  command: 'running a command',
+  install: 'an install',
+  settings: 'a change of settings',
+};
+
+/** And for an act that reaches out or runs code, after outside content, that the owner's words did not ask for. */
+export function ownerWordUnaskedReason(act: OwnerAct): string {
+  return `your words did not ask for ${ACT_SAID[act]}, and this turn has read content you did not write, so it is asked about`;
+}
+
+/** And for a send to somebody their words do not name. */
+export const OWNER_WORD_UNNAMED_REASON = 'your words did not name who this is sent to, and this turn has read content you did not write, so it is asked about';
+
 /** The reason a word asks with, or null when it does not ask. */
 export function ownerWordAsks(word: OwnerWord | null): string | null {
-  return word === 'ask' ? OWNER_WORD_ASKS_REASON : word === 'unseen' ? OWNER_WORD_UNSEEN_REASON : null;
+  switch (word) {
+    case null: case 'go': return null;
+    case 'ask': return OWNER_WORD_ASKS_REASON;
+    case 'unseen': return OWNER_WORD_UNSEEN_REASON;
+    case 'blind': return OWNER_WORD_BLIND_REASON;
+    case 'unnamed': return OWNER_WORD_UNNAMED_REASON;
+    default: return ownerWordUnaskedReason(word.slice('unasked-'.length) as OwnerAct);
+  }
 }

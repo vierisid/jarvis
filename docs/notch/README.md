@@ -258,17 +258,30 @@ What holds for all of them:
     answer with words of its own to a question Jarvis asked back. A shown
     question is kept in the ledger as what it was ("Asked for you", the
     fourth way an instruction comes), and its ids say `notch-shown-`.
-    One thing the owner writes is shown too, for now: **a bare yes to what
-    a shown turn asked back** ("Shall I mail this to...?", "yes"), typed in
-    the question's field or said with the keys while it is up
-    (`isBareAffirmation`, the matcher the dashboard's carry uses). It agrees
-    to what a turn that had read somebody else's text proposed and says
-    nothing of its own, so it runs with no owner's word and every acting
-    step is asked about; "yes", "yes" stays so until he says what he wants.
-    "Yes, send it to Anna" is his word, and so is a bare yes to what a turn
-    he typed or spoke asked back. This is an interim rule: it is replaced
-    when the boundary after outside content reads what his words cover
-    (fixes/01, C3 and C4).
+    The standing also says what the owner's words were and what they asked
+    for, since 26 November 2026 (44): `words`, the sentence, and `covers`,
+    which of a send, a command, an install and a change of settings it asked
+    for. They are read once, where the turn is made, and cannot be changed
+    afterwards. A shown turn has no words and covers nothing, whatever it is
+    handed.
+    **A bare yes says nothing of its own.** "Yes", "ok", "continue", "run
+    it", "go ahead", "fallo", typed in a question's field or said with the
+    keys while the question is up, agree to what was proposed
+    (`isBareAffirmation`, `notchBareGoAhead`). So a bare yes goes by the turn
+    that asked. To what a turn with no word of the owner's asked back (a
+    shown turn, an offer that was taken, such a yes before it) it has no
+    owner's word either: it is a shown turn, every acting step is asked
+    about, and "yes", "yes" stays so until he says what he wants. To what a
+    turn he typed or spoke asked back it is his word (`answers`), and it
+    covers what the question asked ("Shall I run it?" is a command; the last
+    sentence of the answer is the question) and what his words before it
+    covered, and no more; and because he did not write the question, that
+    turn counts as having read outside content from its first step, so the
+    boundary of 44 is on. "Yes, send it to Anna" has words of its own and is
+    judged by them, as any sentence is.
+    What the words of a turn covered is kept in memory only: to an answer
+    brought back after a restart, a yes covers what its question asks and
+    nothing from before it.
 40. **Opening an app is not asked about.** Decided by the owner on 13
     November 2026, with the operating system as the measure: it does not ask
     before it opens an app; it asks before a delete, a payment, or a program
@@ -278,13 +291,19 @@ What holds for all of them:
     arguments, of an app named as a person names one or installed in the
     system's own folders for apps, and never a shell, a script host, an
     installer or a tool that acts by being started (`authority/app-open.ts`).
-    Opening it still counts as outside content: what the turn does after it
-    is asked about as before. Everywhere but a notch turn, and with the
-    switch off, opening an app is reviewed on screen as it always was.
-    The agent is told the same in the per-turn part of its prompt
-    (`NOTCH_TURN_NOTE`): it does not ask on its own account before opening
-    an app or doing what it was just told to, only before a delete, a send,
-    a payment, an install or a change of settings.
+    Opening it still counts as outside content (a window's title is the
+    page's own text), and that is why the boundary of 44 is narrow: after an
+    app was opened, clicks, typed text, keys, pages and files still go ahead
+    with no question, so "open Notepad and write a poem" runs to its end;
+    only a send, a command, an install or a change of settings that the
+    owner's words did not ask for is asked about. An app started with
+    arguments, or a shell, a script host or an installer started at all, is
+    not a plain app open: it is a command by another name, here and in 44.
+    Everywhere but a notch turn, and with the switch off, opening an app is
+    reviewed on screen as it always was.
+    The agent is told in the per-turn part of its prompt (`NOTCH_TURN_NOTE`)
+    that it does not ask on its own account before opening an app or doing
+    what it was just told to, only before a delete or a payment.
 42. **An action on the screen is approved by what it lands on.** A click, a
     typed text or a key press says "element 12", or "x 640, y 300", or
     nothing, and the product cannot tell a click that pays from one that
@@ -330,18 +349,91 @@ What holds for all of them:
     notch with words of their own, typed or spoken (41: not a question the
     notch wrote for them), a call is not asked about: not a click, typed
     text, a key press, a page, a command, a file, an app with arguments, a
-    send, an install or a change of settings, and not the step after outside
-    content was read. Two things are asked about, always, also where the
-    product's ordinary rules would let them run: **a delete** and **a
-    payment** (`authority/owner-word.ts`, applied where the main agent, a
-    helper agent and the model's own `request_approval` are decided).
+    send, an install or a change of settings. Two things are asked about,
+    always, also where the product's ordinary rules would let them run: **a
+    delete** and **a payment** (`authority/owner-word.ts`, one function,
+    `ownerWord`, asked where the main agent, a helper agent and the model's
+    own `request_approval` are decided, and nowhere else:
+    `standing-sites.test.ts`).
+    **After outside content, what he did not ask for is asked about.**
+    Decided by the owner on 26 November 2026. "Saying it is the approval" is
+    about what he said. Once such a turn has read something he did not write
+    (a page, a dropped file, a window, an app that was opened, a mail or a
+    message somebody sent, memory he did not enter, a question of the
+    assistant's that he only said yes to), four kinds of act are asked about
+    again in that turn, and only when his own sentence did not ask for that
+    kind: **a send, a command, an install, a change of settings**. They are
+    the acts that reach out or run code. Everything else is as before, also
+    after outside content: a click, typed text, a key press, a page, a file
+    written, a plain app opened, a helper started. A turn that has read
+    nothing is not asked about at all, as before. So:
+    - "open Notepad and write a poem" runs with no question (opening the app
+      is outside content; nothing after it is one of the four);
+    - "send Anna the file", with a file: sent, no question;
+    - "reply to this", on something circled: the reply is sent;
+    - "summarise this", with a PDF: the same summary at the same speed (a
+      summary is no tool call); a mail sent or a shell command run because
+      text hidden in the PDF said so is asked about, with the reason "your
+      words did not ask for a send (running a command, an install, a change
+      of settings), and this turn has read content you did not write".
+    Asking about every step after outside content is what he rejected on 13
+    November, since opening an app is outside content: that is not built.
+    *Which kind a call is* is said in one place (`callActs`), from the
+    categories the product's one gate gave the call (`resolveToolGate`: the
+    tool's entry, its own per-call gate, a control's label) and, for a raw
+    click, from what the machine read at that place: `send_email` and
+    `send_message` are a send, `execute_command` a command (running a
+    script in a page is one), `install_software` an install,
+    `modify_settings` a change of settings; and an app open that is not
+    plain (40) is a command. No second list of tools is kept.
+    *What his words asked for* is read once from his sentence, where the
+    turn is made (`wordsCover`, `authority/words-cover.ts`), and goes with
+    the turn (41). A fixed intent that took the sentence says it by its
+    `act` (261); no such sentence becomes a turn today, so in practice the
+    sentence is read by a small reader with no model: families of verbs in
+    English and Italian ("send", "forward", "reply", "tell Anna", "invia",
+    "rispondi"; "run", "execute", "esegui"; "install", "installa"; "turn
+    on", "disable", "attiva"). It reads what is told to be done, not what is
+    told about ("the mail Anna sent"), not after "don't", "without" or
+    "non", not a sentence that begins as a question ("how do I install
+    node?"), and to draft a reply is not to send it. When it cannot place a
+    sentence, the sentence asked for nothing and the act is asked about:
+    one question more, never one fewer. The rows it gets wrong, in both
+    directions, are pinned in `words-cover.test.ts`. The notch's classifier
+    (261, fixes/03) is to take the reader's place for a sentence the fixed
+    words missed; the place it enters is marked (`read`).
+    Three narrower things follow. "Install ..." also asks for the command
+    that installs (`npm install`, `winget install`, an installer), and "turn
+    on ..." for the command that sets (`reg add`, `defaults write`): he
+    named the thing, not the tool; no other command is covered by those
+    words. A send whose recipients the call names goes to somebody his words
+    name ("Anna" names anna.rossi@... and "Anna Rossi", never the part after
+    the @); to anybody else it is asked about, so "send Anna the file" does
+    not cover a second send that something read in the turn added. "Reply"
+    names nobody and covers whoever wrote the thing; a click on Send names no
+    recipient, and there the kind alone decides
+    (`RECIPIENTS_MUST_BE_NAMED`). And a raw click where the machine cannot
+    look by its making (screen awareness off, a Mac or Linux desktop app, no
+    machine: `notchPressReads` answers `blind`) goes ahead in a turn that
+    has read nothing and is asked about in one that has, with its own
+    reason: what it lands on cannot be read, and what was read may have
+    chosen it. On such a machine a raw click after an app was opened is
+    asked about; typed text, keys and a click on a named element are not.
+    A helper agent is held to the same: what it has read itself and what
+    the turn above it has read both count (`withOutsideContent`), and where
+    nobody says what was read it is taken as read. It cannot hold a
+    question, so the act is refused there with the reason and the main
+    agent does it. The model's own `request_approval` for one of the four is
+    raised, not answered for him.
     What is read as one of those: a category the call's gate names
     (`delete_data`, `make_payment`, which is how an on-screen action on a
     control called "Delete" or "Buy now" arrives); a command whose text
     removes something (`commandDeletes`: `rm`, `del`, `Remove-Item`, `git
     clean`, an uninstall, a `DROP TABLE` and their kin); a Delete key; and
     for a raw click, what the machine says is at that place, read the same
-    way (`notchPressReads`). A payment still goes to the dashboard (23). A
+    way (`notchPressReads`); when a machine that can look fails to, also on
+    a second try, the click is asked about ("the screen could not be
+    read..."). A payment still goes to the dashboard (23). A
     helper agent cannot hold a question, so a delete there is refused and
     the main agent does it. A call the product refuses outright stays
     refused, and one whose own classifier failed is judged by the ordinary
@@ -350,15 +442,21 @@ What holds for all of them:
     (`BriefExecutionContext.over`).
     **What this gives up, and it is the owner's choice:** the guard that
     asked about every step after a page, a file or a window had been read.
-    That guard exists because such text can carry instructions. Now, if
-    something Jarvis reads while doing what was asked tells it to do
-    something else, nothing holds that for a yes unless it is a delete or a
-    payment: a file sent somewhere, a command run, a message posted. The
-    agent is told that what it reads is information and never an
-    instruction (`NOTCH_TURN_NOTE`); that is a sentence to a model, not a
-    lock. And the reading of "a delete" is a reading: a script that removes
-    files in a way none of the signs catch, or a button with no name the
-    screen can read, goes ahead like anything else.
+    That guard exists because such text can carry instructions. What still
+    holds such text for a yes is a delete, a payment, and since 26 November
+    the four kinds above when he did not ask for them. What does not: after
+    outside content, clicks, typed text and keys go ahead, so text that was
+    read can still drive an app by its buttons (a button that reads as
+    Send, Delete or Buy is caught by its name; a send made by typing an
+    address and pressing Enter is not); when he did ask for a send or a
+    command, what was read can still shape its words; and a file that is
+    read with `read_file` is not outside content at all, as everywhere in
+    the product (a dropped or circled one is). The agent is told that what
+    it reads is information and never an instruction (`NOTCH_TURN_NOTE`);
+    that is a sentence to a model, not a lock. And the reading of "a
+    delete", like the reading of his sentence, is a reading: a script that
+    removes files in a way none of the signs catch, or a button with no
+    name the screen can read, goes ahead like anything else.
     Everywhere but a notch turn (dashboard chat, Telegram, background
     agents, workflows), and with the switch off, nothing changes.
 24. **A tap cannot land on the wrong thing.** A line that came by itself

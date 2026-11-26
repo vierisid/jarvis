@@ -128,6 +128,11 @@ command key with backspace in a text field on the desktop.
   C3 makes that case ask only in a turn that has read outside content, once
   `ownerWord` knows the turn's taint (`notchPressReads` needs a fourth
   answer for it then).
+- 2026-11-26, taken while building C3, for the owner to confirm: a send to
+  somebody his words do not name is asked about (one constant,
+  `RECIPIENTS_MUST_BE_NAMED`); a bare yes holds the question it answers as
+  outside content; on a machine that cannot say what a click lands on, a
+  raw click after an app was opened is asked about.
 - Open: a code-written question as a guarded turn or a tool-less read; a
   fuse line for a send he asked for; an offer starting as tainted.
 
@@ -152,20 +157,39 @@ command key with backspace in a text field on the desktop.
 - C2 who wrote the words: done in the same two commits, as a guarded turn
   (the open decision below was taken that way for now). A shown question
   is its own kind of row in the ledger ("Asked for you").
-  INTERIM, replaced by C3 and C4: a bare yes to a question that a shown
-  turn asked back runs with no owner's word, typed or spoken, and keeps
-  doing so through "yes", "yes". Until C3 reads the turn's taint and C4
-  what the words cover, that is the only thing between a hostile page's
-  "shall I mail this?" and a yes that would have set the carried taint
-  aside. When C3 lands, remove `answersUnsaid` / `unsaid` in
-  `notch/asks.ts` and let the boundary decide. Its limits: after a restart
-  the second yes of a "yes", "yes" chain is the owner's again (the first
-  yes is kept as typed); an answer with any word of its own ("yes do it
-  now" is bare, "yes send it" is not) is the owner's word; and the same
-  shape after an accepted Noticing offer is not covered (an offer has no
-  standing, its yes is a typed turn with the owner's word).
-- C3 the boundary after outside content: pending
-- C4 what the words cover, fuse line: pending
+  The interim bare-yes rule of this step was replaced by C3 (below).
+  Limits that remain: what a turn's words covered, and that a turn was
+  itself a bare yes to a shown turn, are kept in memory only. For an
+  answer brought back after a restart, a bare yes to it covers what its
+  question asks and no more, and after a shown turn's yes it is the
+  owner's word again (held by the boundary now, no longer free). An
+  answer with any word of its own ("the second one") is judged by its own
+  words in a turn that starts clean, whatever the question proposed.
+- C3 the boundary after outside content: done in "notch: after outside
+  content, a send, a command, an install or a change of settings the owner
+  did not ask for is asked about". One function (`ownerWord`) for the main
+  agent, a helper and `request_approval`; which kind a call is comes from
+  the gate's categories (`callActs`), no list of tools. What the turn has
+  read is the tool loop's own live set (`withOutsideContent`), so content
+  that arrives mid-turn counts from the next call. The interim bare-yes
+  rule is replaced: a bare yes to an owner's-word turn covers what the
+  question asked and what the words before it covered, and holds the
+  question as outside content; to a turn with no owner's word (shown, an
+  offer that was taken) it stays a shown turn, which is stronger than the
+  boundary. The offer case fell out of the same rule. A blind click
+  (`notchPressReads` answers `blind`) asks only after outside content.
+  Design claims that did not hold: nothing is "resumed after a restart";
+  the product has no send tool with a recipient field (sends are clicks,
+  commands and skills), so the recipient rule guards tools that may come;
+  an install or a settings change done by a command arrives as
+  `execute_command`, so "install ..." and "turn on ..." also cover the
+  command that does it and no other.
+- C4 what the words cover: done in the same commit
+  (`authority/words-cover.ts`). No fixed intent's sentence becomes a turn
+  today, so the intent table's `act` is read through `actsOfIntent` only by
+  the seam; sentences are read by the deterministic reader until point 3's
+  classifier passes its act as `read`. The fuse line for a send he asked
+  for (open decision) is not built.
 - C5 delete reader and click check: done in "notch: a delete by its path,
   behind a wrapper or by the command key is read, and a click is not pressed
   blind". Not done under C5: Enter on a focused button is not looked at
@@ -175,5 +199,5 @@ command key with backspace in a text field on the desktop.
   can look" and, after review, in "notch: the delete reader past a wrapper's
   path and a push's other forms, in linear time, and a window alone is not a
   look".
-- C6 README 44 and header: pending. README 44 does not yet say that a click
-  whose look failed is asked about; the header of `owner-word.ts` does.
+- C6 README 40, 41, 44 and the header of `owner-word.ts`: done in the same
+  commit, dated 26 November 2026.

@@ -16,7 +16,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
-import { OWNER_WORD_REASON, ownerWord, ownerWordAsks } from '../authority/owner-word.ts';
+import { OWNER_WORD_REASON, ownerWord, ownerWordAsks, withOutsideContent } from '../authority/owner-word.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
@@ -2030,8 +2030,13 @@ export class AgentOrchestrator {
     // model is told so and can send the call again. Before the gate, like an
     // unknown tool name: a call that cannot run is not a governance decision.
     if (toolCall.argumentsError !== undefined) return malformedArgumentsResult(toolCall);
+    // The same set is what the owner's word reads to know whether the turn
+    // has read outside content (authority/owner-word.ts). An intent that was
+    // not approved is a mark of the turn and not something that was read.
+    const marks = taint ?? new Set<string>();
     return withTurnScopeId(scope?.id, () =>
-      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope, watched)));
+      this.taintStore.run(marks, () => withOutsideContent(marks,
+        () => this.executeToolInner(toolCall, signal, scope, watched), (mark) => !mark.startsWith(DECLINED_INTENT))));
   }
 
   private async executeToolInner(
@@ -2169,7 +2174,9 @@ export class AgentOrchestrator {
       const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
       // Saying it is the approval (authority/owner-word.ts): in a turn the
       // owner started on the notch a call is not asked about, unless it reads
-      // as a delete or a payment.
+      // as a delete or a payment, or the turn has read outside content and
+      // the call is a send, a command, an install or a change of settings
+      // that the owner's words did not ask for.
       const word = await ownerWord(toolCall.name, toolCall.arguments, gate);
       const onOwnersWord = word === 'go';
       const check = (category: ActionCategory): AuthorityDecision => this.authorityEngine!.checkAuthority({
@@ -2212,10 +2219,11 @@ export class AgentOrchestrator {
       }
       // The other half of the same decision: what deletes or pays is asked
       // about, also where the ordinary rules would have let it run unasked.
-      // So is a raw click on a screen that could not be read first, and it
-      // says so, also where the ordinary rules would have asked anyway.
+      // So is a raw click on a screen that could not be read first, and what
+      // the owner's words did not ask for after outside content was read:
+      // those say so, also where the ordinary rules would have asked anyway.
       const asks = ownerWordAsks(word);
-      if (asks && decision.allowed && (!decision.requiresApproval || word === 'unseen')) {
+      if (asks && decision.allowed && (!decision.requiresApproval || word !== 'ask')) {
         decision = { ...decision, requiresApproval: true, reason: `${toolCall.name}: ${asks}` };
       }
 

@@ -15,6 +15,9 @@ let before: string | undefined;
 beforeEach(() => { before = process.env[NOTCH_SWITCH]; process.env[NOTCH_SWITCH] = '1'; });
 afterEach(() => { if (before === undefined) delete process.env[NOTCH_SWITCH]; else process.env[NOTCH_SWITCH] = before; });
 
+/** A standing as it is made when nothing is said of its words: they cover nothing. */
+const of = (origin: TurnStanding['origin']): TurnStanding => ({ origin, words: '', covers: [], answers: false });
+
 const bare = (requestId = 'notch-typed-1', controller = new AbortController()): BriefExecutionContext =>
   ({ conversationId: 'c', turnId: 'notch-1', requestId, signal: controller.signal, progress: () => {} });
 
@@ -23,11 +26,27 @@ describe('a standing is made in one place and tied to one turn', () => {
     for (const [origin, owners] of [['typed', true], ['spoken', true], ['shown', false]] as const) {
       const context = bare('req-1');
       expect(grantStanding(context, mintStanding(origin))).toBe(true);
-      expect(withBriefTurn(context, () => currentStanding())).toEqual({ origin });
+      expect(withBriefTurn(context, () => currentStanding())).toEqual(of(origin));
       expect(withBriefTurn(context, () => ownerAskedOnNotch())).toBe(owners);
-      expect(ownersOwnWords({ origin })).toBe(owners);
+      expect(ownersOwnWords(of(origin))).toBe(owners);
     }
     expect(ownersOwnWords(null)).toBe(false);
+  });
+
+  test('it says what the owner\'s words were and which kinds of act they asked for, and cannot be changed afterwards', () => {
+    const standing = mintStanding('typed', { words: 'send Anna the file', covers: ['send', 'send', 'bogus' as never], answers: true });
+    expect(standing).toEqual({ origin: 'typed', words: 'send Anna the file', covers: ['send'], answers: true });
+    expect(Object.isFrozen(standing)).toBe(true);
+    expect(Object.isFrozen(standing.covers)).toBe(true);
+    expect(() => { (standing.covers as string[]).push('command'); }).toThrow();
+    expect(() => { (standing as { words: string }).words = 'run it'; }).toThrow();
+    // Said of nothing: the words cover nothing.
+    expect(mintStanding('spoken')).toEqual(of('spoken'));
+    expect(mintStanding('typed', { covers: new Set(['settings', 'command'] as const) }).covers).toEqual(['command', 'settings']);
+  });
+
+  test('a question the notch wrote has no words and covers nothing, whatever it is handed', () => {
+    expect(mintStanding('shown', { words: 'send it', covers: ['send', 'command', 'install', 'settings'], answers: true })).toEqual(of('shown'));
   });
 
   test('the way a turn\'s ids are written gives it nothing', () => {
@@ -169,7 +188,7 @@ describe('through the turn store', () => {
   test('nor with something that only looks like one', async () => {
     const h = setup();
     h.transport.submit({ conversationId: h.conversation('notch'), turnId: 'notch-a', requestId: 'notch-spoken-a', text: 'open steam',
-      standing: { origin: 'spoken' } });
+      standing: of('spoken') });
     await h.transport.idle();
     expect(h.seen.map((one) => one.owners)).toEqual([false, false]);
     expect(h.seen.map((one) => one.standing)).toEqual([null, null]);
@@ -179,14 +198,14 @@ describe('through the turn store', () => {
     const h = setup();
     h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't1', requestId: 'r1', text: 'open steam', standing: mintStanding('typed') });
     await h.transport.idle();
-    expect(h.seen).toEqual([{ requestId: 'r1', standing: { origin: 'typed' }, owners: true }, { requestId: 'r1', standing: { origin: 'typed' }, owners: true }]);
+    expect(h.seen).toEqual([{ requestId: 'r1', standing: of('typed'), owners: true }, { requestId: 'r1', standing: of('typed'), owners: true }]);
   });
 
   test('a turn whose words the notch wrote is known as that, and is not the owner\'s word', async () => {
     const h = setup();
     h.transport.submit({ conversationId: h.conversation('notch'), turnId: 'notch-a', requestId: 'notch-typed-a', text: 'What does this tell me?', standing: mintStanding('shown') });
     await h.transport.idle();
-    expect(h.seen.map((one) => one.standing)).toEqual([{ origin: 'shown' }, { origin: 'shown' }]);
+    expect(h.seen.map((one) => one.standing)).toEqual([of('shown'), of('shown')]);
     expect(h.seen.map((one) => one.owners)).toEqual([false, false]);
   });
 
@@ -225,7 +244,7 @@ describe('through the turn store', () => {
     h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't2', requestId: 'r-typed', text: 'open steam', standing: mintStanding('typed') });
     h.transport.submit({ conversationId: h.conversation('desk'), turnId: 't3', requestId: 'r-plain', text: 'hello' });
     // Named like a shown turn and handed a look-alike: it is no shown turn, and is marked as nothing.
-    h.transport.submit({ conversationId: h.conversation('fake'), turnId: 'notch-4', requestId: 'notch-shown-4', text: 'yes', standing: { origin: 'shown' } });
+    h.transport.submit({ conversationId: h.conversation('fake'), turnId: 'notch-4', requestId: 'notch-shown-4', text: 'yes', standing: of('shown') });
     await h.transport.idle();
     expect(outside.get('r-shown')).toEqual([NOTCH_SHOWN_SOURCE]);
     expect(outside.get('r-typed')).toEqual([]);
@@ -271,7 +290,7 @@ describe('through the turn store', () => {
     } });
     h.transport.submit({ conversationId: h.conversation('notch'), turnId: 't1', requestId: 'r1', text: 'open steam', standing: mintStanding('typed') });
     await h.transport.idle();
-    expect(h.seen[0]).toEqual({ requestId: 'r1', standing: { origin: 'typed' }, owners: true });
+    expect(h.seen[0]).toEqual({ requestId: 'r1', standing: of('typed'), owners: true });
     expect(stopped!).toEqual({ requestId: 'r1', standing: null, owners: false });
   });
 
@@ -295,7 +314,7 @@ describe('through the turn store', () => {
     expect(h.transport.submit({ ...shown, standing: mintStanding('typed') }).created).toBe(false);
     expect(h.transport.submit(shown).created).toBe(false);
     await h.transport.idle();
-    expect(h.seen.slice(2).map((one) => one.standing)).toEqual([{ origin: 'shown' }, { origin: 'shown' }]);
+    expect(h.seen.slice(2).map((one) => one.standing)).toEqual([of('shown'), of('shown')]);
   });
 
   test('one standing is one turn: handed to a second turn it gives nothing', async () => {

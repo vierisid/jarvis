@@ -18,8 +18,7 @@
  * cause recursion).
  */
 
-import { ownerAskedOnNotch } from '../../authority/app-open.ts';
-import { STILL_ASKED } from '../../authority/owner-word.ts';
+import { ownerWord } from '../../authority/owner-word.ts';
 import type { ActionCategory } from '../../roles/authority.ts';
 import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalLabelAlteration, type ApprovalDelivery } from '../../authority/approval-delivery.ts';
 import type { ApprovalManager } from '../../authority/approval.ts';
@@ -118,9 +117,12 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
       }
 
       // Saying it is the approval (authority/owner-word.ts): in a turn the
-      // owner started on the notch, only a delete or a payment is asked about.
-      // Anything else was approved by their asking, so nothing is raised.
-      if (ownerAskedOnNotch() && !STILL_ASKED.has(category)) {
+      // owner started on the notch, a delete or a payment is asked about, and
+      // after outside content was read so is a send, a command, an install or
+      // a change of settings their words did not ask for. Anything else was
+      // approved by their asking, so nothing is raised. One function says
+      // which, here as for a tool call.
+      if (await ownerWord('request_approval', params, { categories: [category] }) === 'go') {
         return (
           `[APPROVED] The user asked for this directly, and that is their approval for: ${intent}\n` +
           `Proceed with the action now. Do not ask for confirmation again.`

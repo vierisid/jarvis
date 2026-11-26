@@ -88,9 +88,8 @@ describe('"open Steam", asked on the notch', () => {
  * for a yes. Checked where tool calls are actually decided.
  */
 describe('anything asked on the notch is done without asking, except a delete or a payment', () => {
-  test('a click, typed text, a command, a page, an app with arguments: none stops for a yes', async () => {
+  test('a click, typed text, a command, a page, an app with arguments: none stops for a yes in a turn that has read nothing', async () => {
     const h = build();
-    const turn = new Set<string>();
     const asked: [string, Record<string, unknown>][] = [
       ['desktop_launch_app', { executable: 'steam', args: '-applaunch 730' }],
       ['desktop_launch_app', { executable: 'powershell' }],
@@ -100,21 +99,44 @@ describe('anything asked on the notch is done without asking, except a delete or
       ['run_command', { command: 'mkdir notch-test' }],
     ];
     for (const [name, args] of asked) {
-      const out = String(await onNotch(() => h.run(name, args, turn)));
+      // Each as the first thing its turn does: nothing was read before it.
+      const out = String(await onNotch(() => h.run(name, args, new Set())));
       expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, false]);
     }
     expect(h.calls).toHaveLength(asked.length);
     expect(h.approvals.getPending()).toEqual([]);
   });
 
-  test('also after the turn has read outside content: the step after a read is not held for a yes', async () => {
+  test('after the turn has read outside content: a click, typed text and a page are still not held for a yes', async () => {
+    setOwnerWordProbe(async () => []);
+    try {
+      const h = build();
+      const turn = new Set<string>();
+      await onNotch(() => h.run('browser_snapshot', {}, turn));
+      expect(turn.size).toBeGreaterThan(0);
+      for (const [name, args] of [['desktop_click', { element_id: 52 }], ['desktop_type', { text: 'hello' }], ['browser_snapshot', {}], ['desktop_launch_app', { executable: 'steam' }]] as const) {
+        const out = String(await onNotch(() => h.run(name, args, turn)));
+        expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, false]);
+      }
+      expect(h.calls).toHaveLength(5);
+    } finally {
+      setOwnerWordProbe(null);
+    }
+  });
+
+  test('after the turn has read outside content: a command the owner\'s words did not ask for is asked about (decided on 26 November 2026)', async () => {
     const h = build();
     const turn = new Set<string>();
     await onNotch(() => h.run('browser_snapshot', {}, turn));
-    expect(turn.size).toBeGreaterThan(0);
-    const out = String(await onNotch(() => h.run('run_command', { command: 'dir' }, turn)));
+    for (const [name, args] of [['run_command', { command: 'dir' }], ['desktop_launch_app', { executable: 'powershell' }], ['desktop_launch_app', { executable: 'steam', args: '-applaunch 730' }]] as const) {
+      const out = String(await onNotch(() => h.run(name, args, turn)));
+      expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, true]);
+    }
+    expect(h.calls).toHaveLength(1);
+    for (const one of h.approvals.getPending()) expect(one.reason).toContain('your words did not ask for running a command');
+    // His words asked for it: it runs.
+    const out = String(await inTurnOf('spoken', () => h.run('run_command', { command: 'dir' }, turn), { said: { words: 'run dir', covers: ['command'] } }));
     expect(out).not.toContain('AWAITING_APPROVAL');
-    expect(h.calls).toHaveLength(2);
   });
 
   test('a command that deletes is still asked about, and does not run', async () => {
@@ -218,19 +240,26 @@ describe('everywhere else, opening an app is reviewed as it always was', () => {
  */
 describe('"open Notepad and write a poem", typed on the notch', () => {
   test('runs from the first step to the last with no question', async () => {
-    const h = build();
-    const turn = new Set<string>();
-    const steps: [string, Record<string, unknown>][] = [
-      ['desktop_launch_app', { executable: 'notepad' }],
-      ['desktop_click', { element_id: 3 }],
-      ['desktop_type', { text: 'Roses are red,\nviolets are blue.' }],
-    ];
-    for (const [name, args] of steps) {
-      const out = String(await inTurnOf('typed', () => h.run(name, args, turn)));
-      expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, false]);
+    // On a machine that can say what a click lands on (the Windows desktop app, with screen awareness on). Where
+    // nothing can look, the raw click after the app was opened is asked about: owner-word-boundary-gating.test.ts.
+    setOwnerWordProbe(async () => []);
+    try {
+      const h = build();
+      const turn = new Set<string>();
+      const steps: [string, Record<string, unknown>][] = [
+        ['desktop_launch_app', { executable: 'notepad' }],
+        ['desktop_click', { element_id: 3 }],
+        ['desktop_type', { text: 'Roses are red,\nviolets are blue.' }],
+      ];
+      for (const [name, args] of steps) {
+        const out = String(await inTurnOf('typed', () => h.run(name, args, turn)));
+        expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, false]);
+      }
+      expect(h.calls).toHaveLength(3);
+      expect(h.approvals.getPending()).toEqual([]);
+    } finally {
+      setOwnerWordProbe(null);
     }
-    expect(h.calls).toHaveLength(3);
-    expect(h.approvals.getPending()).toEqual([]);
   });
 });
 
@@ -272,14 +301,21 @@ describe('a turn from the notch whose words the notch wrote: a circle with nothi
     }
   });
 
-  test('the same steps under words the owner typed about the same file are not asked about, as before', async () => {
+  test('the same steps under words the owner typed about the same file: only the commands, which the words did not ask for, are asked about', async () => {
+    setOwnerWordProbe(async () => []);
     const h = build();
     const turn = held();
-    for (const [name, args] of acting.slice(0, 5)) {
-      const out = String(await inTurnOf('typed', () => h.run(name, args, turn)));
-      expect([name, out.includes('AWAITING_APPROVAL')]).toEqual([name, false]);
+    // Open Steam, PowerShell with a script, a click, typed text, `dir`.
+    const stops = [false, true, false, false, true];
+    try {
+      for (const [i, [name, args]] of acting.slice(0, 5).entries()) {
+        const out = String(await inTurnOf('typed', () => h.run(name, args, turn), { said: { words: 'open Steam and write what this deck says', covers: [] } }));
+        expect([name, args, out.includes('AWAITING_APPROVAL')]).toEqual([name, args, stops[i] === true]);
+      }
+    } finally {
+      setOwnerWordProbe(null);
     }
-    expect(h.calls).toHaveLength(5);
+    expect(h.calls).toHaveLength(3);
     // And a delete is still asked about under them.
     expect(String(await inTurnOf('typed', () => h.run('run_command', { command: 'rm -rf notch-test' }, turn)))).toContain('AWAITING_APPROVAL');
   });

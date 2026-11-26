@@ -121,20 +121,25 @@ describe('what a raw press would land on, for the word of the owner', () => {
     expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ window_title: '', process_name: 'store' }).deps)).toBeNull();
   });
 
-  test('where it cannot look by its making, nothing is asked of the machine and the click is not held up', async () => {
+  test('where it cannot look by its making, nothing is asked of the machine, and that is its own answer', async () => {
+    // Not "nothing is there" and not a look that failed: the owner's word lets such a click go ahead in a turn
+    // that has read nothing, and asks about it in one that has read outside content.
     // Screen awareness off.
     const off = machine(del, true, false);
-    expect(await notchPressReads('desktop_click', { element_id: 3 }, off.deps)).toEqual([]);
-    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, off.deps)).toEqual([]);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, off.deps)).toBe('blind');
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, off.deps)).toBe('blind');
     expect(off.asked).toEqual([]);
     // No machine to ask.
     const none: NotchWhereDeps = { ...machine(del).deps, target: () => null };
-    expect(await notchPressReads('desktop_click', { element_id: 3 }, none)).toEqual([]);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, none)).toBe('blind');
     // A desktop app that cannot say what is at a place (a Mac, Linux): its empty reply means nothing, so it is not asked.
     const mute = machine({}, true, true, false);
-    expect(await notchPressReads('desktop_click', { element_id: 3 }, mute.deps)).toEqual([]);
-    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, mute.deps)).toEqual([]);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, mute.deps)).toBe('blind');
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, mute.deps)).toBe('blind');
     expect(mute.asked).toEqual([]);
+    // A call that presses nothing reads as nothing, also there: only a press is blind.
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250, action: 'move' }, off.deps)).toEqual([]);
+    expect(await notchPressReads('desktop_type', { text: 'x' }, off.deps)).toEqual([]);
   });
 
   test('a machine that can say and said nothing tried and failed: that is not "nothing is there"', async () => {
