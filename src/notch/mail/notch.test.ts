@@ -4,6 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { attachNotchActions } from '../actions.ts';
 import { NotchInbox } from '../inbox.ts';
 import { NOTCH_FUSE_SEEN_MS, parseNotchToPage, type NotchAnswerAct, type NotchBlock, type NotchLine, type NotchPart, type NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
@@ -108,6 +109,8 @@ function harness(rows: MailProposalRow[], options: {
   const asks = { still: 0 };
   const stillWaits = async (): Promise<boolean | null> =>
     options.stillWaitsWhen ? options.stillWaitsWhen : options.stillWaitsFrom ? options.stillWaitsFrom[0]! : options.stillWaits === undefined ? true : options.stillWaits;
+  // What is written down of a reply that the owner said yes to (../actions.ts), in the same database.
+  const actions = attachNotchActions(db, { now: () => AT + 10_000 + now, log: () => {} });
   const mail = attachNotchMail(inbox, {
     store,
     watch: {
@@ -138,12 +141,13 @@ function harness(rows: MailProposalRow[], options: {
     monthRead: options.monthRead,
     calendar: options.calendar,
     zone: 'UTC',
+    actions,
     now: () => AT + 10_000 + now,
     log: () => {},
   });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    mail, store, inbox, did, looked, plans, redrafts, held, line, surface, asks, db, told,
+    mail, store, inbox, did, looked, plans, redrafts, held, line, surface, asks, db, told, actions,
     /** Something a desktop app says: `from` is which one. */
     async page(from: string, message: Record<string, unknown>): Promise<void> { fromPage(message, from); await settle(); },
     looks: () => looks,
@@ -2041,5 +2045,176 @@ describe('the owner steers what a reply says', () => {
     await h.answer('word', { word: 'told', value: 'cannot be written' });
     expect(notes(h.blocks())).toEqual(['Not what you would say? [tell me]', 'I could not write it again. This is the reply as it was. Tone [yours]']);
     expect((h.blocks()[0] as Extract<NotchBlock, { kind: 'paper' }>).lines.map(text)).toEqual(['Hi Leo,', 'Happy to go ahead with the proposal.', 'Sam']);
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: every reply that goes out from the notch leaves one
+// entry in the list of what was done, with what the owner had before them and how they said yes. Nothing
+// listed what went out in the owner's name.
+describe('what is written down of a reply (the list of what the notch did)', () => {
+  const slots = [
+    { at: Date.UTC(2026, 10, 16, 15, 0), minutes: 30, words: 'Monday at 15:00' },
+    { at: Date.UTC(2026, 10, 17, 10, 0), minutes: 30, words: 'Tuesday at 10:00' },
+  ];
+  const offers = (): MailProposalRow => row({ draft: 'Hi Leo,\nMonday at 15:00 would suit me.\nSam', time: 'Monday at 15:00', missing: '', slots, asked: 'to move Thursday' });
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0);
+
+  test('a reply that went is one entry: who, about what, the draft on a sheet, the yes key, a fuse of five seconds, done', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    // Nothing is written at the yes: what came of it is not known yet.
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('Sent to Leo.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'mail_reply', outcome: 'done', what: 'Reply to Leo: Deck for Thursday?', target: 'leo@lumen.example',
+      seen: 'sheet', how: 'key', fuseMs: MAIL_FUSE_MS, ref: `mail:${row().id}`,
+    });
+    // Never the words of the mail, in any column.
+    const stored = JSON.stringify(h.db.query('SELECT * FROM notch_actions').all());
+    expect(stored).not.toContain('works for me');
+    expect(stored).not.toContain('Hi Leo');
+  });
+
+  test('Esc in the fuse is the yes taken back: nothing was done, and nothing is written', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('undo');
+    expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('a fuse nobody saw burn out decided nothing: nothing is written', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.advance(MAIL_FUSE_MS + 2000);
+    expect(h.did).toEqual(['write', 'discard']);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('the notch is taken in the middle of the fuse: nothing went, and nothing is written', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    // Everything is stopped (Esc twice, or the brain going down): the stage ends under the fuse.
+    h.inbox.stop();
+    await settle();
+    expect(h.did).toEqual(['write', 'discard']);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('the yes stood and the page would not press Send: one entry, not done', async () => {
+    const h = harness([row()], { steps: { send: { ok: false, why: 'no Send button', pressed: false } } });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.said()).toBe('I could not send it. It is in your Gmail drafts.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'mail_reply', outcome: 'not_done', how: 'key' });
+    // Nothing that was not done is a row of what was done.
+    expect(h.actions.today(0)).toEqual([]);
+  });
+
+  describe('a reply that may have gone', () => {
+    const unsure = async (went: boolean | null) => {
+      const h = harness([row()], { steps: { send: { ok: false, why: 'Gmail did not say it was sent', pressed: true } }, sent: [false], went });
+      await h.arrive();
+      await h.answer('yes');
+      await h.answer('yes');
+      await h.answer('done');
+      await h.advance(1500);
+      expect(h.said()).toBe('I pressed Send, and nothing says it went. Look in the thread before sending it again.');
+      return h;
+    };
+    const again = async (h: Awaited<ReturnType<typeof unsure>>) => {
+      await h.answer('done');
+      h.inbox.present('again', (stage) => h.mail.open(stage));
+      await settle();
+      await h.answer('yes');
+    };
+
+    test('is one entry that says so, and a row of Today that says so', async () => {
+      const h = await unsure(null);
+      expect(entries(h)).toHaveLength(1);
+      expect(entries(h)[0]).toMatchObject({ kind: 'mail_reply', outcome: 'unsure', seen: 'sheet', fuseMs: MAIL_FUSE_MS });
+      expect(h.actions.today(0)).toEqual([{ id: `action:${entries(h)[0]!.id}`, at: entries(h)[0]!.at, text: 'Reply to Leo: Deck for Thursday?', small: 'may have gone', undo: false }]);
+    });
+
+    test('found in the thread at the next yes: the same entry says done, and there is no second one', async () => {
+      const h = await unsure(true);
+      const first = entries(h)[0]!;
+      await again(h);
+      expect(h.said()).toBe('It had gone: it is in the thread. I did not send it again.');
+      expect(entries(h)).toHaveLength(1);
+      expect(entries(h)[0]).toMatchObject({ id: first.id, outcome: 'done', at: first.at, seen: 'sheet', how: 'key' });
+      // It went: the mail layer's own row says so, and this list adds no second row.
+      expect(h.actions.today(0)).toEqual([]);
+    });
+
+    test('the mailbox cannot say: nothing is sent, and the entry still says it may have gone', async () => {
+      const h = await unsure(null);
+      await again(h);
+      expect(entries(h)).toHaveLength(1);
+      expect(entries(h)[0]!.outcome).toBe('unsure');
+    });
+  });
+
+  test('a picked time is one entry of its own kind: the letter under a fuse of eight seconds, by a pick', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'mail_slot', outcome: 'done', what: 'Offer of Tuesday at 10:00 to Leo: Deck for Thursday?', seen: 'letter', how: 'pick', fuseMs: MAIL_SLOT_FUSE_MS });
+  });
+
+  test('a letter the page did not vouch for does not go, and nothing is written', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    await h.answer('done', { seen: false });
+    await h.advance(MAIL_SLOT_FUSE_MS + 2000);
+    expect(h.did).toEqual(['write', 'discard']);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('a time said with the talk keys is written down as said', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    const keys = h.at();
+    h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Listening'], play: async (stage) => { await stage.offer(['Listening'], 'ok'); return 'settled'; } });
+    await settle();
+    const route = h.mail.route('Tuesday at ten works', { source: 'spoken', at: keys });
+    await h.answer('yes');
+    route!.run();
+    await settle();
+    await h.answer('done');
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'mail_slot', outcome: 'done', seen: 'letter', how: 'said' });
+  });
+
+  test('a list that cannot be written to does not keep the reply from going, or from being called sent', async () => {
+    const h = harness([row()]);
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    h.db.run('DROP TABLE notch_actions');
+    await h.answer('done');
+    expect(h.did).toEqual(['write', 'send', 'sent?']);
+    expect(h.said()).toBe('Sent to Leo.');
+    expect(h.store.proposal(row().id)!.state).toBe('sent');
   });
 });

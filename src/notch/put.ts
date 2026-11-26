@@ -37,6 +37,7 @@
  * as any paste of Jarvis's (./jobs.ts): only while the place still holds
  * exactly what was put there.
  */
+import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import { actRefusal, type NotchJobHands, type NotchJobs, type NotchPut as NotchPutPlace } from './jobs.ts';
 import { lookCount, type NotchLooked, type NotchThing } from './look.ts';
@@ -214,6 +215,8 @@ export interface NotchPutDeps {
    */
   read?: (picture: Uint8Array) => Promise<string[][] | null>;
   paused?: () => boolean;
+  /** Where a thing that was put somewhere is written down (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -277,7 +280,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
   }
 
   /** Puts it there, and comes back with what is said about it. */
-  async function put(sidecarId: string, thing: NotchHeld, form: NotchPutForm, place: Place, cell: boolean, appSeen: string):
+  async function put(sidecarId: string, thing: NotchHeld, form: NotchPutForm, place: Place, cell: boolean, appSeen: string, asked: NotchActionAsked):
     Promise<{ parts: NotchPart[]; ms: number; mood: 'sorry' | 'careful' | 'happy'; mark?: 'check' | 'fail' }> {
     if (deps.paused?.()) return { parts: ['Everything is stopped. Wake me first.'], ms: 3200, mood: 'careful' };
     if (deps.jobs.busy()) return { parts: ['I am in the middle of something. Stop it first.'], ms: 3200, mood: 'careful' };
@@ -287,6 +290,14 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
       result = await deps.hands.act(request(thing, form, place, cell, appSeen));
     } catch { lost = true; }
     deps.jobs.home();
+    // What came of it is known here, and written down (./actions.ts). Never what was put: only what it was called.
+    const noted = (outcome: NotchActionOutcome, into: string, job?: string): void => {
+      deps.actions?.record({
+        kind: 'put', outcome, asked, what: `Put ${thing.what} from ${thing.app || 'one app'} into ${into}`, target: into,
+        ...(job ? { ref: `job:${job}` } : {}),
+      });
+    };
+    if (lost || !result?.done) noted(lost ? 'unsure' : 'not_done', appSeen || 'where you pointed');
     if (lost) return { parts: ['I lost touch with your computer in the middle of it. Look whether it is there.'], ms: 5200, mood: 'sorry', mark: 'fail' };
     if (!result) return { parts: ['Your computer is not connected.'], ms: 3600, mood: 'sorry', mark: 'fail' };
     if (!result.done) return { parts: [actRefusal(result.why), ' Nothing was put there.'], ms: 4600, mood: 'sorry', mark: 'fail' };
@@ -299,6 +310,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
     const job = deps.jobs.store.open('put', `Put ${thing.what} from ${thing.app || 'one app'} into ${app}${how}`, 1);
     deps.jobs.store.progress(job, 1, where);
     deps.jobs.store.state(job, 'done');
+    noted('done', `${app}${how}`, job);
     log('[notch] a thing that was shown was put where the person pointed');
     if (held === thing) { held = null; deps.hold(sidecarId, '', 0); }
     return { parts: ['There. It is in ', em(app), '.'], ms: 2800, mood: 'happy', mark: 'check' };
@@ -332,7 +344,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
           }
           if (pending === mine) pending = null;
           if (answer.act !== 'yes') return 'settled';
-          const said = await put(sidecarId, thing, form, at, cell, looked.app);
+          const said = await put(sidecarId, thing, form, at, cell, looked.app, { seen: 'line', how: notchAskedHow(stage) });
           await stage.say(said.parts, said.ms, { mood: said.mood, ...(said.mark ? { mark: said.mark } : {}) });
           return 'settled';
         }
@@ -444,7 +456,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
             void circle.done.then((read) => {
               if (stopped) return;
               if (read && held === read) {
-                void put(circle.sidecarId, read, form, 'caret', false, '').then((said) => say(said.parts, said.ms, said.mood, said.mark));
+                void put(circle.sidecarId, read, form, 'caret', false, '', { seen: 'nothing', how: 'said' }).then((said) => say(said.parts, said.ms, said.mood, said.mark));
               } else if (!read && reading === circle) { reading = null; say(NOT_READ, 4200, 'sorry'); }
             });
           },
@@ -463,7 +475,7 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
             deps.inbox.remove(asked.id);
             if (pending === asked) pending = null;
           }
-          void put(sidecarId, thing, form, asked ? asked.at : 'caret', asked?.cell ?? false, asked?.app ?? '')
+          void put(sidecarId, thing, form, asked ? asked.at : 'caret', asked?.cell ?? false, asked?.app ?? '', { seen: asked ? 'line' : 'nothing', how: 'said' })
             .then((said) => say(said.parts, said.ms, said.mood, said.mark));
         },
       };

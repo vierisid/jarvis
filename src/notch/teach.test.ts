@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { attachNotchActions } from './actions.ts';
 import { Database } from 'bun:sqlite';
 import type { RawInteraction } from '../skills/recorder.ts';
 import { NotchInbox } from './inbox.ts';
@@ -194,7 +195,9 @@ function harness(options: {
     },
   };
   const db = new Database(':memory:');
-  const jobs = attachNotchJobs(inbox, { db, hands, sleep: async () => {}, log: () => {} });
+  // What is written down of a job that was done (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { log: () => {} });
+  const jobs = attachNotchJobs(inbox, { db, hands, sleep: async () => {}, actions, log: () => {} });
   let recording = false;
   const shownSoFar: RawInteraction[] = [];
   const hearers = new Set<(interaction: RawInteraction, count: number) => void>();
@@ -246,7 +249,7 @@ function harness(options: {
     return route?.did ?? null;
   };
   return {
-    teach, jobs, sent, calls, ran, line, said, reply, pass, does, say, db, inbox,
+    teach, jobs, sent, calls, ran, line, said, reply, pass, does, say, db, inbox, actions,
     setRunEnd: (end: { end: NotchJobEnd; next: number }) => { runEnd = end; },
     advance: (ms: number) => { now += ms; },
     now: () => now,
@@ -383,6 +386,39 @@ describe('a job to do again at a time of the week', () => {
     await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
     expect(h.said()).toBe('Done. 3 steps.');
+  });
+
+  // Fix 05: a job done at its time leaves one entry in the list of what the notch did, with the yes it went on.
+  test('done at its time on a yes, it is written down once: asked on a line, by the yes key', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('word', { word: 'when', value: 'day at 11:00' });
+    await h.reply('yes');
+    await h.pass(7000);
+    h.advance(61 * 60_000);
+    h.teach.tick();
+    await settle();
+    expect(h.actions.since(0)).toEqual([]);
+    await h.reply('yes');
+    await settle();
+    expect(h.said()).toBe('Done. 3 steps.');
+    expect(h.actions.since(0)).toHaveLength(1);
+    expect(h.actions.since(0)[0]).toMatchObject({ kind: 'job_skill', outcome: 'done', what: expect.stringContaining('Did what you showed me: renames the file and saves it'), seen: 'line', how: 'key', fuseMs: null });
+  });
+
+  test('left alone at its time, nothing is done and nothing is written', async () => {
+    const h = harness();
+    await learned(h);
+    await h.reply('word', { word: 'when', value: 'day at 11:00' });
+    await h.reply('yes');
+    await h.pass(7000);
+    h.advance(61 * 60_000);
+    h.teach.tick();
+    await settle();
+    await h.reply('no');
+    await settle();
+    expect(h.ran).toEqual([]);
+    expect(h.actions.since(0)).toEqual([]);
   });
 
   test('a time that passed while nobody could be asked is not done late', async () => {
@@ -575,6 +611,8 @@ describe('a shown job is done again where it was done', () => {
       { do: 'home' },
     ]);
     expect(h.said()).toBe('Done. 2 steps.');
+    // Fix 05: asked for in words, with no line before it. That is what is written down of it.
+    expect(h.actions.since(0)).toMatchObject([{ kind: 'job_skill', outcome: 'done', seen: 'nothing', how: 'said' }]);
   });
 
   // The owner's first "run it", 16 November 2026: a job shown in a sheet in a
@@ -791,6 +829,8 @@ describe('a shown job is done again where it was done', () => {
       await settle();
       expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
       expect(h.sent.filter((request) => request.do === 'front')).toEqual([]);
+      // Fix 05: pressed on its row of the sheet. That is what is written down of it.
+      expect(h.actions.since(0)).toMatchObject([{ kind: 'job_skill', outcome: 'done', seen: 'sheet', how: 'pick' }]);
     });
   });
 

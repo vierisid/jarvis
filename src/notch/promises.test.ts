@@ -5,10 +5,12 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { ApprovalManager } from '../authority/approval.ts';
+import { AuditTrail } from '../authority/audit.ts';
 import { EmergencyController, setActiveEmergencyController } from '../authority/emergency.ts';
 import { CANCELLED_RESULT, CommitmentExecutor } from '../daemon/commitment-executor.ts';
 import { createCommitment, findCommitments, getCommitment } from '../vault/commitments.ts';
-import { closeDb, initDatabase } from '../vault/schema.ts';
+import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
+import { attachNotchActions } from './actions.ts';
 import { NOTCH_FIXTURE_ORIGIN } from './fixtures.ts';
 import { notchPromiseItemId } from './promises.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -27,7 +29,7 @@ afterEach(() => {
 const settle = async (): Promise<void> => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
 type Internals = { fireExecution(id: string): Promise<void> };
 
-function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive' } = {}) {
+function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive'; /** The brain was not given where to write down what the notch does. */ noActions?: boolean } = {}) {
   const executor = new CommitmentExecutor(options.mode ?? 'aggressive');
   const log: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -56,6 +58,8 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive' } = 
       kept: () => findCommitments({ status: 'completed' }),
       appendFixtureLog: (line) => { log.push(line); },
     },
+    // What the notch does is written down in the vault, and in the product's audit trail (./actions.ts).
+    ...(options.noActions ? {} : { actions: { db: getDb(), audit: new AuditTrail() } }),
     lookMs: 3_600_000,
     clock,
     log: () => {},
@@ -286,5 +290,97 @@ describe('the promise fixture', () => {
     });
     cleanup.push(() => { real.stop(); executor.stop(); });
     expect(real.fixtures.kinds()).toEqual(['approval', 'payment']);
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: a promise that is kept leaves an entry in the list of
+// what the notch did and in the audit trail, with whether its window was before anybody's eyes. Here through
+// the notch as the daemon puts it together (./real.ts), over the product's vault.
+describe('what is written down of a promise', () => {
+  /** The list as a reader of the same vault sees it. */
+  const entries = () => attachNotchActions(getDb(), { log: () => {} }).since(0);
+  const tables = (): string[] => (getDb().query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name);
+
+  test('kept after its fuse was seen to burn out: one entry, the fuse on a line, nobody said yes, done, and the audit has it as the system', async () => {
+    const h = harness();
+    const c = await announced(h);
+    expect(entries()).toEqual([]);
+    await h.answer('done');
+    // The page saying the fuse has burnt starts nothing, and nothing is written.
+    expect(entries()).toEqual([]);
+    await h.fire(c.id);
+    expect(h.said()).toBe('Kept: Send Anna the pricing');
+    const all = entries();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ kind: 'promise', outcome: 'done', what: 'Promised: Send Anna the pricing', seen: 'line', how: 'fuse', ref: `promise:${c.id}` });
+    expect(all[0]!.fuseMs).toBeGreaterThan(4000);
+    expect(all[0]!.fuseMs).toBeLessThanOrEqual(5000);
+    const audit = new AuditTrail().queryEntries({ tool: 'notch_promise' });
+    expect(audit).toMatchObject([{ agent_id: 'notch', authority_decision: 'allowed', channel: 'system', decided_by: 'system', outcome: 'succeeded', executed: 1, entry_key: all[0]!.id }]);
+    // Run a second time by nobody: still one entry.
+    await h.fire(c.id);
+    expect(entries()).toHaveLength(1);
+    await h.answer('done');
+    // Today has the row it always had, once.
+    await h.open();
+    expect(h.said()).toBe('Today: 1 thing done');
+    const today = h.line();
+    expect(today?.kind === 'sheet' && today.blocks).toHaveLength(1);
+    expect(today?.kind === 'sheet' && today.blocks[0]).toMatchObject({ kind: 'row', say: ['Send Anna the pricing'], small: 'promised' });
+  });
+
+  test('kept while no notch was up: nothing was before anybody, and the entry says so', async () => {
+    const h = harness({ page: false });
+    const c = await announced(h);
+    await h.fire(c.id);
+    expect(entries()).toMatchObject([{ kind: 'promise', outcome: 'done', seen: 'nothing', how: 'system', fuseMs: null }]);
+  });
+
+  test('cancelled with Esc in its window: it never ran, and nothing is written', async () => {
+    const h = harness();
+    const c = await announced(h);
+    await h.answer('undo');
+    expect(h.said()).toBe('Cancelled. I will not do it.');
+    await h.fire(c.id);
+    expect(entries()).toEqual([]);
+    expect(new AuditTrail().query({ tool: 'notch_promise' })).toEqual([]);
+  });
+
+  test('cut off in the middle by a restart: it may have partly run, and that is what the entry and the row of Today say', async () => {
+    const first = new CommitmentExecutor('aggressive');
+    cleanup.push(() => first.stop());
+    first.setAgentService({ handleMessage: async () => new Promise<string>(() => {}) } as never);
+    const c = createCommitment('Send the wire', { when_due: Date.now() - 1000 });
+    first.checkAndAnnounce();
+    void (first as unknown as Internals).fireExecution(c.id);
+    await settle();
+    const h = harness();
+    h.executor.start();
+    await settle();
+    expect(h.said()).toBe('Send the wire was cut off by a restart. It may have partly run, so I did not run it again.');
+    expect(entries()).toMatchObject([{ kind: 'promise', outcome: 'unsure', what: 'Promised: Send the wire', seen: 'nothing', how: 'system' }]);
+    expect(new AuditTrail().queryEntries({ tool: 'notch_promise' })).toMatchObject([{ outcome: 'unknown', executed: 0, channel: 'system' }]);
+    await h.answer('done');
+    await h.open();
+    expect(h.said()).toBe('Today: 1 thing done');
+    const today = h.line();
+    expect(today?.kind === 'sheet' && today.blocks[0]).toMatchObject({ kind: 'row', say: ['Promised: Send the wire'], small: 'may have happened' });
+    expect(today?.kind === 'sheet' && today.blocks[0]).not.toHaveProperty('buttons');
+  });
+
+  test('a brain that was not given where to write it down keeps its promise all the same, writes nothing, and makes no table', async () => {
+    const h = harness({ noActions: true });
+    const c = await announced(h);
+    await h.answer('done');
+    await h.fire(c.id);
+    expect(h.said()).toBe('Kept: Send Anna the pricing');
+    expect(tables()).not.toContain('notch_actions');
+    expect(new AuditTrail().query({ agentId: 'notch' })).toEqual([]);
+  });
+
+  test('the table is made when the notch is attached, and not before', () => {
+    expect(tables()).not.toContain('notch_actions');
+    harness();
+    expect(tables()).toContain('notch_actions');
   });
 });

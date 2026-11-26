@@ -45,6 +45,13 @@ export interface NotchTodayDeps {
    * can still be taken back.
    */
   more?(since: number): NotchDone[];
+  /**
+   * What the notch did that none of the others lists (./actions.ts): a
+   * follow-up that went by itself, a word to somebody, an answer to a
+   * workflow, and anything that may have gone. `small` is what came of it.
+   * None of these rows can be taken back from here.
+   */
+  actions?(since: number): NotchDone[];
   now?: () => number;
 }
 
@@ -110,7 +117,7 @@ export function notchDoneBetween(deps: NotchTodayDeps, since: number, now: numbe
     const points = [...job.text];
     rows.push({ at: job.at, text: points.length <= ROW_CHARS ? job.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'job', job: { id: job.id, undoable: job.undoable } });
   }
-  for (const one of deps.more?.(since) ?? []) {
+  for (const one of [...(deps.more?.(since) ?? []), ...(deps.actions?.(since) ?? [])]) {
     if (one.at < since || one.at > now) continue;
     const points = [...one.text];
     rows.push({ at: one.at, text: points.length <= ROW_CHARS ? one.text : `${points.slice(0, ROW_CHARS - 1).join('').trimEnd()}…`, kind: 'more', small: one.small, more: { id: one.id, undo: one.undo } });

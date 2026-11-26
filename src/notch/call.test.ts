@@ -9,6 +9,7 @@ import {
   NOTCH_CALL_EVENT, NOTCH_CALL_FAR_SETTING, NOTCH_CALL_FOLLOWUP_MAX, NOTCH_CALL_FUSE_MS, NOTCH_CALL_NOTES_KEPT_MS, NOTCH_CALL_WORDS_KEPT_MS,
   NotchCallStore, attachNotchCalls, callAddress, callFollowup, callHeard, callMessages, callNotes, callRecipients, callRequest, callTyped, type NotchCallDeps,
 } from './call.ts';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import { NotchSettings } from './settings.ts';
@@ -70,8 +71,10 @@ function harness(options: {
   const emit = (payload: Record<string, unknown>, pcm?: Buffer): void => {
     for (const listener of listeners) listener('pc', { event_type: NOTCH_CALL_EVENT, payload, ...(pcm ? { binary: { type: 'inline', data: pcm.toString('base64') } } : {}) });
   };
+  // What is written down of a follow-up that the owner said yes to (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { now: () => state.now, log: () => {} });
   const deps: NotchCallDeps = {
-    inbox, db, settings,
+    inbox, db, settings, actions,
     async listen(_sidecarId, ask) {
       state.asked.push(ask);
       if (!ask.on) { emit({ id: ask.id, phase: 'end', reason: 'asked' }); return { listening: false }; }
@@ -95,7 +98,7 @@ function harness(options: {
   const line = (): NotchLine | null => surface.current().line;
   let listening: boolean | null = null;
   return {
-    calls, inbox, surface, settings, state, logs, line, db,
+    calls, inbox, surface, settings, state, logs, line, db, actions,
     said: (): string => text(line()?.say),
     blocks: (): NotchBlock[] => { const shown = line(); return shown?.kind === 'sheet' ? shown.blocks : []; },
     listening: () => listening,
@@ -839,5 +842,90 @@ describe('who the follow-up goes to is the owner\'s to say', () => {
     expect(paperTo(h)).toBe('To nobody yet');
     expect(buttonsOf(h)).toEqual(['Forget this call']);
     expect(notesOf(h)).toContain('I heard both sides. I cannot send mail from here.');
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: the follow-up of a call was kept only with the call
+// (`sentAt`), and was in neither Today nor the audit.
+describe('what is written down of the follow-up of a call', () => {
+  const UNSURE = { ok: false as const, why: 'Gmail did not confirm it went', pressed: true, since: AT - 4000 };
+  const upTo = async (mail?: { sends: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number } | Error)[]; went?: boolean | null }) => {
+    const h = harness(mail ? { mail } : {});
+    await h.call();
+    await h.answer('yes');
+    await h.answer('yes');
+    return h;
+  };
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0);
+
+  test('sent: one entry, the follow-up on a sheet, the yes key, a fuse, done, and a row of Today', async () => {
+    const h = await upTo();
+    expect(h.said()).toBe('Sending to Sam…');
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('Sent to Sam.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'call_followup', outcome: 'done', what: 'Follow-up of a call to Sam', target: 'sam@northwind.example', seen: 'sheet', how: 'key', fuseMs: NOTCH_CALL_FUSE_MS });
+    expect(h.actions.today(0)).toMatchObject([{ text: 'Follow-up of a call to Sam', small: 'sent', undo: false }]);
+    // Never what was said on the call or written in the mail.
+    expect(JSON.stringify(h.db.query('SELECT * FROM notch_actions').all())).not.toContain('pricing');
+  });
+
+  test('taken back in its moment, and a fuse nobody saw burn out: nothing is written', async () => {
+    const esc = await upTo();
+    await esc.answer('undo');
+    expect(esc.said()).toBe('Not sent. It is kept with the call.');
+    expect(entries(esc)).toEqual([]);
+    const lost = await upTo();
+    await lost.advance(NOTCH_CALL_FUSE_MS + 3000);
+    expect(lost.state.sent).toEqual([]);
+    expect(entries(lost)).toEqual([]);
+  });
+
+  test('the page would not press Send: one entry, not done; sent on the next yes, the same entry says done', async () => {
+    const h = await upTo({ sends: [{ ok: false, why: 'the thread did not open', pressed: false }, { ok: true }] });
+    await h.answer('done');
+    expect(h.said()).toBe('I could not send it: the thread did not open. It is kept with the call.');
+    expect(entries(h)).toMatchObject([{ kind: 'call_followup', outcome: 'not_done' }]);
+    const first = entries(h)[0]!;
+    await h.answer('done');
+    h.inbox.present('again', (stage) => h.calls.open(stage, 'calls'));
+    await settle();
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.said()).toBe('Sent to Sam.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ id: first.id, outcome: 'done' });
+  });
+
+  test('may have gone, then found at the next yes: one entry, first unsure, then done', async () => {
+    const h = await upTo({ sends: [UNSURE], went: true });
+    await h.answer('done');
+    expect(entries(h)).toMatchObject([{ kind: 'call_followup', outcome: 'unsure' }]);
+    expect(h.actions.today(0)).toMatchObject([{ small: 'may have gone' }]);
+    const first = entries(h)[0]!;
+    await h.answer('done');
+    h.inbox.present('again', (stage) => h.calls.open(stage, 'calls'));
+    await settle();
+    await h.answer('yes');
+    expect(h.said()).toBe('It had gone: it is in your mail. I did not send it again.');
+    expect(h.state.sent).toHaveLength(1);
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ id: first.id, outcome: 'done', seen: 'sheet', how: 'key', fuseMs: NOTCH_CALL_FUSE_MS });
+  });
+
+  test('a send that threw may have gone: that is what the entry says', async () => {
+    const h = await upTo({ sends: [new Error('the desktop app went away')] });
+    await h.answer('done');
+    expect(entries(h)).toMatchObject([{ outcome: 'unsure' }]);
+  });
+
+  test('a list that cannot be written to does not keep the follow-up from going', async () => {
+    const h = await upTo();
+    h.db.run('DROP TABLE notch_actions');
+    await h.answer('done');
+    expect(h.state.sent).toHaveLength(1);
+    expect(h.said()).toBe('Sent to Sam.');
+    expect(h.calls.store.recent()[0]!.notes!.sentAt).not.toBeNull();
   });
 });

@@ -34,6 +34,7 @@
  * untilAsk, startChase, CHASES, viewChasing).
  */
 import type { Database } from 'bun:sqlite';
+import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -455,6 +456,8 @@ export interface NotchStandingDeps {
    * back (`released`).
    */
   offline?: () => boolean;
+  /** Where each mail of a chase is written down with what came of it (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -679,6 +682,25 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     }
   }
 
+  /**
+   * The yes that the next mail of a chase goes on, from the yes until what came of that mail is written
+   * down. A chase with none here sends by the clock, on the leave of the yes that started it.
+   */
+  const yesTo = new Map<string, NotchActionAsked>();
+
+  /** One mail of a chase as it is written down (./actions.ts): the first is 0, the follow-up 1. One entry each. */
+  const mailEntry = (chase: NotchChase, n: number, outcome: NotchActionOutcome): NotchActionEntry => ({
+    kind: n === 0 ? 'chase_mail' : 'chase_followup', ref: `chase:${chase.id}:${Math.min(n, 1)}`, outcome,
+    what: `${n === 0 ? 'First mail' : 'Follow-up'} to ${first(chase.name)} for ${chaseWhat(chase)}`, target: chase.address,
+    // By the clock, both mails were shown on the sheet the chase was started from, and nobody decided anything now.
+    asked: yesTo.get(chase.id) ?? { seen: 'sheet', how: 'system' },
+  });
+  /** What came of sending the mail a chase sends next: written down where it is known, whatever becomes of the chase. */
+  const noted = (chase: NotchChase, outcome: NotchActionOutcome): void => {
+    deps.actions?.record(mailEntry(chase, chase.nudges, outcome));
+    yesTo.delete(chase.id);
+  };
+
   /** What a chase writes down when a draft it began in the thread could not be taken away: the owner finds it there. */
   const STEP_DRAFT_LEFT = 'A draft may be left in the thread: I could not take it away.';
 
@@ -703,6 +725,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
   /** The mail that may have gone had gone: it is counted as sent, and the chase goes on. */
   function counted(chase: NotchChase): void {
     const opening = chase.nudges === 0;
+    // The entry that said it may have gone says that it went: no second one.
+    deps.actions?.settle(mailEntry(chase, chase.nudges, 'done').ref!, 'done', { otherwise: mailEntry(chase, chase.nudges, 'done') });
     chase.state = 'on'; chase.nudges++; chase.nextAt = now() + waitOf(chase); chase.unsure = null;
     step(chase, opening ? `Nudged ${first(chase.name)} by email.` : STEP_FOLLOWED_UP);
     store.putChase(chase);
@@ -776,10 +800,14 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     // What would refuse it is said now, not after a fuse that could send nothing.
     const refused = cannotStart(chase);
     if (refused) return { ...refused, ok: false };
+    // The yes that was just given, on the sheet with both mails: read before the fuse answers.
+    const asked: NotchActionAsked = { seen: 'sheet', how: notchAskedHow(stage), fuseMs: NOTCH_CHASE_FUSE_MS };
     const went = await stage.fuse(['Sending ', em(first(chase.name)), ' the first mail…'], NOTCH_CHASE_FUSE_MS, { src: 'mail' });
     if (went === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 2600, extras: {} };
     if (went === 'lost') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
+    yesTo.set(chase.id, asked);
     const said = await startChase(chase);
+    yesTo.delete(chase.id);
     return { ...said, ok: store.chase(chase.id) !== null };
   }
 
@@ -788,6 +816,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     if (refused) return refused;
     chase.createdAt = now();
     const sent = await sendNudge(chase);
+    noted(chase, sent.ok ? 'done' : sent.unsure ? 'unsure' : 'not_done');
     if (!sent.ok && sent.unsure) {
       // Send was pressed and nothing confirmed it. It was said "I could not send it. Nothing was
       // started", and the same words then went a second time. The chase is kept, stuck on that
@@ -887,6 +916,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         unshown.delete(chase.id);
         stage.surface.act({ kick: 200 });
         let picked: 'send' | 'monday' | 'call' | 'drop';
+        /** How the yes to the mail on the sheet was given. */
+        let yesHow: NotchActionAsked['how'] = 'key';
         if (sends) {
           // What a yes would send is shown before the yes (README 116): the question used to be a
           // line of choices, and "Try again" sent a mail the owner had last seen days before.
@@ -901,7 +932,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
             ],
           });
           const answer = await stage.answer(sheet, ['yes', 'no', 'button']);
-          if (answer.act === 'yes') picked = 'send';
+          if (answer.act === 'yes') { picked = 'send'; yesHow = notchAskedHow(stage); }
           else if (answer.act === 'button' && answer.button === 'monday') picked = 'monday';
           else if (answer.act === 'button' && answer.button === 'drop') picked = 'drop';
           else return 'waits';
@@ -913,6 +944,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
         }
         const fresh = store.chase(chase.id);
         if (!fresh || fresh.state !== 'stuck') { await stage.say(['That one is already closed.'], 2400); return 'settled'; }
+        // Anything but a yes to the mail: what goes later goes by the clock, not on an earlier yes.
+        if (picked !== 'send') yesTo.delete(chase.id);
         if (picked === 'monday') {
           fresh.day = 'Monday'; fresh.byAt = chaseBy('Monday', now()); fresh.state = 'on'; fresh.nextAt = fresh.byAt - 9 * 3_600_000;
           step(fresh, 'You said: wait until Monday.');
@@ -951,6 +984,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           still.state = 'on'; still.nextAt = now();
           step(still, why.kind === 'send' ? 'You said: try again.' : `You said: send ${which}.`);
           store.putChase(still);
+          // The mail goes on this yes: it was on the sheet, and the fuse burnt out.
+          yesTo.set(still.id, { seen: 'sheet', how: yesHow, fuseMs: NOTCH_CHASE_FUSE_MS });
           // It goes by the same step as any mail of a chase: the mailbox is looked at first, and one that cannot go asks again.
           void tick();
           await stage.say(['Sending it. I will come back if it does not go.'], 2800);
@@ -1040,6 +1075,8 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           }
         }
         const sent = await sendNudge(chase);
+        // What came of the mail is written down whatever became of the chase meanwhile: a mail that went, went.
+        noted(chase, sent.ok ? 'done' : sent.unsure ? 'unsure' : 'not_done');
         const fresh = store.chase(chase.id);
         // Stopped, or answered, while the mail was on its way: nothing more is written down for it.
         if (!fresh || fresh.state !== 'on') continue;

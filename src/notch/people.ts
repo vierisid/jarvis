@@ -56,6 +56,7 @@
  *   - The work is reading and looking. Whatever would change the machine or
  *     reach somebody stops for an approval of its own (src/daemon/notch-peers.ts).
  */
+import { notchSentOutcome, type NotchActionHow, type NotchActionKind, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
@@ -167,6 +168,8 @@ export interface NotchPeopleDeps {
   inbox: NotchInbox;
   link: PeerLink;
   store: PeerStore;
+  /** Where what is sent to somebody is written down, with what came of it (./actions.ts). */
+  actions?: NotchActions | null;
   /** Opens a page in the person's own browser, on the machine the answer came from. False when it could not. */
   openPage(sidecarId: string | null, url: string): Promise<boolean>;
   /**
@@ -417,8 +420,17 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   }
 
   /** A time that is free for two people. Always there: without a calendar it says so, to the owner and to the one who asks. */
+  /**
+   * Something sent to somebody under a fuse that was seen to burn out, written down with what came of it
+   * (./actions.ts). The line under the fuse is what the owner had before them. What they said or typed
+   * started it, unless `how` says it was a pick. Never the words that went.
+   */
+  const noted = (kind: NotchActionKind, to: string, what: string, sent: { ok: boolean; why?: string }, how: NotchActionHow = 'said'): void => {
+    deps.actions?.record({ kind, what, target: to, asked: { seen: 'line', how, fuseMs: NOTCH_PEOPLE_FUSE_MS }, outcome: notchSentOutcome(sent) });
+  };
+
   const times = attachNotchPeopleTime({
-    inbox, link, store, person, log, now,
+    inbox, link, store, person, log, now, actions: deps.actions,
     calendar: (from, to) => (deps.time ? deps.time.calendar(from, to) : Promise.resolve(null)),
     open: (url) => deps.openPage(null, url),
     news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }),
@@ -434,13 +446,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     if (jobsMade) return jobsMade;
     const chases = deps.chases?.() ?? null;
     if (!chases) return null;
-    jobsMade = attachNotchPeopleJobs({ inbox, link, store, chases, person, log, now, news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }) });
+    jobsMade = attachNotchPeopleJobs({ inbox, link, store, chases, person, log, now, actions: deps.actions, news: (id, say, more) => news(id, say, say, { person: true, ms: 4600, ...(more?.who ? { who: more.who } : {}) }) });
     return jobsMade;
   };
 
   /** Files, when this brain was given somewhere to keep and to put them. */
   const files = deps.files ? attachNotchPeopleFiles({
-    inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log, now,
+    inbox, link, store, dir: deps.files.dir, save: deps.files.save, person, log, now, actions: deps.actions,
     ...(deps.files.arrived ? { arrived: deps.files.arrived } : {}), ...(deps.files.find ? { find: deps.files.find } : {}), ...(deps.files.open ? { open: deps.files.open } : {}),
     ...(deps.files.think ? { think: deps.files.think } : {}), ...(deps.files.known ? { known: deps.files.known } : {}),
     news: (id, say, more) => news(id, say, say, { person: true, ms: 4200, ...(more?.who ? { who: more.who } : {}) }),
@@ -1180,6 +1192,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       // Nobody saw the line burn: what nobody may have seen does not go out.
       if (went === 'lost') return;
       const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, words));
+      noted('people_tell', to.name, `Message to ${to.name}`, sent);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words });
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1194,6 +1207,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
       const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(question, { kind: 'ask', options })));
+      noted('people_ask', to.name, `Question to ${to.name}`, sent);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'ask', words: question, options, ...(firstId ? { again: firstId } : {}) });
       await stage.say(firstId ? ['Asked again.'] : sent.delivered ? ['Asked ', em(to.name), '. I will tell you the answer.'] : ['Asked. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1375,6 +1389,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       const id = crypto.randomUUID();
       // The sentence is for a contact who is not on a Pillow: they read it, and can say it to their own assistant.
       const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(`An agent of mine, ${agent.name}: ${sentence}`, { kind: 'agent', id, name: agent.name, sentence })));
+      noted('people_agent', to.name, `Agent ${agent.name} sent to ${to.name}`, sent);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.setMeta(`agent-out:${id}`, JSON.stringify({ peer: to.id, name: agent.name }));
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you whether ', em(to.name), ' takes ', agent.name, ' on.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 3000, { mark: 'check' });
@@ -1471,6 +1486,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
       if (went === 'lost') return;
       const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(text, { kind: 'look', what, app })));
+      noted('people_share', to.name, `Showed ${to.name} what was circled${app ? ` in ${app}` : ''}`, sent);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words: what });
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1607,6 +1623,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
       const sent = await meanwhile(stage, ['Sending…'], link.ask(to.id, words.slice(0, 120), words));
+      noted('people_request', to.name, `Request to ${theirs}`, sent);
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.request({ id: sent.id, dir: 'out', peer: to.id, words });
       following();
@@ -1936,6 +1953,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return 'waits'; }
         if (went === 'lost') return 'waits';
         const sent = await meanwhile(stage, ['Sending…'], link.tell(item.from, peerNoteText(pick, { kind: 'answer', pick }), { replyTo: item.id }));
+        // The pick was made on the line with their question.
+        noted('people_answer', from.name, `Answer to a question from ${from.name}`, sent, 'pick');
         if (!sent.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
         store.done(item.id);
         void link.seen(item.id);

@@ -16,6 +16,7 @@ import { NOTCH_DECIDER, applyApprovalDecision, type ApprovalDecisionDeps } from 
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { gateVoiceApprovalResolution } from '../roles/authority.ts';
 import { NOTCH_PLAIN_LINE_COLUMNS, attachNotchApprovals, notchApprovalWay, type NotchApprovalWhere } from './approvals.ts';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -74,7 +75,10 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   if (options.page !== false) fromPage({ type: 'hello', v: 1 });
   const opened: (string | null)[] = [];
+  // What is written down of a yes given here (./actions.ts), with the same audit trail the product writes to.
+  const actions = attachNotchActions(getDb(), { audit, log: (line) => logs.push(line) });
   const notch = attachNotchApprovals(inbox, {
+    actions,
     approvalManager: approvals,
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
     deny: (id) => (options.denyFails ? Promise.reject(new Error('database is locked')) : applyApprovalDecision('deny', id, NOTCH_DECIDER, deps)),
@@ -89,7 +93,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
   const line = (): NotchLine | null => surface.current().line;
   const text = (l: NotchLine | null): string => (l?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
   return {
-    approvals, deps, runs, ask, surface, inbox, notch, logs, opened, line, fromPage,
+    approvals, deps, runs, ask, surface, inbox, notch, logs, opened, line, fromPage, actions, audit,
     pushed: () => pushed,
     said: (): string => text(line()),
     count: (): number => surface.current().count,
@@ -840,4 +844,96 @@ test('a sign the width table does not know is no reason to send an approval to t
   expect(notchApprovalWay(arrow)).toBe('sheet');
   const short = h.ask({ context: JSON.stringify({ intent: 'Rename a \u2192 b' }) });
   expect(['key', 'sheet']).toContain(notchApprovalWay(short));
+});
+
+// Fix 05, the owner's decision of 26 November 2026: an approval said yes to on the notch keeps its own row
+// and its own audit, as ever (rule 20). The list of what the notch did adds what those do not hold: what was
+// before the owner when they said yes, and for how long it could be taken back.
+describe('what is written down of a yes to an approval', () => {
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0);
+
+  test('a yes on its line: one entry with the sentence, the line, the yes key and the fuse, and no audit row beyond the product\'s own', async () => {
+    const h = harness();
+    const req = h.ask();
+    await h.sync();
+    await h.answer('yes');
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('Done.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'approval', outcome: 'done', what: approvalToast(req).body, target: 'write_file', seen: 'line', how: 'key', fuseMs: 3000, ref: `approval:${req.id}`, approvalId: req.id,
+    });
+    // The audit is the product's: the decision as the notch, and the receipt. Nothing is added by the list.
+    const rows = h.audit.query({});
+    expect(rows.every((row) => row.agent_id === 'agent-1' && row.tool_name === 'write_file')).toBe(true);
+    expect(rows.some((row) => row.channel === 'notch' && row.decided_by === 'notch')).toBe(true);
+    expect(h.audit.queryEntries()).toHaveLength(1);
+    // Today has its row from the approval: the list adds no second one.
+    expect(h.actions.today(0)).toEqual([]);
+  });
+
+  test('on a sheet, the entry says it was a sheet, in the words that were on it', async () => {
+    const h = harness({ describe: async () => 'Look up where Steam is installed?' });
+    const req = h.ask({ context: JSON.stringify({ intent: `reg query "HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam" /v InstallPath ${'x'.repeat(80)}` }) });
+    expect(notchApprovalWay(req)).toBe('sheet');
+    await h.sync();
+    await h.answer('yes');
+    await h.answer('done');
+    expect(entries(h)).toMatchObject([{ kind: 'approval', outcome: 'done', what: 'Look up where Steam is installed', seen: 'sheet', how: 'key', fuseMs: 3000 }]);
+  });
+
+  test('one that whoever waited for the answer runs: the yes was handed on, and what came of it is the approval\'s own to say', async () => {
+    const h = harness();
+    const req = h.ask({ mode: 'inline' });
+    await h.sync();
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.approvals.getRequest(req.id)!.status).toBe('approved');
+    expect(h.runs).toEqual([]);
+    expect(entries(h)).toMatchObject([{ kind: 'approval', outcome: 'handed', approvalId: req.id }]);
+  });
+
+  test('Esc in the fuse, a fuse nobody saw, a no, and a yes that was held: nothing was approved here, nothing is written', async () => {
+    const back = harness();
+    back.ask();
+    await back.sync();
+    await back.answer('yes');
+    await back.answer('undo');
+    expect(entries(back)).toEqual([]);
+    await back.answer('no');
+    expect(entries(back)).toEqual([]);
+
+    const lost = harness();
+    lost.ask();
+    await lost.sync();
+    await lost.answer('yes');
+    await lost.advance(3000 + 2000);
+    expect(lost.runs).toEqual([]);
+    expect(entries(lost)).toEqual([]);
+
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    const held = harness();
+    held.ask();
+    await held.sync();
+    controller.pause();
+    await held.answer('yes');
+    await held.answer('done');
+    expect(held.said()).toContain('I am paused');
+    expect(entries(held)).toEqual([]);
+  });
+
+  test('a list that cannot be written to does not keep the approval from being decided and run', async () => {
+    const h = harness();
+    const req = h.ask();
+    await h.sync();
+    await h.answer('yes');
+    getDb().run('DROP TABLE notch_actions');
+    await h.answer('done');
+    expect(h.runs).toHaveLength(1);
+    expect(h.approvals.getRequest(req.id)).toMatchObject({ status: 'executed', decided_by: 'notch' });
+    expect(h.said()).toBe('Done.');
+    expect(h.logs.some((line) => line.startsWith('[notch] an action could not be written down'))).toBe(true);
+  });
 });

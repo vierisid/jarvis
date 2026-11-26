@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { attachNotchActions } from './actions.ts';
 import { Database } from 'bun:sqlite';
 import { NOTCH_CATCH_QUIET_MS, NOTCH_WATCH_EVENT, attachNotchCatch, countRequest } from './catch.ts';
 import { NotchInbox } from './inbox.ts';
@@ -50,7 +51,9 @@ function harness(options: { left?: number | null; paused?: () => boolean; teachi
   };
   const counted: Record<string, unknown>[] = [];
   const logs: string[] = [];
-  const jobs = attachNotchJobs(inbox, { db: new Database(':memory:'), hands, sleep: async () => {}, log: () => {} });
+  // What is written down of a job that was done (./actions.ts).
+  const actions = attachNotchActions(new Database(':memory:'), { log: () => {} });
+  const jobs = attachNotchJobs(inbox, { db: new Database(':memory:'), hands, sleep: async () => {}, actions, log: () => {} });
   const catcher = attachNotchCatch({ onEvent(listener) { toCatch = listener; } }, {
     inbox, jobs, hands, paused: options.paused, teaching: options.teaching, now: () => now,
     count: options.left === undefined ? undefined : async (request) => { counted.push(request); return options.left ?? null; },
@@ -74,7 +77,7 @@ function harness(options: { left?: number | null; paused?: () => boolean; teachi
     await settle();
   };
   const answer = async (n: number): Promise<void> => { for (let i = 0; i < n; i++) { await settle(); waiting.shift()?.(); await settle(); } };
-  return { catcher, jobs, sent, counted, logs, tell, click, keys, row, line, said, reply, pass, answer, advance: (ms: number) => { now += ms; } };
+  return { catcher, jobs, sent, counted, logs, tell, click, keys, row, line, said, reply, pass, answer, actions, advance: (ms: number) => { now += ms; } };
 }
 
 describe('catching a job the person does twice by hand', () => {
@@ -116,6 +119,33 @@ describe('catching a job the person does twice by hand', () => {
     await h.answer(12);
     await settle();
     expect(h.said()).toBe('Done. 3 pasted.');
+    // Fix 05: taken over on a yes to its line. One entry, written when it ended.
+    expect(h.actions.since(0)).toHaveLength(1);
+    expect(h.actions.since(0)[0]).toMatchObject({ kind: 'job_rounds', outcome: 'done', what: 'Pasted 3 from notepad into excel', seen: 'line', how: 'key' });
+  });
+
+  // Fix 05: turned down, nothing is done and nothing is written.
+  test('a no to the offer writes nothing down', async () => {
+    const h = harness({ left: 3 });
+    h.row(0);
+    h.row(1);
+    await settle();
+    await h.pass(500);
+    await h.reply('no');
+    await settle();
+    expect(h.actions.since(0)).toEqual([]);
+  });
+
+  // Fix 05: taken over by words alone ("do the next two"), with no line before it.
+  test('taken over by words, it is written down as said, with nothing shown before it', async () => {
+    const h = harness({ left: 6 });
+    h.row(0);
+    h.row(1);
+    await settle();
+    expect(await h.catcher.take(2)).toBe('started');
+    await h.answer(8);
+    await settle();
+    expect(h.actions.since(0)).toMatchObject([{ kind: 'job_rounds', outcome: 'done', seen: 'nothing', how: 'said' }]);
   });
 
   test('a third row done by hand while the offer is up moves the start on with it', async () => {

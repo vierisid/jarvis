@@ -90,7 +90,8 @@ Sent:
 6. A turn-end withdrawal is closed as the system, not as the notch, and
    does not reset the learner's run of approvals.
 7. Put: cell guard, idempotent copy step, pays check for caught rounds.
-8. `NotchActions`: the log, 90 days, also writing the audit. Today reads it.
+8. `NotchActions`: the log, also writing the audit. Today reads it. Kept
+   as long as the audit trail is: nothing is cleared.
 9. `NotchDecidable` and `playDecidable`, questions first.
 10. Approvals, mail reply, chase, call follow-up and promises move onto it.
 
@@ -105,9 +106,14 @@ Sent:
 17 November 2026, kept: a nudge Gmail says went is sent. It is not called
 "not confirmed" and sent again.
 
+26 November 2026, with step 8: the log keeps neither the text of a mail or
+a message nor a hash of it, as the audit trail keeps none for a send
+approved on the dashboard. It is kept as long as the audit trail is.
+
 Still open: whether a silent follow-up is also said the next morning
-(recommended: no), and whether the log keeps the sent text or only a hash
-(recommended: a hash).
+(recommended: no; it is a row of Today now), and whether a row that may
+have gone counts in "Today: 3 things done" and in the morning's count (it
+does now).
 
 ## Status
 
@@ -131,7 +137,8 @@ Still open: whether a silent follow-up is also said the next morning
 6. done in "notch: an approval closed because its instruction ended is not audited as the owner's no"
    and "notch: a request the system closed does not break the owner's run of approvals"
 7. pending
-8. pending
+8. done in "notch: one list of what the notch did, written where what came of a thing is known, in the audit trail too, and in Today"
+   (`src/notch/actions.ts`; README 262 to 268)
 9. pending
 10. pending
 
@@ -151,6 +158,22 @@ Steps 1, 2 and 5 were tightened after a second review in
   mark.
 - Step 5: the fuse is burnt with `stage.fuse` directly. `playDecidable` is
   step 9.
+- Step 8: the design had `begin()` at the yes and `settle()` after, and at
+  attach every entry left `going` became `unsure`. Nothing is written at
+  the yes: one call, where what came of it is known. A brain that stops in
+  between writes nothing. A yes taken back with Esc, and a fuse nobody saw
+  burn out, write nothing either: nothing was decided and nothing done.
+- Step 8: the design kept a hash of the text, and cleared after 90 days.
+  Neither: see the owner's decisions.
+- Step 8: the design had Today read approvals, promises and the log, and
+  nothing else. The rows that were there are left as they are: the log
+  adds the rows nothing else has, and whatever may have gone.
+- Step 8: an approval said yes to on the notch gets an entry in the log
+  (what was before the owner, the fuse) and no audit row from it: the
+  decision function has written that one. Run by whoever waited for the
+  answer, its outcome is `handed`: what came of it is the approval's own.
+- Step 8: answering a workflow's question is written by nobody else in
+  the audit, so it is written from here. The design had left it open.
 - That a mail may have gone was first kept with why the chase was stuck. A
   chase handed over and back, or told to wait until Monday, then sent it
   again without looking. It is kept with the chase now, with the mail as it
@@ -208,6 +231,11 @@ Steps 1, 2 and 5 were tightened after a second review in
   rows is more than that. Both numbers are the owner's to tune.
 - While any fuse burns, Esc is the notch's: for eight seconds an Esc meant
   for the app in front takes the pick back.
+- The log (step 8): what is sent to somebody is written as "said", also
+  when it was a press on a card. Answers the engine carries ("Yes, I took
+  it", "Seen", the pieces of a file), a file that arrived, and what is
+  done for somebody who asked are not in it. After a restart a reply that
+  may have gone and is sent again is one entry, also if both went.
 - A brain that stops in the middle of the fuse leaves the draft in the
   thread. Nothing is sent. The brain that comes up asks the question
   again, and a pick says that this reply is already in the thread as a

@@ -4850,6 +4850,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           },
         } } : {}),
         approvalManager,
+        // What the notch does in the world is written down in its own list, and in the audit trail with it.
+        actions: { db: getDb(), audit: auditTrail },
         approve: (requestId) => applyApprovalDecision('approve', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
         // Esc on its line is a no: denied through the same function.
         deny: (requestId) => applyApprovalDecision('deny', requestId, NOTCH_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),

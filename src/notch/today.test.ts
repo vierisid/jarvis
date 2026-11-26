@@ -83,3 +83,46 @@ describe('what else was started, and can be taken back', () => {
   });
 });
 
+
+// Fix 05, the owner's decision of 26 November 2026: what the notch did that no other part lists is a row
+// too (./actions.ts). The rows that were there are as they were.
+describe('what only the list of what the notch did has', () => {
+  const now = new Date(2026, 10, 26, 15, 0, 0).getTime();
+  const at = (hour: number, minute: number): number => new Date(2026, 10, 26, hour, minute, 0).getTime();
+
+  test('each is a row with what came of it as its small word, among the others in the order they happened, and none has an Undo', () => {
+    const deps = {
+      executedApprovals: () => [],
+      keptPromises: () => [{ what: 'Send Anna the pricing', completed_at: at(10, 30) }],
+      sentMail: () => [{ at: at(9, 15), text: 'Replied to Leo: Deck for Thursday?', small: '1,280 tokens' }],
+      jobs: () => [{ id: 'j1', at: at(11, 0), text: 'Pasted 7 from Notepad into Excel', undoable: true }],
+      more: () => [{ id: 'chase:c1', at: at(8, 0), text: "Getting Sam's answer by Friday", small: 'on it', undo: true }],
+      now: () => now,
+    };
+    const before = notchTodayBlocks(notchToday(deps));
+    const rows = notchToday({
+      ...deps,
+      actions: () => [
+        { id: 'action:na-1', at: at(12, 0), text: "Follow-up to Sam for Sam's answer", small: 'sent', undo: false },
+        { id: 'action:na-2', at: at(9, 45), text: 'Message to Leo', small: 'may have gone', undo: false },
+        { id: 'action:old', at: at(9, 45) - 86_400_000, text: 'Message to Anna', small: 'sent', undo: false },
+      ],
+    });
+    const blocks = notchTodayBlocks(rows);
+    expect(blocks).toEqual([
+      { kind: 'row', lead: '12:00', say: ["Follow-up to Sam for Sam's answer"], id: 'action:na-1', small: 'sent' },
+      { kind: 'row', lead: '11:00', say: ['Pasted 7 from Notepad into Excel'], id: 'job:j1', buttons: [{ id: 'undo', label: 'Undo', quiet: true }] },
+      { kind: 'row', lead: '10:30', say: ['Send Anna the pricing'], small: 'promised' },
+      { kind: 'row', lead: '09:45', say: ['Message to Leo'], id: 'action:na-2', small: 'may have gone' },
+      { kind: 'row', lead: '09:15', say: ['Replied to Leo: Deck for Thursday?'], small: 'sent · 1,280 tokens' },
+      { kind: 'row', lead: '08:00', say: ["Getting Sam's answer by Friday"], id: 'chase:c1', buttons: [{ id: 'undo', label: 'Undo', quiet: true }] },
+    ]);
+    // The rows that were there before are the same rows, word for word.
+    expect(blocks.filter((block) => !(block.kind === 'row' && block.id?.startsWith('action:')))).toEqual(before);
+  });
+
+  test('with no such list given, Today is what it was', () => {
+    const rows = notchToday({ executedApprovals: () => [], keptPromises: () => [{ what: 'Send Anna the pricing', completed_at: at(10, 30) }], now: () => now });
+    expect(notchTodayBlocks(rows)).toEqual([{ kind: 'row', lead: '10:30', say: ['Send Anna the pricing'], small: 'promised' }]);
+  });
+});

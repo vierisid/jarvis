@@ -3,8 +3,9 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
-import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_STEP_MS, NOTCH_PEOPLE_TRUST_AFTER, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
+import { NOTCH_PEOPLE_ASK_WAIT_MS, NOTCH_PEOPLE_FUSE_MS, NOTCH_PEOPLE_STEP_MS, NOTCH_PEOPLE_TRUST_AFTER, attachNotchPeople, peerAsksToDo, peopleName, peopleOptions } from './people.ts';
 import type { NotchPeopleStep } from './people.ts';
 import { NOTCH_TIME_ASKS_AN_HOUR, peerTimeCalendarUrl, peerTimeMinutes } from './people-time.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
@@ -193,8 +194,11 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const worked: { from: string; words: string }[] = [];
   /** For each of them: whether it was handed over as a thing to be done. */
   const acted: boolean[] = [];
+  // What is written down of what is sent to somebody (./actions.ts), in a list of this side's own.
+  const actionsDb = new Database(':memory:');
+  const actions = attachNotchActions(actionsDb, { now: () => server.now(), log: () => {} });
   const make = () => attachNotchPeople({
-    inbox, link, store, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
+    inbox, link, store, actions, noClock: true, now: () => server.now(), log: (line) => logs.push(line),
     ...(more.engineWaitMs ? { engineWaitMs: more.engineWaitMs } : {}),
     ...(more.stepMs ? { stepMs: more.stepMs } : {}),
     // An engine that does not answer is not waited for here.
@@ -240,7 +244,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const answer = async (act: string, extra: Record<string, unknown> = {}): Promise<void> => { fromPage({ type: 'answer', id: line()!.id, act, ...extra }); await settle(); };
   return {
     engine, link, store, people, inbox, logs, opened, state, line, pushed, worked, acted, make, timeState, lookState, agentState, chaseState, callState,
-    saved, filesDir, fileState, lookedFor, held, thought, readState,
+    saved, filesDir, fileState, lookedFor, held, thought, readState, actions, actionsDb,
     /** Getting in, when this side was given it. */
     setup: setup as FakeSetup,
     /** The sheet's or the line's blocks, as text. */
@@ -4167,5 +4171,127 @@ describe('a sentence read by the model', () => {
     expect(await sam.hear('please let Leo know I am late')).toBe('nothing');
     expect(sam.line()).toBeNull();
     expect(leo.engine.inbox.length).toBe(0);
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: what is sent to somebody's Pillow under a fuse leaves one
+// entry in the list of what the notch did. None of it was in Today or in the audit.
+describe('what is written down of what is sent to somebody', () => {
+  const entries = (one: ReturnType<typeof side>) => one.actions.since(0).reverse();
+  const stored = (one: ReturnType<typeof side>): string => JSON.stringify(one.actionsDb.query('SELECT * FROM notch_actions').all());
+
+  test('a word to somebody: one entry when it has gone, the line under its fuse, by what was said. Never the words', async () => {
+    const { sam, leo } = await joined();
+    await sam.say('tell Leo the review moved to Friday');
+    expect(sam.kind()).toBe('send');
+    expect(entries(sam)).toEqual([]);
+    await sam.done();
+    expect(sam.said()).toBe('Sent to Leo. I will tell you when it is seen.');
+    expect(entries(sam)).toHaveLength(1);
+    expect(entries(sam)[0]).toMatchObject({ kind: 'people_tell', outcome: 'done', what: 'Message to Leo', target: 'Leo', seen: 'line', how: 'said', fuseMs: NOTCH_PEOPLE_FUSE_MS });
+    expect(stored(sam)).not.toContain('review');
+    expect(sam.actions.today(0)).toMatchObject([{ text: 'Message to Leo', small: 'sent', undo: false }]);
+    // Receiving it, and saying it was seen, is nothing the other side did in the world: nothing is written there.
+    await sam.done();
+    await leo.yes();
+    expect(entries(leo)).toEqual([]);
+  });
+
+  test('taken back inside the window: nothing is sent and nothing is written', async () => {
+    const { sam } = await joined();
+    await sam.say('tell Leo the review moved to Friday');
+    await sam.answer('undo');
+    expect(sam.engine.sent).toEqual([]);
+    expect(entries(sam)).toEqual([]);
+  });
+
+  test('signed out after the fuse burnt out: it did not go, and the entry says so', async () => {
+    const { sam } = await joined();
+    await sam.say('tell Leo the review moved to Friday');
+    sam.engine.signedIn = false;
+    await sam.done();
+    expect(entries(sam)).toMatchObject([{ kind: 'people_tell', outcome: 'not_done' }]);
+    expect(sam.actions.today(0)).toEqual([]);
+  });
+
+  test('the line broke before the server answered: it may have gone, and that is what is written and what Today says', async () => {
+    const { sam } = await joined();
+    await sam.say('tell Leo the review moved to Friday');
+    sam.link.tell = async () => ({ ok: false, why: 'unknown' });
+    await sam.done();
+    expect(entries(sam)).toMatchObject([{ kind: 'people_tell', outcome: 'unsure' }]);
+    expect(sam.actions.today(0)).toMatchObject([{ text: 'Message to Leo', small: 'may have gone' }]);
+  });
+
+  test('a question, and the pick that answers it on the other side, are each one entry of their own kind', async () => {
+    const { sam, leo } = await joined();
+    await sam.say('Ask Leo: the review on Thursday or Friday?');
+    await sam.done();
+    expect(entries(sam)).toMatchObject([{ kind: 'people_ask', outcome: 'done', what: 'Question to Leo', how: 'said' }]);
+    await sam.done();
+    await leo.pick(1);
+    expect(leo.kind()).toBe('send');
+    expect(entries(leo)).toEqual([]);
+    await leo.done();
+    expect(leo.said()).toBe('Told Sam: Friday.');
+    expect(entries(leo)).toMatchObject([{ kind: 'people_answer', outcome: 'done', what: 'Answer to a question from Sam', target: 'Sam', seen: 'line', how: 'pick', fuseMs: NOTCH_PEOPLE_FUSE_MS }]);
+    expect(stored(leo)).not.toContain('Friday');
+  });
+
+  test("a request to their Pillow is one entry, and what was asked is not in it", async () => {
+    const { sam } = await joined();
+    expect(await sam.say("ask Leo's Pillow what changed in the deck")).toBe(true);
+    expect(sam.kind()).toBe('send');
+    await sam.done();
+    expect(entries(sam)).toMatchObject([{ kind: 'people_request', outcome: 'done', what: "Request to Leo's Pillow", target: 'Leo' }]);
+    expect(stored(sam)).not.toContain('deck');
+  });
+
+  test('a file: offered is one entry, and the same entry says sent once they have it', async () => {
+    const { sam, leo } = await joined();
+    const bytes = new Uint8Array(300_000).fill(7);
+    expect(sam.people.sendFile(LEO, { name: 'deck.pdf', bytes })).toBe(true);
+    await settle();
+    expect(sam.kind()).toBe('send');
+    expect(entries(sam)).toEqual([]);
+    await sam.done();
+    expect(sam.said()).toBe('Offered to Leo. It goes when Leo takes it.');
+    expect(entries(sam)).toHaveLength(1);
+    const offered = entries(sam)[0]!;
+    expect(offered).toMatchObject({ kind: 'people_file', outcome: 'done', what: 'File offered to Leo: deck.pdf', target: 'Leo', seen: 'line', how: 'said', fuseMs: NOTCH_FILE_FUSE_MS });
+    expect(offered.ref).toStartWith('file:');
+    await sam.done();
+    await leo.pick(0);
+    await leo.done();
+    for (let round = 0; round < 6; round++) { await settle(); await sam.people.filesIdle(); await leo.people.look(); await sam.people.look(); }
+    await settle();
+    expect(leo.saved).toHaveLength(1);
+    expect(entries(sam)).toHaveLength(1);
+    expect(entries(sam)[0]).toMatchObject({ id: offered.id, outcome: 'done', what: 'File sent to Leo: deck.pdf', how: 'said' });
+  });
+
+  test('an offer taken back in its window writes nothing', async () => {
+    const { sam } = await joined();
+    sam.people.sendFile(LEO, { name: 'deck.pdf', bytes: new Uint8Array(300_000).fill(7) });
+    await settle();
+    await sam.answer('undo');
+    expect(entries(sam)).toEqual([]);
+  });
+
+  test('asking their laptop for a file is one entry', async () => {
+    const { sam } = await joined();
+    expect(await sam.say("get me the Q3 numbers from Leo's laptop")).toBe(true);
+    await sam.done();
+    expect(entries(sam)).toMatchObject([{ kind: 'people_file_ask', outcome: 'done', what: "Asked Leo's Pillow for a file: the Q3 numbers", target: 'Leo', fuseMs: NOTCH_FILE_FUSE_MS }]);
+  });
+
+  test('a list that cannot be written to does not keep a word from going', async () => {
+    const { sam, leo } = await joined();
+    await sam.say('tell Leo the review moved to Friday');
+    sam.actionsDb.run('DROP TABLE notch_actions');
+    await sam.done();
+    expect(sam.said()).toBe('Sent to Leo. I will tell you when it is seen.');
+    await sam.done();
+    expect(leo.said()).toBe('Sam: The review moved to Friday');
   });
 });

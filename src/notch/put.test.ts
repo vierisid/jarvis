@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
 import { attachNotchJobs, type NotchActResult, type NotchJobHands } from './jobs.ts';
 import type { NotchLooked, NotchThing } from './look.ts';
@@ -88,10 +89,13 @@ function harness(options: { result?: NotchActResult | null | 'lost'; paused?: ()
         : options.result);
     },
   };
-  const jobs = attachNotchJobs(inbox, { db: new Database(':memory:'), hands, sleep: async () => {}, now: () => now, log: () => {} });
+  const db = new Database(':memory:');
+  // What is written down of a thing that was put somewhere (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { now: () => now, log: () => {} });
+  const jobs = attachNotchJobs(inbox, { db, hands, sleep: async () => {}, now: () => now, actions, log: () => {} });
   const holds: { what: string; ms: number }[] = [];
   const put = attachNotchPut({
-    inbox, jobs, hands, paused: options.paused, read: options.read, now: () => now, log: () => {},
+    inbox, jobs, hands, paused: options.paused, read: options.read, now: () => now, actions, log: () => {},
     hold: (_sidecarId, what, ms) => { holds.push({ what, ms }); },
   });
   const line = (): NotchLine | null => surface.current().line;
@@ -107,7 +111,7 @@ function harness(options: { result?: NotchActResult | null | 'lost'; paused?: ()
     await settle();
     return route?.did ?? null;
   };
-  return { put, jobs, sent, holds, line, said, reply, speak, advance: (ms: number) => { now += ms; }, now: () => now };
+  return { put, jobs, sent, holds, line, said, reply, speak, advance: (ms: number) => { now += ms; }, now: () => now, actions, db };
 }
 
 describe('show it a thing, then point at a place', () => {
@@ -508,5 +512,90 @@ describe('a circle the program says nothing about is read off its picture', () =
     await r.answer(READ);
     expect(h.sent[0]).toEqual({ do: 'paste', front: true, as: 'list', hand: 0, rows: READ });
     expect(h.said()).toBe('There. It is in Notepad.');
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: "put it here" leaves one entry in the list of what the
+// notch did. It was a row of Today, and nothing said what the owner had before them or how they said yes.
+describe('what is written down of a thing that was put somewhere', () => {
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0);
+
+  test('a yes on its line: one entry, done, by the yes key, with no fuse. Nothing is written before it is there', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    expect(entries(h)).toEqual([]);
+    await h.reply('yes');
+    expect(h.said()).toBe('There. It is in Notepad.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'put', outcome: 'done', what: 'Put 3 rows from Grafana into Notepad as a table', target: 'Notepad as a table', seen: 'line', how: 'key', fuseMs: null,
+      ref: `job:${h.jobs.store.since(0)[0]!.id}`,
+    });
+    // Its row of Today is the job's own: this list adds no second one.
+    expect(h.actions.today(0)).toEqual([]);
+    // Never what was put.
+    expect(JSON.stringify(h.db.query('SELECT * FROM notch_actions').all())).not.toContain('Acme');
+  });
+
+  test('Esc on the line puts nothing and writes nothing', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    await h.reply('no');
+    expect(h.sent).toEqual([]);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('said instead of tapped, with the line up or with no line at all: written down as said, and what was seen', async () => {
+    const answered = harness();
+    answered.put.shown('pc', looked(ROWS));
+    answered.put.shown('pc', FIELD);
+    await settle();
+    await answered.speak('as a list');
+    expect(entries(answered)).toMatchObject([{ kind: 'put', outcome: 'done', seen: 'line', how: 'said' }]);
+    const caret = harness();
+    caret.put.shown('pc', looked(ROWS));
+    await caret.speak('Put it here as a table');
+    expect(entries(caret)).toMatchObject([{ kind: 'put', outcome: 'done', seen: 'nothing', how: 'said' }]);
+  });
+
+  test('refused by the window: one entry, not done. Lost in the middle of it: one entry that says it may have happened', async () => {
+    const refused = harness({ result: { done: false, why: 'elevated' } });
+    refused.put.shown('pc', looked(ROWS));
+    refused.put.shown('pc', FIELD);
+    await settle();
+    await refused.reply('yes');
+    expect(entries(refused)).toMatchObject([{ kind: 'put', outcome: 'not_done', ref: null }]);
+    const lost = harness({ result: 'lost' });
+    lost.put.shown('pc', looked(ROWS));
+    lost.put.shown('pc', FIELD);
+    await settle();
+    await lost.reply('yes');
+    expect(lost.said()).toBe('I lost touch with your computer in the middle of it. Look whether it is there.');
+    expect(entries(lost)).toMatchObject([{ kind: 'put', outcome: 'unsure' }]);
+  });
+
+  test('with everything stopped nothing was tried, and nothing is written', async () => {
+    const h = harness({ paused: () => true });
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    await h.reply('yes');
+    expect(h.sent.filter((request) => request.do === 'paste')).toEqual([]);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('a list that cannot be written to does not keep the thing from being put', async () => {
+    const h = harness();
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    h.db.run('DROP TABLE notch_actions');
+    await h.reply('yes');
+    expect(h.said()).toBe('There. It is in Notepad.');
+    expect(h.jobs.done(0)).toMatchObject([{ text: 'Put 3 rows from Grafana into Notepad as a table' }]);
   });
 });

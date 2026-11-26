@@ -29,6 +29,7 @@
  *     step. It arrives as text and is shown as text.
  *   - An answer counts only from the one the job was handed to.
  */
+import { notchSentOutcome, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -60,6 +61,8 @@ export interface NotchPeopleJobsDeps {
   person(id: string): PeerPerson | null;
   /** News that is said once. */
   news(id: string, say: NotchPart[], more?: { who?: string }): void;
+  /** Where a job offered to somebody, or asked back, is written down (./actions.ts). */
+  actions?: NotchActions | null;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -119,6 +122,7 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
       const told = await link.tell(to.id, peerNoteText(
         `Can you take this over from me: getting ${what}${chase.about ? ` on ${chase.about}` : ''} by ${chase.day}?`,
         { kind: 'job', id, name: chase.name, address: chase.address, thing: chase.thing, about: chase.about, day: chase.day, steps: history(chase) }));
+      deps.actions?.record({ kind: 'people_job', what: `Offered ${to.name} to take over getting ${what}, with its history`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_JOB_FUSE_MS }, outcome: notchSentOutcome(told) });
       if (!told.ok) { await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
       keep(`job-out:${id}`, { peer: to.id, chase: chase.id, what, state: 'offered' });
       log('[notch] a job was offered to somebody, with its history');
@@ -135,6 +139,7 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
       if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
       if (went === 'lost') return;
       const told = await link.tell(to.id, peerNoteText(`Can I have ${mine.what} back?`, { kind: 'job-back', of: job }));
+      deps.actions?.record({ kind: 'people_job', what: `Asked ${to.name} for ${mine.what} back`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_JOB_FUSE_MS }, outcome: notchSentOutcome(told) });
       if (!told.ok) { await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
       keep(`job-out:${job}`, { ...mine, asked: true });
       await stage.say(['Asked ', em(to.name), '. I will tell you what ', em(to.name), ' says.'], 2800, { mark: 'check', who: to.name });

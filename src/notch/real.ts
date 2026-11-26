@@ -12,6 +12,8 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import type { Database } from 'bun:sqlite';
 import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.ts';
+import { attachNotchActions } from './actions.ts';
+import type { AuditTrail } from '../authority/audit.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
 import type { NotchAskFile, NotchAskHow, NotchAsks, NotchAsksDeps } from './asks.ts';
@@ -121,6 +123,12 @@ export interface NotchRealDeps {
   deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Opens the dashboard on the machine named, or on every machine showing the notch. */
   openDashboard?: (sidecarId: string | null) => void;
+  /**
+   * What the notch does in the world, written down (./actions.ts): where the
+   * list is kept, and the product's audit trail, which gets every entry too.
+   * Not given: nothing is written down, and no table is made.
+   */
+  actions?: { db: Database; audit?: Pick<AuditTrail, 'log'> | null };
   /** Promises: the executor that keeps them, and the store they live in. */
   promises?: {
     executor: {
@@ -453,6 +461,9 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   let drop: NotchDrop | null = null;
   let around: NotchAround | null = null;
   let stopWhere: () => void = () => {};
+  // What the notch does in the world, as one list that also writes the audit. Each part writes its own
+  // entries, where it knows what came of a thing: this only makes the list and hands it to them.
+  const actions = deps.actions ? attachNotchActions(deps.actions.db, { audit: deps.actions.audit, log }) : null;
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
@@ -460,6 +471,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     jobs: (since: number) => jobs?.done(since) ?? [],
     // What else was started and can be taken back: a watch, a chase, an agent that was made.
     more: (since: number) => [...(standing?.done(since) ?? []), ...(agents?.done(since) ?? [])],
+    // And what only the list of what was done has: a follow-up, a word to somebody, what may have gone.
+    actions: (since: number) => actions?.today(since) ?? [],
   };
   /** Undo on a row of what was done that is not a paste: what to say, or null when the row stands for nothing that can be taken back. */
   const undoRow = (row: string): NotchPart[] | null => standing?.undo(row) ?? agents?.undo(row) ?? null;
@@ -534,6 +547,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     describe: deps.asks?.describeApproval,
     where: deps.asks?.whereApproval,
     mine: (requestId) => asks?.mine(requestId) === true,
+    actions,
     clock: deps.clock,
     log,
   });
@@ -561,7 +575,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     const emergency = deps.emergency;
     const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
     jobs = attachNotchJobs(inbox, {
-      db: given.db, hands: given.hands, paused,
+      db: given.db, hands: given.hands, paused, actions,
       // What the person does while Jarvis works is not a job to take over, and what came before it is over.
       running: () => catcher?.reset(),
       log,
@@ -575,7 +589,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       inbox, jobs, hands: given.hands, db: given.db, ...given.teach, count: given.count,
       catcher: () => catcher, paused, log,
     });
-    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, read: given.read, paused, log });
+    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, read: given.read, paused, actions, log });
     given.watch?.();
     if (!given.noClock) {
       const learned = teach;
@@ -585,7 +599,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   if (deps.agents && deps.asks) {
     const emergency = deps.emergency;
     const made = attachNotchAgents({
-      inbox, db: deps.agents.db, workflows: deps.agents.workflows, log,
+      inbox, db: deps.agents.db, workflows: deps.agents.workflows, log, actions,
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
     });
     agents = made;
@@ -603,7 +617,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   // The organisation: the people whose Jarvises this one may talk to. Only with the engine's switch on.
   if (deps.peers) {
     people = attachNotchPeople({
-      inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log,
+      inbox, link: deps.peers.link, store: new PeerStore(deps.peers.db), openPage: deps.peers.openPage, log, actions,
       ...(deps.peers.work ? { work: deps.peers.work } : {}),
       ...(deps.peers.setup ? { setup: deps.peers.setup } : {}),
       ...(deps.peers.think ? { think: deps.peers.think } : {}),
@@ -758,21 +772,21 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
   }
   const promises = deps.promises;
-  registry.add(notchPromisesFeature(promises?.executor));
+  registry.add(notchPromisesFeature(promises?.executor, actions));
   // A fixture promise is kept by writing one line, not by a model turn.
   const appendFixtureLog = promises?.appendFixtureLog;
   if (promises && appendFixtureLog) {
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
   registry.add(notchPauseFeature(deps.emergency));
-  const questions: NotchQuestions | null = registry.add(notchQuestionsFeature(deps.questions ? { ...deps.questions, openDashboard: deps.openDashboard } : undefined));
+  const questions: NotchQuestions | null = registry.add(notchQuestionsFeature(deps.questions ? { ...deps.questions, openDashboard: deps.openDashboard, actions } : undefined));
   if (deps.mail) {
     const emergency = deps.emergency;
     const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
-    mail = attachMailLayer(inbox, { ...deps.mail, paused, log });
+    mail = attachMailLayer(inbox, { ...deps.mail, paused, actions, log });
     if (deps.standing) {
       const kept = attachNotchStanding({
-        inbox, db: deps.mail.db, mail: mail.standing, paused, log,
+        inbox, db: deps.mail.db, mail: mail.standing, paused, actions, log,
         // Without a connection a follow-up that is due is held, and goes out when the connection is back.
         offline: () => (around ? !around.online() : false),
         eye: (on) => { eyeKept = on; paintEye(); },
@@ -806,7 +820,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     if (deps.day.around && deps.calls) {
       const emergency = deps.emergency;
       const kept = attachNotchCalls(deps.calls.port, {
-        inbox, db: deps.calls.db, settings, log,
+        inbox, db: deps.calls.db, settings, actions, log,
         listen: deps.calls.listen, stt: deps.calls.stt, think: deps.calls.think,
         // The follow-up goes the way a chase's mail goes: in the thread with that person, or as a new mail.
         mail: layer ? { find: (who) => layer.standing.find(who), send: (plan) => layer.standing.send(plan), went: (plan, since) => layer.standing.went(plan, since), owner: () => layer.standing.owner() } : undefined,

@@ -30,6 +30,7 @@
  */
 import { NOTCH_NAME } from './name.ts';
 import type { Database } from 'bun:sqlite';
+import type { NotchActionAsked, NotchActions } from './actions.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import { roundPlace, roundsCopy, type RoundStep, type Rounds, type WatchWin } from './rounds.ts';
@@ -539,15 +540,24 @@ export interface NotchJobsDeps {
   paused?: () => boolean;
   /** A job began, or ended: whoever watches the person's hands looks away meanwhile, and starts afresh after. */
   running?: (running: boolean) => void;
+  /** Where a job that was done, in part or whole, is written down (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   log?: (line: string) => void;
 }
 
+/** How a job was asked for when whoever started it did not say: nothing was shown, and nobody decided on the notch. */
+export const NOTCH_JOB_UNASKED: NotchActionAsked = { seen: 'nothing', how: 'system' };
+
 export interface NotchJobs {
   store: NotchJobStore;
-  /** Puts a job on the notch and runs it. False when one is already running. */
-  start(plan: NotchJobPlan): boolean;
+  /**
+   * Puts a job on the notch and runs it. False when one is already running.
+   * `asked`: what the owner had before them and how they said so, for what is
+   * written down of it.
+   */
+  start(plan: NotchJobPlan, asked?: NotchActionAsked): boolean;
   /** Takes back what a job of today pasted. Says so itself when there is nothing to take back. */
   undo(jobId: string): void;
   /** Takes back the last thing that can be. False when there is none. */
@@ -564,6 +574,8 @@ export interface NotchJobs {
 interface LiveJob {
   id: string;
   plan: NotchJobPlan;
+  /** What the owner had before them and how they asked for it. */
+  asked: NotchActionAsked;
   /** running, or how it ended and has not been shown yet. */
   end: NotchJobEnd | null;
   abort: AbortController;
@@ -596,6 +608,25 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
   };
   const changed = (job: LiveJob): Promise<'changed'> => new Promise((resolve) => { job.waiters.add(() => resolve('changed')); });
 
+  /**
+   * A run of a job has ended: what it did is written down (./actions.ts), one entry for the job however
+   * often it is gone on with. A step whose answer was lost may have landed. A job that did something says
+   * how much in its sentence, also when it stopped half way. One the owner stopped before it did anything
+   * did nothing, and nothing is written. Taking back is not a job of its own here: it changes the entry
+   * of the job it takes back (`startUndo`).
+   */
+  function noted(job: LiveJob, end: NotchJobEnd): void {
+    const plan = job.plan;
+    if (plan.kind === 'undo') return;
+    const did = plan.done();
+    const unsure = end.how === 'failed' && end.unsure === true;
+    if (end.how === 'stopped' && did === 0) return;
+    deps.actions?.record({
+      kind: plan.kind === 'skill' ? 'job_skill' : 'job_rounds', ref: `job:${job.id}`, what: plan.words.title(did), asked: job.asked,
+      outcome: unsure ? 'unsure' : end.how === 'done' || did > 0 ? 'done' : 'not_done',
+    });
+  }
+
   /** Starts, or goes on with, the run of a job. */
   function go(job: LiveJob): void {
     job.end = null;
@@ -620,6 +651,7 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
       clearInterval(pausedWatch);
       store.progress(job.id, job.plan.done(), job.plan.puts());
       store.state(job.id, end.how === 'done' ? 'done' : end.how === 'stopped' ? 'stopped' : 'failed', end.how === 'failed' ? end.why : null, job.plan.words.title(job.plan.done()));
+      noted(job, end);
       job.end = end;
       deps.running?.(false);
       // The pointers go home when the work is over, however it ended.
@@ -708,10 +740,10 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
     return true;
   }
 
-  function begin(plan: NotchJobPlan, playIt?: (job: LiveJob, stage: NotchStage) => Promise<NotchItemEnd>): void {
+  function begin(plan: NotchJobPlan, asked: NotchActionAsked, playIt?: (job: LiveJob, stage: NotchStage) => Promise<NotchItemEnd>): void {
     const id = store.open(plan.kind, plan.words.title(0), plan.total);
     const job: LiveJob = {
-      id, plan, end: null, abort: new AbortController(), running: null, waiters: new Set(),
+      id, plan, asked, end: null, abort: new AbortController(), running: null, waiters: new Set(),
       item: () => ({
         id: itemId(id), subject: 'job', class: 'person', speaks: true, urgent: true, asked: true, returns: true,
         title: () => [plan.words.doing],
@@ -723,9 +755,9 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
     inbox.add(job.item());
   }
 
-  function start(plan: NotchJobPlan): boolean {
+  function start(plan: NotchJobPlan, asked: NotchActionAsked = NOTCH_JOB_UNASKED): boolean {
     if (!free()) return false;
-    begin(plan);
+    begin(plan, asked);
     return true;
   }
 
@@ -749,14 +781,14 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
         store.progress(ofJob, store.get(ofJob)?.done ?? 0, left);
         // "Taken back" is said of a job of which everything was taken back. One of which nothing or only a
         // part was is not undone: it keeps its place in Today as it was.
-        if (left.length === 0 && result.kept === 0) store.state(ofJob, 'undone');
+        if (left.length === 0 && result.kept === 0) { store.state(ofJob, 'undone'); deps.actions?.undone(`job:${ofJob}`); }
         if (part.stopped) return { how: 'stopped' };
         if (part.why) return { how: 'failed', why: part.why };
         return { how: 'done' };
       },
     };
     if (!free()) return;
-    begin(plan, async (job, stage) => {
+    begin(plan, NOTCH_JOB_UNASKED, async (job, stage) => {
       const ended = await play(job, stage);
       if (ended !== 'settled' || job.end?.how !== 'done') return ended;
       const { taken, kept } = result;

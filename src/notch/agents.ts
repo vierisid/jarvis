@@ -26,6 +26,7 @@
  * The words are the prototype's (v15: sentence, createAgent, viewAgents, the
  * `trust` moment), and "Freedom" for the rung is the demo's (./demo.ts).
  */
+import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { Database } from 'bun:sqlite';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -304,6 +305,8 @@ export interface NotchAgentsDeps {
   db: Database;
   workflows: NotchAgentWorkflows;
   paused?: () => boolean;
+  /** Where an agent that was made, changed, run or let go is written down (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -406,6 +409,17 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
    * asked about a second time. Everything else is as for any agent: built,
    * switched on, named, on the first rung.
    */
+  /** What was done with an agent, as it is written down (./actions.ts). The making of one is one entry (`agent:<id>`), which Undo changes. */
+  const noted = (kind: 'agent_made' | 'agent_rung' | 'agent_paused' | 'agent_run' | 'agent_gone', name: string, what: string, how: NotchActionAsked, outcome: NotchActionOutcome = 'done', ref?: string): void => {
+    deps.actions?.record({ kind, what, target: name, asked: how, outcome, ...(ref ? { ref } : {}) });
+  };
+  /** A rung set by the owner's own hand on its word, or by a yes to the offer of the next one. */
+  const setRung = (flowId: string, rung: NotchAgentRung, how: NotchActionAsked): void => {
+    const name = store.get(flowId)?.name ?? 'an agent';
+    store.setRung(flowId, rung, now());
+    noted('agent_rung', name, `${name} now ${rung}`, how);
+  };
+
   function make(asked: AgentSentence, agreed = false): void {
     if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return; }
     const sentence: AgentSentence = { ...asked };
@@ -432,6 +446,8 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
           if (answer.act !== 'yes') return 'settled';
           break;
         }
+        // The yes to the sentence as it was read back. One that was agreed to on another line was said yes to there.
+        const how: NotchActionAsked = { seen: 'line', how: agreed ? 'key' : notchAskedHow(stage) };
         const full = agentFull(sentence);
         const key = agentKey(full);
         // The same sentence twice is refused: one job, one agent.
@@ -485,11 +501,13 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         waiting.delete(key);
         const on = deps.workflows.enable(built.flowId);
         if (!on.ok) {
+          noted('agent_made', built.job, `Agent built and not switched on: ${built.job}`, how, 'not_done', `agent:${built.flowId}`);
           await stage.say(['I built ', em(built.job), ', but could not switch it on: ', on.why.replace(/[.\s]+$/, ''), '. It is in the dashboard, switched off.'], 8000, { mood: 'sorry', mark: 'fail' });
           return 'settled';
         }
         const name = nextName();
         store.add({ flowId: built.flowId, name, rung: 'asks first', sentence: full, madeAt: now(), rungAt: now(), askedAt: 0, toldRun: '' });
+        noted('agent_made', name, `Made ${name}: ${full}`, how, 'done', `agent:${built.flowId}`);
         log('[notch] an agent was made from a sentence, and asks first');
         await meet(stage, ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], 7000, { mood: 'proud', mark: 'check' });
         return 'settled';
@@ -516,13 +534,15 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
   }
 
   /** Switches on something that was built, and makes it an agent: a name, and the first rung. */
-  function switchOn(built: { flowId: string; job: string; enabled?: boolean }): { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry'; mark?: 'check' | 'fail' }; born?: boolean } {
+  function switchOn(built: { flowId: string; job: string; enabled?: boolean }, how: NotchActionAsked): { parts: NotchPart[]; ms: number; extras: { mood?: 'proud' | 'sorry'; mark?: 'check' | 'fail' }; born?: boolean } {
     if (!built.enabled) {
       const on = deps.workflows.enable(built.flowId);
+      if (!on.ok) noted('agent_made', built.job, `Agent built and not switched on: ${built.job}`, how, 'not_done', `agent:${built.flowId}`);
       if (!on.ok) return { parts: ['I could not switch ', em(built.job), ' on: ', on.why.replace(/[.\s]+$/, ''), '.'], ms: 6000, extras: { mood: 'sorry', mark: 'fail' } };
     }
     const name = nextName();
     store.add({ flowId: built.flowId, name, rung: 'asks first', sentence: built.job, madeAt: now(), rungAt: now(), askedAt: 0, toldRun: '' });
+    noted('agent_made', name, `Made ${name}: ${built.job}`, how, 'done', `agent:${built.flowId}`);
     log('[notch] something the assistant built was made an agent, and asks first');
     return { parts: ['Meet ', em(name), ', a new agent. The first time, it shows you before it acts.'], ms: 7000, extras: { mood: 'proud', mark: 'check' }, born: true };
   }
@@ -550,7 +570,8 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     }
     // Switched on already, by whoever built it: it is an agent from now on, and is named.
     if (built.enabled) {
-      const said = switchOn(built);
+      // Nobody decided anything here: whoever built it had switched it on. It is named, and that is written down.
+      const said = switchOn(built, { seen: 'nothing', how: 'system' });
       deps.inbox.add({ id, subject: id, class: 'person', speaks: true, once: true, asked: true, title: () => said.parts,
         play: async (stage) => { await saySwitched(stage, said); return 'settled'; } });
       return;
@@ -566,7 +587,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         // A no leaves it switched off, in the list, where it can still be switched on or discarded.
         if (answer.act !== 'yes') return 'settled';
         if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'waits'; }
-        const said = switchOn(built);
+        const said = switchOn(built, { seen: 'line', how: notchAskedHow(stage) });
         await saySwitched(stage, said);
         return 'settled';
       },
@@ -605,7 +626,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
         const flowId = (answer.word ?? '').startsWith('rung:') ? (answer.word ?? '').slice(5) : '';
         const rung = NOTCH_AGENT_RUNGS.find((name) => name === answer.value);
         // The owner's own hand on the word: the rung is what they set it to, up or down.
-        if (flowId && rung && store.get(flowId)) { store.setRung(flowId, rung, now()); log('[notch] the owner set an agent\'s rung by hand'); }
+        if (flowId && rung && store.get(flowId)) { setRung(flowId, rung, { seen: 'sheet', how: notchAskedHow(stage, 'pick') }); log('[notch] the owner set an agent\'s rung by hand'); }
         continue;
       }
       if (answer.act !== 'button' || !answer.row) return;
@@ -618,7 +639,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
           continue;
         }
         if (!draft.enabled && !draft.ready) continue;
-        const said = switchOn(draft);
+        const said = switchOn(draft, { seen: 'sheet', how: notchAskedHow(stage, 'pick') });
         await saySwitched(stage, said);
         return;
       }
@@ -668,22 +689,29 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
           }
         } else if (answer.word === `rung:${flowId}`) {
           const rung = NOTCH_AGENT_RUNGS.find((one) => one === answer.value);
-          if (rung) { store.setRung(flowId, rung, now()); log('[notch] the owner set an agent\'s rung by hand'); }
+          if (rung) { setRung(flowId, rung, { seen: 'sheet', how: notchAskedHow(stage, 'pick') }); log('[notch] the owner set an agent\'s rung by hand'); }
         }
         continue;
       }
       if (answer.act === 'yes') {
         if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'left'; }
         const ran = deps.workflows.run(flowId);
+        noted('agent_run', agent.name, `Ran ${agent.name} now`, { seen: 'sheet', how: notchAskedHow(stage) }, ran.ok ? 'done' : 'not_done');
         await stage.say(ran.ok ? [em(agent.name), ' is running.'] : [em(agent.name), ' could not start: ', ran.why.replace(/[.\s]+$/, ''), '.'], ran.ok ? 2400 : 5000, ran.ok ? { mood: 'look' } : { mood: 'sorry', mark: 'fail' });
         return 'left';
       }
-      if (answer.button === 'pause') { deps.workflows.pause(flowId, agent.enabled); continue; }
+      if (answer.button === 'pause') {
+        const did = deps.workflows.pause(flowId, agent.enabled);
+        noted('agent_paused', agent.name, `${agent.enabled ? 'Paused' : 'Resumed'} ${agent.name}`, { seen: 'sheet', how: notchAskedHow(stage, 'pick') }, did ? 'done' : 'not_done');
+        continue;
+      }
       if (answer.button === 'go') {
         const sure = await stage.offer(['Let ', em(agent.name), ' go? It is deleted for good.'], 'let go', { mood: 'careful', fold: 0 });
         if (sure.act !== 'yes') continue;
+        const sureHow: NotchActionAsked = { seen: 'line', how: notchAskedHow(stage) };
         let gone = false;
         try { gone = await deps.workflows.remove(flowId); } catch { gone = false; }
+        noted('agent_gone', agent.name, `Let ${agent.name} go: it is deleted`, sureHow, gone ? 'done' : 'not_done');
         if (gone) { store.drop(flowId); log('[notch] an agent was let go and deleted'); return 'back'; }
         await stage.say([em(agent.name), ' is still finishing something. Try again in a moment.'], 4200, { mood: 'careful' });
         return 'left';
@@ -718,7 +746,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
           // No, or left alone: it stays where it is, and nothing is said.
           if (answer.act !== 'yes') return 'settled';
           if (how === next.keep) { await stage.say([em(agent.name), ` ${next.kept}`], 2800); return 'settled'; }
-          store.setRung(agent.flowId, next.rung, now());
+          setRung(agent.flowId, next.rung, { seen: 'line', how: notchAskedHow(stage) });
           log('[notch] an agent was moved up a rung on the owner\'s yes');
           await stage.say([em(agent.name), ` now ${next.rung}. Change it any time.`], 3000, { mood: 'proud', mark: 'check' });
           return 'settled';
@@ -842,6 +870,8 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       const seen = agent ? deps.workflows.look(agent.flowId) : null;
       if (!agent || !seen?.enabled) return null;
       if (!deps.workflows.pause(agent.flowId, true)) return [em(agent.name), ' could not be switched off. It is still on.'];
+      // Taken back from the list of what was done: the entry of its making says so. No second one.
+      deps.actions?.undone(`agent:${agent.flowId}`);
       log('[notch] an agent was switched off from the list of what was done');
       return [em(agent.name), ' is switched off. It is still in Agents.'];
     },

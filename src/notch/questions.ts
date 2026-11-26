@@ -29,6 +29,7 @@
  * the count and comes round again.
  */
 import type { HumanRequest, InputField } from '../workflows/runtime/human-input-contract.ts';
+import { notchAskedHow, type NotchActionHow, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
@@ -52,6 +53,8 @@ export interface NotchQuestionDeps {
   /** Answers through the product's own function. `status` is 200 when it was taken. */
   answer(id: string, input: { decision: 'approve' | 'reject' | 'submit'; generation: number; answers?: Record<string, unknown> }): { status: number; error?: string };
   openDashboard?: (sidecarId: string | null) => void;
+  /** Where an answer that was given from the notch is written down (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   fuseMs?: number;
   log?: (line: string) => void;
@@ -109,7 +112,15 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
     return current && current.status === 'pending' && (current.generation ?? 0) === (request.generation ?? 0) ? current : null;
   };
 
-  async function send(request: HumanRequest, stage: NotchStage, said: NotchPart[], input: { decision: 'approve' | 'submit'; answers?: Record<string, unknown> }): Promise<NotchItemEnd | 'again'> {
+  /** An answer given from the notch, as it is written down (./actions.ts): which question of which workflow, and the answer. */
+  const noted = (request: HumanRequest, gave: string, how: NotchActionHow, outcome: NotchActionOutcome, fuse?: number): void => {
+    deps.actions?.record({
+      kind: 'question', outcome, what: `${gave}: ${oneLine(request.title)}`, target: request.workflowName || null,
+      asked: { seen: 'line', how, ...(fuse ? { fuseMs: fuse } : {}) },
+    });
+  };
+
+  async function send(request: HumanRequest, stage: NotchStage, said: NotchPart[], input: { decision: 'approve' | 'submit'; answers?: Record<string, unknown> }, gave: string, how: NotchActionHow): Promise<NotchItemEnd | 'again'> {
     const id = itemId(request);
     answering.add(id);
     try {
@@ -121,9 +132,12 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
         result = deps.answer(request.id, { ...input, generation: request.generation ?? 0 });
       } catch (error) {
         log(`[notch] a workflow question could not be answered: ${error instanceof Error ? error.message : String(error)}`);
+        noted(request, gave, how, 'not_done', fuseMs);
         await stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' });
         return 'waits';
       }
+      // Answered somewhere else a moment before (409, 404): this answer did nothing, and is not written down.
+      if (result.status !== 409 && result.status !== 404) noted(request, gave, how, result.status === 200 ? 'done' : 'not_done', fuseMs);
       if (result.status === 200) {
         await stage.say(['Answered. The workflow goes on.'], 2000, { mood: 'happy', mark: 'check' });
         return 'settled';
@@ -149,6 +163,8 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
       log(`[notch] a workflow question could not be rejected: ${error instanceof Error ? error.message : String(error)}`);
       return stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' }).then(() => 'waits' as const);
     }
+    // Esc on its line was the no, with no fuse: a rejection that was taken is something the workflow acts on.
+    if (result.status === 200) noted(request, 'Rejected', 'key', 'done');
     // Rejected here, or already answered somewhere else: it no longer waits.
     if (result.status === 200 || result.status === 409 || result.status === 404) {
       stage.surface.act({ gesture: 'shake' });
@@ -186,7 +202,7 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
         const answer = await stage.offer([/[?]$/.test(words) ? words : `${words.replace(/[.]+$/, '')}?`], 'approve', { mood: 'curious', who });
         if (answer.act === 'no') return reject(request, stage);
         if (answer.act !== 'yes') return 'waits';
-        const end = await send(request, stage, ['Approving…'], { decision: 'approve' });
+        const end = await send(request, stage, ['Approving…'], { decision: 'approve' }, 'Approved', notchAskedHow(stage));
         if (end === 'again') continue;
         return end;
       }
@@ -194,7 +210,7 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
       if (answer.act === 'no') return dismiss(request, stage);
       if (answer.act !== 'pick' || answer.index === undefined || answer.index >= shape.options.length) return 'waits';
       const picked = shape.options[answer.index]!;
-      const end = await send(request, stage, ['Answering ', em(picked), '…'], { decision: 'submit', answers: { [shape.field.key]: shape.values[answer.index] } });
+      const end = await send(request, stage, ['Answering ', em(picked), '…'], { decision: 'submit', answers: { [shape.field.key]: shape.values[answer.index] } }, `Answered ${picked}`, notchAskedHow(stage, 'pick'));
       if (end === 'again') continue;
       return end;
     }
@@ -245,7 +261,7 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
  * is made, and every few seconds after. Absent on a brain that was not given
  * the product's questions.
  */
-export function notchQuestionsFeature(given: Pick<NotchQuestionDeps, 'pending' | 'get' | 'answer' | 'openDashboard'> | undefined): NotchFeatureDef<'questions'> {
+export function notchQuestionsFeature(given: Pick<NotchQuestionDeps, 'pending' | 'get' | 'answer' | 'openDashboard' | 'actions'> | undefined): NotchFeatureDef<'questions'> {
   return {
     id: 'questions',
     make(ctx) {

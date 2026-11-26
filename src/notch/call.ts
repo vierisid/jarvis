@@ -49,6 +49,7 @@
  *     watched for.
  */
 import type { Database } from 'bun:sqlite';
+import { notchAskedHow, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchInbox } from './inbox.ts';
@@ -369,6 +370,8 @@ export interface NotchCallDeps {
   onPause?: (listener: (paused: boolean) => void) => void;
   /** Lights the notch's eye while a call is listened to. */
   eye?: (on: boolean) => void;
+  /** Where a follow-up that went, did not go or may have gone is written down (./actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -684,6 +687,14 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         }
         // Yes: the follow-up goes, after the moment in which it can be taken back.
         if (!sendable() || !notes.to || !deps.mail) continue;
+        // How the yes that was just given was given: read before the fuse answers.
+        const yesHow = notchAskedHow(stage);
+        /** This follow-up as it is written down (./actions.ts): one entry for the call's mail, changed if it is sent again. */
+        const entry = (outcome: NotchActionOutcome): NotchActionEntry => ({
+          kind: 'call_followup', ref: `call:${id}`, outcome, what: `Follow-up of a call to ${whom()}`,
+          target: [notes.to!.address, ...(notes.also ?? []).map((one) => one.address)].join(', '),
+          asked: { seen: 'sheet', how: yesHow, fuseMs: NOTCH_CALL_FUSE_MS },
+        });
         const also = (notes.also ?? []).map((one) => one.address);
         const plan = {
           address: notes.to.address, ...(also.length > 0 ? { also } : {}), thread: also.length > 0 ? null : notes.to.thread,
@@ -704,6 +715,8 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
           try { there = (await deps.mail.went?.({ ...plan, text: notes.unsureText ?? plan.text }, notes.unsureSince)) ?? null; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
           if (there === true) {
             await gone();
+            // The entry that said it may have gone says that it went: no second one.
+            deps.actions?.settle(`call:${id}`, 'done', { otherwise: entry('done') });
             log('[notch] a call\'s follow-up that may have gone had gone: it is not sent again');
             await stage.say(['It had gone: it is in your mail. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
             return;
@@ -724,6 +737,8 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
           // Not known how far it got before it threw: it may have gone, and that is how it is read.
           sent = { ok: false, why: 'the mailbox did not answer' };
         }
+        // The fuse was seen to burn out, and this is what came of it.
+        deps.actions?.record(entry(sent.ok ? 'done' : sent.pressed !== false ? 'unsure' : 'not_done'));
         if (!sent.ok && sent.pressed !== false) {
           // Send was pressed, or it is not known that it was not: it may have gone. It was said "I
           // could not send it", and the next yes sent it a second time.

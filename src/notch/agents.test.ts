@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import {
   NOTCH_AGENT_GOOD_RUNS, NotchAgentStore, agentFull, agentKey, agentSentence, agentsListRequest, attachNotchAgents, type NotchAgentWorkflows,
 } from './agents.ts';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -64,7 +65,10 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
     return { flowId, since };
   };
   const logs: string[] = [];
-  const agents = attachNotchAgents({ inbox, db: options.db ?? new Database(':memory:'), workflows, paused: options.paused, now: () => now, log: (line) => logs.push(line) });
+  const db = options.db ?? new Database(':memory:');
+  // What is written down of an agent that was made, changed, run or let go (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { now: () => now, log: () => {} });
+  const agents = attachNotchAgents({ inbox, db, workflows, paused: options.paused, actions, now: () => now, log: (line) => logs.push(line) });
   const line = (): NotchLine | null => surface.current().line;
   const said = (): string => text(line()?.say);
   const pass = async (ms: number): Promise<void> => {
@@ -98,7 +102,7 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   const opens = async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); };
   /** What the notch was asked to do with its face and body, in order. */
   const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
-  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, advance: (ms: number) => { now += ms; }, now: (): number => now };
+  return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, actions, db, advance: (ms: number) => { now += ms; }, now: (): number => now };
 }
 
 describe('a sentence that asks for an agent', () => {
@@ -809,3 +813,143 @@ describe('an agent that was made, in the list of what was done, with Undo', () =
   });
 });
 
+
+// Fix 05, the owner's decision of 26 November 2026: an agent that is made or changed from the notch leaves an
+// entry in the list of what the notch did. Making one was a row of Today; letting it act alone, pausing it,
+// running it and deleting it were written nowhere.
+describe('what is written down of an agent', () => {
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0).reverse();
+
+  test('made on a yes to its sentence: one entry, written when it is switched on, by the yes key on a line', async () => {
+    const h = harness();
+    await h.speak('Every Monday send Sam the numbers');
+    expect(entries(h)).toEqual([]);
+    await h.reply('yes');
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'agent_made', outcome: 'done', what: 'Made Tony: Every Monday at 9:00, send Sam the numbers.', target: 'Tony', seen: 'line', how: 'key', fuseMs: null, ref: 'agent:flow-1',
+    });
+    // Its row of Today is the agents' own.
+    expect(h.actions.today(0)).toEqual([]);
+  });
+
+  test('Esc builds nothing and writes nothing; one that cannot be built, or cannot run yet, is no agent and no entry', async () => {
+    const esc = harness();
+    await esc.speak('Every Monday send Sam the numbers');
+    await esc.reply('no');
+    expect(entries(esc)).toEqual([]);
+    const broken = harness({ build: () => ({ ok: false, why: 'no model' }) });
+    await broken.speak('Every Monday send Sam the numbers');
+    await broken.reply('yes');
+    expect(entries(broken)).toEqual([]);
+  });
+
+  test('built, and it could not be switched on: one entry, not done', async () => {
+    const h = harness({ enable: { ok: false, why: 'the scheduler is down' } });
+    await h.speak('Every Monday send Sam the numbers');
+    await h.reply('yes');
+    expect(h.said()).toContain('could not switch it on');
+    expect(entries(h)).toMatchObject([{ kind: 'agent_made', outcome: 'not_done', ref: 'agent:flow-1' }]);
+  });
+
+  test('one the assistant had switched on is named with nobody deciding anything here: the entry says so', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing', { enabled: true });
+    h.agents.adopt(built.since);
+    await settle();
+    expect(entries(h)).toMatchObject([{ kind: 'agent_made', outcome: 'done', what: 'Made Tony: Daily AI news briefing', seen: 'nothing', how: 'system', ref: `agent:${built.flowId}` }]);
+  });
+
+  test('one the assistant built is switched on by a yes on its line', async () => {
+    const h = harness();
+    const built = h.assistantBuilds('Daily AI news briefing');
+    h.agents.adopt(built.since);
+    await settle();
+    expect(h.said()).toBe('Switch Daily AI news briefing on as an agent?');
+    await h.reply('yes');
+    expect(entries(h)).toMatchObject([{ kind: 'agent_made', outcome: 'done', seen: 'line', how: 'key' }]);
+  });
+
+  test('Undo in Today switches it off: the entry of its making says taken back, and there is no second one', async () => {
+    const h = harness();
+    const start = h.now();
+    await h.makes();
+    const [row] = h.agents.done(start);
+    const first = entries(h)[0]!;
+    expect(h.agents.undo(row!.id)).not.toBeNull();
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ id: first.id, outcome: 'undone', how: 'key' });
+    expect(h.agents.undo(row!.id)).toBeNull();
+    expect(entries(h)).toHaveLength(1);
+  });
+
+  test('a rung set by hand, and one moved up on a yes to the offer, are each an entry and a row of Today', async () => {
+    const h = harness();
+    await h.makes();
+    await h.speak('my agents');
+    await h.reply('word', { word: 'rung:flow-1', value: 'acts alone' });
+    expect(entries(h).slice(1)).toMatchObject([{ kind: 'agent_rung', outcome: 'done', what: 'Tony now acts alone', target: 'Tony', seen: 'sheet', how: 'pick' }]);
+    // A word that is no rung changes nothing and writes nothing.
+    await h.reply('word', { word: 'rung:flow-1', value: 'does anything' });
+    await h.reply('word', { word: 'rung:flow-77', value: 'acts alone' });
+    expect(entries(h)).toHaveLength(2);
+    expect(h.actions.today(0)).toMatchObject([{ text: 'Tony now acts alone', small: 'done', undo: false }]);
+
+    const offered = harness();
+    await offered.makes();
+    for (let i = 0; i < NOTCH_AGENT_GOOD_RUNS; i++) offered.ran('flow-1');
+    offered.agents.tick();
+    await settle();
+    await offered.reply('yes');
+    expect(offered.said()).toBe('Tony now tells you after. Change it any time.');
+    expect(entries(offered).slice(1)).toMatchObject([{ kind: 'agent_rung', what: 'Tony now tells you after', seen: 'line', how: 'key' }]);
+  });
+
+  test('"keep asking", or a no to the offer, changes nothing and writes nothing', async () => {
+    const h = harness();
+    await h.makes();
+    for (let i = 0; i < NOTCH_AGENT_GOOD_RUNS; i++) h.ran('flow-1');
+    h.agents.tick();
+    await settle();
+    await h.reply('no');
+    expect(entries(h)).toHaveLength(1);
+  });
+
+  test('Pause, Resume, Run now and Let go on its card are each one entry', async () => {
+    const h = harness();
+    await h.makes();
+    await h.speak('my agents');
+    await h.reply('button', { row: 'flow-1', button: 'open' });
+    await h.reply('button', { button: 'pause' });
+    await h.reply('button', { button: 'pause' });
+    expect(entries(h).slice(1).map((row) => [row.kind, row.what, row.outcome, row.seen, row.how])).toEqual([
+      ['agent_paused', 'Paused Tony', 'done', 'sheet', 'pick'], ['agent_paused', 'Resumed Tony', 'done', 'sheet', 'pick'],
+    ]);
+    await h.reply('yes');
+    expect(h.said()).toBe('Tony is running.');
+    expect(entries(h).at(-1)).toMatchObject({ kind: 'agent_run', what: 'Ran Tony now', outcome: 'done', seen: 'sheet', how: 'key' });
+
+    const gone = harness();
+    await gone.makes();
+    await gone.speak('my agents');
+    await gone.reply('button', { row: 'flow-1', button: 'open' });
+    await gone.reply('button', { button: 'go' });
+    // A no to "Let Tony go?" deletes nothing and writes nothing.
+    await gone.reply('no');
+    expect(entries(gone)).toHaveLength(1);
+    await gone.reply('button', { button: 'go' });
+    await gone.reply('yes');
+    expect(gone.did.at(-1)).toBe('remove flow-1');
+    expect(entries(gone).at(-1)).toMatchObject({ kind: 'agent_gone', what: 'Let Tony go: it is deleted', outcome: 'done', seen: 'line', how: 'key' });
+  });
+
+  test('a list that cannot be written to does not keep an agent from being made', async () => {
+    const h = harness();
+    await h.speak('Every Monday send Sam the numbers');
+    h.db.run('DROP TABLE notch_actions');
+    await h.reply('yes');
+    expect(h.said()).toBe('Meet Tony, a new agent. The first time, it shows you before it acts.');
+    expect(h.agents.store.list()).toHaveLength(1);
+  });
+});

@@ -197,19 +197,33 @@ export class NotchStage {
     return { type: 'answer', id, ...next };
   }
 
+  /** Whether the last answer a script was handed was given in words. */
+  private lastSaid = false;
+
+  /**
+   * How the last answer a script of this stage was handed was given: `said`
+   * when it was words said or typed over the line (./said.ts), `key` when a
+   * page sent it. Read right after the answer, for what is written down of a
+   * yes (./actions.ts): the next answer, a fuse's too, says its own.
+   */
+  answeredHow(): 'key' | 'said' {
+    return this.lastSaid ? 'said' : 'key';
+  }
+
   /** The next answer about the line `id`, of one of `acts` when given. */
   answer(id: string, acts?: NotchAnswerAct[]): Promise<NotchAnswer> {
     return new Promise((resolve, reject) => {
       if (this.stopped) { reject(new NotchStageEnded()); return; }
       const said = this.nextSaid(id, acts);
-      if (said) { resolve(said); return; }
+      if (said) { this.lastSaid = true; resolve(said); return; }
       const wanted = (answer: NotchAnswer): boolean => answer.id === id && (!acts || acts.includes(answer.act));
       const kept = this.unheard.findIndex(wanted);
-      if (kept >= 0) { resolve(this.unheard.splice(kept, 1)[0]!); return; }
+      if (kept >= 0) { this.lastSaid = false; resolve(this.unheard.splice(kept, 1)[0]!); return; }
       const waiter = {
         take: (answer: NotchAnswer): boolean => {
           if (!wanted(answer)) return false;
           this.waiters.delete(waiter);
+          this.lastSaid = false;
           resolve(answer);
           return true;
         },

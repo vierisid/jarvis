@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { attachNotchActions } from './actions.ts';
+import { NOTCH_QUESTION_FUSE_MS } from './questions.ts';
 import type { HumanRequest, InputField } from '../workflows/runtime/human-input-contract.ts';
 import { NotchInbox } from './inbox.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -34,7 +37,11 @@ function harness() {
   const inbox = new NotchInbox(surface, { log: (line) => logs.push(line) });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   fromPage({ type: 'hello', v: 1 });
+  const db = new Database(':memory:');
+  // What is written down of an answer given from the notch (./actions.ts).
+  const actions = attachNotchActions(db, { log: () => {} });
   const questions = attachNotchQuestions(inbox, {
+    actions,
     pending: () => [...store.values()],
     get: (id) => store.get(id) ?? null,
     answer: (id, input) => {
@@ -50,7 +57,7 @@ function harness() {
   });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    store, answers, questions, logs, opened, line, inbox,
+    store, answers, questions, logs, opened, line, inbox, actions, db,
     refuse: (with_: { status: number; error?: string } | null) => { refuse = with_; },
     ask(q: HumanRequest): HumanRequest { store.set(q.id, q); return q; },
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
@@ -254,5 +261,97 @@ describe('a workflow asks', () => {
     await h.sync();
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(1);
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: an answer to a workflow given from the notch, under its
+// fuse, leaves one entry in the list of what the notch did. It was listed nowhere.
+describe('what is written down of an answer to a workflow', () => {
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0);
+
+  test('approved with a yes: one entry, written when the product took the answer', async () => {
+    const h = harness();
+    h.ask(request());
+    await h.sync();
+    await h.answer('yes');
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    expect(h.said()).toBe('Answered. The workflow goes on.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'question', outcome: 'done', what: 'Approved: Send the 30 invoices', target: 'Monthly invoices', seen: 'line', how: 'key', fuseMs: NOTCH_QUESTION_FUSE_MS,
+    });
+    expect(h.actions.today(0)).toMatchObject([{ text: 'Approved: Send the 30 invoices', small: 'done', undo: false }]);
+  });
+
+  test('a pick is written down with what was picked', async () => {
+    const h = harness();
+    h.ask(request({ kind: 'input', title: 'Which tone?', fields: [select(['Warm', 'Short', 'Formal'])] }));
+    await h.sync();
+    await h.answer('pick', { option: 'Short', index: 1 });
+    await h.answer('done');
+    expect(entries(h)).toMatchObject([{ kind: 'question', outcome: 'done', what: 'Answered Short: Which tone?', seen: 'line', how: 'pick' }]);
+  });
+
+  test('the fuse taken back, a fuse nobody saw, and a line left alone: nothing was answered, nothing is written', async () => {
+    const h = harness();
+    h.ask(request());
+    await h.sync();
+    await h.answer('yes');
+    await h.answer('undo');
+    expect(h.answers).toEqual([]);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('Esc on approve-or-reject is the no, and a rejection that was taken is written down', async () => {
+    const h = harness();
+    h.ask(request());
+    await h.sync();
+    await h.answer('no');
+    expect(h.answers).toMatchObject([{ input: { decision: 'reject' } }]);
+    expect(entries(h)).toMatchObject([{ kind: 'question', outcome: 'done', what: 'Rejected: Send the 30 invoices', how: 'key', fuseMs: null }]);
+  });
+
+  test('Esc on a choice answers nothing, and nothing is written', async () => {
+    const h = harness();
+    h.ask(request({ kind: 'input', fields: [select(['Warm', 'Short'])] }));
+    await h.sync();
+    await h.answer('no');
+    expect(h.answers).toEqual([]);
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('answered somewhere else during the fuse: this answer did nothing, and is not written', async () => {
+    const h = harness();
+    const q = h.ask(request());
+    await h.sync();
+    await h.answer('yes');
+    h.store.set(q.id, { ...q, status: 'approved' });
+    await h.answer('done');
+    expect(h.said()).toBe('Already answered somewhere else.');
+    expect(entries(h)).toEqual([]);
+  });
+
+  test('an answer the product refuses: one entry, not done', async () => {
+    const h = harness();
+    h.ask(request());
+    await h.sync();
+    await h.answer('yes');
+    h.refuse({ status: 400, error: 'bad input' });
+    await h.answer('done');
+    expect(h.said()).toBe('It did not take that answer. Open it in the dashboard.');
+    expect(entries(h)).toMatchObject([{ kind: 'question', outcome: 'not_done' }]);
+    expect(h.actions.today(0)).toEqual([]);
+  });
+
+  test('a list that cannot be written to does not keep the answer from being given', async () => {
+    const h = harness();
+    const q = h.ask(request());
+    await h.sync();
+    await h.answer('yes');
+    h.db.run('DROP TABLE notch_actions');
+    await h.answer('done');
+    expect(h.answers).toEqual([{ id: q.id, input: { decision: 'approve', generation: 0 } }]);
+    expect(h.said()).toBe('Answered. The workflow goes on.');
   });
 });

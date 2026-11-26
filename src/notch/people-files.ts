@@ -78,6 +78,7 @@
  *   - Nothing is opened to find it. What is known about a file is what the
  *     owner had read before.
  */
+import { notchSentOutcome, type NotchActions } from './actions.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -241,6 +242,8 @@ export interface NotchPeopleFilesDeps {
   person(id: string): PeerPerson | null;
   /** News that is said once. */
   news(id: string, say: NotchPart[], more?: { who?: string; sorry?: boolean }): void;
+  /** Where what is sent to somebody is written down, with what came of it (./actions.ts). */
+  actions?: NotchActions | null;
   log?: (line: string) => void;
   now?: () => number;
   /** For tests: no pause between pieces, and none before a piece is tried again. */
@@ -357,6 +360,11 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
       const sent = await link.tell(to.id, peerNoteText(
         want ? `The file you asked for: ${name}, ${fileSize(size)}.` : `A file for you: ${name}, ${fileSize(size)}. It comes when you take it on your ${NOTCH_NAME}.`,
         { kind: 'file', id, name, size, parts, sha, ...(want ? { want } : {}) }));
+      // One entry for this file: offered now, and sent once they have it.
+      deps.actions?.record({
+        kind: 'people_file', ref: `file:${id}`, what: `File offered to ${to.name}: ${name}`, target: to.name, outcome: notchSentOutcome(sent),
+        asked: { seen: 'line', how: 'said', fuseMs: more.where && !want ? NOTCH_FILE_PICKED_FUSE_MS : NOTCH_FILE_FUSE_MS },
+      });
       if (!sent.ok) { store.fileState(id, 'lost', ['offered']); clear(id); await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       if (shown) store.wantState(shown.id, 'done', ['show']);
       if (!want) {
@@ -390,6 +398,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
       const id = crypto.randomUUID();
       // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
       const sent = await link.tell(to.id, peerNoteText(`Can you send me a file: ${what}? I asked from my ${NOTCH_NAME}.`, { kind: 'file-want', id, what }));
+      deps.actions?.record({ kind: 'people_file_ask', what: `Asked ${theirs} for a file: ${what}`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_FILE_FUSE_MS }, outcome: notchSentOutcome(sent) });
       if (!sent.ok) {
         await stage.say(sent.why === 'signed_out' ? ['You are signed out. It was not asked.'] : sent.why === 'offline' || sent.why === 'down' ? ['I have no line to the others now. It was not asked.'] : ['That could not be asked.'], 3400, { mood: 'sorry' });
         return;
@@ -555,6 +564,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
       } catch { missed.push(to); continue; }
       store.file({ id, dir: 'out', peer: to.id, name, size, parts, sha });
       const sent = await link.tell(to.id, peerNoteText(`A file for you: ${name}, ${fileSize(size)}. It comes when you take it on your ${NOTCH_NAME}.`, { kind: 'file', id, name, size, parts, sha }));
+      deps.actions?.record({ kind: 'people_file', ref: `file:${id}`, what: `File offered to ${to.name}: ${name}`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_FILE_PICKED_FUSE_MS }, outcome: notchSentOutcome(sent) });
       if (!sent.ok) { store.fileState(id, 'lost', ['offered']); clear(id); missed.push(to); continue; }
       reached.push(to);
     }
@@ -833,7 +843,7 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
       // How it ended is news, unless the file's own line is on the notch and says it.
       const quiet = inView.has(row.id);
       if (got.kind === 'file-no' && store.fileState(row.id, 'no', ['offered'])) { clear(row.id); ended(row.id); if (!quiet) deps.news(`people:file-no:${row.id}`, [em(from.name), ' did not take ', em(row.name), '.'], { who: from.name }); }
-      else if (got.kind === 'file-got' && store.fileState(row.id, 'done', ['going'])) { clear(row.id); ended(row.id); if (!quiet) deps.news(`people:file-got:${row.id}`, [em(from.name), ' has ', em(row.name), '.'], { who: from.name }); }
+      else if (got.kind === 'file-got' && store.fileState(row.id, 'done', ['going'])) { deps.actions?.settle(`file:${row.id}`, 'done', { what: `File sent to ${from.name}: ${row.name}` }); clear(row.id); ended(row.id); if (!quiet) deps.news(`people:file-got:${row.id}`, [em(from.name), ' has ', em(row.name), '.'], { who: from.name }); }
       else if (got.kind === 'file-lost' && store.fileState(row.id, 'lost', ['going'])) { clear(row.id); ended(row.id); if (!quiet) deps.news(`people:file-lost:${row.id}`, [em(row.name), ' did not arrive whole at ', em(`${from.name}'s`), '. Send it again.'], { who: from.name, sorry: true }); }
     }
     await settle();

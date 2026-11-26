@@ -16,6 +16,7 @@
  * time, and none while everything is stopped.
  */
 import type { Database } from 'bun:sqlite';
+import type { NotchActions } from '../actions.ts';
 import type { NotchInbox } from '../inbox.ts';
 import type { StandingMail } from '../standing.ts';
 import { firstWay } from '../ways.ts';
@@ -52,6 +53,8 @@ export interface NotchMailLayerDeps {
   /** One call to the brain's model, counted as the mail layer's. */
   think: MailThink;
   paused?(): boolean;
+  /** Where what goes out is written down (../actions.ts). */
+  actions?: NotchActions | null;
   /** Whether a model is set up: without one nothing is looked at. */
   modelReady?(): boolean;
   zone?: string;
@@ -210,7 +213,7 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
     waitMs: deps.waitMs,
     log,
   });
-  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, monthRead: () => sweptOnce, calendar, zone: deps.zone, now, log });
+  mail = attachNotchMail(inbox, { store, watch, mailbox, inGmail: () => inGmail, monthRead: () => sweptOnce, calendar, zone: deps.zone, actions: deps.actions, now, log });
 
   const timers: ReturnType<typeof setInterval>[] = [];
   let first: ReturnType<typeof setTimeout> | null = null;

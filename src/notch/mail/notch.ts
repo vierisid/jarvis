@@ -70,6 +70,7 @@
  * The reply speaks up by itself in one place for now: when the owner comes to
  * Gmail. Everywhere else it joins the count.
  */
+import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from '../actions.ts';
 import { NOTCH_NAME } from '../name.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
@@ -185,6 +186,8 @@ export interface NotchMailDeps {
   calendar?(from: number, to: number): Promise<MailCalendarEvent[] | null>;
   /** The owner's time zone, for the words of a time. */
   zone?: string;
+  /** Where a reply that went, did not go or may have gone is written down (../actions.ts). */
+  actions?: NotchActions | null;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -392,6 +395,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     let offering: string | null = null;
     /** A time was picked, and the letter is too long to be read under a fuse: it is opened as a draft. */
     let long = false;
+    /** What the owner had before them at the yes, and how it was given: written down with what came of it (../actions.ts). */
+    let asked: NotchActionAsked = { seen: 'sheet', how: 'key', fuseMs: MAIL_FUSE_MS };
     if (options.line) {
       // A reply whose times have passed while it waited is written again, for the calendar as it is now.
       if (row.slots?.length && !openSlots(row)) {
@@ -408,6 +413,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       while (slots) {
         const open = slots;
         let chosen = said ? open.find((slot) => slot.say === said) : undefined;
+        // The letter is what is seen, under its fuse. A time said with the talk keys is words; one pressed is a pick.
+        asked = { seen: 'letter', how: chosen ? 'said' : 'pick', fuseMs: MAIL_SLOT_FUSE_MS };
         said = undefined;
         if (!chosen) {
           // The prototype's line: who asked for what, and the free times as keys.
@@ -431,6 +438,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
           if (pick.act === 'no') return tookBack.has(id) ? 'waits' : decline(id);
           chosen = open.find((slot) => slot.say === pick.option);
           if (pick.act !== 'pick' || !chosen) continue;
+          asked = { ...asked, how: notchAskedHow(stage, 'pick') };
         }
         // The calendar is asked now: the reply may have waited for hours. Not known is not no.
         if ((await stillFree(chosen)) === false) {
@@ -492,7 +500,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       // Esc. On a draft the owner opened from the list or from Home it closes the draft, and the sheet
       // says so beside the key: the reply is kept. On the draft of a reply that was offered, it is a no.
       if (answer.act === 'no') return keep ? 'waits' : decline(id);
-      if (answer.act === 'yes') break;
+      if (answer.act === 'yes') { asked = { seen: 'sheet', how: notchAskedHow(stage), fuseMs: MAIL_FUSE_MS }; break; }
       const value = (answer.value ?? '').trim();
       if (answer.word === 'when' && row.time && value && value !== row.time && row.draft.includes(row.time)) {
         // The owner's own time, in the place of the one that was proposed.
@@ -543,6 +551,8 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       if (there === true) {
         maybeSent.delete(id);
         store.move(id, 'ready', 'sent', now());
+        // The entry that said it may have gone says that it went: no second one.
+        deps.actions?.settle(`mail:${id}`, 'done');
         log('[notch] a reply that may have gone had gone: it is not sent again');
         await stage.say(['It had gone: it is in the thread. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
         return 'settled';
@@ -554,6 +564,13 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     }
     // The reply as it goes: what is asked after it went is asked about this one.
     const going = row;
+    /** Written down once what came of the yes is known: one entry for this reply, changed if it is tried again. */
+    const noted = (outcome: NotchActionOutcome): void => {
+      deps.actions?.record({
+        kind: offering ? 'mail_slot' : 'mail_reply', ref: `mail:${id}`, outcome, asked,
+        what: `${offering ? `Offer of ${offering} to` : 'Reply to'} ${who}: ${going.subject}`, target: going.to.map((person) => person.address).join(', '),
+      });
+    };
     const plan: MailReplyPlan = { thread: going.thread, to: going.to.map((person) => person.address), cc: going.cc.map((person) => person.address), text: going.draft };
     watch.hold(id);
     // Said at once: the tab may be in the middle of a look, and the yes must not seem to have gone nowhere.
@@ -593,7 +610,15 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         // A stage that ends between two looks fails this wait, and the looking ends there (./send.ts).
         wait: (ms) => stage.wait(ms),
         now,
+      }).catch((error: unknown) => {
+        // It broke off past a fuse that was seen to burn out: Send may have been pressed, so it may have gone.
+        if (went === 'done') noted('unsure');
+        throw error;
       });
+      // Written down once the yes stands: the fuse was seen to burn out. Then whatever came of it is, sent,
+      // not sent, or may have gone. A yes that was taken back (Esc), or a fuse nobody saw to its end, decided
+      // nothing and did nothing: nothing is written.
+      if (went === 'done') noted(end.state === 'sent' ? 'done' : end.state === 'unsure' ? 'unsure' : 'not_done');
       if (end.state === 'not_sent' && end.at === 'stopped') {
         // Written down before anything is said: it holds whatever takes the notch now.
         if (offering) tookBack.add(id);

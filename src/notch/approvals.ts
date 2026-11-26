@@ -50,6 +50,7 @@ import type { ApprovalRequest } from '../authority/approval.ts';
 import { approvalIsWatched } from '../authority/approval-provenance.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import { impactFromCategory } from '../roles/authority.ts';
+import { notchAskedHow, type NotchActionAsked, type NotchActions } from './actions.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -270,6 +271,11 @@ export interface NotchApprovalDeps {
    * there would be nothing left to say yes to.
    */
   mine?: (requestId: string) => boolean;
+  /**
+   * Where a yes given here is written down with what the owner had before
+   * them (./actions.ts). The approval itself and its audit are the product's.
+   */
+  actions?: NotchActions | null;
   now?: () => number;
   fuseMs?: number;
   wordsMs?: number;
@@ -454,13 +460,14 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       if (answer.act === 'no') return refuse(requestId, stage);
       // Left alone until it folded: it waits, and comes round again.
       if (answer.act !== 'yes') return 'waits';
+      const asked: NotchActionAsked = { seen: 'line', how: notchAskedHow(stage), fuseMs };
       answering.add(requestId);
       try {
         const fuse = await stage.fuse([`${bare(sentence)}…`], fuseMs, { mood: 'work' });
         if (fuse === 'undo') continue;
         // Nobody saw the fuse burn out: the yes is not acted on.
         if (fuse === 'lost') return 'waits';
-        return await decide(requestId, stage);
+        return await decide(requestId, stage, { asked, what: bare(sentence) });
       } finally {
         answering.delete(requestId);
       }
@@ -523,6 +530,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       // Left alone: it waits, and comes round again.
       if (!answer) return 'waits';
       if (answer.act === 'no') return refuse(requestId, stage);
+      const how: NotchActionAsked = { seen: 'sheet', how: notchAskedHow(stage), fuseMs };
       answering.add(requestId);
       try {
         // In the words that were on the sheet when yes was given.
@@ -532,7 +540,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         if (fuse === 'lost') return 'waits';
         // The read came in while the fuse burned, and it is a payment.
         if (paying.has(requestId)) return 'again';
-        return await decide(requestId, stage);
+        return await decide(requestId, stage, { asked: how, what: bare(said.replace(/\?+$/, '')) });
       } finally {
         answering.delete(requestId);
       }
@@ -567,7 +575,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
   }
 
   /** The fuse has burnt: decide, and say what came of it. */
-  async function decide(requestId: string, stage: NotchStage): Promise<NotchItemEnd> {
+  async function decide(requestId: string, stage: NotchStage, yes: { asked: NotchActionAsked; what: string }): Promise<NotchItemEnd> {
     let outcome: ApprovalDecisionOutcome;
     // Whatever road led here: what lands on a payment is not approved on the notch.
     if (paying.has(requestId)) {
@@ -601,6 +609,14 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
       case 'denied':
         return 'settled';
       case 'approved': {
+        // The yes, with what was before the owner when it was given. The approval and its receipt are the
+        // product's own record, and so is its audit: nothing is written there from here. Run by whoever
+        // waited for the answer, what came of it is not known here: it was handed on.
+        const came = outcome.error ? 'failed' : outcome.executed ? executionState(outcome.request) : 'handed';
+        deps.actions?.record({
+          kind: 'approval', ref: `approval:${requestId}`, approvalId: requestId, what: yes.what, target: outcome.request?.tool_name ?? null, asked: yes.asked,
+          outcome: came === 'handed' ? 'handed' : came === 'committed' ? 'done' : came === 'unknown' ? 'unsure' : 'not_done',
+        });
         if (outcome.error) {
           await stage.say(['Approved, but it could not be started.'], 3000, { mood: 'sorry', mark: 'fail' });
           return 'settled';

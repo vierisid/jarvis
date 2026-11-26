@@ -478,6 +478,9 @@ switch is on:
   restart is closed, not run again; nothing is announced or run while Jarvis
   is paused; a turn that came back as error text is a failure.
 - **The audit trail has a channel `notch`**, unused while the switch is off.
+  With the switch on, since 26 November 2026, what the notch itself does is
+  written there too, under the agent name of the notch and tool names that
+  begin with `notch_` (see "What the notch did, written down").
 - **On Windows an app that cannot be started by its name is looked up in the
   Start menu** (`sidecar/desktop_startmenu.go`). `launch_app` could only
   start what is on PATH or under "App Paths", so "open Steam" failed while
@@ -2904,7 +2907,9 @@ back.
     still under way, an agent that is switched on. A mail that was sent, a
     promise that was kept and an action that was approved and carried out
     have none: they cannot be unsent or undone, and a button that says
-    otherwise would be a lie.
+    otherwise would be a lie. Since 26 November 2026 a paste and an agent
+    that are taken back are also written down as taken back, on the entry
+    that says they were done (rule 263).
 219. **What Undo does is what the row says in reverse, and no more.** A
     watch is closed. A chase is stopped for good, by the same move as Stop
     in its list, and the line says that what was sent stays sent. An agent
@@ -2935,6 +2940,129 @@ What is not done, or not proven:
 - **The pieces are tested each by itself.** The sheet, the rows and each
   way of taking back have their tests; the whole of it together, on a
   brain with mail and agents, has not run.
+
+## What the notch did, written down
+
+Nothing listed what went out in the owner's name. A reply sent from the
+notch was a row of Today and nothing else. The follow-up of a chase, which
+goes by itself a day later, was nowhere, and neither was the follow-up of a
+call, a word to somebody's Pillow, a file that was offered, an answer given
+to a workflow, or an agent that was let act alone. None of them was in the
+audit trail: only an approval is, and these are not approvals. The review
+of 26 November 2026 found it, and the owner decided the same day: one list
+of what the notch did, which also writes the audit. No approval rows: a
+row that waits would be toasted, and could be approved from Telegram with
+no fuse and nobody looking.
+
+| What | Where |
+|---|---|
+| The list, its table `notch_actions`, and what goes to the audit | `src/notch/actions.ts` |
+| Where each part writes its entry | in the part itself, at the place where what came of the thing is known |
+| The rows Today gets from it | `src/notch/today.ts` (`actions`), `src/notch/real.ts` |
+
+An entry says what was done in one sentence, to whom or to what, what the
+owner had before them when it was decided (a line, a sheet, the letter on
+paper, nothing) and for how long the fuse burnt, how it was decided (the
+yes key, words that were said or typed, a pick, a fuse that burnt out with
+no yes asked, or the system: a clock, or an earlier yes that covers it),
+when, and what came of it: done, not done, may have been done, taken back.
+
+262. **One action is one entry, and it is written where what came of it is
+    known.** Not at the yes: a yes that is taken back in its fuse, or a fuse
+    nobody saw burn out, decided nothing and did nothing, and nothing is
+    written (rule 22). Once the yes stands, whatever came of it is written:
+    it went, it did not go, or it may have gone. So "not sent" in the list
+    means the owner's yes stood and the thing still did not happen. What
+    was refused before anything was tried (everything is stopped, Gmail
+    cannot be reached) is said on the notch and is not in the list.
+263. **A thing that changes changes its entry.** A mail that may have gone
+    and is found in the thread at the next yes, a mail that did not go and
+    is sent on a second try, a job that was stopped and gone on with, a
+    file that was offered and then taken, a paste or an agent taken back
+    from Today: each changes the entry it belongs to. There is never a
+    second entry that says otherwise.
+264. **Every entry is in the audit trail too, as one entry there.** Written
+    through the product's own `AuditTrail.log`, under the notch's name, with
+    a tool name of its own (`notch_mail_reply`, `notch_chase_followup`,
+    `notch_people_tell`, `notch_put`) and the product's category for it
+    (a mail, a message, something done in an app, an agent). The channel is
+    `notch` when the owner decided it there, and `system` when nobody did
+    just then: a follow-up by the clock, a promise that was kept. A change
+    to the entry is a further row of the same audit entry, whose outcome is
+    the last word. An approval said yes to on the notch is not written to
+    the audit from here: the product's own decision function has written it
+    (rule 20). The list only keeps what that does not hold: what was before
+    the owner, and the fuse.
+265. **The words of a mail or of a message are not kept, in any form.** Not
+    the text, not a hash of it, and nothing a model was asked. The audit
+    trail keeps none for a send that was approved on the dashboard either.
+    The sentence names who and about what, as the rows of Today already
+    did: "Reply to Leo: Deck for Thursday?", "Message to Leo", "File
+    offered to Leo: deck.pdf".
+266. **Today lists what only the list has, and nothing twice.** A reply that
+    went, a job, a chase, an agent that was made, a promise that was kept
+    and an approval have their rows from where they always came from, and
+    those rows are as they were. New rows: a follow-up of a chase, the
+    follow-up of a call, what was sent to somebody, an answer to a
+    workflow, an agent that was changed, run or let go. And anything that
+    may have gone, whatever it is, with "may have gone" as its small word:
+    that is the one thing the owner has to look at. What was not done is
+    not a row of what was done. None of the new rows has Undo (rule 218).
+267. **Writing it down never stands in the way of the thing.** A list that
+    cannot be written to, or an audit trail that throws, is said in the log
+    and nowhere else, and the mail goes, the job is done, the agent is made
+    all the same.
+268. **It is kept as long as the audit trail is.** Nothing is cleared. The
+    table is made when the notch is attached: with the switch off there is
+    no table and nothing is written.
+
+What is written down, and where:
+
+| What | Seen before it | Decided by | Fuse | Row of Today |
+|---|---|---|---|---|
+| A reply sent from its draft | the draft on a sheet | yes key, or said | 5 s | the mail's own |
+| A reply with a picked time | the letter on paper | a pick, or said | 8 s | the mail's own |
+| A chase's first mail | both mails on a sheet | yes key, or said | 5 s | the chase's own |
+| A chase's follow-up, by the clock | both mails, on the sheet it started from | the system | none | new |
+| A mail of a chase sent on "try again" | that mail on a sheet | yes key, or said | 5 s | the chase's own, or new |
+| The follow-up of a call | the follow-up on a sheet | yes key, or said | 5 s | new |
+| A word, a question, a request, an agent, something circled, sent to somebody | the line under the fuse | said | 3 s | new |
+| An answer to somebody's question | their question on a line | a pick | 3 s | new |
+| A file offered to somebody, and sent | the line under the fuse | said | 3 s, or longer for one picked from a folder | new |
+| A job handed to somebody, a time asked of them | the line under the fuse | said, or a pick | 3 s | new |
+| An agent made | its sentence on a line | yes key, or said | none | the agent's own |
+| An agent's rung, pause, run now, let go | its card, or a line | a pick, or yes key | none | new |
+| A job done in a window | a line, a sheet, or nothing ("run it") | yes key, a pick, or said | none | the job's own |
+| A thing put where the owner pointed | its line, or nothing ("put it here") | yes key, or said | none | the job's own |
+| A promise that was kept | its fuse on a line, or nothing | the fuse, or the system | its window | the promise's own |
+| An answer to a workflow | the question on a line | yes key, or a pick | 3 s | new |
+| A yes to an approval | a line, or a sheet with the exact action | yes key, or said | 3 s | the approval's own |
+
+What is not done, or not proven:
+
+- **"Said" is what the owner's words started, and a press on a card too.**
+  What is sent to somebody is written as said. A file that was dropped on
+  the notch and sent with a press on its card reads the same.
+- **Answers that are no send of the owner's own are not written.** "Yes, I
+  took it", "No, thank you", "Seen", "Got it", and the pieces of a file:
+  the engine carries them, and they follow an answer the owner gave on a
+  line. A file that arrived and was saved is not written either.
+- **What is done for somebody who asked** (a request from their Pillow,
+  step by step under the owner's eyes) is the assistant's work: its steps
+  are approvals, and those have their own audit.
+- **An instruction to the assistant is not in the list.** What a turn does
+  is audited by the product as ever, tool by tool.
+- **After a restart a reply that may have gone is not looked for** (the
+  note of what may have gone is kept only while the brain runs, see the
+  mail section). Its entry still says "may have gone". A second yes that
+  sends it changes that entry to sent: if both went, the list says one.
+- **A brain that stops between Send and the look** writes nothing: there
+  was no moment at which what came of it was known.
+- **"Today: 3 things done" counts a row that may have gone**, and so does
+  the morning's count. It is the owner's to say whether such a row is
+  counted.
+- **The dashboard shows the audit entries as it shows any**: by tool name
+  and category. It has no sentence for them. The sentence is in Today.
 
 ## A manner that is learned
 
@@ -3626,8 +3754,9 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 - A room that is steadily louder than a level of 500 is all voice to the
   measure, speech or not. Then the recording is sent, and what was said is
   left to speech-to-text.
-- Today (the list under Home's text field) holds approved actions and kept
-  promises only. Work that needed no
+- Today (the list under Home's text field) held approved actions and kept
+  promises only. Since 26 November 2026 it also has what the notch itself
+  did (rule 266). Work the assistant did in a turn that needed no
   approval is in the audit trail by tool name, with no sentence to show.
 - The keys were tried by hand on one Windows 11 machine. The macOS tap went
   in and watched the keys once, on a real Mac on 19 November 2026 (the sixth

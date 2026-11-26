@@ -18,6 +18,7 @@
  * It never acts without the yes. An offer that is turned down, or left, is
  * not made again for the same job for ten minutes.
  */
+import { notchAskedHow, type NotchActionAsked } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
 import { NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import type { NotchPart } from './protocol.ts';
@@ -138,8 +139,8 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     return Number.isInteger(n) && n > 0 ? Math.min(n, NOTCH_CATCH_COUNT_MOST) : null;
   }
 
-  function run(rounds: Rounds, count: number | null): boolean {
-    const started = deps.jobs.start(roundsPlan(newRoundsRun(rounds, count), deps.hands, roundsWords(rounds, roundsApps(rounds))));
+  function run(rounds: Rounds, count: number | null, asked: NotchActionAsked): boolean {
+    const started = deps.jobs.start(roundsPlan(newRoundsRun(rounds, count), deps.hands, roundsWords(rounds, roundsApps(rounds))), asked);
     if (started) seen.clear();
     return started;
   }
@@ -177,6 +178,8 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
           const left = mine.left;
           const parts: NotchPart[] = left && left > 0 ? ['I can take it from here. ', em(`${left} left`), '.'] : ['I can take it from here.'];
           const answer = await stage.offer(parts, 'take over', { mood: 'track' });
+          // The yes to this line, for what is written down of the job.
+          const asked: NotchActionAsked = { seen: 'line', how: notchAskedHow(stage) };
           if (offer !== mine) return 'settled';
           offer = null;
           if (answer.act !== 'yes') {
@@ -211,7 +214,7 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
             count = await howMany(stage);
             if (count === null) { home(); quiet.set(name, now()); return 'settled'; }
           }
-          if (!run(latest, count)) {
+          if (!run(latest, count, asked)) {
             home();
             await stage.say(['I am in the middle of something else.'], 3000, { mood: 'careful' });
           }
@@ -298,7 +301,8 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
         const sure = await sureRounds(rounds, deps.hands);
         if (!sure) return 'unseen';
         if (offer) { deps.inbox.remove('catch'); offer = null; home(); }
-        return run(sure, n) ? 'started' : 'busy';
+        // Asked for in words, with no line of its own.
+        return run(sure, n, { seen: 'nothing', how: 'said' }) ? 'started' : 'busy';
       }
       return 'none';
     },

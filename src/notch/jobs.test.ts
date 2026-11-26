@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { attachNotchActions, type NotchActionAsked } from './actions.ts';
 import { Database } from 'bun:sqlite';
 import { NotchInbox } from './inbox.ts';
 import {
@@ -527,8 +528,11 @@ function notch(rows: string[], options: { paused?: () => boolean } = {}) {
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const w = world(rows, { gated: true });
   const running: boolean[] = [];
+  const db = new Database(':memory:');
+  // What is written down of a job that was done (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { log: () => {} });
   const jobs = attachNotchJobs(inbox, {
-    db: new Database(':memory:'), hands: w.hands, paused: options.paused, running: (on) => running.push(on),
+    db, hands: w.hands, paused: options.paused, running: (on) => running.push(on), actions,
     sleep: async () => {}, log: () => {},
   });
   const line = (): NotchLine | null => surface.current().line;
@@ -543,11 +547,11 @@ function notch(rows: string[], options: { paused?: () => boolean } = {}) {
     for (const timer of [...timers]) if (timer.at <= now) { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); timer.fn(); }
     await settle();
   };
-  const start = (count: number | null): boolean => {
+  const start = (count: number | null, asked?: NotchActionAsked): boolean => {
     const rounds = shown();
-    return jobs.start(roundsPlan(newRoundsRun(rounds, count), w.hands, roundsWords(rounds, roundsApps(rounds))));
+    return jobs.start(roundsPlan(newRoundsRun(rounds, count), w.hands, roundsWords(rounds, roundsApps(rounds))), asked);
   };
-  return { ...w, jobs, line, said, reply, pass, start, running, pushed };
+  return { ...w, jobs, line, said, reply, pass, start, running, pushed, actions, db };
 }
 
 describe('a job on the notch', () => {
@@ -727,5 +731,120 @@ describe('why a step was not done', () => {
     expect(new Set(said).size).toBe(reasons.length);
     expect(actRefusal('pointer')).toContain('pointer was moved');
     expect(actRefusal(undefined)).toBe('A step did not work.');
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: a job done in a window leaves one entry in the list of
+// what the notch did, with what the owner had before them when they let it. It was a row of Today only.
+describe('what is written down of a job', () => {
+  const YES: NotchActionAsked = { seen: 'line', how: 'key' };
+  const entries = (n: ReturnType<typeof notch>) => n.actions.since(0);
+
+  test('a job that was done is one entry, written when it ended: what it did, how it was asked for, done', async () => {
+    const n = notch(FIVE);
+    n.start(3, YES);
+    await n.answer(4);
+    // In the middle of it nothing is written: what came of it is not known yet.
+    expect(entries(n)).toEqual([]);
+    await n.answer(8);
+    await settle();
+    expect(n.said()).toBe('Done. 3 pasted.');
+    expect(entries(n)).toHaveLength(1);
+    expect(entries(n)[0]).toMatchObject({
+      kind: 'job_rounds', outcome: 'done', what: 'Pasted 3 from notepad into excel', seen: 'line', how: 'key', fuseMs: null, ref: `job:${n.jobs.store.since(0)[0]!.id}`,
+    });
+    // Its row of Today is the job's own.
+    expect(n.actions.today(0)).toEqual([]);
+    // Shapes only, as in the job's own record: never what was pasted.
+    expect(JSON.stringify(n.db.query('SELECT * FROM notch_actions').all())).not.toContain('a\\t1');
+  });
+
+  test('stopped half way it says how far it came, and gone on with it is still one entry', async () => {
+    const n = notch(FIVE);
+    n.start(5, YES);
+    await n.answer(8);
+    await n.reply('stop');
+    await n.answer(4);
+    await settle();
+    expect(n.said()).toBe('Stopped at 3 of 5. What now?');
+    expect(entries(n)).toMatchObject([{ outcome: 'done', what: 'Pasted 3 from notepad into excel' }]);
+    const first = entries(n)[0]!;
+    await n.reply('pick', { option: 'Go on', index: 0 });
+    await n.answer(8);
+    await settle();
+    expect(n.said()).toBe('Done. 5 pasted.');
+    expect(entries(n)).toHaveLength(1);
+    expect(entries(n)[0]).toMatchObject({ id: first.id, outcome: 'done', what: 'Pasted 5 from notepad into excel', how: 'key' });
+  });
+
+  test('a first step that was refused did nothing: one entry, not done', async () => {
+    const n = notch(FIVE);
+    n.next.push({ why: 'moved' });
+    n.start(5, YES);
+    await n.answer(1);
+    await settle();
+    expect(n.said()).toContain('I stopped at 0 of 5.');
+    expect(entries(n)).toMatchObject([{ kind: 'job_rounds', outcome: 'not_done', what: 'Pasted 0 from notepad into excel' }]);
+  });
+
+  test('a step whose answer never came may have landed: that is what the entry says', async () => {
+    const n = notch(FIVE);
+    n.next.push(null, null, null, 'lost');
+    n.start(5, YES);
+    await n.answer(4);
+    await settle();
+    expect(n.said()).toContain('It may have landed.');
+    expect(entries(n)).toMatchObject([{ kind: 'job_rounds', outcome: 'unsure' }]);
+  });
+
+  test('a job nobody said how it was asked for says so, and claims no yes', async () => {
+    const n = notch(FIVE);
+    n.start(1);
+    await n.answer(4);
+    await settle();
+    expect(entries(n)).toMatchObject([{ outcome: 'done', seen: 'nothing', how: 'system' }]);
+  });
+
+  test('taken back whole from Today: the same entry says so, and the taking back is no entry of its own', async () => {
+    const n = notch(FIVE);
+    n.start(3, YES);
+    await n.answer(12);
+    await settle();
+    await n.pass(6000);
+    const [row] = n.jobs.done(0);
+    const first = entries(n)[0]!;
+    n.jobs.undo(row!.id);
+    await settle();
+    await n.answer(9);
+    await settle();
+    expect(n.said()).toBe('Undone. It is as you left it.');
+    expect(entries(n)).toHaveLength(1);
+    expect(entries(n)[0]).toMatchObject({ id: first.id, outcome: 'undone', what: 'Pasted 3 from notepad into excel', how: 'key' });
+  });
+
+  test('taken back only in part, it is not called taken back', async () => {
+    const n = notch(FIVE);
+    n.start(3, YES);
+    await n.answer(12);
+    await settle();
+    await n.pass(6000);
+    n.cells.set(460, 'changed');
+    expect(n.jobs.undoLast()).toBe(true);
+    await settle();
+    await n.answer(8);
+    await settle();
+    expect(n.said()).toBe('Took back 2. I left 1 that was changed since.');
+    expect(entries(n)).toMatchObject([{ outcome: 'done' }]);
+    expect(entries(n)).toHaveLength(1);
+  });
+
+  test('a list that cannot be written to does not keep the job from being done, or from saying so', async () => {
+    const n = notch(FIVE);
+    n.start(3, YES);
+    n.db.run('DROP TABLE notch_actions');
+    await n.answer(12);
+    await settle();
+    expect(n.said()).toBe('Done. 3 pasted.');
+    expect(n.jobs.done(0)).toMatchObject([{ text: 'Pasted 3 from notepad into excel' }]);
   });
 });

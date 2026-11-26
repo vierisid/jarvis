@@ -160,3 +160,43 @@ describe('a fuse with a letter under it', () => {
     expect(await fuse).toBe('done');
   });
 });
+
+// Fix 05: what is written down of a yes says how it was given. An answer in words (./said.ts) is handed to
+// the script as if a page had sent it, so the stage is what knows the difference.
+describe('how the last answer was given', () => {
+  function shownStage() {
+    let current: unknown = null;
+    const surface = { show: (line: unknown) => { current = line; }, update: () => {}, current: () => ({ line: current, count: 0 }) } as unknown as NotchSurface;
+    const clock: NotchClock = { setTimeout: () => 0, clearTimeout: () => {} };
+    return new NotchStage(surface, clock, 'test', { prefix: 't' });
+  }
+
+  test('an answer a page sent is by key, and it is so before any answer', async () => {
+    const stage = shownStage();
+    expect(stage.answeredHow()).toBe('key');
+    const offer = stage.offer(['Send it?'], 'send');
+    stage.heard({ type: 'answer', id: 't-test-1', act: 'yes' });
+    expect((await offer).act).toBe('yes');
+    expect(stage.answeredHow()).toBe('key');
+  });
+
+  test('an answer given in words before the line came back is said, and the next one a page sends is by key again', async () => {
+    const stage = shownStage();
+    stage.expectSaid('offer|Send it?|', [{ act: 'yes' }]);
+    const offer = await stage.offer(['Send it?'], 'send');
+    expect(offer.act).toBe('yes');
+    expect(stage.answeredHow()).toBe('said');
+    // The fuse that follows is answered by the page: read after it, the yes would read as a key.
+    const fuse = stage.fuse(['Sending...'], 3000);
+    stage.heard({ type: 'answer', id: 't-test-2', act: 'done' });
+    expect(await fuse).toBe('done');
+    expect(stage.answeredHow()).toBe('key');
+  });
+
+  test('an answer that arrived before the script asked for it is by key', async () => {
+    const stage = shownStage();
+    stage.heard({ type: 'answer', id: 't-test-1', act: 'yes' });
+    expect((await stage.offer(['Send it?'], 'send')).act).toBe('yes');
+    expect(stage.answeredHow()).toBe('key');
+  });
+});

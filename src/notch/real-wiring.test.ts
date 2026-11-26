@@ -18,10 +18,12 @@
  */
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { ApprovalManager } from '../authority/approval.ts';
+import { AuditTrail } from '../authority/audit.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import type { HumanRequest } from '../workflows/runtime/human-input-contract.ts';
 import { PeerLink } from '../peers/link.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
+import { attachNotchActions } from './actions.ts';
 import { NOTCH_AGENT_TICK_MS, NotchAgentStore } from './agents.ts';
 import { NOTCH_APPROVAL_LOOK_MS } from './approvals.ts';
 import { NotchCallStore } from './call.ts';
@@ -144,6 +146,8 @@ function everything(given: Given = {}) {
       getHistory: () => executed as never,
     },
     approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
+    // What the notch does is written down in the vault and in the product's audit trail (./actions.ts).
+    actions: { db, audit: new AuditTrail() },
     openDashboard: (from) => { state.opened.push(from); },
     emergency: {
       getState: () => (state.paused ? 'paused' : 'normal'),
@@ -846,5 +850,110 @@ describe('Esc twice, put together', () => {
     await wait();
     expect(faces).toBeGreaterThan(asked);
     expect(refreshed).toBe(2);
+  });
+});
+
+// Fix 05, the owner's decision of 26 November 2026: one list of what the notch did, which also writes the
+// audit. `real.ts` makes it and hands it to the parts, and Today reads what only the list has.
+describe('the list of what the notch did, with every part given', () => {
+  const tables = (w: ReturnType<typeof everything>): string[] => (w.db.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((row) => row.name);
+  const todayRows = (w: ReturnType<typeof everything>): string[] => w.blocks().filter((block) => block.kind === 'row' && typeof (block as { lead?: string }).lead === 'string' && /^\d\d:\d\d$/.test((block as { lead: string }).lead))
+    .map((block) => { const row = block as { lead?: string; say?: unknown; small?: string; buttons?: { id: string }[] }; return `${row.lead} ${text(row.say)} | ${row.buttons ? row.buttons.map((button) => button.id).join(',') : row.small}`; });
+  const SEVEN: [string, string, string, string, string, string, string] = [
+    '11:50 Pasted 2 from notepad into excel | undo',
+    "11:40 Getting Lea's answer by Friday | undo",
+    "11:30 Watching for Sam's reply | undo",
+    '11:20 Made Tony: Every Monday at 9:00, send Sam the numbers. | undo',
+    '11:10 Replied to Sam: Pricing | sent · 1,200 tokens',
+    '11:00 Sent the weekly update | approved',
+    '10:50 Send Anna the pricing | promised',
+  ];
+
+  test('its table is made with the notch, and not when the brain was not given where to keep it', () => {
+    expect(tables(everything())).toContain('notch_actions');
+    live?.stop();
+    closeDb();
+    initDatabase(':memory:', { quiet: true });
+    const without = everything({ without: ['actions'] });
+    expect(tables(without)).not.toContain('notch_actions');
+  });
+
+  test('without it, today is the seven rows it was', async () => {
+    const w = everything({ without: ['actions'] });
+    fill(w);
+    await w.open();
+    expect(todayRows(w)).toEqual(SEVEN);
+  });
+
+  test('what the parts list themselves is not listed twice, and what only the list has stands among the rest in its place', async () => {
+    const w = everything();
+    fill(w);
+    // As the parts write them: the same things the seven rows are about, each with its entry in the list.
+    let at = NOON;
+    const list = attachNotchActions(w.db, { now: () => at, log: () => {} });
+    const asked = { seen: 'line' as const, how: 'key' as const };
+    const minutes = (n: number): number => NOON - n * 60_000;
+    const write = (ago: number, entry: Parameters<typeof list.record>[0]): void => { at = minutes(ago); list.record(entry); };
+    write(10, { kind: 'job_rounds', what: 'Pasted 2 from notepad into excel', asked, outcome: 'done', ref: 'job:job-1' });
+    write(20, { kind: 'chase_mail', what: "First mail to Lea for Lea's answer", asked, outcome: 'done', ref: 'chase:chase-1:0' });
+    write(40, { kind: 'agent_made', what: 'Made Tony: Every Monday at 9:00, send Sam the numbers.', asked, outcome: 'done', ref: 'agent:flow-1' });
+    write(50, { kind: 'mail_reply', what: 'Reply to Sam: Pricing', asked, outcome: 'done', ref: 'mail:sent-1' });
+    write(60, { kind: 'approval', what: 'Sent the weekly update', asked, outcome: 'done', ref: 'approval:1', approvalId: '1' });
+    write(70, { kind: 'promise', what: 'Promised: Send Anna the pricing', asked: { seen: 'nothing', how: 'system' }, outcome: 'done', ref: 'promise:p' });
+    await w.open();
+    expect(todayRows(w)).toEqual(SEVEN);
+    await w.answer({ act: 'no' });
+    // And what none of them lists: a follow-up that went by itself, a word to somebody, a reply that may have gone.
+    write(15, { kind: 'chase_followup', what: "Follow-up to Lea for Lea's answer", asked: { seen: 'sheet', how: 'system' }, outcome: 'done', ref: 'chase:chase-1:1' });
+    write(35, { kind: 'people_tell', what: 'Message to Leo', asked: { seen: 'line', how: 'said', fuseMs: 3000 }, outcome: 'done' });
+    write(55, { kind: 'mail_reply', what: 'Reply to Anna: Invoice', asked, outcome: 'unsure', ref: 'mail:other' });
+    write(65, { kind: 'people_tell', what: 'Message to Anna', asked: { seen: 'line', how: 'said', fuseMs: 3000 }, outcome: 'not_done' });
+    await w.open();
+    expect(todayRows(w)).toEqual([
+      SEVEN[0],
+      "11:45 Follow-up to Lea for Lea's answer | sent",
+      SEVEN[1], SEVEN[2],
+      '11:25 Message to Leo | sent',
+      SEVEN[3], SEVEN[4],
+      '11:05 Reply to Anna: Invoice | may have gone',
+      SEVEN[5], SEVEN[6],
+    ]);
+  });
+
+  test('Undo on an agent in today changes the entry of its making, and the audit gets it as the same entry', async () => {
+    const w = everything();
+    fill(w);
+    const list = attachNotchActions(w.db, { now: () => NOON - 40 * 60_000, audit: new AuditTrail(), log: () => {} });
+    list.record({ kind: 'agent_made', what: 'Made Tony: Every Monday at 9:00, send Sam the numbers.', asked: { seen: 'line', how: 'key' }, outcome: 'done', ref: 'agent:flow-1' });
+    await w.open();
+    await w.answer({ act: 'button', button: 'undo', row: 'agent:flow-1' });
+    expect(w.title()).toBe('Tony is switched off. It is still in Agents.');
+    expect(list.since(0)).toMatchObject([{ kind: 'agent_made', outcome: 'undone', ref: 'agent:flow-1' }]);
+    const trail = new AuditTrail();
+    expect(trail.queryEntries({ tool: 'notch_agent_made' })).toMatchObject([{ events: 2, outcome: 'succeeded', channel: 'notch', decided_by: 'notch' }]);
+    expect(trail.query({ tool: 'notch_agent_made_undo' })).toHaveLength(1);
+  });
+
+  test('a word to somebody, said on this notch, is in the list and in the audit trail when it has gone', async () => {
+    const w = everything();
+    await w.link.refresh();
+    await wait();
+    const route = w.real.people!.route('tell Leo the review moved to Friday');
+    expect(route).not.toBeNull();
+    route!.run();
+    await wait();
+    expect(w.line()).toMatchObject({ kind: 'send' });
+    const list = attachNotchActions(w.db, { log: () => {} });
+    expect(list.since(0)).toEqual([]);
+    await w.answer({ act: 'done' });
+    await wait();
+    expect(list.since(0)).toMatchObject([{ kind: 'people_tell', outcome: 'done', what: 'Message to Leo', seen: 'line', how: 'said' }]);
+    expect(new AuditTrail().queryEntries({ agentId: 'notch' })).toMatchObject([
+      { tool_name: 'notch_people_tell', action_category: 'send_message', authority_decision: 'allowed', channel: 'notch', decided_by: 'notch', outcome: 'succeeded', executed: 1 },
+    ]);
+    // And it is a row of today.
+    await w.answer({ act: 'done' });
+    await w.open();
+    expect(todayRows(w)).toEqual(['12:00 Message to Leo | sent']);
   });
 });

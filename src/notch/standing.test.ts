@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { attachNotchActions } from './actions.ts';
 import { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchLine, NotchPart, NotchToPage } from './protocol.ts';
@@ -49,6 +50,8 @@ function harness(options: {
   /** The owner's name as it is known at each asking: it can change after a mail went. */
   ownerNow?: () => string;
   db?: Database;
+  /** Called while a mail is on its way, with how many have been handed to the mailbox. */
+  onSend?: (n: number) => void;
 } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -83,7 +86,7 @@ function harness(options: {
       const people = options.people ?? { sam: SAM, [SAM.address]: SAM };
       return people[who.toLowerCase()] ?? null;
     },
-    async send(plan) { sent.push(plan); return answers.shift() ?? { ok: true }; },
+    async send(plan) { sent.push(plan); options.onSend?.(sent.length); return answers.shift() ?? { ok: true }; },
     async went(plan, since) { asked.push({ text: plan.text, thread: plan.thread, since }); return wentAnswers.length > 1 ? wentAnswers.shift()! : wentAnswers.length === 1 ? wentAnswers[0]! : false; },
     async look() { looks++; const came = arriving; arriving = []; if (came.length) read(came); },
     owner: () => options.ownerNow?.() ?? options.owner ?? 'Vieri',
@@ -91,8 +94,11 @@ function harness(options: {
   const eyes: boolean[] = [];
   const logs: string[] = [];
   let fired = 0;
+  const db = options.db ?? new Database(':memory:');
+  // What is written down of each mail a chase sends (./actions.ts), in the same database.
+  const actions = attachNotchActions(db, { now: () => now, log: () => {} });
   const standing = attachNotchStanding({
-    inbox, db: options.db ?? new Database(':memory:'), mail, paused: options.paused, offline: options.offline, now: () => now, waitMs: options.waitMs,
+    inbox, db, mail, paused: options.paused, offline: options.offline, now: () => now, waitMs: options.waitMs, actions,
     eye: (on) => { if (eyes.at(-1) !== on) eyes.push(on); },
     fired: () => { fired++; },
     log: (line) => logs.push(line),
@@ -124,7 +130,7 @@ function harness(options: {
     await settle();
   };
   return {
-    standing, sent, asked, eyes, logs, line, said, pass, speak, reply, inbox,
+    standing, sent, asked, eyes, logs, line, said, pass, speak, reply, inbox, actions,
     fired: () => fired, looks: () => looks,
     arrives: (...threads: MailThread[]) => { read(threads); },
     arriving: (...threads: MailThread[]) => { arriving = threads; },
@@ -1297,3 +1303,160 @@ describe('a follow-up that comes due with no connection', () => {
   });
 });
 
+
+// Fix 05, the owner's decision of 26 November 2026: each mail a chase sends leaves one entry in the list of
+// what the notch did. The first mail was a row of Today only as the chase it started; the follow-up, which
+// goes by itself a day later, was nowhere.
+describe('what is written down of the mails of a chase', () => {
+  const UNSURE = { ok: false as const, why: 'Gmail did not confirm it went', pressed: true, since: MONDAY - 5000 };
+  async function started(h: ReturnType<typeof harness>): Promise<void> {
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    if (h.line()?.kind === 'send') await h.reply('done');
+  }
+  const entries = (h: ReturnType<typeof harness>) => h.actions.since(0).reverse();
+
+  test('the first mail is one entry: both mails on a sheet, the yes key, a fuse, done. Nothing is written before it went', async () => {
+    const h = harness();
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    expect(entries(h)).toEqual([]);
+    await h.reply('done');
+    expect(h.sent).toHaveLength(1);
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({
+      kind: 'chase_mail', outcome: 'done', what: "First mail to Sam for Sam's answer", target: 'sam@northwind.example',
+      seen: 'sheet', how: 'key', fuseMs: NOTCH_CHASE_FUSE_MS, ref: `chase:${h.standing.handable()[0]!.id}:0`,
+    });
+    // The chase has its own row in what was done, from its start: this list adds no second one.
+    expect(h.actions.today(0)).toEqual([]);
+    expect(JSON.stringify(entries(h))).not.toContain('quick nudge');
+  });
+
+  test('Esc in the fuse, and a fuse nobody saw burn out: nothing went, nothing is written', async () => {
+    const esc = harness();
+    await esc.speak("Get Sam's answer on the contract by Friday");
+    await esc.reply('yes');
+    await esc.reply('undo');
+    expect(esc.sent).toEqual([]);
+    expect(entries(esc)).toEqual([]);
+    const lost = harness();
+    await lost.speak("Get Sam's answer on the contract by Friday");
+    await lost.reply('yes');
+    await lost.pass(NOTCH_CHASE_FUSE_MS + 3000);
+    expect(lost.sent).toEqual([]);
+    expect(entries(lost)).toEqual([]);
+  });
+
+  test('a first mail that could not be sent after the fuse burnt out: one entry, not done', async () => {
+    const h = harness({ send: [{ ok: false, why: 'no Send button', pressed: false }] });
+    await started(h);
+    expect(h.said()).toBe('I could not send it: no Send button. Nothing was started.');
+    expect(entries(h)).toMatchObject([{ kind: 'chase_mail', outcome: 'not_done', how: 'key' }]);
+    expect(h.actions.today(0)).toEqual([]);
+  });
+
+  test('the follow-up goes by the clock, a day later, with nobody deciding anything: one entry that says so, and a row of Today', async () => {
+    const h = harness({ waitMs: 60_000 });
+    await started(h);
+    await h.pass(9000);
+    h.advance(60_000);
+    await h.standing.tick();
+    expect(h.sent).toHaveLength(2);
+    expect(entries(h)).toHaveLength(2);
+    expect(entries(h)[1]).toMatchObject({
+      kind: 'chase_followup', outcome: 'done', what: "Follow-up to Sam for Sam's answer", seen: 'sheet', how: 'system', fuseMs: null,
+      ref: `chase:${h.standing.handable()[0]!.id}:1`,
+    });
+    expect(h.actions.today(0)).toMatchObject([{ text: "Follow-up to Sam for Sam's answer", small: 'sent', undo: false }]);
+    // Nothing more is sent, so nothing more is written.
+    h.advance(60_000);
+    await h.standing.tick();
+    await settle();
+    expect(entries(h)).toHaveLength(2);
+  });
+
+  test('a follow-up that may have gone, found at "try again": one entry, first unsure, then done', async () => {
+    const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE], went: [true] });
+    await started(h);
+    await h.pass(9000);
+    h.advance(60_000);
+    await h.standing.tick();
+    await settle();
+    expect(h.said()).toBe('The follow-up to Sam may have gone: Gmail did not confirm it. What now?');
+    expect(entries(h)).toHaveLength(2);
+    const unsure = entries(h)[1]!;
+    expect(unsure).toMatchObject({ kind: 'chase_followup', outcome: 'unsure', how: 'system' });
+    expect(h.actions.today(0)).toMatchObject([{ small: 'may have gone' }]);
+    await h.reply('yes');
+    expect(h.said()).toBe('It had gone: it is in your mail. I did not send it again. Still on it.');
+    expect(entries(h)).toHaveLength(2);
+    expect(entries(h)[1]).toMatchObject({ id: unsure.id, outcome: 'done', how: 'system' });
+    expect(h.actions.today(0)).toMatchObject([{ small: 'sent' }]);
+  });
+
+  test('not there, and sent again on a yes under its fuse: still one entry, done, by that yes', async () => {
+    const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE, { ok: true }], went: [false] });
+    await started(h);
+    await h.pass(9000);
+    h.advance(60_000);
+    await h.standing.tick();
+    await settle();
+    const unsure = entries(h)[1]!;
+    await h.reply('yes');
+    expect(h.line()).toMatchObject({ kind: 'send', ms: NOTCH_CHASE_FUSE_MS });
+    await h.reply('done');
+    await settle();
+    expect(h.sent).toHaveLength(3);
+    expect(entries(h)).toHaveLength(2);
+    expect(entries(h)[1]).toMatchObject({ id: unsure.id, outcome: 'done', seen: 'sheet', how: 'key', fuseMs: NOTCH_CHASE_FUSE_MS });
+  });
+
+  test('a first mail that may have gone keeps its entry across a restart, and the brain that comes up settles the same one', async () => {
+    const db = new Database(':memory:');
+    const h = harness({ db, send: [UNSURE] });
+    await started(h);
+    expect(h.said()).toBe('The first mail to Sam may have gone: Gmail did not confirm it. I ask you what now.');
+    expect(entries(h)).toMatchObject([{ kind: 'chase_mail', outcome: 'unsure', how: 'key', fuseMs: NOTCH_CHASE_FUSE_MS }]);
+    const first = entries(h)[0]!;
+    h.standing.stop();
+    const again = harness({ db, went: [true] });
+    await settle();
+    expect(again.said()).toBe('The first mail to Sam may have gone: Gmail did not confirm it. What now?');
+    await again.reply('yes');
+    expect(again.said()).toBe('It had gone: it is in your mail. I did not send it again. Still on it.');
+    expect(entries(again)).toHaveLength(1);
+    // What the owner saw and how they decided is what was true of the yes that sent it.
+    expect(entries(again)[0]).toMatchObject({ id: first.id, outcome: 'done', how: 'key', fuseMs: NOTCH_CHASE_FUSE_MS });
+  });
+
+  test('a mail that went while the chase was stopped is written down all the same', async () => {
+    let stop: () => void = () => {};
+    const h = harness({ waitMs: 60_000, onSend: (n) => { if (n === 2) stop(); } });
+    await started(h);
+    await h.pass(9000);
+    h.advance(60_000);
+    const id = h.standing.handable()[0]!.id;
+    // The owner takes the chase back while the follow-up is on its way.
+    stop = () => { h.standing.undo(`chase:${id}`); };
+    await h.standing.tick();
+    await settle();
+    expect(h.sent).toHaveLength(2);
+    expect(h.standing.chase(id)!.state).toBe('dropped');
+    expect(entries(h)).toHaveLength(2);
+    expect(entries(h)[1]).toMatchObject({ kind: 'chase_followup', outcome: 'done' });
+  });
+
+  test('a list that cannot be written to does not keep a mail from going or the chase from starting', async () => {
+    const db = new Database(':memory:');
+    const h = harness({ db });
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    db.run('DROP TABLE notch_actions');
+    await h.reply('done');
+    expect(h.sent).toHaveLength(1);
+    expect(h.said()).toBe("On it. I will come back when Sam's answer is in, or if I am stuck.");
+    expect(h.standing.counts().chases).toBe(1);
+  });
+});
