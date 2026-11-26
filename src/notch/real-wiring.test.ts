@@ -32,6 +32,7 @@ import type { NotchBlock, NotchLine } from './protocol.ts';
 import { NOTCH_QUESTION_LOOK_MS } from './questions.ts';
 import { attachNotchReal, type NotchReal, type NotchRealDeps } from './real.ts';
 import { NOTCH_STANDING_TICK_MS, NotchStandingStore } from './standing.ts';
+import { NOTCH_CALL_AFTER_MS } from './around.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import { NotchLearnedStore } from './teach.ts';
 
@@ -93,13 +94,31 @@ function everything(given: Given = {}) {
   const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
   const fromPage = (message: unknown, sidecarId = 'pc'): void => onPage(sidecarId, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   fromPage({ type: 'hello', v: 1 });
-  // The notch's own clock never runs here: a line stays until it is answered.
-  const clock = { setTimeout: (_fn: () => void, _ms: number) => ({}), clearTimeout: (_handle: unknown) => {} };
+  // The notch's own clock runs only when a test winds it (`pass`): a line stays until it is answered.
+  const timers: { fn: () => void; at: number }[] = [];
+  let ticks = 0;
+  const clock = {
+    setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: ticks + ms }; timers.push(timer); return timer; },
+    clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
+  };
+  const pass = async (ms: number): Promise<void> => {
+    const until = ticks + ms;
+    for (;;) {
+      const next = timers.filter((timer) => timer.at <= until).sort((a, b) => a.at - b.at)[0];
+      if (!next) break;
+      ticks = next.at; timers.splice(timers.indexOf(next), 1); next.fn();
+      await wait();
+    }
+    ticks = until;
+    await wait();
+  };
+  let aroundSays: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const db = getDb();
   const state = {
     paused: false, pauseAsked: 0, opened: [] as (string | null)[], pages: [] as string[], flows: new Map<string, boolean>(), pausedFlows: [] as string[],
     ranFlows: [] as string[], failures: [] as NotchOpenFailure[], questions: [] as HumanRequest[], forgotten: [] as string[],
     tasks: { asked: 0, there: false, hear: null as NotchNews['taskEnded'] | null },
+    listenAsked: [] as { on: boolean }[],
   };
   const emergencyListeners = new Set<(state: 'normal' | 'paused') => void>();
   const promiseListeners = new Set<unknown>();
@@ -160,8 +179,12 @@ function everything(given: Given = {}) {
         runs: () => [], madeSince: () => [],
       } as never,
     },
-    day: { db, noClock, around: { onEvent() {}, onSidecarDisconnected() {} } },
-    calls: { db, noClock, port: { onEvent() {}, onSidecarDisconnected() {} }, listen: async () => ({ listening: false }), stt: () => null, think: async () => '' } as never,
+    day: { db, noClock, around: { onEvent(listener) { aroundSays = listener; }, onSidecarDisconnected() {} } },
+    calls: {
+      db, noClock, port: { onEvent() {}, onSidecarDisconnected() {} },
+      listen: async (_sidecarId: string, ask: { on: boolean; far: boolean }) => { state.listenAsked.push({ on: ask.on }); return ask.on ? { listening: true, far: ask.far, why: '' } : { listening: false }; },
+      stt: () => ({ transcribe: async () => '' }), think: async () => '',
+    } as never,
     peers: { db, link, openPage: async () => true, noClock },
     notice: { noClock, see: async () => null, think: async () => '' } as never,
     jobs: {
@@ -210,6 +233,8 @@ function everything(given: Given = {}) {
   const blocks = (): NotchBlock[] => { const shown = line(); return shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks as NotchBlock[] : []; };
   return {
     real, surface, state, started: made.started, db, executed, kept, link, fromPage, line, blocks,
+    pass,
+    around: (payload: Record<string, unknown>): void => aroundSays('pc', { event_type: 'notch.around', payload }),
     resume: (): void => { (all.emergency as unknown as { resume(): void }).resume(); },
     title: (): string => text(line()?.say),
     async open(): Promise<void> { fromPage({ type: 'open' }); await wait(); },
@@ -592,6 +617,53 @@ describe('stop, with every part given', () => {
       'stop: notice',
       'stop: agents',
     ]);
+  });
+
+  /** A chase whose next step is due now. */
+  const dueChase = (w: ReturnType<typeof everything>): { looked: number; sent: number } => {
+    new NotchStandingStore(w.db).putChase({
+      id: 'chase-due', createdAt: NOON - 86_400_000, name: 'Lea Roth', address: 'lea@example.com', thing: 'answer', about: 'the contract', day: 'Friday', byAt: NOON + 86_400_000,
+      thread: null, subject: 'Contract', state: 'on', nudges: 1, nextAt: NOON - 1000, steps: [], updatedAt: NOON - 86_400_000,
+    } as never);
+    // The mailbox the chases write through: the object the mail layer hands them.
+    const seen = { looked: 0, sent: 0 };
+    const mailbox = w.real.mail!.standing;
+    mailbox.look = async () => { seen.looked++; };
+    mailbox.send = async () => { seen.sent++; return { ok: true }; };
+    mailbox.went = async () => false;
+    return seen;
+  };
+  /** The clocks of half a minute, the chases' among them, run once, whether or not they were cleared. */
+  const halfMinute = async (w: ReturnType<typeof everything>): Promise<void> => { for (const one of w.started.filter((each) => each.ms === NOTCH_STANDING_TICK_MS)) one.fn(); await wait(); };
+
+  test('a chase that is due is taken up at its clock: the mailbox is looked at and its follow-up goes', async () => {
+    const w = everything({ ticking: true });
+    const seen = dueChase(w);
+    await halfMinute(w);
+    expect(seen).toEqual({ looked: 1, sent: 1 });
+    expect(new NotchStandingStore(w.db).chase('chase-due')).toMatchObject({ state: 'on', nudges: 2 });
+  });
+
+  test('on a notch that was stopped a chase that is due is not taken up, even if its clock were to run: nothing is looked at, nothing is sent', async () => {
+    const w = everything({ ticking: true });
+    const seen = dueChase(w);
+    w.real.stop();
+    await halfMinute(w);
+    expect(seen).toEqual({ looked: 0, sent: 0 });
+    expect(new NotchStandingStore(w.db).chase('chase-due')).toMatchObject({ state: 'on', nudges: 1 });
+    expect(w.line()).toBeNull();
+  });
+
+  test('a call that is listened to is let go: the desktop app is told to stop hearing', async () => {
+    const w = everything();
+    w.around({ call: true });
+    await w.pass(NOTCH_CALL_AFTER_MS);
+    expect(w.title()).toBe('On a call. Listen and write it down?');
+    await w.answer({ act: 'yes' });
+    expect(w.state.listenAsked).toEqual([{ on: true }]);
+    w.real.stop();
+    await wait();
+    expect(w.state.listenAsked).toEqual([{ on: true }, { on: false }]);
   });
 
   test('after it Esc twice pauses nothing, a promise is not heard, and nothing is taken', async () => {
