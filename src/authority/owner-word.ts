@@ -21,7 +21,9 @@
  *   - a command that deletes, read from its text (`commandDeletes`);
  *   - a Delete key (`keysDelete`);
  *   - for a raw click, what the machine says is at that place, read the same
- *     way as a control's label (the probe, set by the daemon).
+ *     way as a control's label (the probe, set by the daemon). When the
+ *     machine cannot be asked, or does not answer on a second try, the click
+ *     is asked about: it is not pressed blind.
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
@@ -51,8 +53,33 @@ export const STILL_ASKED: ReadonlySet<ActionCategory> = new Set<ActionCategory>(
  * common tools that delete by a verb of their own. Read on the command as
  * written, so a name in quotes or after a pipe is seen too.
  */
-/** Where a command word can stand: at the start, after ; & | ( a newline or a quote, or after a word that runs what follows. */
-const AT_COMMAND = String.raw`(?:^|[;&|(\n\`"']|\b(?:sudo|doas|xargs|exec|then|do|else)\s|-exec(?:dir)?\s|(?:\/[ck]|-c|-command)\s+["']?)\s*`;
+/**
+ * What may stand between the place a command starts and its own word, none of
+ * which changes what runs: a variable set for that one command (`FOO=1`), a
+ * word that only runs what follows (`env`, `command`, `nohup`, `time`, `nice`,
+ * `timeout`, `busybox`, and `sudo` again), such a word's own options with at
+ * most one value each (`-n 10`, `-u www-data`, `-I {}`), and a bare number
+ * (`timeout 5`). Each kind starts differently from the others and an option's
+ * value may be none of them, so a run of them reads one way only.
+ */
+const RUNS_WHAT_FOLLOWS = 'sudo|doas|env|command|builtin|nohup|time|nice|ionice|timeout|stdbuf|setsid|busybox|toybox|xargs|exec';
+const BEFORE_THE_WORD = [
+  String.raw`[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+`,
+  // (`command -v rm` only says where rm is.)
+  String.raw`(?!command\s+-[vV]\s)(?:${RUNS_WHAT_FOLLOWS})\s+`,
+  String.raw`-{1,2}\w[\w-]*(?:=\S*)?\s+(?:(?!(?:${RUNS_WHAT_FOLLOWS})\s)[^\s\d=-][^\s=]*\s+)?`,
+  String.raw`\d+(?:\.\d+)?[smhd]?\s+`,
+].join('|');
+
+/**
+ * Where a command word can stand: at the start, after ; & | ( a newline or a
+ * quote, or after a word that runs what follows; then past what changes
+ * nothing (above), past the backslash that steps round an alias (`\rm`), and
+ * past the folder the program is named with (`/bin/rm`, `.\tools\sdelete.exe`).
+ * Both are counted (sixteen such words, a folder of 256 letters), so a very
+ * long command is still read in a time that grows with its length.
+ */
+const AT_COMMAND = String.raw`(?:^|[;&|(\n\`"']|\b(?:sudo|doas|xargs|exec|then|do|else)\s|-exec(?:dir)?\s|(?:\/[ck]|-c|-command)\s+["']?)\s*(?:${BEFORE_THE_WORD}){0,16}\\?(?:[^\s;&|"'<>=]{0,256}[\\/])?`;
 
 const DELETES: readonly RegExp[] = [
   // The verbs that remove, in a shell, in cmd and as PowerShell's short names.
@@ -63,6 +90,8 @@ const DELETES: readonly RegExp[] = [
   // What a tool deletes by its own word.
   /\bfind\b[^|;&]*\s-delete\b/i,
   /\bgit\s+(?:clean|rm|reset\s+--hard|checkout\s+--\s|branch\s+-D|push\s+[^|;&]*--delete|stash\s+(?:drop|clear))/i,
+  // A push that throws away what the other side had: forced by a flag, or by a + before the branch.
+  /\bgit\s+push\b(?:[^|;&]*\s)?(?:--force(?:-with-lease|-if-includes)?\b|-f\b|\+[\w./-])/,
   /\brsync\b[^|;&]*\s--delete/i,
   /\brobocopy\b[^|;&]*\s\/(?:MIR|PURGE)\b/i,
   /\b(?:docker|podman)\s+(?:(?:image|container|volume|network|system)\s+)?(?:rm|rmi|prune)\b/i,
@@ -76,6 +105,8 @@ const DELETES: readonly RegExp[] = [
   /\b(?:DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW)|TRUNCATE\s+TABLE|DELETE\s+FROM)\b/i,
   // A script given on the command line that removes files.
   /\b(?:os\.(?:remove|unlink|rmdir|removedirs)|shutil\.rmtree|(?:fs|fsPromises|promises)\.(?:rm|rmdir|unlink)(?:Sync)?|unlinkSync|rmSync|rmdirSync|File\.Delete|Directory\.Delete|FileUtils\.rm\w*)\b/,
+  // A file or a folder removed by its own method: pathlib's `Path(x).unlink()`, PowerShell's `(Get-Item x).Delete()`.
+  /\.(?:unlink|rmdir|rmtree|Delete)\s*\(/,
   // Emptying a file: writing nothing over it.
   /(?:^|[;&|\n])\s*(?::\s*)?>\s*[^\s&|>]/,
   /\btruncate\s+-s\s*0\b/i,
@@ -86,10 +117,16 @@ export function commandDeletes(command: unknown): boolean {
   return DELETES.some((pattern) => pattern.test(command));
 }
 
-/** Whether a key press holds the Delete key: in a file list that removes the file. */
+/**
+ * Whether a key press deletes: the Delete key in any chord (in a file list
+ * that removes the file), or on a Mac the command key with backspace, which
+ * is how a file goes to the Trash there (and, with more keys, past it).
+ */
 export function keysDelete(keys: unknown): boolean {
   if (typeof keys !== 'string') return false;
-  return keys.split(/[,+]/).some((key) => /^(?:delete|del|forwarddelete|kp_delete)$/i.test(key.trim()));
+  const held = keys.split(/[,+]/).map((key) => key.trim().toLowerCase());
+  if (held.some((key) => /^(?:delete|del|forwarddelete|kp_delete)$/.test(key))) return true;
+  return held.some((key) => /^(?:backspace|bs)$/.test(key)) && held.some((key) => /^(?:cmd|command|meta|super|win|windows)$/.test(key));
 }
 
 /** The words of a call that can hold a command: the product's own tools for running one. */
@@ -116,8 +153,13 @@ export function callDeletesOrPays(toolName: string, params: Record<string, unkno
  * Asks the machine what a raw click would land on, and answers with what that
  * reads as (`delete_data`, `make_payment`, or nothing). The daemon sets it;
  * without it a raw click is judged by the call alone.
+ *
+ * Null means it could not look: the screen may not be read, there is no
+ * machine to ask, or the machine said nothing about the place. A throw means
+ * the asking failed (no answer in time, a desktop app too old to know the
+ * question). Neither is "nothing is there".
  */
-export type OwnerWordProbe = (toolName: string, params: Record<string, unknown>) => Promise<readonly ActionCategory[]>;
+export type OwnerWordProbe = (toolName: string, params: Record<string, unknown>) => Promise<readonly ActionCategory[] | null>;
 
 let probe: OwnerWordProbe | null = null;
 
@@ -143,12 +185,16 @@ export interface OwnerWordGate {
  *     payment. It is asked about, also where the product's ordinary rules
  *     would have let it run: a command that deletes ran unasked in a turn that
  *     had read nothing, and "a delete is asked about" has to be true.
+ *   - `unseen`: it is inside such a turn and it is a raw click on a screen
+ *     that could not be read, asked twice. It is asked about like `ask`,
+ *     with its own reason: a click is not pressed blind, since "Delete" and
+ *     "Buy now" are found by reading what is there.
  *   - null: not such a turn, or a call whose own classifier failed. The
  *     product's ordinary rules decide, as everywhere else.
  *
  * `asked` is for tests; the product asks `ownerAskedOnNotch`.
  */
-export type OwnerWord = 'go' | 'ask';
+export type OwnerWord = 'go' | 'ask' | 'unseen';
 
 export async function ownerWord(
   toolName: string,
@@ -160,12 +206,19 @@ export async function ownerWord(
   if (gate.unclassified) return null;
   if (callDeletesOrPays(toolName, params, gate.categories)) return 'ask';
   if (probe && RAW_PRESS_TOOLS.has(toolName)) {
-    try {
-      const reads = await probe(toolName, params);
-      if (reads.some((category) => STILL_ASKED.has(category))) return 'ask';
-    } catch {
-      // The machine could not say. Not knowing is not a delete or a payment.
+    // Asked once more when the first asking fails or sees nothing: a machine
+    // that was busy answers the second time. After that it is not known what
+    // is there, and not knowing is a reason to ask.
+    for (let tries = 0; tries < 2; tries += 1) {
+      let reads: readonly ActionCategory[] | null = null;
+      try {
+        reads = await probe(toolName, params);
+      } catch {
+        // The machine could not say this time.
+      }
+      if (reads) return reads.some((category) => STILL_ASKED.has(category)) ? 'ask' : 'go';
     }
+    return 'unseen';
   }
   return 'go';
 }
@@ -175,3 +228,11 @@ export const OWNER_WORD_REASON = 'asked for by the owner on the notch: saying it
 
 /** And for one that is asked about because it deletes or pays. */
 export const OWNER_WORD_ASKS_REASON = 'a delete or a payment is always asked about';
+
+/** And for a raw click on a screen that could not be read first. */
+export const OWNER_WORD_UNSEEN_REASON = 'the screen could not be read to see what this click lands on, so it is asked about';
+
+/** The reason a word asks with, or null when it does not ask. */
+export function ownerWordAsks(word: OwnerWord | null): string | null {
+  return word === 'ask' ? OWNER_WORD_ASKS_REASON : word === 'unseen' ? OWNER_WORD_UNSEEN_REASON : null;
+}

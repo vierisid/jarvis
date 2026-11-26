@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { STILL_ASKED, callDeletesOrPays, commandDeletes, keysDelete, ownerWord, setOwnerWordProbe } from './owner-word.ts';
+import { OWNER_WORD_ASKS_REASON, OWNER_WORD_UNSEEN_REASON, STILL_ASKED, callDeletesOrPays, commandDeletes, keysDelete, ownerWord, ownerWordAsks, setOwnerWordProbe } from './owner-word.ts';
 import { ownerAskedOnNotch } from './app-open.ts';
 import { withBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
 import { NOTCH_SWITCH } from '../notch/switch.ts';
@@ -36,6 +36,27 @@ describe('what still asks when the owner asked for the thing', () => {
     expect(missed).toEqual([]);
   });
 
+  test('a delete written the other ordinary ways is read too', () => {
+    const missed: string[] = [];
+    for (const command of [
+      // By its full path, or past the shell's own alias.
+      '/bin/rm -rf ~/old', '/usr/bin/rm notes.txt', './rm notes.txt', '\\rm -rf build', 'C:\\Windows\\System32\\sdelete.exe -p 3 a.txt', 'ls && /bin/rm a',
+      // Behind a word that only runs what follows, with or without its own options.
+      'env rm notes.txt', 'env -i rm notes.txt', 'command rm notes.txt', 'nohup rm -rf build &', 'time rm -rf build', 'nice rm a', 'nice -n 10 rm a',
+      'busybox rm a', 'timeout 5 rm a', 'sudo -n rm a', 'sudo -u www-data rm a', 'sudo env rm a', 'nohup nice /bin/rm -rf build', 'find . -name "*.tmp" | xargs -0 rm', 'ls | xargs -I {} rm {}',
+      // After a variable set for that one command.
+      'FOO=1 rm notes.txt', 'LC_ALL=C DEBUG="a b" rm notes.txt', 'env FOO=1 rm notes.txt', 'cd build && FOO=1 /bin/rm -rf out',
+      // By a method of the thing itself.
+      'python3 -c "from pathlib import Path; Path(\'a.txt\').unlink()"', 'python -c "import pathlib; pathlib.Path(\'d\').rmdir()"',
+      'powershell -Command "(Get-Item a.txt).Delete()"', '$f.Delete()',
+      // History thrown away on the other side.
+      'git push --force', 'git push origin main --force', 'git push -f origin main', 'git push --force-with-lease origin main', 'git push origin +main',
+    ]) {
+      if (!commandDeletes(command)) missed.push(command);
+    }
+    expect(missed).toEqual([]);
+  });
+
   test('a command that only looks, makes or changes is not a delete', () => {
     const wrong: string[] = [];
     for (const command of [
@@ -46,6 +67,10 @@ describe('what still asks when the owner asked for the thing', () => {
       'where steam', 'Get-StartApps', 'cp a b', 'mv a b', 'copy a b', 'move a b', 'type notes.txt', 'whoami', 'hostname',
       'Clear-Host', 'cls', 'grep -r "delete" src', 'tar -xzf a.tgz', 'code .', 'explorer .', 'start notepad', 'aws cli help',
       'ffmpeg -i in.mp4 out.mp3', 'findstr /s delete *.txt', 'cmd 2>&1', 'Write-Output "the rmdir command"',
+      // The same words that run something else, or that are only talked about.
+      'env', 'env FOO=1 node server.js', 'FOO=1 bun test', 'time ls', 'nohup node server.js &', 'nice -n 10 make', 'timeout 5 curl https://example.com',
+      'command -v rm', 'which rm', 'man rm', 'cat docs/rm', 'ls /bin/rm', 'curl "https://example.com/rm"', 'cd ~/rm && ls', 'sudo -n ls', 'busybox ls',
+      'git push', 'git push origin main', 'git push -u origin feature', 'git push --follow-tags', 'git push origin fix+more', 'node -e "m.delete(1)"', 'python -c "a.remove(1)"',
     ]) {
       if (commandDeletes(command)) wrong.push(command);
     }
@@ -59,6 +84,18 @@ describe('what still asks when the owner asked for the thing', () => {
     for (const keys of ['delete', 'Delete', 'shift,delete', 'ctrl,shift,delete', 'del', 'shift+delete']) expect(keysDelete(keys)).toBe(true);
     for (const keys of ['enter', 'ctrl,s', 'backspace', 'ctrl,d', 'alt,f4', 'tab', '', 'deleted']) expect(keysDelete(keys)).toBe(false);
     expect(keysDelete(undefined)).toBe(false);
+  });
+
+  test('on a Mac the delete of a file is the command key with backspace', () => {
+    const missed: string[] = [];
+    for (const keys of ['cmd,backspace', 'cmd+backspace', 'Cmd+Backspace', 'command,backspace', 'cmd,option,backspace', 'cmd,shift,backspace', 'meta,backspace', 'Meta+Backspace', 'super,bs', 'cmd, backspace']) {
+      if (!keysDelete(keys)) missed.push(keys);
+    }
+    expect(missed).toEqual([]);
+    // Backspace by itself, or with a key that is not the command key, rubs out typed text.
+    for (const keys of ['backspace', 'ctrl,backspace', 'alt,backspace', 'option,backspace', 'shift,backspace', 'cmd,b', 'cmd,s']) expect(keysDelete(keys)).toBe(false);
+    expect(callDeletesOrPays('desktop_press_keys', { keys: 'cmd,backspace' }, ['control_app'])).toBe(true);
+    expect(callDeletesOrPays('browser_press_key', { key: 'Meta+Backspace' }, ['access_browser'])).toBe(true);
   });
 
   test('a call is a delete or a payment by its categories, its command or its keys', () => {
@@ -115,9 +152,46 @@ describe('saying it is the approval', () => {
     expect(asked).toHaveLength(4);
   });
 
-  test('a machine that cannot say is not a reason to ask', async () => {
-    setOwnerWordProbe(async () => { throw new Error('the desktop app does not know describe_target'); });
-    expect(await ownerWord('desktop_click', { element_id: 9 }, { categories: ['control_app'] }, yes)).toBe('go');
+  test('a machine that fails once is asked once more, and its second answer counts', async () => {
+    let tries = 0;
+    setOwnerWordProbe(async (_tool, params) => {
+      tries += 1;
+      if (tries === 1) throw new Error('describe_target timed out');
+      return params.element_id === 9 ? ['make_payment'] : [];
+    });
+    const gate = { categories: ['control_app' as const] };
+    expect(await ownerWord('desktop_click', { element_id: 9 }, gate, yes)).toBe('ask');
+    expect(tries).toBe(2);
+    tries = 0;
+    expect(await ownerWord('desktop_click', { element_id: 7 }, gate, yes)).toBe('go');
+    expect(tries).toBe(2);
+  });
+
+  test('a raw click on a screen that could not be read is asked about, never pressed blind', async () => {
+    const gate = { categories: ['control_app' as const] };
+    // It fails both times: an older desktop app, or a machine that does not answer in time.
+    let tries = 0;
+    setOwnerWordProbe(async () => { tries += 1; throw new Error('the desktop app does not know describe_target'); });
+    expect(await ownerWord('desktop_click', { element_id: 9 }, gate, yes)).toBe('unseen');
+    expect(tries).toBe(2);
+    // It may not look, or has nothing to look with (screen awareness off): null, both times.
+    tries = 0;
+    setOwnerWordProbe(async () => { tries += 1; return null; });
+    expect(await ownerWord('desktop_pointer', { x: 500, y: 500 }, gate, yes)).toBe('unseen');
+    expect(tries).toBe(2);
+    // Only a raw press, and only in such a turn: nothing else is held up by a screen that cannot be read.
+    expect(await ownerWord('desktop_type', { text: 'hello' }, gate, yes)).toBe('go');
+    expect(await ownerWord('ui_act', { element_id: 52, action: 'click' }, gate, yes)).toBe('go');
+    expect(await ownerWord('desktop_click', { element_id: 9 }, gate, no)).toBeNull();
+    // A delete seen in the call itself stays what it is called.
+    expect(await ownerWord('desktop_click', { element_id: 9 }, { categories: ['control_app', 'delete_data'] }, yes)).toBe('ask');
+  });
+
+  test('what is asked carries its own reason', () => {
+    expect(ownerWordAsks('ask')).toBe(OWNER_WORD_ASKS_REASON);
+    expect(ownerWordAsks('unseen')).toBe(OWNER_WORD_UNSEEN_REASON);
+    expect(ownerWordAsks('go')).toBeNull();
+    expect(ownerWordAsks(null)).toBeNull();
   });
 
   test('a call whose own classifier failed is left to the ordinary rules: nothing is known about it', async () => {

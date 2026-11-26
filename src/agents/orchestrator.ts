@@ -16,7 +16,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
-import { OWNER_WORD_ASKS_REASON, OWNER_WORD_REASON, ownerWord } from '../authority/owner-word.ts';
+import { OWNER_WORD_REASON, ownerWord, ownerWordAsks } from '../authority/owner-word.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
@@ -2212,8 +2212,11 @@ export class AgentOrchestrator {
       }
       // The other half of the same decision: what deletes or pays is asked
       // about, also where the ordinary rules would have let it run unasked.
-      if (word === 'ask' && decision.allowed && !decision.requiresApproval) {
-        decision = { ...decision, requiresApproval: true, reason: `${toolCall.name}: ${OWNER_WORD_ASKS_REASON}` };
+      // So is a raw click on a screen that could not be read first, and it
+      // says so, also where the ordinary rules would have asked anyway.
+      const asks = ownerWordAsks(word);
+      if (asks && decision.allowed && (!decision.requiresApproval || word === 'unseen')) {
+        decision = { ...decision, requiresApproval: true, reason: `${toolCall.name}: ${asks}` };
       }
 
       // The category the decision was made on: the worst case when allowed,

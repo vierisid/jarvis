@@ -90,15 +90,28 @@ const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle'])
  * a send, a settings change), or none. For the owner's word
  * (authority/owner-word.ts), which lets a click go ahead unasked unless it is
  * a delete or a payment and so has to know before the click, not on a sheet.
- * Nothing is read when the screen may not be read, and a machine that cannot
- * say reads as nothing.
+ *
+ * Three answers, and they are kept apart:
+ *
+ *   - a list (often empty): the machine looked. A place with no name, in a
+ *     window it could name, reads as nothing;
+ *   - null: it could not look. The screen may not be read (screen awareness
+ *     off), there is no machine to ask, or the machine said nothing at all
+ *     about the place (a desktop app that cannot say, an element it no longer
+ *     knows). That is not "nothing is there", and the owner's word asks;
+ *   - a throw: the asking failed (no answer in time, a desktop app too old to
+ *     know the question). The owner's word asks once more.
+ *
+ * A call that presses nothing, or that will be refused before it runs (no
+ * place can be worked out, a click that names no element), reads as nothing.
  */
-export async function notchPressReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<ActionCategory[]> {
-  if ((toolName !== 'desktop_click' && toolName !== 'desktop_pointer') || !deps.allowed()) return [];
+export async function notchPressReads(toolName: string, args: Record<string, unknown>, deps: NotchWhereDeps): Promise<ActionCategory[] | null> {
+  if (toolName !== 'desktop_click' && toolName !== 'desktop_pointer') return [];
   const action = typeof args.action === 'string' && args.action ? args.action : 'click';
   if (!PRESSES.has(action)) return [];
+  if (!deps.allowed()) return null;
   const target = deps.target(args.target, toolName);
-  if (!target) return [];
+  if (!target) return null;
   let params: Record<string, unknown>;
   if (toolName === 'desktop_pointer') {
     const place = pointerRequest(args, deps.seen(target));
@@ -110,11 +123,14 @@ export async function notchPressReads(toolName: string, args: Record<string, unk
     return [];
   }
   const reply = await deps.ask(target, params);
-  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return [];
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return null;
   const said = reply as Record<string, unknown>;
-  const name = typeof said.element_name === 'string' ? said.element_name : '';
-  const title = typeof said.window_title === 'string' ? said.window_title : '';
-  return name ? uiEffectHints('click', name, title) : [];
+  const word = (key: string): string => (typeof said[key] === 'string' ? (said[key] as string) : '');
+  const name = word('element_name');
+  const title = word('window_title');
+  if (name) return uiEffectHints('click', name, title);
+  // No name. It looked if it could say anything else about the place.
+  return title || word('process_name') || word('element_role') || said.own === true ? [] : null;
 }
 
 /** The place an approval would land on, or null when it acts on nothing on a screen or the machine cannot say. */

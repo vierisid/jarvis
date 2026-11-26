@@ -49,7 +49,7 @@ import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 import { runAsActingAgent } from './acting-agent.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
-import { OWNER_WORD_REASON, ownerWord } from '../authority/owner-word.ts';
+import { OWNER_WORD_REASON, ownerWord, ownerWordAsks } from '../authority/owner-word.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -582,10 +582,11 @@ async function executeTool(
     if (onOwnersWord) {
       // Allowed, and asked for by the owner: it runs like any allowed call.
       console.log(`[Authority] ${toolCall.name} (${actionCategory}) goes ahead in a helper: ${OWNER_WORD_REASON}`);
-    } else if (decision.requiresApproval || gate.confirm === 'always' || word === 'ask') {
+    } else if (decision.requiresApproval || gate.confirm === 'always' || ownerWordAsks(word)) {
       // (`ask`: a delete or a payment in something the owner asked for on the
-      // notch. A helper cannot hold the question, so it is refused here and
-      // the agent that can ask does it.)
+      // notch; `unseen`: a raw click on a screen that could not be read. A
+      // helper cannot hold the question, so it is refused here and the agent
+      // that can ask does it.)
       if (!governedTools) {
         // Nobody can hold the approval, so the call is refused. The row says
         // approval was required and nothing ran.

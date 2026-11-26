@@ -138,6 +138,37 @@ describe('anything asked on the notch is done without asking, except a delete or
       setOwnerWordProbe(null);
     }
   });
+
+  test('a raw click on a screen that cannot be read is asked about, with that as the reason', async () => {
+    let tries = 0;
+    setOwnerWordProbe(async (_tool, params) => {
+      tries += 1;
+      if (params.element_id === 7) return null;
+      if (params.element_id === 6 && tries % 2 === 1) throw new Error('describe_target timed out');
+      if (params.element_id === 5) throw new Error('describe_target timed out');
+      return [];
+    });
+    try {
+      const h = build();
+      // Screen awareness off: nothing may be read, in a turn that has read nothing either.
+      expect(String(await onNotch(() => h.run('desktop_click', { element_id: 7 }, new Set())))).toContain('AWAITING_APPROVAL');
+      // No answer, twice.
+      expect(String(await onNotch(() => h.run('desktop_click', { element_id: 5 }, new Set())))).toContain('AWAITING_APPROVAL');
+      expect(h.calls).toEqual([]);
+      const pending = h.approvals.getPending();
+      expect(pending).toHaveLength(2);
+      for (const asked of pending) {
+        expect(asked.reason).toContain('could not be read');
+        expect(asked.reason).not.toContain('a delete or a payment');
+      }
+      // No answer once, then "nothing that deletes or pays is there": it goes ahead.
+      tries = 0;
+      expect(String(await onNotch(() => h.run('desktop_click', { element_id: 6 }, new Set())))).not.toContain('AWAITING_APPROVAL');
+      expect(h.calls).toEqual(['desktop_click {"element_id":6}']);
+    } finally {
+      setOwnerWordProbe(null);
+    }
+  });
 });
 
 describe('everywhere else it is asked about as it always was', () => {

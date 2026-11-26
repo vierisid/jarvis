@@ -14,6 +14,7 @@ import { closeDb, initDatabase } from '../vault/schema.ts';
 import type { ApprovalDelivery } from './approval-delivery.ts';
 import { ApprovalManager } from './approval.ts';
 import { AuthorityEngine } from './engine.ts';
+import { setOwnerWordProbe } from './owner-word.ts';
 
 const turn = (requestId: string) => <T>(fn: () => T): T =>
   withBriefTurn({ conversationId: 'c', turnId: 't', requestId, signal: new AbortController().signal, progress: () => {} }, fn);
@@ -28,8 +29,8 @@ describe('a helper agent working on something asked on the notch', () => {
   function helper(calls: LLMToolCall[]) {
     const runs: string[] = [];
     const registry = new ToolRegistry();
-    for (const name of ['write_file', 'run_command']) {
-      registry.register({ name, category: name === 'run_command' ? 'terminal' : 'file-ops', description: 't', parameters: {},
+    for (const name of ['write_file', 'run_command', 'desktop_click']) {
+      registry.register({ name, category: name === 'run_command' ? 'terminal' : name === 'desktop_click' ? 'desktop' : 'file-ops', description: 't', parameters: {},
         execute: async (params) => { runs.push(`${name} ${JSON.stringify(params)}`); return 'ok'; } });
     }
     const history: Array<{ role: string; content: unknown }> = [];
@@ -64,6 +65,23 @@ describe('a helper agent working on something asked on the notch', () => {
     const result = await onNotch(() => h.run());
     expect(h.runs).toEqual([]);
     expect(said(result)).toContain('requires user approval');
+  });
+
+  test('cannot click on a screen that could not be read: it is refused like a delete, and nothing is pressed', async () => {
+    const click: LLMToolCall = { id: 'c3', name: 'desktop_click', arguments: { element_id: 9 } };
+    try {
+      setOwnerWordProbe(async () => []);
+      const seen = helper([click]);
+      await onNotch(() => seen.run());
+      expect(seen.runs).toEqual(['desktop_click {"element_id":9}']);
+      setOwnerWordProbe(async () => null);
+      const blind = helper([click]);
+      const result = await onNotch(() => blind.run());
+      expect(blind.runs).toEqual([]);
+      expect(said(result)).toContain('[AUTHORITY DENIED] desktop_click');
+    } finally {
+      setOwnerWordProbe(null);
+    }
   });
 
   test('anywhere else it is refused as before', async () => {

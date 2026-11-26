@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { notchApprovalWhere, notchPlaceSentence, type NotchWhereDeps } from './notch-where.ts';
+import { notchApprovalWhere, notchPlaceSentence, notchPressReads, type NotchWhereDeps } from './notch-where.ts';
 
 const request = (tool: string, args: unknown) => ({ tool_name: tool, tool_arguments: JSON.stringify(args) });
 
@@ -92,5 +92,55 @@ describe('where on the screen an approval would land', () => {
     const long = notchPlaceSentence({ element_role: 'Button', element_name: `Pay\n\n${'x'.repeat(300)}`, window_title: 'W' }, false)!;
     expect(long).not.toContain('\n');
     expect(long.length).toBeLessThan(140);
+  });
+});
+
+describe('what a raw press would land on, for the word of the owner', () => {
+  const del = { element_role: 'Button', element_name: 'Delete', window_title: 'Photos', process_name: 'photos' };
+  const buy = { element_role: 'Button', element_name: 'Buy now', window_title: 'Store', process_name: 'store' };
+
+  test('a name the screen gave is read as a control label is', async () => {
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, machine(del).deps)).toContain('delete_data');
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine(buy).deps)).toContain('make_payment');
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Button', element_name: 'Library', window_title: 'Steam' }).deps)).toEqual([]);
+  });
+
+  test('a place the machine looked at and found no name for reads as nothing', async () => {
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ window_title: 'Hades', process_name: 'hades' }).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Pane', element_name: '', window_title: 'Hades' }).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Button', element_name: '' }).deps)).toEqual([]);
+  });
+
+  test('a screen that may not be read, or a machine that says nothing, is "could not look", not "nothing is there"', async () => {
+    // Screen awareness off: nothing is asked of the machine at all.
+    const off = machine(del, true, false);
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, off.deps)).toBeNull();
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, off.deps)).toBeNull();
+    expect(off.asked).toEqual([]);
+    // No machine to ask.
+    const none: NotchWhereDeps = { ...machine(del).deps, target: () => null };
+    expect(await notchPressReads('desktop_click', { element_id: 3 }, none)).toBeNull();
+    // No reply, an empty one (a desktop app that cannot say, an element it no longer knows), or not an object.
+    for (const reply of [null, undefined, {}, [], 'ok', { element_name: '', window_title: '', process_name: '' }]) {
+      expect(await notchPressReads('desktop_click', { element_id: 3 }, machine(reply).deps)).toBeNull();
+      expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine(reply).deps)).toBeNull();
+    }
+  });
+
+  test('a machine that fails is not hidden: the failure reaches the one who decides', async () => {
+    const broken: NotchWhereDeps = { ...machine(del).deps, ask: async () => { throw new Error('describe_target timed out'); } };
+    await expect(notchPressReads('desktop_click', { element_id: 3 }, broken)).rejects.toThrow('timed out');
+  });
+
+  test('what presses nothing, or will be refused before it runs, is not a reason to ask', async () => {
+    const off = machine(del, true, false).deps;
+    // Not a press: nothing is clicked, whatever the screen holds.
+    expect(await notchPressReads('desktop_click', { element_id: 3, action: 'get_value' }, off)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250, action: 'scroll_down' }, off)).toEqual([]);
+    expect(await notchPressReads('desktop_type', { text: 'hello' }, off)).toEqual([]);
+    // A place that cannot be worked out, or a click that names no element: the call itself does nothing.
+    expect(await notchPressReads('desktop_pointer', { x: 5000, y: 10 }, machine(del).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 10, y: 10 }, machine(del, false).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_click', {}, machine(del).deps)).toEqual([]);
   });
 });
