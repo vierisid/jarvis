@@ -2661,7 +2661,8 @@ Friday at 10:00 to Anna."
     Windows it is not hidden behind a fullscreen video while the fuse
     burns with Esc not taken. On a Mac the window that hides for a video
     does not come back for a question yet (point 10): there the letter
-    goes only if the page knows it is shown.
+    is held back only when the page knows itself hidden, and whether it
+    knows has not been seen.
     A letter that with its line of who it goes to takes more than
     `MAIL_SLOT_PAPER_ROWS` rows is not read in eight seconds and may not
     fit the paper: the pick opens it as a draft, with the time in it, and
