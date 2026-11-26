@@ -42,6 +42,8 @@ function harness(rows: MailProposalRow[], options: {
   /** The mailbox takes its time: the answer comes when this does. */
   stillWaitsWhen?: Promise<boolean | null>;
   noMailbox?: boolean;
+  /** What the mailbox says when it is asked whether a reply that may have gone did. */
+  went?: boolean | null;
   look?: MailLook | null;
   /** A look (the month, say) is under way. */
   reading?: boolean;
@@ -75,13 +77,15 @@ function harness(rows: MailProposalRow[], options: {
   for (const entry of rows) store.put(entry);
 
   const did: string[] = [];
+  /** Each time the mailbox was asked whether a reply that may have gone did. */
+  const looked: { text: string; thread: string | null; since: number }[] = [];
   const plans: MailReplyPlan[] = [];
   const sent = [...(options.sent ?? [true])];
   const mailbox: Mailbox = {
     reader: async () => null,
     write: async () => ({ ok: true }),
     search: async () => [],
-    went: async () => null,
+    went: async (asked, since) => { did.push('went?'); looked.push({ text: asked.text, thread: asked.thread, since }); return options.went === undefined ? false : options.went; },
     reply: async (plan, work) => {
       plans.push(plan);
       const session: MailReplySession = {
@@ -134,7 +138,7 @@ function harness(rows: MailProposalRow[], options: {
   });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    mail, store, inbox, did, plans, redrafts, held, line, surface, asks,
+    mail, store, inbox, did, looked, plans, redrafts, held, line, surface, asks,
     looks: () => looks,
     /** The time, as the mail layer reads it. */
     at: (): number => AT + 10_000 + now,
@@ -465,6 +469,46 @@ describe('a prepared reply on the notch', () => {
       expect(h.said()).toBe('I pressed Send, and nothing says it went. Look in the thread before sending it again.');
       expect(h.store.proposal(row().id)!.state).toBe('ready');
     }
+  });
+
+  // The second yes on such a reply was guarded only by "the thread has not moved on", and that
+  // let it through when the thread could not be read: the same reply went twice.
+  describe('a reply that may have gone, and the owner says yes again', () => {
+    const again = async (went: boolean | null) => {
+      const h = harness([row()], { steps: { send: { ok: false, why: 'Gmail did not say it was sent', pressed: true } }, sent: [false], went });
+      await h.arrive();
+      await h.answer('yes');
+      await h.answer('yes');
+      await h.answer('done');
+      await h.advance(1500);
+      expect(h.said()).toBe('I pressed Send, and nothing says it went. Look in the thread before sending it again.');
+      await h.answer('done');
+      h.did.length = 0;
+      h.inbox.present('again', (stage) => h.mail.open(stage));
+      await settle();
+      await h.answer('yes');
+      return h;
+    };
+
+    test('the mailbox cannot say whether it went: it stops there, and nothing is written or sent', async () => {
+      const h = await again(null);
+      expect(h.did).toEqual(['went?']);
+      expect(h.said()).toBe('I cannot see whether it went the first time, so I am not sending it again. Look in the thread first.');
+      expect(h.store.proposal(row().id)!.state).toBe('ready');
+    });
+
+    test('it had gone: it is called sent, and is not sent again', async () => {
+      const h = await again(true);
+      expect(h.did).toEqual(['went?']);
+      expect(h.looked).toEqual([{ text: row().draft, thread: row().thread, since: h.looked[0]!.since }]);
+      expect(h.said()).toBe('It had gone: it is in the thread. I did not send it again.');
+      expect(h.store.proposal(row().id)!.state).toBe('sent');
+    });
+
+    test('it is not there: then it is written and sent as any reply', async () => {
+      const h = await again(false);
+      expect(h.did.slice(0, 2)).toEqual(['went?', 'write']);
+    });
   });
 
   // Gmail's word is not enough: sent means it is the last word in the thread.

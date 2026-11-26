@@ -37,7 +37,7 @@ function harness(options: {
   heard?: string[];
   think?: (messages: { role: string; content: string }[]) => string | Promise<string>;
   stt?: false;
-  mail?: false | { find?: typeof SAM | null | ((who: string) => { name: string; address: string; thread: { id: string; subject: string } | null } | null); send?: { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number }; sends?: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number })[]; went?: boolean | null };
+  mail?: false | { find?: typeof SAM | null | ((who: string) => { name: string; address: string; thread: { id: string; subject: string } | null } | null); send?: { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number }; sends?: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number } | Error)[]; went?: boolean | null };
   paused?: () => boolean;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
@@ -61,7 +61,7 @@ function harness(options: {
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const db = new Database(':memory:');
   const settings = new NotchSettings(db);
-  const state = { now: AT, eye: false, asked: [] as { on: boolean; id: string; far: boolean }[], made: 0, thought: [] as { role: string; content: string }[][], sent: [] as { address: string; also?: string[]; thread: string | null; subject: string; text: string }[], found: [] as string[], looked: [] as { thread: string | null; since: number }[] };
+  const state = { now: AT, eye: false, asked: [] as { on: boolean; id: string; far: boolean }[], made: 0, thought: [] as { role: string; content: string }[][], sent: [] as { address: string; also?: string[]; thread: string | null; subject: string; text: string }[], found: [] as string[], looked: [] as { thread: string | null; since: number; text?: string }[] };
   const sends = [...((options.mail && options.mail.sends) || [])];
   const logs: string[] = [];
   const heard = [...(options.heard ?? TALK)];
@@ -81,8 +81,8 @@ function harness(options: {
     think: async (messages) => { state.thought.push(messages); return options.think ? options.think(messages) : NOTES; },
     ...(options.mail === false ? {} : { mail: {
       find: async (who: string) => { state.found.push(who); const find = options.mail && 'find' in options.mail ? options.mail.find : SAM; return typeof find === 'function' ? find(who) : find ?? null; },
-      send: async (plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }) => { state.sent.push(plan); return sends.shift() ?? ((options.mail && options.mail.send) || { ok: true as const }); },
-      went: async (plan: { thread: string | null }, since: number) => { state.looked.push({ thread: plan.thread, since }); return options.mail && options.mail.went !== undefined ? options.mail.went : false; },
+      send: async (plan: { address: string; also?: string[]; thread: string | null; subject: string; text: string }) => { state.sent.push(plan); const next = sends.shift(); if (next instanceof Error) throw next; return next ?? ((options.mail && options.mail.send) || { ok: true as const }); },
+      went: async (plan: { thread: string | null; text: string }, since: number) => { state.looked.push({ thread: plan.thread, since, text: plan.text }); return options.mail && options.mail.went !== undefined ? options.mail.went : false; },
       owner: () => 'Vera',
     } }),
     paused: options.paused,
@@ -360,7 +360,7 @@ describe('after the call', () => {
   describe('a follow-up that may have gone', () => {
     const UNSURE = { ok: false as const, why: 'Gmail did not confirm it went. Look in the thread before trying again', pressed: true, since: AT - 4000 };
     /** The follow-up is sent once, and the call's sheet is opened again from Home's row. */
-    const tried = async (mail: { sends: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number })[]; went?: boolean | null }) => {
+    const tried = async (mail: { sends: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number } | Error)[]; went?: boolean | null }) => {
       const h = harness({ mail });
       await h.call();
       await h.answer('yes');
@@ -382,7 +382,9 @@ describe('after the call', () => {
     test('the next yes looks first: a mail that is there is counted, and nothing is sent a second time', async () => {
       const { h } = await tried({ sends: [UNSURE], went: true });
       await h.answer('yes');
-      expect(h.state.looked).toEqual([{ thread: 'aaaaaaaaaaaaaaaa', since: AT - 4000 }]);
+      // Looked for as it was sent.
+      expect(h.state.looked).toEqual([{ thread: 'aaaaaaaaaaaaaaaa', since: AT - 4000, text: h.state.sent[0]!.text }]);
+      expect(h.calls.store.recent()[0]!.notes).not.toHaveProperty('unsureText');
       expect(h.said()).toBe('It had gone: it is in your mail. I did not send it again.');
       expect(h.state.sent).toHaveLength(1);
       expect(h.calls.store.recent()[0]!.notes!.sentAt).not.toBeNull();
@@ -402,6 +404,16 @@ describe('after the call', () => {
       const { h } = await tried({ sends: [UNSURE], went: null });
       await h.answer('yes');
       expect(h.said()).toBe('I cannot see whether it went, so I am not sending it again. Look in your mail first.');
+      expect(h.state.sent).toHaveLength(1);
+    });
+
+    // A send that threw was read as "nothing was pressed". Nobody knows how far it got.
+    test('a send that threw may have gone too: the next yes looks first', async () => {
+      const { h, said } = await tried({ sends: [new Error('the desktop app went away')], went: true });
+      expect(said).toBe('It may have gone: Gmail did not confirm it. Before I send it again I look whether it did. It is kept with the call.');
+      expect(h.calls.store.recent()[0]!.notes).toMatchObject({ sentAt: null, unsureText: h.state.sent[0]!.text });
+      await h.answer('yes');
+      expect(h.state.looked).toHaveLength(1);
       expect(h.state.sent).toHaveLength(1);
     });
 

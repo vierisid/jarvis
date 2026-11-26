@@ -60,11 +60,13 @@ const goesToTheExpected = (frame) => {
 // The words of this refusal are MAIL_WHY_DRAFT_THERE in ../mailbox.ts: the draft is then left alone.
 const DRAFT_THERE = 'a reply is already being written in that thread';
 const flat = (text) => String(text || '').replace(/\s+/g, ' ').trim();
-// The mark "write" leaves on the reply it opened, on the text and on its frame: "discard" runs in
+// The mark "write" leaves on the reply it opened, on its text: "discard" runs in
 // the same page later and has to know that reply from one somebody else began. It is gone with
 // the page: a reply of ours left from an earlier visit is then nobody's to throw away, and stays.
 const MARK = 'data-jarvis-reply';
-const ours = (box, frame) => box.getAttribute(MARK) === thread || frame.getAttribute(MARK) === thread;
+// Only the text itself carries it: a frame can outlive the reply it held, and a mark on it would
+// make whatever is opened in it next look like ours.
+const ours = (box) => box.getAttribute(MARK) === thread;
 // Gmail's own word that a mail went, counted: in the places it speaks through, and on the whole
 // page. Only a count that goes up after Send was pressed is Gmail saying so about this mail. A
 // mail in the thread that says "your message has been sent" was there before.
@@ -86,7 +88,7 @@ if (step === 'discard') {
   // to block the thread. A reply without the mark is somebody's (the owner's own, half
   // written, or one that begins with our words and goes on with theirs): it used to be thrown
   // away with the rest when a step before this one failed.
-  if (!ours(box, frame)) return { ok: false, why: 'the reply being written is not the one that was written here', kept: true };
+  if (!ours(box)) return { ok: false, why: 'the reply being written is not the one that was written here', kept: true };
   // The bin of this reply, and of no other: a thread can hold more than one thing with a bin.
   const bin = [...frame.querySelectorAll('div[role="button"]')].find((node) => visible(node) && /^discard draft/i.test(node.getAttribute('aria-label') || node.getAttribute('data-tooltip') || ''));
   if (!bin) return { ok: false, why: 'no way to discard was found' };
@@ -123,7 +125,6 @@ if (step === 'write') {
   // A reply this script opened, with no words in it: it is marked as the one "discard" may
   // throw away, before anything is written, so that a write that fails half way is not left.
   box.setAttribute(MARK, thread);
-  frame.setAttribute(MARK, thread);
   // Gmail fills in who it goes to a moment after the reply opens.
   for (let tries = 0; tries < 12 && !goesToTheExpected(frame); tries++) await sleep(250);
   if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', people: addressedIn(frame).size, expected: expected.size };

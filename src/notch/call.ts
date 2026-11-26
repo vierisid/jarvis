@@ -118,6 +118,8 @@ export interface NotchCallNotes {
    * whether it did, from then.
    */
   unsureSince?: number;
+  /** That follow-up, as it was sent. */
+  unsureText?: string;
 }
 
 export interface NotchCallRow {
@@ -686,6 +688,7 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         const gone = async (): Promise<void> => {
           notes.sentAt = now();
           delete notes.unsureSince;
+          delete notes.unsureText;
           store.set(id, { notes });
         };
         if (notes.unsureSince) {
@@ -694,7 +697,7 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
           const looking = stage.id();
           stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
           let there: boolean | null = null;
-          try { there = (await deps.mail.went?.(plan, notes.unsureSince)) ?? null; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
+          try { there = (await deps.mail.went?.({ ...plan, text: notes.unsureText ?? plan.text }, notes.unsureSince)) ?? null; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
           if (there === true) {
             await gone();
             log('[notch] a call\'s follow-up that may have gone had gone: it is not sent again');
@@ -714,12 +717,15 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
           sent = await deps.mail.send(plan);
         } catch (error) {
           if (error instanceof NotchStageEnded) throw error;
-          sent = { ok: false, why: 'the mailbox could not be reached', pressed: false };
+          // Not known how far it got before it threw: it may have gone, and that is how it is read.
+          sent = { ok: false, why: 'the mailbox did not answer' };
         }
         if (!sent.ok && sent.pressed !== false) {
           // Send was pressed, or it is not known that it was not: it may have gone. It was said "I
           // could not send it", and the next yes sent it a second time.
           notes.unsureSince = sent.since ?? before;
+          // The mail as it was sent: that is what is looked for, not what it would say if written now.
+          notes.unsureText = plan.text;
           store.set(id, { notes });
           log('[notch] a call\'s follow-up may have gone: nothing confirmed it');
           await stage.say(['It may have gone: Gmail did not confirm it. Before I send it again I look whether it did. It is kept with the call.'], 6200, { mood: 'careful' });

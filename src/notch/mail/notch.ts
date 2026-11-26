@@ -247,6 +247,12 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   const unseen = (): MailProposalRow[] => store.ready().filter((row) => !seen.has(row.id));
   /** The draft that is open on the notch, or was until a moment ago: what is said then is about it. */
   let inHand: { id: string; showing: boolean; leftAt: number } | null = null;
+  /**
+   * Replies on which Send was pressed and that nothing confirmed: since when, and the words that
+   * were sent. Before such a reply is sent again the mailbox is asked whether it went. Kept for as
+   * long as the brain runs: after a restart only the thread's own last word guards a second send.
+   */
+  const maybeSent = new Map<string, { since: number; text: string }>();
   /** The line of free times that is on the notch, or was until the talk keys took it off: a time said then picks one. */
   let slotsUp: { id: string; says: string[]; showing: boolean; leftAt: number } | null = null;
 
@@ -444,6 +450,26 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       await stage.say(['The thread has moved on since. I did not send it.'], 3600, { src: 'mail' });
       return 'settled';
     }
+    // The last yes pressed Send and nothing confirmed it. That the thread has not moved on is not
+    // enough to send again: it was the only guard, and a thread that could not be read let a
+    // second send through. The mailbox is asked for the reply as it was sent.
+    const before = maybeSent.get(id);
+    if (before) {
+      const looking = stage.id();
+      stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
+      const there = await mailbox.went({ to: row.to[0]?.address ?? row.who.address, thread: row.thread, subject: row.subject, text: before.text }, before.since).catch(() => null);
+      if (there === true) {
+        maybeSent.delete(id);
+        store.move(id, 'ready', 'sent', now());
+        log('[notch] a reply that may have gone had gone: it is not sent again');
+        await stage.say(['It had gone: it is in the thread. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
+        return 'settled';
+      }
+      if (there === null) {
+        await stage.say(['I cannot see whether it went the first time, so I am not sending it again. Look in the thread first.'], 5200, { mood: 'careful', src: 'mail' });
+        return 'waits';
+      }
+    }
     // The reply as it goes: what is asked after it went is asked about this one.
     const going = row;
     const plan: MailReplyPlan = { thread: going.thread, to: going.to.map((person) => person.address), cc: going.cc.map((person) => person.address), text: going.draft };
@@ -518,13 +544,16 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
           // Gmail did not say it went, and the thread does not show it. It may have gone all the same:
           // it used to be called "in your Gmail drafts", and the owner sent it a second time.
           log(`[notch] a reply was sent and nothing confirms it: ${sent.why}`);
+          maybeSent.set(id, { since, text: going.draft });
           await stage.say(['I pressed Send, and nothing says it went. Look in the thread before sending it again.'], 5200, { mood: 'worried', src: 'mail' });
           return 'waits';
         }
         if (there === false) {
+          maybeSent.set(id, { since, text: going.draft });
           await stage.say(['Gmail says it was sent, but I do not see it in the thread yet. I will look again.'], 4600, { mood: 'curious', src: 'mail' });
           return 'waits';
         }
+        maybeSent.delete(id);
         store.move(id, 'ready', 'sent', now());
         await stage.say(offering ? ['Offered ', em(offering), ` to ${who}.`] : ['Sent to ', em(who), '.'], offering ? 2800 : 2400, { mood: 'happy', mark: 'check', src: 'mail' });
         // The prototype: "Always use a short tone with Marco?" A reply that went in a manner the owner chose

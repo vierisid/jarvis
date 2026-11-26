@@ -40,12 +40,14 @@ function harness(options: {
   offline?: () => boolean;
   people?: Record<string, StandingPerson | null>;
   find?: 'unreachable';
-  send?: ({ ok: true } | { ok: false; why: string; pressed?: boolean; since?: number })[];
+  send?: ({ ok: true; left?: boolean } | { ok: false; why: string; pressed?: boolean; since?: number; left?: boolean })[];
   /** What the mailbox says each time it is asked whether a mail that may have gone did. */
   went?: (boolean | null)[];
   paused?: () => boolean;
   waitMs?: number;
   owner?: string;
+  /** The owner's name as it is known at each asking: it can change after a mail went. */
+  ownerNow?: () => string;
   db?: Database;
 } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -84,7 +86,7 @@ function harness(options: {
     async send(plan) { sent.push(plan); return answers.shift() ?? { ok: true }; },
     async went(plan, since) { asked.push({ text: plan.text, thread: plan.thread, since }); return wentAnswers.length > 1 ? wentAnswers.shift()! : wentAnswers.length === 1 ? wentAnswers[0]! : false; },
     async look() { looks++; const came = arriving; arriving = []; if (came.length) read(came); },
-    owner: () => options.owner ?? 'Vieri',
+    owner: () => options.ownerNow?.() ?? options.owner ?? 'Vieri',
   };
   const eyes: boolean[] = [];
   const logs: string[] = [];
@@ -841,14 +843,14 @@ describe('until it is done', () => {
       const id = await followUpUnsure(h);
       expect(h.said()).toBe('The follow-up to Sam may have gone: Gmail did not confirm it. What now?');
       expect(whatNow(h.line())).toMatchObject({ yes: 'try again', buttons: ['Let it go'] });
-      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', nudges: 1, stuck: { kind: 'send', unsure: { since: MONDAY - 5000 } } });
+      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', nudges: 1, stuck: { kind: 'send' }, unsure: { since: MONDAY - 5000, text: expect.stringContaining('Following up on my note below') } });
       expect(h.standing.chase(id)!.steps.at(-1)!.text).toBe('The follow-up may have gone: Gmail did not confirm it.');
       // It is the same question after a restart, with the same moment to look from.
       h.standing.stop();
       const again = harness({ db, waitMs: 60_000 });
       await settle();
       expect(again.said()).toBe('The follow-up to Sam may have gone: Gmail did not confirm it. What now?');
-      expect(again.standing.chase(id)!.stuck).toEqual({ kind: 'send', why: UNSURE.why, unsure: { since: MONDAY - 5000 } });
+      expect(again.standing.chase(id)).toMatchObject({ stuck: { kind: 'send', why: UNSURE.why }, unsure: { since: MONDAY - 5000, text: expect.stringContaining('Following up on my note below') } });
     });
 
     test('"try again" looks first: a mail that is there is counted, and nothing is sent a second time', async () => {
@@ -897,7 +899,7 @@ describe('until it is done', () => {
       // Kept: a second chase of Sam is refused while this one asks, so the same mail is not sent by another way.
       expect(h.standing.counts().chases).toBe(1);
       const id = h.standing.handable()[0]!.id;
-      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', nudges: 0, stuck: { kind: 'send', unsure: { since: MONDAY - 5000 } } });
+      expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', nudges: 0, stuck: { kind: 'send' }, unsure: { since: MONDAY - 5000, text: expect.stringContaining('A quick nudge on the contract') } });
       await h.pass(9000);
       await h.speak("Get Sam's answer on the contract by Friday");
       expect(h.said()).toBe('I am already on that.');
@@ -942,6 +944,134 @@ describe('until it is done', () => {
       await settle();
       await other.reply('button', { button: 'drop' });
       expect(other.said()).toBe('Dropped. I will not chase it. The mail that may have gone is not taken back.');
+    });
+
+    // The second review, 26 November 2026. That a mail may have gone was kept with why the chase
+    // was stuck, and was lost whenever the chase changed state: handed to somebody and back, or
+    // told to wait until Monday, it sent the same mail again without looking.
+    describe('and the chase is handed over, comes back, or waits', () => {
+      const FIRST = 'Hi Sam,\n\nA quick nudge on the contract: could you get back to me by Friday?\n\nThanks,\nVieri';
+      /** The first mail may have gone, Leo took the chase and handed it back, and its question is up. */
+      async function unsureAndBack(h: ReturnType<typeof harness>): Promise<string> {
+        await started(h);
+        await h.pass(9000);
+        const id = h.standing.handable()[0]!.id;
+        expect(h.standing.hand(id, 'Leo')).toBe(true);
+        expect(h.standing.back(id, [], 'Leo')).toBe(true);
+        await h.standing.tick();
+        await settle();
+        expect(h.said()).toBe("Leo handed Sam's answer back. What now?");
+        return id;
+      }
+
+      test('handed back, "send it" looks first: the mail is there, it is counted, and nothing is sent', async () => {
+        const h = harness({ send: [UNSURE], went: [true] });
+        const id = await unsureAndBack(h);
+        expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', stuck: { kind: 'back', from: 'Leo' }, unsure: { since: MONDAY - 5000, text: FIRST } });
+        // The mail on the sheet is the first one: nothing of it is called a follow-up.
+        expect(whatNow(h.line())).toMatchObject({ yes: 'send it', paper: ['Hi Sam,', 'A quick nudge on the contract: could you get back to me by Friday?', 'Thanks,', 'Vieri'] });
+        await h.reply('yes');
+        expect(h.asked).toEqual([{ thread: 'aaaaaaaaaaaaaaaa', since: MONDAY - 5000, text: FIRST }]);
+        expect(h.said()).toBe('It had gone: it is in your mail. I did not send it again. Still on it.');
+        expect(h.sent).toHaveLength(1);
+        expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 1, unsure: null });
+      });
+
+      test('handed back, "send it", and it is not there: the fuse names the first mail, and it goes', async () => {
+        const h = harness({ send: [UNSURE, { ok: true }], went: [false] });
+        const id = await unsureAndBack(h);
+        await h.reply('yes');
+        expect(h.said()).toBe('Sending Sam the first mail…');
+        await h.reply('done');
+        await settle();
+        expect(h.sent.map((mail) => mail.text)).toEqual([FIRST, FIRST]);
+        expect(h.standing.chase(id)!.steps.map((step) => step.text)).toContain('You said: send the first mail.');
+        expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 1, unsure: null });
+      });
+
+      test('"Wait until Monday": the clock looks before it sends, and a mail that is there is not sent again', async () => {
+        const h = harness({ send: [UNSURE], went: [true] });
+        const id = await unsureAndBack(h);
+        await h.reply('button', { button: 'monday' });
+        expect(h.said()).toBe('Waiting until Monday. If nothing has come by then, the first mail goes, unless I find that it went.');
+        expect(h.standing.chase(id)).toMatchObject({ state: 'on', unsure: { since: MONDAY - 5000 } });
+        await h.pass(7000);
+        h.advance(8 * 24 * HOUR);
+        await h.standing.tick();
+        await settle();
+        expect(h.asked).toHaveLength(1);
+        expect(h.sent).toHaveLength(1);
+        expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 1, unsure: null });
+      });
+
+      test('"Wait until Monday", and the mailbox cannot say on Monday: nothing is sent, and it asks', async () => {
+        const h = harness({ send: [UNSURE], went: [null] });
+        const id = await unsureAndBack(h);
+        await h.reply('button', { button: 'monday' });
+        await h.pass(7000);
+        h.advance(8 * 24 * HOUR);
+        await h.standing.tick();
+        await settle();
+        expect(h.sent).toHaveLength(1);
+        expect(h.standing.chase(id)).toMatchObject({ state: 'stuck', unsure: { since: MONDAY - 5000 } });
+        expect(h.said()).toBe('The first mail to Sam may have gone: Gmail did not confirm it. What now?');
+      });
+
+      test('the same for a follow-up that may have gone: handed over and back, it is looked for before it is sent', async () => {
+        const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE], went: [true] });
+        const id = await followUpUnsure(h);
+        await h.reply('no');
+        h.standing.hand(id, 'Leo');
+        h.standing.back(id, [], 'Leo');
+        await h.standing.tick();
+        await settle();
+        await h.reply('yes');
+        expect(h.asked).toHaveLength(1);
+        expect(h.sent).toHaveLength(2);
+        expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 2, unsure: null });
+      });
+    });
+
+    // What is looked for is the mail as it went. It was written out again at the moment of the
+    // look: with the owner's name learnt in between, the first lines no longer matched.
+    test('the look is for the mail as it was sent, not as it would be written now', async () => {
+      let owner = '';
+      const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE], went: [true], ownerNow: () => owner });
+      await followUpUnsure(h);
+      owner = 'Vieri';
+      await h.reply('yes');
+      expect(h.asked.map((one) => one.text)).toEqual(['Hi Sam,\n\nFollowing up on my note below. Could you let me know by Friday?\n\nThanks,']);
+    });
+
+    test('looked for and not found, then held with no connection: it is looked for again right before it goes', async () => {
+      let off = false;
+      const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE, { ok: true }], went: [false, true], offline: () => off });
+      const id = await followUpUnsure(h);
+      await h.reply('yes');
+      expect(h.asked).toHaveLength(1);
+      off = true;
+      await h.reply('done');
+      await settle();
+      expect(h.sent).toHaveLength(2);
+      h.advance(10 * 60_000);
+      off = false;
+      await h.standing.released();
+      // It went meanwhile after all: the second look finds it, and it is not sent again.
+      expect(h.asked).toHaveLength(2);
+      expect(h.sent).toHaveLength(2);
+      expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 2, unsure: null });
+    });
+
+    test('taken back with the follow-up unsure: what went stays sent, and the follow-up may have gone', async () => {
+      const h = harness({ waitMs: 60_000, send: [{ ok: true }, UNSURE] });
+      const id = await followUpUnsure(h);
+      expect(text(h.standing.undo(`chase:${id}`) ?? [])).toBe('Stopped. I will not write to Sam again. What I sent stays sent, and the follow-up that may have gone is not taken back.');
+    });
+
+    test('a draft that could not be taken out of the thread is written in the chase\'s log', async () => {
+      const h = harness({ send: [{ ok: true, left: true }] });
+      await started(h);
+      expect(h.standing.handable()[0]!.steps.map((step) => step.text)).toEqual(['Nudged Sam by email.', 'A draft may be left in the thread: I could not take it away.']);
     });
 
     test('a chase taken from somebody whose first mail may have gone is a chase here, and says so', async () => {

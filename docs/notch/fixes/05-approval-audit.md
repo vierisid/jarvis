@@ -126,6 +126,9 @@ Still open: whether a silent follow-up is also said the next morning
 9. pending
 10. pending
 
+Steps 1, 2 and 5 were tightened after a second review in
+"notch: a mail that may have gone is looked for before every way of sending it again, across a hand-over and a wait".
+
 ## What the work proved wrong
 
 - A row of Gmail's list has no time, so "in Sent since then" cannot be read
@@ -139,6 +142,10 @@ Still open: whether a silent follow-up is also said the next morning
   mark.
 - Step 5: the fuse is burnt with `stage.fuse` directly. `playDecidable` is
   step 9.
+- That a mail may have gone was first kept with why the chase was stuck. A
+  chase handed over and back, or told to wait until Monday, then sent it
+  again without looking. It is kept with the chase now, with the mail as it
+  was sent, and the clock looks before every such send.
 
 ## Known limits
 
@@ -151,6 +158,12 @@ Still open: whether a silent follow-up is also said the next morning
 - The mark lives in the page. After the page is loaded again, a reply of
   ours left from before is nobody's: it is left, and the thread answers
   "there is a draft already" until the owner removes it.
+- A reply that may have gone is remembered only while the brain runs.
+  After a restart the second yes is guarded by the thread's last word
+  alone, as it was before.
+- A Gmail that is not in English presses nothing: the labels and the words
+  the scripts look for are English only (so it was before). Nothing is
+  sent, and a draft may be left.
 - The question of a mail that may have gone is put up by the chase clock
   when the notch is busy: up to 30 s after the line that announces it.
 
@@ -166,5 +179,8 @@ Only a real Gmail session can settle:
   inside the reply's frame, the words in `[role=alert]` and `[aria-live]`
   and on the whole page.
 - When a kept draft opens: with the thread, or only when Reply is pressed.
-- Whether Gmail keeps an attribute the script sets on the reply (the mark)
-  for as long as the reply is open.
+- Whether Gmail keeps an attribute the script sets on the reply's text
+  (the mark) for as long as the reply is open. The mark is on the text
+  alone, not on its frame: a frame may outlive the reply it held. If Gmail
+  drops it, our own half-written reply is left in the thread and said so.
+- Whether fifteen hours back is the right reach for the later look.

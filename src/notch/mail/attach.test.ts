@@ -9,7 +9,7 @@ import { NotchInbox } from '../inbox.ts';
 import type { NotchLine, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import { NUDGE_SENT_ASKS, NUDGE_SENT_WAIT_MS, NUDGE_UNSURE, attachMailLayer, sendNudge } from './attach.ts';
-import type { MailReplySession, MailStep } from './mailbox.ts';
+import { MAIL_WHY_DRAFT_THERE, type MailReplySession, type MailStep } from './mailbox.ts';
 import type { MailBrowser } from './browser.ts';
 import { MailSignedOut } from './tab.ts';
 
@@ -104,22 +104,23 @@ describe('the mail layer, put together', () => {
 describe('a nudge is sent once', () => {
   function box(session: Partial<MailReplySession>) {
     const did: string[] = [];
+    const logs: string[] = [];
     const ok: MailStep = { ok: true };
     const full: MailReplySession = {
       write: async () => { did.push('write'); return session.write ? session.write() : ok; },
       send: async () => { did.push('send'); return session.send ? session.send() : ok; },
-      discard: async () => { did.push('discard'); return ok; },
+      discard: async () => { did.push('discard'); return session.discard ? session.discard() : ok; },
       sent: async (since) => { did.push('read back'); return session.sent ? session.sent(since) : true; },
     };
     return {
-      did,
+      did, logs,
       reply: async (_plan: unknown, work: (session: MailReplySession) => Promise<MailStep>) => work(full),
       write: async () => { did.push('new mail'); return ok; },
     };
   }
   const plan = { address: 'sam@northwind.example', thread: 'T1', subject: 'The contract', text: 'Any news?' };
   const waited: number[] = [];
-  const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, () => {}, async (ms) => { waited.push(ms); });
+  const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, (line) => { b.logs.push(line); }, async (ms) => { waited.push(ms); });
 
   test('to several people it is a mail of its own, never a reply in one person\'s thread', async () => {
     const written: unknown[] = [];
@@ -181,6 +182,21 @@ describe('a nudge is sent once', () => {
     const b = box({ write: async () => ({ ok: false, why: 'the thread goes to others too' }) });
     expect(await send(b)).toEqual({ ok: true });
     expect(b.did).toEqual(['write', 'discard', 'new mail']);
+  });
+
+  // The result of taking a draft away was dropped three times over: a draft left in the thread
+  // was nobody's news, and it stood in the way of the next reply there.
+  test('what was begun and cannot be taken away is said: to the log, and to whoever asked', async () => {
+    const stuck = async (): Promise<MailStep> => ({ ok: false, why: 'no way to discard was found' });
+    const refused = box({ send: async () => ({ ok: false, why: 'no way to send was found', pressed: false }), discard: stuck });
+    expect(await send(refused)).toEqual({ ok: true, left: true });
+    expect(refused.logs).toContain('[notch] what a nudge began in its thread could not be taken away: no way to discard was found');
+    const unsure = box({ send: async () => ({ ok: false, why: 'Gmail did not answer', pressed: true }), sent: async () => false, discard: stuck });
+    expect(await send(unsure)).toEqual({ ok: false, why: NUDGE_UNSURE, pressed: true, since: NOW, left: true });
+    // Somebody's own draft that is kept is not a failure, and nothing is said of it.
+    const theirs = box({ write: async () => ({ ok: false, why: MAIL_WHY_DRAFT_THERE }), discard: async () => ({ ok: false, why: 'the reply being written is not the one that was written here' }) });
+    expect(await send(theirs)).toEqual({ ok: true });
+    expect(theirs.logs.some((line) => line.includes('could not be taken away'))).toBe(false);
   });
 
   test('no thread: a new mail', async () => {

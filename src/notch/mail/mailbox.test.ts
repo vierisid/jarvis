@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { MAIL_SENT_ASKS, MAIL_WHY_UNSURE, browserMailbox } from './mailbox.ts';
+import { MAIL_SENT_ASKS, MAIL_WENT_SLACK_MS, MAIL_WHY_UNSURE, browserMailbox } from './mailbox.ts';
 import type { GooglePage } from './page.ts';
 import { MailSignedOut, MailTabTurn } from './tab.ts';
 
@@ -158,9 +158,16 @@ describe('one reply through the tab', () => {
     expect(await browserMailbox(answered.page, new MailTabTurn()).went(ask, NOW)).toBe(true);
     expect(await browserMailbox(tab({ up: true }).page, new MailTabTurn()).went(ask, NOW)).toBe(false);
     expect(await browserMailbox(tab({ up: true, threads: () => [] }).page, new MailTabTurn()).went(ask, NOW)).toBeNull();
-    // An older mail of the owner's with the same words is not this one.
-    const older = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW - 3_600_000, plan.text)) });
+    // A day-old mail of the owner's with the same words is not this one.
+    const older = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW - 20 * 3_600_000, plan.text)) });
     expect(await browserMailbox(older.page, new MailTabTurn()).went(ask, NOW)).toBe(false);
+    // One that reads as hours older is: a time read in another zone than the account's must not
+    // make a mail that went look like one that did not. Missing it sends it twice.
+    const zoned = tab({ up: true, threads: (ids) => ids.map((id) => printed(id, me, NOW - 9 * 3_600_000, plan.text)) });
+    expect(await browserMailbox(zoned.page, new MailTabTurn()).went(ask, NOW)).toBe(true);
+    expect(MAIL_WENT_SLACK_MS).toBeGreaterThan(14 * 3_600_000);
+    // Right after the press it is still to the minute.
+    expect(await browserMailbox(zoned.page, new MailTabTurn()).reply(plan, (reply) => reply.sent(NOW))).toBe(false);
   });
 });
 
@@ -176,7 +183,7 @@ describe('writing a new mail to one person', () => {
      * What the Sent folder shows each time it is asked: the mail, nothing of it, an old one, one
      * with the same subject and other words, or it cannot be read. The last answer stands.
      */
-    folder?: ('shows' | 'empty' | 'old' | 'other' | 'unreadable')[];
+    folder?: ('shows' | 'empty' | 'old' | 'other' | 'unreadable' | 'half')[];
   } = {}) {
     const calls: { name: string; args?: unknown }[] = [];
     const folder = [...(options.folder ?? ['shows'])];
@@ -197,9 +204,10 @@ describe('writing a new mail to one person', () => {
           shown = folder.length > 1 ? folder.shift()! : folder[0]!;
           if (shown === 'unreadable') throw new Error('Gmail did not answer');
           // Another mail to the same person is in Sent too: only the one with this subject counts.
-          return { there: true, rows: [{ ...row('19a1b2c3d4e5f6ff'), subject: 'Lunch' }, ...(shown === 'empty' ? [] : [{ ...row(T1), subject: 'The  contract' }])] } as T;
+          // "half": two threads with this subject, and only one of them can be read.
+          return { there: true, rows: [{ ...row('19a1b2c3d4e5f6ff'), subject: 'Lunch' }, ...(shown === 'empty' ? [] : [{ ...row(T1), subject: 'The  contract' }]), ...(shown === 'half' ? [{ ...row('19a1b2c3d4e5f6aa'), subject: 'The contract' }] : [])] } as T;
         }
-        if (name === 'threads') return (args as { ids: string[] }).ids.map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', shown === 'old' ? NOW - 3_600_000 : NOW, shown === 'other' ? 'Leo, about the contract: call me.' : plan.text)) as T;
+        if (name === 'threads') return (args as { ids: string[] }).ids.filter((id) => shown !== 'half' || id === T1).map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', shown === 'old' ? NOW - 20 * 3_600_000 : NOW, shown === 'other' || shown === 'half' ? 'Leo, about the contract: call me.' : plan.text)) as T;
         throw new Error(`no such script: ${name}`);
       },
     };
@@ -263,6 +271,9 @@ describe('writing a new mail to one person', () => {
     expect(await writing({ folder: ['other'] }).box().went(ask, NOW)).toBe(false);
     expect(await writing({ folder: ['empty'] }).box().went(ask, NOW)).toBe(false);
     expect(await writing({ folder: ['unreadable'] }).box().went(ask, NOW)).toBeNull();
+    // One of the threads that could hold it was not read: "not there" is the answer that sends
+    // a mail again, and it is not given on half a reading.
+    expect(await writing({ folder: ['half'] }).box().went(ask, NOW)).toBeNull();
   });
 
   test('a writing window that does not hold the mail is not sent from', async () => {

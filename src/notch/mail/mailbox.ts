@@ -35,8 +35,10 @@ export interface MailReplyPlan {
  * way: it is never sent again on the strength of this no, and whoever sends
  * it again looks first (`Mailbox.went`). `since` is the moment before the
  * press, for that look.
+ * `left`: something that was begun in a thread could not be taken away
+ * again, and a draft may be left there.
  */
-export type MailStep = { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number };
+export type MailStep = { ok: true; left?: boolean } | { ok: false; why: string; pressed?: boolean; since?: number; left?: boolean };
 
 /** A mail that may have gone, as it is looked for afterwards: where, to whom, and how it begins. */
 export interface MailSentAsk {
@@ -52,6 +54,25 @@ export interface MailSentAsk {
  * does not show it. Short: the notch shows 80 signs of it.
  */
 export const MAIL_WHY_UNSURE = 'Gmail did not confirm it went. Look in Sent before trying again';
+
+/**
+ * How far before "since" a mail may be dated and still be the one that was
+ * sent: Gmail prints when a mail was sent to the minute, so one sent at
+ * 9:05:40 reads as 9:05. For the look right after the press.
+ */
+export const MAIL_SENT_SLACK_MS = 120_000;
+/**
+ * The same for the look that comes later, before a mail is sent a second
+ * time (`went`): fifteen hours. The two ways to be wrong do not cost the
+ * same. Finding a mail that is not ours skips one mail, and the owner is
+ * told. Missing one that is ours sends it twice, and nothing takes that
+ * back. What can make ours look older than it is, is the time the print view
+ * shows being read in another zone than the account's: at most fourteen
+ * hours, and an hour of room. It stays under the twenty hours a chase waits
+ * at the least between two mails, and a mail only counts when it begins with
+ * the same words, so the earlier mail of the same chase is not taken for it.
+ */
+export const MAIL_WENT_SLACK_MS = 15 * 3_600_000;
 
 /** How often the Sent folder is asked again for a mail it does not show yet, and how long between. */
 export const MAIL_SENT_ASKS = 3;
@@ -140,37 +161,38 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
    * minutes" was taken for it, and the owner answering by hand at the same
    * moment was read as our mail having gone.
    */
-  const isOurs = (message: MailThread['messages'][number], owner: string, text: string, since: number): boolean =>
-    // Gmail prints when a mail was sent to the minute: one sent at 9:05:40 reads as 9:05.
-    message.from.address === owner.toLowerCase() && message.at >= since - 120_000 && begins(message.text, text);
+  const isOurs = (message: MailThread['messages'][number], owner: string, text: string, since: number, slack: number): boolean =>
+    message.from.address === owner.toLowerCase() && message.at >= since - slack && begins(message.text, text);
 
   /**
    * Does the Sent folder show a mail of the owner's to that person, with that
    * subject and beginning with those words, sent since then? Null when that
    * could not be read. Asked with the tab's turn already held.
    */
-  const inSent = async (to: string, subject: string, text: string, since: number): Promise<boolean | null> => {
+  const inSent = async (to: string, subject: string, text: string, since: number, slack: number): Promise<boolean | null> => {
     try {
       const owner = (await page.run<{ address: string }>('owner')).address;
-      const days = Math.max(1, Math.ceil((now() - since) / 86_400_000) + 1);
+      const days = Math.max(1, Math.ceil((now() - since + slack) / 86_400_000) + 1);
       const rows = (await gmailSearch(page, `in:sent to:${to} newer_than:${days}d`, { pages: 1 })).filter((row) => flat(row.subject) === flat(subject)).slice(0, 2);
       if (rows.length === 0) return false;
-      const { threads } = await gmailThreads(page, rows, { batch: 2, pauses: [] });
-      if (threads.length === 0) return null;
-      return threads.some((thread) => thread.messages.some((message) => isOurs(message, owner, text, since)));
+      const { threads, failed } = await gmailThreads(page, rows, { batch: 2, pauses: [] });
+      if (threads.some((thread) => thread.messages.some((message) => isOurs(message, owner, text, since, slack)))) return true;
+      // "Not there" is the one answer that sends a mail again: it is given only when every thread
+      // that was asked for was read. One that could not be read may be the one that holds it.
+      return threads.length < rows.length || Object.keys(failed).length > 0 ? null : false;
     } catch {
       return null;
     }
   };
   /** The same, of a thread: any mail in it, for a look that comes later, or only its last word. */
-  const inThread = async (thread: string, text: string, since: number, which: 'last' | 'any'): Promise<boolean | null> => {
+  const inThread = async (thread: string, text: string, since: number, which: 'last' | 'any', slack: number): Promise<boolean | null> => {
     try {
       const owner = (await page.run<{ address: string }>('owner')).address;
       const { threads } = await gmailThreads(page, [{ id: thread, draft: false, subject: '' }], { batch: 1, pauses: [] });
       const messages = threads[0]?.messages ?? [];
       const last = messages.at(-1);
       if (!last) return null;
-      return which === 'last' ? isOurs(last, owner, text, since) : messages.some((message) => isOurs(message, owner, text, since));
+      return which === 'last' ? isOurs(last, owner, text, since, slack) : messages.some((message) => isOurs(message, owner, text, since, slack));
     } catch {
       return null;
     }
@@ -247,8 +269,8 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
         if (sent?.sent === true) return { ok: true };
         // Gmail said nothing. It may have gone all the same: the Sent folder is asked, and it
         // takes a moment to show a mail.
-        let there = await inSent(people[0]!, plan.subject, plan.text, since);
-        for (let asks = 1; there === false && asks < MAIL_SENT_ASKS; asks++) { await sleep(MAIL_SENT_WAIT_MS); there = await inSent(people[0]!, plan.subject, plan.text, since); }
+        let there = await inSent(people[0]!, plan.subject, plan.text, since, MAIL_SENT_SLACK_MS);
+        for (let asks = 1; there === false && asks < MAIL_SENT_ASKS; asks++) { await sleep(MAIL_SENT_WAIT_MS); there = await inSent(people[0]!, plan.subject, plan.text, since, MAIL_SENT_SLACK_MS); }
         await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
         if (there === true) return { ok: true };
         return { ok: false, why: MAIL_WHY_UNSURE, pressed: true, since };
@@ -260,7 +282,7 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
     went: (mail, since) => turn.take(async () => {
       try {
         await gmailUp();
-        const there = mail.thread ? await inThread(mail.thread, mail.text, since, 'any') : await inSent(mail.to.trim().toLowerCase(), mail.subject, mail.text, since);
+        const there = mail.thread ? await inThread(mail.thread, mail.text, since, 'any', MAIL_WENT_SLACK_MS) : await inSent(mail.to.trim().toLowerCase(), mail.subject, mail.text, since, MAIL_WENT_SLACK_MS);
         await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
         return there;
       } catch {
@@ -298,7 +320,7 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
         },
         discard: () => step(async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'discard' }))),
         // The last word in the thread is the owner's, sent since then, and begins with this reply.
-        sent: (since) => inThread(plan.thread, plan.text, since, 'last'),
+        sent: (since) => inThread(plan.thread, plan.text, since, 'last', MAIL_SENT_SLACK_MS),
       };
       return work(session);
     }, { first: true }),

@@ -697,11 +697,18 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     anywhere on the page. When Gmail says nothing, the thread is asked, or
     the Sent folder for a mail of its own, a few times. When neither says it
     went, the mail may have gone all the same: it is said as that, never as
-    "could not be sent", and before it is sent again by any way (a chase's
-    "try again", the follow-up of a call) the mailbox is asked whether it
-    went, and a mail that is there is counted and not sent twice
-    (`Mailbox.went`). A send the page refused before pressing anything sent
-    nothing, and is said as that.
+    "could not be sent", and before it is sent again by any way the notch
+    has (a chase's "try again" or "send it", its clock after "wait until
+    Monday" or a connection that was gone, the follow-up of a call, the
+    second yes on a reply) the mailbox is asked whether it went, for the
+    mail as it was sent. A mail that is there is counted and not sent
+    twice, and when the mailbox cannot say, nothing is sent
+    (`Mailbox.went`). That look reaches fifteen hours back from the press,
+    where the look right after it reaches two minutes: missing a mail that
+    went sends it twice, and a time read in the wrong zone must not do
+    that. A send the page refused before pressing anything sent nothing,
+    and is said as that. A draft that could not be taken out of a thread is
+    said, or written in the chase's log.
 63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a reply
     speaks up by itself the mailbox is asked whether it is still an answer to
@@ -1701,7 +1708,11 @@ applied).
     gone", for the first mail too: the chase is then kept and asks, where
     it used to say "Nothing was started". "Try again" on such a mail looks
     in the mailbox first: when the mail is there it is counted and nothing
-    is sent, when the mailbox cannot say nothing is sent either.
+    is sent, when the mailbox cannot say nothing is sent either. That a
+    mail may have gone is kept with the chase itself (`unsure`, with the
+    mail as it was sent), not with why it is stuck: handed to somebody and
+    back, or told to wait until Monday, the chase still looks before that
+    mail goes again, and the clock looks right before every such send.
     A chase that somebody had taken and hands back asks: "Leo handed Sam's
     answer back. What now?", with the follow-up to send, wait until Monday,
     or let it go. It used to be under way again at once, and its follow-up
