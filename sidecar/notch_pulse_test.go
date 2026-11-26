@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -13,11 +14,12 @@ func pulseAt(start time.Time, seconds float64) time.Time {
 	return start.Add(time.Duration(seconds * float64(time.Second)))
 }
 
-// A page that wants Esc and stops answering is gone after the limit, said
-// once, and back with its next answer.
+// A page that has answered the question once, wants Esc and stops answering
+// is gone after the limit, said once, and back with its next answer.
 func TestNotchPulseAPageThatStopsAnsweringIsGone(t *testing.T) {
 	start := time.Unix(1000, 0)
 	p := newNotchPulse(start)
+	p.Alive(pulseAt(start, 0.5))
 	p.Esc(true, pulseAt(start, 1))
 	for s := 1.0; s <= 6; s++ {
 		p.Window(pulseAt(start, s))
@@ -34,21 +36,124 @@ func TestNotchPulseAPageThatStopsAnsweringIsGone(t *testing.T) {
 	if got := p.Beat(pulseAt(start, 8)); !got.PageGone || got.PageChanged {
 		t.Fatalf("still gone, and said only once: %+v", got)
 	}
-	p.Page(pulseAt(start, 8.5))
+	p.Alive(pulseAt(start, 8.5))
 	p.Window(pulseAt(start, 9))
 	if got := p.Beat(pulseAt(start, 9)); got.PageGone || !got.PageChanged || got.Unseen() {
 		t.Fatalf("it answered again: %+v", got)
 	}
 }
 
-// The review of the first version: a page that says it wants Esc and hangs
-// before it has answered a single question was never held to answering, and
-// kept Esc until Jarvis was quit. Saying so is a sign like an answer: the
-// limit counts from it, however long the page has been up, and no answer at
-// all is needed first.
+// Asking has to be seen to work before silence means anything. In a web view
+// where the question never comes back, every page would be silent, and Esc
+// would be taken from every sheet five seconds after it came up: Esc is what
+// stops a fuse that is burning. So a page that has never answered the
+// question keeps Esc as it said, however long it is silent and whatever else
+// it calls; it is asked whatever it wants for thirty seconds; and then it is
+// said once that nothing watches it, and it is asked no more.
+func TestNotchPulseAPageThatNeverAnsweredTheQuestionKeepsEsc(t *testing.T) {
+	start := time.Unix(1000, 0)
+	p := newNotchPulse(start)
+	if !p.Asking() {
+		t.Fatal("a page just attached is asked, whether it wants Esc or not: that is how asking is seen to work")
+	}
+	p.Esc(true, pulseAt(start, 1))
+	// Its other calls are signs of it, and prove nothing about the asking.
+	p.Page(pulseAt(start, 2))
+	offs := 0
+	for s := 1.0; s <= 120; s++ {
+		p.Window(pulseAt(start, s))
+		got := p.Beat(pulseAt(start, s))
+		if got.Unseen() {
+			t.Fatalf("%v s: a page that never answered the question lost Esc: %+v", s, got)
+		}
+		if got.PingProven {
+			t.Fatalf("%v s: nothing was answered, and asking is said to work", s)
+		}
+		if got.PingOff {
+			offs++
+			if s <= 30 {
+				t.Fatalf("given up after %v s", s)
+			}
+		}
+		if want := s <= 30; p.Asking() != want {
+			t.Fatalf("%v s: asked = %v", s, !want)
+		}
+	}
+	if offs != 1 {
+		t.Fatalf("that nothing watches this page is said once, got %d times", offs)
+	}
+}
+
+// And the first answer is what turns it on, said once.
+func TestNotchPulseTheFirstAnswerProvesTheAsking(t *testing.T) {
+	start := time.Unix(1000, 0)
+	p := newNotchPulse(start)
+	p.Esc(true, pulseAt(start, 1))
+	p.Window(pulseAt(start, 1))
+	if got := p.Beat(pulseAt(start, 1)); got.PingProven {
+		t.Fatalf("nothing answered yet: %+v", got)
+	}
+	p.Alive(pulseAt(start, 1.5))
+	p.Window(pulseAt(start, 2))
+	if got := p.Beat(pulseAt(start, 2)); !got.PingProven || got.Unseen() {
+		t.Fatalf("the first answer: %+v", got)
+	}
+	said := 0
+	var got notchPulseState
+	for s := 3.0; s <= 40; s++ {
+		p.Window(pulseAt(start, s))
+		got = p.Beat(pulseAt(start, s))
+		if got.PingProven {
+			said++
+		}
+		if got.PingOff {
+			t.Fatalf("%v s: given up on a page that answered", s)
+		}
+	}
+	if said != 0 {
+		t.Fatalf("said %d more times", said)
+	}
+	if !got.PageGone {
+		t.Fatalf("proven, wanting Esc, and silent since: %+v", got)
+	}
+	// It wants none after all: it is no longer asked.
+	p.Esc(false, pulseAt(start, 41))
+	if p.Asking() {
+		t.Fatal("a page that has shown it can be asked, and wants no Esc, is left alone")
+	}
+}
+
+// The two lines the log gets, each once: that asking works for this page,
+// or that it does not and nothing watches the page.
+func TestNotchPulseSaysOnceWhetherThePageIsWatched(t *testing.T) {
+	var out strings.Builder
+	old := log.Writer()
+	log.SetOutput(&out)
+	defer log.SetOutput(old)
+	svc := &NotchService{}
+	hold := func(bool) { t.Fatal("nothing of the platform's is held off for this") }
+	notchPulseTellTo(svc, notchPulseState{PingOff: true}, hold, time.Now())
+	if got := out.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "nothing watches this page") || !strings.Contains(got, "Esc stays as the page says") {
+		t.Fatalf("the log, when asking does not work: %q", got)
+	}
+	out.Reset()
+	notchPulseTellTo(svc, notchPulseState{PingProven: true}, hold, time.Now())
+	if got := out.String(); strings.Count(got, "\n") != 1 || !strings.Contains(got, "the page answers when asked") {
+		t.Fatalf("the log, when asking works: %q", got)
+	}
+	if svc.stalled {
+		t.Fatal("neither word takes Esc from the page")
+	}
+}
+
+// A page that has answered the question once, and later says it wants Esc
+// and hangs at once, is held to answering from the moment it said so: saying
+// so is a sign like an answer, and the limit counts from it, however long
+// the page has been up.
 func TestNotchPulseAPageThatWantsEscAndHangsAtOnceIsGone(t *testing.T) {
 	start := time.Unix(1000, 0)
 	p := newNotchPulse(start)
+	p.Alive(pulseAt(start, 0.5))
 	for s := 1.0; s <= 100; s++ {
 		p.Window(pulseAt(start, s))
 		p.Beat(pulseAt(start, s))
@@ -131,6 +236,7 @@ func TestNotchPulseAWindowThatHasNotStartedIsNotGone(t *testing.T) {
 func TestNotchPulseASleepIsNobodysSilence(t *testing.T) {
 	start := time.Unix(1000, 0)
 	p := newNotchPulse(start)
+	p.Alive(pulseAt(start, 0.5))
 	p.Esc(true, pulseAt(start, 1))
 	p.Window(pulseAt(start, 1))
 	p.Beat(pulseAt(start, 1))
@@ -198,7 +304,7 @@ func newPulseWorld() *pulseWorld {
 	w.threadRuns.Store(true)
 	w.pageAnswers.Store(true)
 	w.pulse = newNotchPulse(time.Now())
-	w.pulse.limit, w.pulse.gap = 250*time.Millisecond, time.Hour
+	w.pulse.limit, w.pulse.gap, w.pulse.proveWithin = 250*time.Millisecond, time.Hour, 600*time.Millisecond
 	onWindow := func(run func()) {
 		w.put.Add(1)
 		if w.threadRuns.Load() {
@@ -212,7 +318,7 @@ func newPulseWorld() *pulseWorld {
 	ask := func() {
 		w.asked.Add(1)
 		if w.pageAnswers.Load() {
-			w.pulse.Page(time.Now())
+			w.pulse.Alive(time.Now())
 		}
 	}
 	tell := func(s notchPulseState) {
@@ -298,36 +404,81 @@ func TestNotchAPageThatHangsDoesNotKeepEsc(t *testing.T) {
 	}
 }
 
-// The same for a page that hangs the moment it has said so, before it has
-// answered anything.
-func TestNotchAPageThatHangsBeforeItsFirstAnswerDoesNotKeepEsc(t *testing.T) {
+// The other side of it: in a web view where the question never comes back,
+// a page that wants Esc keeps it, as it did before there was a pulse. It is
+// asked for a while whatever it wants, then it is said once that nothing
+// watches it, and it is asked no more.
+func TestNotchAPageThatCannotBeAskedKeepsEsc(t *testing.T) {
 	w := newPulseWorld()
 	defer func() { close(w.quit); <-w.done }()
 	w.pageAnswers.Store(false)
 	w.wantEsc(true)
-	if !w.takesEsc() {
-		t.Fatal("it has just said so: Esc is the notch's")
+	offs := func() (n int) {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		for _, s := range w.told {
+			if s.PingOff {
+				n++
+			}
+		}
+		return n
 	}
-	w.until(t, "the page hung before its first answer", false)
+	deadline := time.Now().Add(5 * time.Second)
+	for offs() == 0 {
+		if !w.takesEsc() {
+			t.Fatal("a page that never answered the question lost Esc")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("it was never said that nothing watches this page")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if w.asked.Load() == 0 {
+		t.Fatal("it was never asked: asking cannot be seen to work that way")
+	}
+	asked := w.asked.Load()
+	// Well past the limit for a page that is watched.
+	time.Sleep(400 * time.Millisecond)
+	if !w.takesEsc() {
+		t.Fatal("a page that never answered the question lost Esc after it was given up on")
+	}
+	if n := offs(); n != 1 {
+		t.Fatalf("said %d times", n)
+	}
+	if more := w.asked.Load() - asked; more > 1 {
+		t.Fatalf("asked %d more times after it was given up on", more)
+	}
 }
 
-// A page that wants no Esc is not asked anything, and is asked from the
-// moment it wants it.
+// A page is asked until it has answered once, whatever it wants. After that
+// it is asked only while it wants Esc.
 func TestNotchAPageIsAskedOnlyWhileItWantsEsc(t *testing.T) {
 	w := newPulseWorld()
 	defer func() { close(w.quit); <-w.done }()
-	time.Sleep(60 * time.Millisecond)
-	if asked := w.asked.Load(); asked != 0 {
-		t.Fatalf("a page that wants no Esc was asked %d times", asked)
+	deadline := time.Now().Add(3 * time.Second)
+	for w.pulse.Asking() {
+		if time.Now().After(deadline) {
+			t.Fatal("a page that answers is still asked although it wants no Esc")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	if put := w.put.Load(); put == 0 {
+	if w.asked.Load() == 0 {
+		t.Fatal("a page just attached was never asked")
+	}
+	asked, put := w.asked.Load(), w.put.Load()
+	time.Sleep(80 * time.Millisecond)
+	if more := w.asked.Load() - asked; more > 1 {
+		t.Fatalf("a page that wants no Esc was asked %d more times after its first answer", more)
+	}
+	if w.put.Load() == put {
 		t.Fatal("the window's thread is given something every beat all the same: that is how it is known to run")
 	}
+	asked = w.asked.Load()
 	w.wantEsc(true)
-	deadline := time.Now().Add(3 * time.Second)
-	for w.asked.Load() == 0 {
+	deadline = time.Now().Add(3 * time.Second)
+	for w.asked.Load() <= asked+1 {
 		if time.Now().After(deadline) {
-			t.Fatal("a page that wants Esc was never asked")
+			t.Fatal("a page that wants Esc was not asked")
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -649,7 +800,7 @@ func TestNotchMacWindowSaysWhenItHides(t *testing.T) {
 func TestNotchPageCallsAreSignsToThePulse(t *testing.T) {
 	bind := goFunc(t, "notch_host.go", "bindNotch")
 	before(t, "bindNotch", bind, "notch.wantEsc(want)", "pulse := newNotchPulse(time.Now())", "pulse.Esc(want, time.Now())")
-	if !strings.Contains(bind, "bind(\"__notch_alive\", func() {\n\t\tpulse.Page(time.Now())") {
+	if !strings.Contains(bind, "bind(\"__notch_alive\", func() {\n\t\tpulse.Alive(time.Now())") {
 		t.Error("the page's answer to the question no longer reaches the pulse")
 	}
 }

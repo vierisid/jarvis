@@ -273,7 +273,7 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	})
 	// __notch_alive(): the page answering the pulse.
 	bind("__notch_alive", func() {
-		pulse.Page(time.Now())
+		pulse.Alive(time.Now())
 	})
 	notch.attachPage(inPage)
 	notch.watchKeys()

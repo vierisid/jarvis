@@ -73,10 +73,13 @@ the shared seams.
 2. The Mac window's timer reports hide and show through `goNotchHidden`,
    which only puts the word down (`notchHideRelay`, notch.go); a goroutine
    tells `NotchService.setHidden`. A hidden window refuses the keyboard.
-3. A pulse (notch_pulse.go). While the page says it wants Esc it is asked
-   once a second, and saying so counts as its first answer. Silent for 5 s,
-   it holds no Esc until it gives a sign again. A page that wants no Esc is
-   not asked. Something is put on the window's thread every second either
+3. A pulse (notch_pulse.go). From attach the page is asked once a second
+   until it has answered once: that proves asking works in this web view.
+   After that it is asked only while it wants Esc, and silent for 5 s it
+   holds no Esc until it gives a sign again. A page that never answers
+   within 30 s is not watched: one log line, and Esc stays as the page says,
+   as before the pulse. Known small limit: a page that hangs before its
+   very first answer after loading keeps Esc. Something is put on the window's thread every second either
    way; once that thread has run and then stops for 5 s, the log gets every
    goroutine's stack (at most once in ten minutes, five times per run) and
    on the Mac the three taps are held off until it runs again. Afterwards
@@ -111,14 +114,17 @@ the shared seams.
 - Step 3, pulse: done in the same commit, reworked after review in "notch:
   the pulse holds a page to answering from when it wants Esc, and a window
   that has not started is not gone". Shared part tested on Linux and run on
-  Windows; the Mac tap hold was never compiled.
+  Windows; the Mac tap hold was never compiled. The proof that asking works
+  before silence counts: done in "notch: a page keeps Esc until it has
+  answered the pulse once". Whether a real WebView2 or WKWebView answers at
+  all has never been seen.
 - VERSION 0.14.0: done in "sidecar: 0.14.0".
 - macOS go test in CI: done in "ci: the sidecar's tests run on macOS", with
   a job limit in "ci: the macOS sidecar job has a limit". Never run by a
   runner.
 - Steps 4 to 8 and the Windows half of step 9: pending.
 
-## Only a Mac can say
+## Only a Mac can say (and one look on Windows)
 
 Nothing below has been seen. The first four need no person, only the CI job.
 
@@ -137,6 +143,9 @@ Nothing below has been seen. The first four need no person, only the CI job.
   slowed page alone would read as silent.
 - Sleep and wake with a sheet up: no "has not answered" line, Esc still the
   notch's after waking.
+- By hand, on Windows as well as on the Mac: after start, sidecar.log says
+  "the page answers when asked" (and never "nothing watches this page");
+  and Esc still cancels a fuse 10 s after a sheet comes up.
 - By hand: where-is ten times while circling the mouse and tapping Shift and
   Esc, with two waits left to time out (no freeze); a fullscreen film with a
   sheet up (Esc leaves fullscreen, yes does nothing, a text field does not
