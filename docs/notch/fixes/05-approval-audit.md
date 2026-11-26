@@ -115,8 +115,13 @@ Still open: whether a silent follow-up is also said the next morning
    and "notch: Gmail's word after the press counts as sent, a mail that may have gone is looked for first, and only the reply it opened is thrown away"
 2. done in "notch: a mail is called sent when the thread or the Sent folder shows it"
    and the second commit named under 1
-3. pending
-4. pending, phase 2 (the slot reply under an 8 s fuse; README 199 is untouched until then)
+3. done in "notch: a reply and a nudge are sent in a thread by one way, and a notch taken right after Send still remembers the mail may have gone"
+   (`sendMail` in `src/notch/mail/send.ts`; the reply, the picked time and
+   `sendNudge` use it, and the chase and the call follow-up through `sendNudge`)
+4. done in "notch: a fuse can carry the letter that goes out, on paper while it burns, and vouches only for one seen to its end",
+   "notch: a picked time shows its letter under an 8 s fuse before it goes, and Esc brings the times back"
+   and "notch: text a sender hid from the eye is not read to the model that drafts the reply"
+   (README 199 rewritten, 61 and 62 added to)
 5. done in "notch: a chase burns a fuse, shows its follow-up, asks when handed back, and asks again after a restart"
    and the second commit named under 1
 6. done in "notch: an approval closed because its instruction ended is not audited as the owner's no"
@@ -147,6 +152,27 @@ Steps 1, 2 and 5 were tightened after a second review in
   again without looking. It is kept with the chase now, with the mail as it
   was sent, and the clock looks before every such send.
 
+- Step 3: the design put "hold" and "still waits" inside `sendMail`. They
+  are the reply's own (the watcher), and a chase has others: they stay with
+  who calls. `sendMail` is the steps in the thread and nothing else. A mail
+  of its own (`Mailbox.write`) is another page and is not in it.
+- Step 3: a wait on the stage never comes back once the stage has ended.
+  Between the two looks after Send that kept the tab's turn for good (no
+  mail was read until a restart), never let the thread go, and forgot that
+  Send had been pressed. Put right for this send only. `NotchStage.wait`
+  itself still does not fail when its stage ends, against its own comment:
+  not this point's to change, and worth a look.
+- Step 3: for a nudge, "since" is now the moment before the press, as its
+  comment always said. It had been the moment before the write.
+- Step 4: the design cut `aria-hidden` text too. Such text is on the
+  screen, so the owner sees it: it is still read.
+- Step 4: "fits the paper" cannot be known in the brain. It is counted
+  (12 rows of 48 columns, `MAIL_SLOT_PAPER_ROWS`), and the page has the
+  last word: it does not vouch for a letter whose end was never on screen.
+- Step 4: a click away from a sheet is an Esc. For a letter under its fuse
+  that would have taken the pick back at the owner's next click in their
+  own app. A click away from a fuse answers nothing.
+
 ## Known limits
 
 - A draft with no words that Gmail brings up only when Reply is pressed
@@ -158,6 +184,21 @@ Steps 1, 2 and 5 were tightened after a second review in
 - The mark lives in the page. After the page is loaded again, a reply of
   ours left from before is nobody's: it is left, and the thread answers
   "there is a draft already" until the owner removes it.
+- The slot pick: the letter is first seen when the fuse starts. Putting it
+  in the thread comes before that and takes a few seconds, with only
+  "Putting it in the thread..." on the notch.
+- Eight seconds is about thirty words read with care. A letter of twelve
+  rows is more than that. Both numbers are the owner's to tune.
+- While any fuse burns, Esc is the notch's: for eight seconds an Esc meant
+  for the app in front takes the pick back.
+- A brain that stops in the middle of the fuse leaves the draft in the
+  thread. Nothing is sent. The brain that comes up asks the question
+  again, and a pick answers "there is a draft already" until the owner
+  removes that draft: nothing knows any more that it was the notch's.
+- Hidden text: only what an element says of itself is cut (not shown, no
+  size, see-through, no room and cut off). White on white, and anything a
+  style sheet or a class hides, is still read by the model. The owner
+  seeing the letter is the wall.
 - A reply that may have gone is remembered only while the brain runs.
   After a restart the second yes is guarded by the thread's last word
   alone, as it was before.
@@ -184,3 +225,11 @@ Only a real Gmail session can settle:
   alone, not on its frame: a frame may outlive the reply it held. If Gmail
   drops it, our own half-written reply is left in the thread and said so.
 - Whether fifteen hours back is the right reach for the later look.
+- The letter under its fuse on a real notch: that twelve rows fit the
+  paper without scrolling (also under a camera housing), that the fuse
+  draws round a sheet, that the lit time reads as lit, and that the owner
+  can read it in eight seconds.
+- Whether the page Gmail makes for printing keeps a mail's own `style`
+  and `hidden` attributes as they were sent. If Gmail rewrites them, the
+  cut of hidden text finds nothing, or Gmail has already cut it.
+- How long "Putting it in the thread" takes before the letter is seen.
