@@ -172,6 +172,8 @@ import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { notchMoveSlipped, notchSlipped } from "./notch-slipped.ts";
 import { attachNotchReal } from "../notch/real.ts";
+import { NOTCH_FAILED_NOTICE, NOTCH_PEOPLE_FAILED_NOTICE, holdNotch, notchDashboardNotice, startNotchPart, stopNotch } from "./notch-start.ts";
+import { setOwnerWordProbe } from "../authority/owner-word.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchAskDeps, notchCallDeps, notchNoticeDeps, notchMailModelReady, notchModelReady, notchScriptDeps, notchTurnNote, setNotchFrontSource, wireOwnerWord } from "./notch-asks.ts";
@@ -526,6 +528,9 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   }
   briefOpportunityActivation?.stop();
   briefOpportunityActivation = null;
+  // The notch first, before the turns are waited for: from here on it looks at no window and reads no mail,
+  // and a yes whose window was still running on it sends nothing (docs/notch/README.md, rule 22).
+  stopNotch();
   // Told to leave, so that it closes its line to the server in order. It would end with the brain anyway.
   // An organisation's server that runs here goes down with it, and comes back with the next brain.
   peerSetup?.stop();
@@ -1234,23 +1239,30 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // brain claim the manager signs so localhost / 127.0.0.1 / remote all agree.
     const pebbleBrainWs = buildEnrollmentUrls(brainDomain).brainWs;
     const pebblePanelOrigin = `${pebbleBrainWs.startsWith('wss') ? 'https' : 'http'}://${new URL(pebbleBrainWs).host}`;
+    // A notch that could not be started is said on the dashboard: kept for the one that opens next, and shown at once in one that is open.
+    const notchNotice = (message: string): void => notchDashboardNotice(message, (text, storedId) => { wsService.broadcastNotificationToDashboard(text, 'normal', storedId); });
     // The notch ships dark: with JARVIS_NOTCH unset this registers nothing and
     // no notch.* message is ever sent (docs/notch/README.md).
     attachNotch(sidecarManager, { enabled: notchEnabled(), pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
     if (notchEnabled()) {
       // What the notch shows lives here, so a desktop app that comes back
-      // gets the same line again (src/notch/surface.ts).
-      notchSurface = new NotchSurface(sidecarManager);
-      // A page whose sign-in has ended is opened again, signed in anew.
-      const notchReopen = createNotchReopen(sidecarManager, { pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
-      notchSurface.onSignedOut((sidecarId) => { void notchReopen(sidecarId); });
-      // And a notch whose window went away by itself is put back.
-      sidecarManager.onEvent((sidecarId, event) => {
-        if (event.event_type !== 'panel.closed') return;
-        if ((event.payload as { panel_id?: unknown } | undefined)?.panel_id !== NOTCH_PANEL_ID) return;
-        void notchReopen.closed(sidecarId);
-      });
-      if (notchDemoState === 'open') {
+      // gets the same line again (src/notch/surface.ts). The notch is not
+      // what the brain stands on: if it cannot be made, the brain starts
+      // without it and the dashboard says so (./notch-start.ts).
+      notchSurface = startNotchPart('the notch', () => {
+        const surface = new NotchSurface(sidecarManager);
+        // A page whose sign-in has ended is opened again, signed in anew.
+        const notchReopen = createNotchReopen(sidecarManager, { pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
+        surface.onSignedOut((sidecarId) => { void notchReopen(sidecarId); });
+        // And a notch whose window went away by itself is put back.
+        sidecarManager.onEvent((sidecarId, event) => {
+          if (event.event_type !== 'panel.closed') return;
+          if ((event.payload as { panel_id?: unknown } | undefined)?.panel_id !== NOTCH_PANEL_ID) return;
+          void notchReopen.closed(sidecarId);
+        });
+        return surface;
+      }, { say: NOTCH_FAILED_NOTICE, notice: notchNotice });
+      if (notchSurface && notchDemoState === 'open') {
         // Real things live on the notch too: yes at rest and Esc twice are
         // theirs, and when a moment ends the count is said again.
         notchDemo = createNotchDemo(notchSurface, { real: true, onEnd: () => notchReal?.inbox.refresh() });
@@ -4678,7 +4690,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // owner on 12 November, with "Esc twice pauses, it does not kill". It is
     // behind the notch switch so that with the switch off Pause is unchanged;
     // to make it the rule everywhere, call this unconditionally.
-    setPauseHoldsLoops(notchEnabled());
+    // A notch that could not be made is no notch: Pause keeps its meaning of
+    // the switch being off (./notch-start.ts).
+    setPauseHoldsLoops(notchSurface !== null);
 
     // The notch: every pending approval becomes one line with one yes. The
     // yes goes through applyApprovalDecision like every other surface's, as
@@ -4732,12 +4746,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Other people's Jarvises (src/peers/). Dark unless switched on: by the place of the engine, or by
       // JARVIS_PEERS=1, with which the engine comes when an organisation is made or joined.
       // The link is made before the notch, which shows what it asks of the person; the engine is started after it.
-      const peerLink = peersOn() ? new PeerLink({ log: (line) => console.log(line) }) : null;
-      const peerSetupNow = peerLink ? new PeerSetup({
-        brainDataDir: dataDir, link: peerLink, memory: new PeerStore(getDb()), enginePath: peersEnginePath(), source: peersSourcePath(),
-        // The person's own home, when the brain was given another: the tunnel program keeps its account there.
-        home: os.userInfo().homedir, runtimeDir: path.dirname(process.execPath), log: (line) => console.log(line),
-      }) : null;
+      // If this part cannot be made, the notch starts without other people, and the dashboard says so.
+      const peerParts = peersOn() ? startNotchPart("the part of the notch that talks to other people's Jarvises", () => {
+        const link = new PeerLink({ log: (line) => console.log(line) });
+        return { link, setup: new PeerSetup({
+          brainDataDir: dataDir, link, memory: new PeerStore(getDb()), enginePath: peersEnginePath(), source: peersSourcePath(),
+          // The person's own home, when the brain was given another: the tunnel program keeps its account there.
+          home: os.userInfo().homedir, runtimeDir: path.dirname(process.execPath), log: (line) => console.log(line),
+        }) };
+      }, { say: NOTCH_PEOPLE_FAILED_NOTICE, notice: notchNotice }) : null;
+      const peerLink = peerParts?.link ?? null;
+      const peerSetupNow = peerParts?.setup ?? null;
       // A page in the person's own browser: where they sign in. Only a page that is reached safely, and
       // on the machine the answer came from. A desktop app that cannot do it opens nothing.
       const notchOpenUrl = async (sidecarId: string | null, url: string): Promise<boolean> => {
@@ -4751,7 +4770,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           return false;
         }
       };
-      notchReal = attachNotchReal(notchSurface, {
+      // Made apart from the brain's own start: when a part of it cannot be made (a notch table that cannot be
+      // created, say), what was made of it is stopped again (src/notch/real.ts), what was set for it above is
+      // put back, the dashboard says that the notch did not start, and the brain goes on without it.
+      const notchPage = notchSurface;
+      notchReal = startNotchPart('the notch', () => attachNotchReal(notchPage, {
         busy: () => notchDemo?.running() != null,
         // What a file that arrived from somebody is, in one sentence: one small question to the model about that
         // one file. A PDF is read to text by the product's own reader, apart from the daemon and under a deadline.
@@ -5055,8 +5078,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           },
           openPage: notchOpenPage,
         }),
+      }), {
+        say: NOTCH_FAILED_NOTICE,
+        notice: notchNotice,
+        undo: () => { setPauseHoldsLoops(false); setOwnerWordProbe(null); setNotchFrontSource(null); setCaptureGuard(null); },
       });
-      if (peerSetupNow) {
+      // What the brain stops on its way down (handleShutdown).
+      holdNotch(notchReal);
+      // Nothing answers what the engine asks of the person when there is no notch: then it is not started.
+      if (peerSetupNow && notchReal) {
         // What the engine asks of the person goes to the link, and from there to the notch. Nothing else answers it.
         peerSetup = peerSetupNow;
         peerSetupNow.start();
