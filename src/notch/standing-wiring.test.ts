@@ -27,6 +27,9 @@ function body(told: Record<string, unknown>, picture: Uint8Array): Uint8Array {
   return out;
 }
 
+/** Today at 12:00, local time. */
+const NOON = ((): number => { const day = new Date(); day.setHours(12, 0, 0, 0); return day.getTime(); })();
+
 let live: NotchReal | null = null;
 beforeEach(() => { initDatabase(':memory:', { quiet: true }); });
 afterEach(() => { live?.stop(); live = null; closeDb(); });
@@ -54,7 +57,9 @@ function assembled() {
         cancel() {}, onEvent: () => () => {}, look: () => null, mark() {},
       }) as never,
     },
-    day: { db: getDb(), noClock: true },
+    // Noon on this computer's own clock, whatever the hour and the zone: a file that arrives in the quiet
+    // hours waits for them to end, and the test would fail at night.
+    day: { db: getDb(), noClock: true, now: () => NOON },
     lookMs: 3_600_000,
     log: () => {},
   });
