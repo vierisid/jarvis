@@ -8,7 +8,7 @@
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
 import { NOTCH_NAME } from '../../../../src/notch/name.ts';
-import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_MOODS, notchWhereApp } from '../../../../src/notch/protocol.ts';
+import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_MOODS, notchWhereApp, parseNotchToPage } from '../../../../src/notch/protocol.ts';
 import type {
   NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp, NotchWord,
 } from '../../../../src/notch/protocol.ts';
@@ -65,6 +65,12 @@ export interface NotchSurface {
   onWantEsc(listener: (want: boolean) => void): void;
   /** Told whenever the notch starts or stops showing a question that waits for a yes or a no. */
   onAsking(listener: (asking: boolean) => void): void;
+  /**
+   * Told whenever something the brain said could not be read and was dropped,
+   * with a word or two on what it was. The notch is as it was before it; it
+   * may no longer be what the brain believes it shows.
+   */
+  onDropped(listener: (what: string) => void): void;
   destroy(): void;
 }
 
@@ -169,6 +175,8 @@ export function createNotchSurface(
   let count = 0, shownCount = 0;
   /** Every `show` makes whatever was scheduled for the line before it void. */
   let tok = 0, shownAt = 0;
+  /** What `tok` was when the last thing was drawn whole. Not `tok` any more: what was scheduled for it is void. */
+  let shownTok = 0;
   let foldTimer = 0, folding = false;
   /** A look given at rest goes back to the resting face after this long. */
   let moodBack = 0;
@@ -424,6 +432,7 @@ export function createNotchSurface(
     shape.fit(instant);
     more();
     syncEsc();
+    shownTok = tok;
   }
 
   /**
@@ -529,13 +538,24 @@ export function createNotchSurface(
    * the screen, and the keys answering for the new one that nobody saw.
    */
   function drawLine(l: NotchLine, instant = false): void {
-    const before = { line, cur };
+    const before = { line, cur, folding };
     try { showLine(l, instant); } catch (error) {
       console.error('[notch] a line could not be drawn', error);
       line = before.line;
       cur = before.cur;
-      if (!cur) { try { rest(true); } catch { /* nothing more can be done here */ } }
+      if (!cur) { try { rest(true); } catch { /* nothing more can be done here */ } return; }
+      // What was scheduled for the line that stays may have gone with the attempt (a draw that got as far
+      // as the screen makes it void, and any attempt stops its fold): a result then stayed up for ever, and
+      // an offer never folded. Then it is drawn again as it stands. When
+      // nothing of it was touched it is left alone: drawing it again would empty a field being typed in.
+      if (tok === shownTok && !before.folding) return;
+      try { again(); } catch { try { rest(true); } catch { /* nothing more can be done here */ } }
     }
+  }
+
+  /** Draws the line that is up again as it stands, unless it was answered. */
+  function again(): void {
+    if (line && cur && !cur.done) showLine(structuredClone(line), true);
   }
 
   function showLine(l: NotchLine, instant = false): void {
@@ -865,8 +885,23 @@ export function createNotchSurface(
     }
   }
 
-  function receive(message: NotchToPage): void {
-    if (!alive || typeof message !== 'object' || message === null) return;
+  const dropListeners = new Set<(what: string) => void>();
+  /** A word or two on a message that could not be read, for the log: what it said it was, never what was in it. */
+  const named = (raw: unknown): string => {
+    const word = (value: unknown): string => (typeof value === 'string' ? value.replace(/[^\w-]/g, '').slice(0, 20) : '');
+    const m = typeof raw === 'object' && raw !== null ? raw as { type?: unknown; line?: { kind?: unknown } | null } : {};
+    return [word(m.type) || 'not a message', word(m.line?.kind)].filter(Boolean).join(' ');
+  };
+
+  function receive(raw: NotchToPage): void {
+    if (!alive) return;
+    // Read whole before anything changes: a message that is not one is dropped, and the notch stays as it was.
+    const message = parseNotchToPage(raw);
+    if (!message) {
+      const what = named(raw);
+      for (const listener of dropListeners) listener(what);
+      return;
+    }
     try {
       switch (message.type) {
         case 'state': {
@@ -880,7 +915,12 @@ export function createNotchSurface(
           sounds.set(message.sound === true);
           if (message.line) {
             edge.appear();
-            showLine(structuredClone(message.line), true);
+            // A line that cannot be drawn must not leave the page unborn: it then drew nothing and heard
+            // nothing more until it was loaded again. It rests, and can be shown the next thing.
+            try { showLine(structuredClone(message.line), true); } catch (error) {
+              console.error('[notch] a line could not be drawn', error);
+              try { rest(true); } catch { /* nothing more can be done here */ }
+            }
           } else if (message.born && !born) {
             rest(true);
             edge.birth(message.born, () => {});
@@ -1176,11 +1216,12 @@ export function createNotchSurface(
     onOutline(listener) { listeners.add(listener); },
     onWantEsc(listener) { escListeners.add(listener); },
     onAsking(listener) { askingListeners.add(listener); },
+    onDropped(listener) { dropListeners.add(listener); },
     setPairs(pairs) {
       if (!setKeyPairs(pairs)) return;
       held();
       // The hints on screen were drawn with the old keys: draw the line again.
-      if (line && cur && !cur.done) showLine(structuredClone(line), true);
+      again();
     },
     setHousing(w, h) {
       const next = notchHousing(w, h);
@@ -1199,6 +1240,7 @@ export function createNotchSurface(
       syncEsc();
       escListeners.clear();
       askingListeners.clear();
+      dropListeners.clear();
       frames.stop();
       timers.clear();
       sounds.stop();

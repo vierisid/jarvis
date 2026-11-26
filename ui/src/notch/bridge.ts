@@ -134,8 +134,16 @@ export function connectHousing(surface: Pick<NotchSurface, 'setHousing'>, host: 
   } catch { /* no desktop app here: no housing */ }
 }
 
-/** Wires a surface to the desktop app, then says hello to the brain. */
-export function connectNotch(surface: NotchSurface, host: NotchWindow = window as unknown as NotchWindow): void {
+/** How many times a message that could not be read is written to the desktop app's log. A brain that is wrong is wrong often. */
+export const NOTCH_DROPPED_LOGGED = 5;
+
+/**
+ * Wires a surface to the desktop app, then says hello to the brain.
+ * `helloAgainMs` is how often the hello is said again while no state has
+ * come: NOTCH_HELLO_AGAIN_MS when not given (the tests give less).
+ */
+export function connectNotch(surface: NotchSurface, host: NotchWindow = window as unknown as NotchWindow, options: { helloAgainMs?: number } = {}): void {
+  const helloEvery = options.helloAgainMs ?? NOTCH_HELLO_AGAIN_MS;
   let sent: Polygons | null = null;
   let sentAt = 0;
   let trailing: ReturnType<typeof setTimeout> | null = null;
@@ -162,11 +170,52 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
     quietly(() => host.__notch_set_outline?.(shapes, cuts));
   };
   surface.onOutline(report);
-  /** The brain has answered the hello with what the notch shows. */
+  /** The brain has answered the hello with what the notch shows, and nothing it said since was dropped. */
   let stated = false;
+  let tries = 0;
+  let helloAt = -Infinity;
+  let again: ReturnType<typeof setInterval> | null = null;
+  const hello = (): void => {
+    helloAt = performance.now();
+    notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
+  };
+  // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
+  // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
+  // a state has come.
+  const keepAsking = (): void => {
+    if (again !== null) return;
+    again = setInterval(() => {
+      if (stated || ++tries > NOTCH_HELLO_TRIES) { if (again !== null) clearInterval(again); again = null; return; }
+      hello();
+    }, helloEvery);
+  };
+  /** Said now, unless it was said a moment ago: a brain that answers with something unreadable is not asked in a loop. */
+  const helloSoon = (): void => { if (performance.now() - helloAt >= helloEvery) hello(); };
+  // Something the brain said could not be read, and was dropped whole. What the notch shows may no longer be
+  // what the brain believes it shows, so the brain is asked for the whole of it again. (A line that could
+  // not be drawn, told to a page that came up, used to leave that page drawing nothing and hearing nothing
+  // until the desktop app was started again: the state had come, so the hello was never said a second time.)
+  let dropped = 0, droppedNow = false;
+  surface.onDropped((what) => {
+    droppedNow = true;
+    if (dropped++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`a message from the brain could not be read and was dropped: ${what}`));
+    stated = false;
+    helloSoon();
+    keepAsking();
+  });
   host.__notch_receive = (message) => {
-    if ((message as { type?: unknown } | null)?.type === 'state') stated = true;
+    droppedNow = false;
     surface.receive(message);
+    if (droppedNow) return;
+    if ((message as { type?: unknown } | null)?.type === 'state') {
+      stated = true;
+      // The next time the page is out of step it may ask as often again.
+      tries = 0;
+    } else if (!stated) {
+      // The brain is speaking to a page that has no state from it: its tries may be long used up (a line
+      // that could not be read stayed up for minutes), and this is the moment the brain may have one that can.
+      helloSoon();
+    }
   };
   host.__notch_cursor = (x, y, down) => surface.pointer(x, y, !!down);
   // The keys: what they said, which they are on this machine, and whether Esc
@@ -189,14 +238,6 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
   quietly(() => host.__notch_log?.(`page ready: scale ${window.devicePixelRatio || 1}, window ${window.innerWidth}x${window.innerHeight} css px`));
   // A page that was loaded again while it had the keyboard never gave it back: it is given back once, now.
   quietly(() => host.__notch_focus?.(false));
-  const hello = (): void => notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
   hello();
-  // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
-  // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
-  // a state has come.
-  let tries = 0;
-  const again = setInterval(() => {
-    if (stated || ++tries > NOTCH_HELLO_TRIES) { clearInterval(again); return; }
-    hello();
-  }, NOTCH_HELLO_AGAIN_MS);
+  keepAsking();
 }

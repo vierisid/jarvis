@@ -451,3 +451,249 @@ export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
   }
   return answer;
 }
+
+type Raw = Record<string, unknown>;
+
+const isRaw = (value: unknown): value is Raw => typeof value === 'object' && value !== null && !Array.isArray(value);
+/** A field that was left out. One that is null was left out too: that is what a number that is not one becomes on the way. */
+const absent = (value: unknown): value is undefined | null => value === undefined || value === null;
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const oneOf = <T extends string>(all: readonly T[], value: unknown): T | undefined =>
+  (typeof value === 'string' && (all as readonly string[]).includes(value) ? (value as T) : undefined);
+
+/** Thrown while a message is read, when something it needs is not what it must be. It never leaves this file. */
+class NotchUnread extends Error {}
+const unread = (): never => { throw new NotchUnread(); };
+
+const text = (value: unknown): string => (typeof value === 'string' ? value : unread());
+const number = (value: unknown): number => (isNumber(value) ? value : unread());
+const optText = (value: unknown): string | undefined => (absent(value) ? undefined : text(value));
+const optFlag = (value: unknown): boolean | undefined => (absent(value) ? undefined : typeof value === 'boolean' ? value : unread());
+const optNumber = (value: unknown): number | undefined => (absent(value) ? undefined : number(value));
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : unread());
+const texts = (value: unknown): string[] => list(value).map(text);
+/** Sets a field only when it was given, so that what is read is what was sent, and no more. */
+const put = <T extends object, K extends keyof T>(into: T, key: K, value: T[K] | undefined): void => {
+  if (value !== undefined) into[key] = value;
+};
+
+const WORD_READS = ['day', 'dayTime', 'sched', 'days', 'lead', 'where'] as const;
+const PART_KEYS = ['yes', 'talk', 'esc', 'enter'] as const;
+const FILE_ICONS = ['doc', 'image', 'audio', 'video', 'sheet'] as const;
+const MAP_KINDS = ['me', 'person', 'tool', 'co', 'thing'] as const;
+const BEADS = ['ok', 'ask', 'bad'] as const;
+const MOUTHS = ['open', 'over', 'shut', 'gulp'] as const;
+/** The longest name a line may have: an answer that names a longer one is not read by the brain. */
+const LINE_ID_MAX = 200;
+
+function readWord(value: unknown): NotchWord {
+  const raw = isRaw(value) ? value : unread();
+  const word: NotchWord = { name: text(raw.name), value: text(raw.value), options: texts(raw.options) };
+  put(word, 'label', optText(raw.label));
+  if (!absent(raw.read)) word.read = oneOf(WORD_READS, raw.read) ?? unread();
+  if (!absent(raw.syn)) {
+    const syn = isRaw(raw.syn) ? raw.syn : unread();
+    word.syn = Object.fromEntries(Object.entries(syn).map(([option, ways]) => [option, texts(ways)]));
+  }
+  put(word, 'free', optFlag(raw.free));
+  put(word, 'long', optFlag(raw.long));
+  return word;
+}
+
+function readPart(value: unknown): NotchPart {
+  if (typeof value === 'string') return value;
+  const raw = isRaw(value) ? value : unread();
+  if ('em' in raw) return { em: text(raw.em) };
+  if ('key' in raw) return { key: oneOf(PART_KEYS, raw.key) ?? unread() };
+  if ('word' in raw) return { word: readWord(raw.word) };
+  return unread();
+}
+const readParts = (value: unknown): NotchPart[] => list(value).map(readPart);
+
+function readButton(value: unknown): NotchButton {
+  const raw = isRaw(value) ? value : unread();
+  const button: NotchButton = { id: text(raw.id), label: text(raw.label) };
+  put(button, 'key', optNumber(raw.key));
+  put(button, 'quiet', optFlag(raw.quiet));
+  return button;
+}
+
+/**
+ * The map is drawn from what is found as it is found, and takes what it can
+ * of what it is given: a thing with no name is left out, a place off the
+ * field is brought into it, and a kind nobody knows is a thing.
+ */
+function readMap(raw: Raw): Extract<NotchBlock, { kind: 'map' }> {
+  const within = (value: unknown, most: number): number => (isNumber(value) ? Math.max(0, Math.min(most, value)) : 0);
+  const each = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+  const nodes: NotchMapNode[] = [];
+  for (const node of each(raw.nodes)) {
+    if (!isRaw(node) || typeof node.id !== 'string' || typeof node.label !== 'string') continue;
+    nodes.push({ id: node.id, label: node.label, x: within(node.x, 444), y: within(node.y, 204), kind: oneOf(MAP_KINDS, node.kind) ?? 'thing' });
+  }
+  const links: [string, string][] = [];
+  for (const pair of each(raw.links)) {
+    if (Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'string') links.push([pair[0], pair[1]]);
+  }
+  const sources: NotchMapSource[] = [];
+  for (const source of each(raw.sources)) {
+    if (!isRaw(source) || typeof source.name !== 'string') continue;
+    const read: NotchMapSource = { name: source.name };
+    if (typeof source.found === 'string') read.found = source.found;
+    put(read, 'state', oneOf(['on', 'done'] as const, source.state));
+    sources.push(read);
+  }
+  const map: Extract<NotchBlock, { kind: 'map' }> = { kind: 'map', nodes, links, sources };
+  if (Array.isArray(raw.tour)) map.tour = raw.tour.filter((id): id is string => typeof id === 'string');
+  return map;
+}
+
+function readBlock(value: unknown): NotchBlock {
+  const raw = isRaw(value) ? value : unread();
+  if (raw.kind === 'row') {
+    const row: Extract<NotchBlock, { kind: 'row' }> = { kind: 'row', say: readParts(raw.say) };
+    put(row, 'id', optText(raw.id));
+    put(row, 'lead', optText(raw.lead));
+    put(row, 'tail', optText(raw.tail));
+    put(row, 'small', optText(raw.small));
+    if (!absent(raw.buttons)) row.buttons = list(raw.buttons).map(readButton);
+    put(row, 'go', optFlag(raw.go));
+    put(row, 'gone', optFlag(raw.gone));
+    // The dots only tell how the last runs went: one that is not a dot is left out, and the row stands.
+    if (Array.isArray(raw.beads)) row.beads = raw.beads.filter((bead): bead is NotchBead => oneOf(BEADS, bead) !== undefined);
+    return row;
+  }
+  if (raw.kind === 'paper') {
+    const paper: Extract<NotchBlock, { kind: 'paper' }> = { kind: 'paper', lines: list(raw.lines).map(readParts) };
+    if (!absent(raw.to)) paper.to = readParts(raw.to);
+    put(paper, 'numbered', optFlag(raw.numbered));
+    if (!absent(raw.file)) {
+      const file = isRaw(raw.file) ? raw.file : unread();
+      paper.file = { name: text(file.name), size: text(file.size) };
+    }
+    return paper;
+  }
+  if (raw.kind === 'note') return { kind: 'note', say: readParts(raw.say) };
+  if (raw.kind === 'buttons') return { kind: 'buttons', buttons: list(raw.buttons).map(readButton) };
+  if (raw.kind === 'file') return { kind: 'file', icon: oneOf(FILE_ICONS, raw.icon) ?? unread(), name: text(raw.name), meta: text(raw.meta) };
+  if (raw.kind === 'map') return readMap(raw);
+  return unread();
+}
+const readBlocks = (value: unknown): NotchBlock[] => list(value).map(readBlock);
+
+function readLine(value: unknown): NotchLine {
+  const raw = isRaw(value) ? value : unread();
+  const id = text(raw.id);
+  if (!id || id.length > LINE_ID_MAX) unread();
+  const say = readParts(raw.say);
+  let line: NotchLine;
+  if (raw.kind === 'say' || raw.kind === 'send') {
+    line = { id, kind: raw.kind, say, ms: number(raw.ms) };
+  } else if (raw.kind === 'offer') {
+    line = { id, kind: 'offer', say };
+    put(line, 'yes', optText(raw.yes));
+    if (!absent(raw.options)) line.options = texts(raw.options);
+    put(line, 'fold', optNumber(raw.fold));
+    if (!absent(raw.keys)) line.keys = oneOf(['esc', 'talk'] as const, raw.keys) ?? unread();
+  } else if (raw.kind === 'sheet') {
+    line = { id, kind: 'sheet', say, blocks: readBlocks(raw.blocks) };
+    put(line, 'yes', optText(raw.yes));
+    put(line, 'stay', optFlag(raw.stay));
+    put(line, 'no', optText(raw.no));
+    put(line, 'whole', optFlag(raw.whole));
+  } else if (raw.kind === 'ask') {
+    line = { id, kind: 'ask', say, placeholder: text(raw.placeholder), yes: text(raw.yes), blocks: readBlocks(raw.blocks) };
+    put(line, 'focus', optFlag(raw.focus));
+    put(line, 'stay', optFlag(raw.stay));
+  } else if (raw.kind === 'work') {
+    line = { id, kind: 'work', say, steps: number(raw.steps), done: number(raw.done) };
+    put(line, 'canTalk', optFlag(raw.canTalk));
+  } else if (raw.kind === 'listen') {
+    line = { id, kind: 'listen', say, heard: text(raw.heard) };
+    put(line, 'over', optFlag(raw.over));
+  } else {
+    return unread();
+  }
+  // What only dresses a line is left out when it is not known, and the line is still said.
+  put(line, 'mood', oneOf(NOTCH_MOODS, raw.mood));
+  put(line, 'mark', oneOf(['check', 'fail'] as const, raw.mark));
+  if (typeof raw.who === 'string') line.who = raw.who;
+  put(line, 'src', oneOf(NOTCH_APPS, raw.src));
+  put(line, 'arrive', oneOf(NOTCH_ARRIVALS, raw.arrive));
+  if (typeof raw.step === 'string') line.step = raw.step;
+  // Not this one: it is what keeps a yes that was on its way to something else from landing here.
+  put(line, 'unasked', optFlag(raw.unasked));
+  return line;
+}
+
+function readToPage(m: Raw): NotchToPage | null {
+  if (m.type === 'rest') return { type: 'rest' };
+  if (m.type === 'show') return { type: 'show', line: readLine(m.line) };
+  if (m.type === 'count') return { type: 'count', count: number(m.count) };
+  if (m.type === 'face') return { type: 'face', mood: oneOf(NOTCH_MOODS, m.mood) ?? unread() };
+  if (m.type === 'where') return { type: 'where', app: notchWhereApp(m.app) };
+  if (m.type === 'state') {
+    const state: Extract<NotchToPage, { type: 'state' }> = { type: 'state', line: absent(m.line) ? null : readLine(m.line), count: number(m.count) };
+    put(state, 'born', oneOf(NOTCH_BIRTHS, m.born));
+    put(state, 'face', oneOf(NOTCH_MOODS, m.face));
+    if (m.where !== undefined) state.where = notchWhereApp(m.where);
+    put(state, 'eye', optFlag(m.eye));
+    put(state, 'sound', optFlag(m.sound));
+    return state;
+  }
+  if (m.type === 'update') {
+    const id = text(m.id);
+    if (!id || id.length > LINE_ID_MAX) unread();
+    const update: Extract<NotchToPage, { type: 'update' }> = { type: 'update', id };
+    put(update, 'done', optNumber(m.done));
+    if (!absent(m.say)) update.say = readParts(m.say);
+    put(update, 'heard', optText(m.heard));
+    put(update, 'over', optFlag(m.over));
+    if (!absent(m.blocks)) update.blocks = readBlocks(m.blocks);
+    return update;
+  }
+  if (m.type === 'act') {
+    // A movement is never worth losing the others for: one that is not known is left out.
+    const act: Extract<NotchToPage, { type: 'act' }> = { type: 'act' };
+    put(act, 'mood', oneOf(NOTCH_MOODS, m.mood));
+    put(act, 'gesture', oneOf(NOTCH_GESTURES, m.gesture));
+    put(act, 'lip', oneOf(NOTCH_LIPS, m.lip));
+    put(act, 'birth', oneOf(NOTCH_BIRTHS, m.birth));
+    if (isNumber(m.aim)) act.aim = m.aim;
+    put(act, 'body', oneOf(NOTCH_BODIES, m.body));
+    if (isNumber(m.kick)) act.kick = m.kick;
+    put(act, 'edge', oneOf(NOTCH_EDGES, m.edge));
+    put(act, 'side', oneOf(['left', 'right'] as const, m.side));
+    if (typeof m.eye === 'boolean') act.eye = m.eye;
+    put(act, 'mouth', oneOf(MOUTHS, m.mouth));
+    if (isNumber(m.park)) act.park = m.park;
+    if (typeof m.sound === 'boolean') act.sound = m.sound;
+    return act;
+  }
+  return null;
+}
+
+/**
+ * Reads one message from the brain, for the page. The counterpart of
+ * `parseNotchFromPage`: what arrives has crossed two processes as text, and
+ * the page must be able to draw whatever it lets in. So a message is read
+ * whole before anything on the notch changes, and one that is not exactly a
+ * message (a line with no id, a sheet with no blocks, a part of a sentence
+ * that is not one) is null: it is dropped, and the notch stays as it was.
+ *
+ * Two things are taken more lightly, as the page always took them. What only
+ * dresses a line or moves the notch (a mood, a mark, an app, a way of
+ * arriving, the movements of `act`) is left out when it is not known, and the
+ * rest stands. And the map takes what it can of what it is given.
+ *
+ * What comes back is a new object with nothing in it but what a message has.
+ */
+export function parseNotchToPage(raw: unknown): NotchToPage | null {
+  if (!isRaw(raw)) return null;
+  try {
+    return readToPage(raw);
+  } catch (error) {
+    if (error instanceof NotchUnread) return null;
+    throw error;
+  }
+}

@@ -85,3 +85,99 @@ describe('the display\'s camera housing', () => {
     expect(told).toEqual([]);
   });
 });
+
+// Point 7 of the notch review, 26 November 2026 (docs/notch/fixes/07-page-renderer.md).
+describe('a page that is told something it cannot read', () => {
+  type Host = NonNullable<Parameters<typeof import('./bridge.ts')['connectNotch']>[1]>;
+  const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  /** A sheet with no blocks: nothing that can be drawn. */
+  const unreadable = { type: 'state', count: 1, line: { id: 'bad', kind: 'sheet', say: ['Approve?'], yes: 'approve' } };
+  const readable = { type: 'state', count: 1, line: { id: 'good', kind: 'offer', say: ['Reply to Marco?'], yes: 'show' } };
+
+  /** The real page on a desktop app that only records: what was sent to the brain, and what was written to its log. */
+  async function page(helloAgainMs: number) {
+    const { GlobalRegistrator } = await import('@happy-dom/global-registrator');
+    GlobalRegistrator.register();
+    const { connectNotch, notchSend } = await import('./bridge.ts');
+    const { createNotchSurface } = await import('./surface/index.ts');
+    const root = document.createElement('div');
+    document.body.append(root);
+    const sent: { type: string; id?: string; act?: string }[] = [];
+    const logs: string[] = [];
+    const host: Host = { __notch_send: (text) => { sent.push(JSON.parse(text)); }, __notch_log: (text) => { logs.push(text); } };
+    const surface = createNotchSurface(root, notchSend(host), { reducedMotion: true });
+    connectNotch(surface, host, { helloAgainMs });
+    return {
+      host, sent, logs, root,
+      hellos: () => sent.filter((m) => m.type === 'hello').length,
+      dropped: () => logs.filter((line) => line.includes('could not be read')),
+      tell: (message: unknown) => host.__notch_receive?.(message as never),
+      said: () => (root.querySelector('.say')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      end: () => { surface.destroy(); root.remove(); GlobalRegistrator.unregister(); },
+    };
+  }
+
+  test('a line that cannot be drawn, told to a page that comes up, does not leave it dead: it asks again, and shows what it is told then', async () => {
+    const p = await page(30);
+    try {
+      expect(p.hellos()).toBe(1);
+      p.tell(unreadable);
+      expect(p.dropped()).toEqual(['a message from the brain could not be read and was dropped: state sheet']);
+      // The state had come, so the hello was never said again: the page drew nothing until it was loaded anew.
+      await wait(150);
+      expect(p.hellos()).toBeGreaterThan(1);
+      p.tell(readable);
+      expect(p.said()).toContain('Reply to Marco?');
+      p.tell({ type: 'show', line: { id: 'next', kind: 'say', say: ['Sent.'], ms: 4000 } });
+      expect(p.said()).toContain('Sent.');
+      // And once it has been told, it stops asking.
+      await wait(60);
+      const asked = p.hellos();
+      await wait(150);
+      expect(p.hellos()).toBe(asked);
+    } finally { p.end(); }
+  });
+
+  test('later on, the line that is up stays and can be answered, and the brain is asked for the whole of it again at once', async () => {
+    const p = await page(40);
+    try {
+      p.tell(readable);
+      await wait(120);
+      expect(p.hellos()).toBe(1);
+      p.tell({ type: 'show', line: { id: 'x', kind: 'sheet', say: ['T'], blocks: [{ kind: 'paper' }] } });
+      expect(p.hellos()).toBe(2);
+      // Not twice in a moment: a brain that answers with the same thing again is not asked in a loop.
+      p.tell({ type: 'show', line: { id: 'x', kind: 'sheet', say: ['T'], blocks: [{ kind: 'paper' }] } });
+      p.tell(unreadable);
+      expect(p.hellos()).toBe(2);
+      expect(p.said()).toContain('Reply to Marco?');
+      p.root.querySelector<HTMLElement>('.hint .key')?.click();
+      expect(p.sent.at(-1)).toEqual({ type: 'answer', id: 'good', act: 'yes' });
+      p.tell(readable);
+    } finally { p.end(); }
+  });
+
+  test('a brain that only ever says what cannot be read is not asked for ever, nor is the log filled; when it speaks again it is asked once more', async () => {
+    const { NOTCH_HELLO_TRIES, NOTCH_DROPPED_LOGGED } = await import('./bridge.ts');
+    const p = await page(4);
+    try {
+      // Every hello is answered with the same unreadable state.
+      const send = p.host.__notch_send!;
+      p.host.__notch_send = (text) => { send(text); if (JSON.parse(text).type === 'hello') queueMicrotask(() => p.tell(unreadable)); };
+      p.tell(unreadable);
+      await wait(400);
+      const asked = p.hellos();
+      expect(asked).toBeGreaterThan(5);
+      expect(asked).toBeLessThanOrEqual(NOTCH_HELLO_TRIES + 2);
+      await wait(100);
+      expect(p.hellos()).toBe(asked);
+      expect(p.dropped().length).toBe(NOTCH_DROPPED_LOGGED);
+      // The brain says something else: it may have a line that can be read by now.
+      p.tell({ type: 'count', count: 2 });
+      expect(p.hellos()).toBe(asked + 1);
+      p.host.__notch_send = send;
+      p.tell(readable);
+      expect(p.said()).toContain('Reply to Marco?');
+    } finally { p.end(); }
+  });
+});
