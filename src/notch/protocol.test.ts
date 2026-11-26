@@ -22,6 +22,7 @@ const lines: NotchLine[] = [
   { id: 'sheet-1', kind: 'sheet', say: ['A draft'], blocks, yes: 'send', stay: true, no: 'back', whole: true },
   { id: 'ask-1', kind: 'ask', say: [], placeholder: 'Tell me', yes: 'ask', blocks: [], focus: true, stay: true },
   { id: 'work-1', kind: 'work', say: ['Pasting'], steps: 9, done: 2, canTalk: true },
+  { id: 'work-2', kind: 'work', say: ['Putting it in the thread'], steps: 0, done: 0, asks: true },
   { id: 'send-1', kind: 'send', say: ['Sending'], ms: 4000, left: 0 },
   // A letter under its fuse: what goes out is on the notch while it burns.
   { id: 'send-2', kind: 'send', say: ['Offering ', { em: 'Tuesday at 10:00' }, ' to Leo'], ms: 8000, left: 5000, blocks: [{ kind: 'paper', to: ['To ', { em: 'Leo' }], lines: [['Hi Leo,'], [{ em: 'Tuesday at 10:00' }, ' would suit me.']] }] },

@@ -92,3 +92,71 @@ describe('a wait for time on a stage', () => {
     expect(await state(work)).toBe('ended');
   });
 });
+
+// What is going out is on the notch while its fuse burns, and the proof that it was seen is
+// positive: a page's word that the fuse ran out is not enough without its word that it drew the
+// letter. A page loaded before the brain was updated draws none, and says "done" all the same.
+describe('a fuse with a letter under it', () => {
+  const LETTER = [{ kind: 'paper' as const, lines: [['Hi Leo,']] }];
+  const ID = 't-test-1';
+  const begin = () => { const h = stageOf(); return { ...h, letter: h.stage.letter(['Offering'], 8000, LETTER) }; };
+  const done = (seen?: unknown) => ({ type: 'answer' as const, id: ID, act: 'done' as const, ...(seen === undefined ? {} : { seen: seen as boolean }) });
+
+  test('goes only on a page saying it ran out and that the letter was seen', async () => {
+    const h = begin();
+    expect(h.stage.burning()).toBe(true);
+    h.stage.heard(done(true));
+    expect(await state(h.letter)).toBe('resolved');
+    expect(await h.letter).toBe('done');
+    expect(h.stage.burning()).toBe(false);
+  });
+
+  test('a page saying only that it ran out does not end it: it is unseen when the time is up, and not before', async () => {
+    const h = begin();
+    h.advance(8000);
+    h.stage.heard(done());
+    expect(await state(h.letter)).toBe('pending');
+    h.advance(1499);
+    expect(await state(h.letter)).toBe('pending');
+    h.advance(1);
+    expect(await h.letter).toBe('unseen');
+  });
+
+  test('after such a page, another can still vouch, or take it back', async () => {
+    const vouched = begin();
+    vouched.stage.heard(done());
+    vouched.stage.heard(done(true));
+    expect(await vouched.letter).toBe('done');
+
+    const undone = begin();
+    undone.stage.heard(done());
+    undone.stage.heard({ type: 'answer', id: ID, act: 'undo' });
+    expect(await undone.letter).toBe('undo');
+  });
+
+  test('an undo before anything else is an undo, and a word that it was seen afterwards changes nothing', async () => {
+    const h = begin();
+    h.stage.heard({ type: 'answer', id: ID, act: 'undo' });
+    h.stage.heard(done(true));
+    expect(await h.letter).toBe('undo');
+  });
+
+  test('no page saying anything is lost, not unseen', async () => {
+    const h = begin();
+    h.advance(9500);
+    expect(await h.letter).toBe('lost');
+  });
+
+  test('the stage ending in the middle of it fails it, like any wait', async () => {
+    const h = begin();
+    h.stage.stop();
+    expect(await state(h.letter)).toBe('ended');
+  });
+
+  test('a fuse with no letter goes on the word that it ran out, as it always did', async () => {
+    const h = stageOf();
+    const fuse = h.stage.fuse(['Sending'], 5000);
+    h.stage.heard(done());
+    expect(await fuse).toBe('done');
+  });
+});

@@ -420,6 +420,16 @@ describe('a letter under its fuse', () => {
     return el;
   };
   const paper = (): string => ($('.sheet .paper')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+  /** What the page said when the fuse ran out: with its word that the letter was seen, or without. */
+  const ranOut = (): unknown[] => sent.filter((m) => m.type === 'answer' && m.act === 'done').map((m) => ({ ...m }));
+  const VOUCHED = { type: 'answer', id: 'slot', act: 'done', seen: true };
+  const BARE = { type: 'answer', id: 'slot', act: 'done' };
+  /** The page is told by its window that it is shown, or not. */
+  const sight = (state: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  afterEach(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' }); });
 
   test('is on the notch, whole, with the picked time lit, while the fuse burns, and then it is said to have run out', () => {
     show(letter);
@@ -436,7 +446,60 @@ describe('a letter under its fuse', () => {
     // The letter is still there for as long as it can be taken back.
     expect(paper()).toContain('would suit me.');
     clock.advance(1);
-    expect(acts()).toEqual(['slot:done']);
+    // It ran out, and the page says with it that the letter was drawn and seen to its end.
+    expect(ranOut()).toEqual([VOUCHED]);
+  });
+
+  test('a fuse with no letter never carries that word: it is the letter that is vouched for', () => {
+    show({ id: 'slot', kind: 'send', say: ['Sending'], ms: 4000 });
+    clock.advance(4000);
+    expect(ranOut()).toEqual([BARE]);
+  });
+
+  test('out of sight at any moment while it burnt, or when it was drawn, the page says it ran out and does not vouch', () => {
+    show(letter);
+    clock.advance(3000);
+    sight('hidden');
+    sight('visible');
+    clock.advance(5000);
+    expect(ranOut()).toEqual([BARE]);
+
+    fresh();
+    state(null);
+    sight('hidden');
+    show(letter);
+    sight('visible');
+    clock.advance(8000);
+    expect(ranOut()).toEqual([BARE]);
+
+    fresh();
+    state(null);
+    show(letter);
+    clock.advance(7999);
+    sight('hidden');
+    clock.advance(1);
+    expect(ranOut()).toEqual([BARE]);
+    // In sight again, a letter after it starts clean.
+    fresh();
+    state(null);
+    sight('visible');
+    show(letter);
+    clock.advance(8000);
+    expect(ranOut()).toEqual([VOUCHED]);
+  });
+
+  test('it is a question to the window: the notch is not to be out of sight for it, nor for the work that leads into it', () => {
+    const asking: boolean[] = [];
+    surface.onAsking((now) => asking.push(now));
+    show({ id: 'w', kind: 'work', say: ['Pasting'], steps: 0, done: 0 });
+    show({ id: 'f', kind: 'send', say: ['Sending'], ms: 4000 });
+    expect(asking).toEqual([]);
+    show({ id: 'p', kind: 'work', say: ['Putting it in the thread'], steps: 0, done: 0, asks: true });
+    expect(asking).toEqual([true]);
+    show(letter);
+    expect(asking).toEqual([true]);
+    surface.key('esc');
+    expect(asking).toEqual([true, false]);
   });
 
   test('Esc at any moment of it is an undo, once, and it is never then said to have run out', () => {
@@ -466,13 +529,19 @@ describe('a letter under its fuse', () => {
     expect(acts()).toEqual(['slot:done']);
   });
 
-  test('a letter whose end was never on screen is not said to have run out; Esc is still an undo', () => {
+  test('a letter whose end was never on screen: the page says the fuse ran out, and does not vouch for the letter', () => {
+    show(letter);
+    sized(300, 900);
+    clock.advance(7999);
+    surface.key('esc');
+    expect(acts()).toEqual(['slot:undo']);
+
+    fresh();
+    state(null);
     show(letter);
     sized(300, 900);
     clock.advance(20000);
-    expect(acts()).toEqual([]);
-    surface.key('esc');
-    expect(acts()).toEqual(['slot:undo']);
+    expect(ranOut()).toEqual([BARE]);
   });
 
   test('scrolled to its end before the fuse is out, it was seen', () => {
@@ -481,7 +550,7 @@ describe('a letter under its fuse', () => {
     clock.advance(4000);
     el.scrollTop = 600;
     clock.advance(4000);
-    expect(acts()).toEqual(['slot:done']);
+    expect(ranOut()).toEqual([VOUCHED]);
   });
 
   test('told again to the page that shows it (a hello in the middle), it is not drawn again: the fuse goes on, and an undo stays an undo', () => {
@@ -510,7 +579,7 @@ describe('a letter under its fuse', () => {
     expect(paper()).toContain('would suit me.');
     expect(fusing()).toBe(true);
     clock.advance(NOTCH_FUSE_SEEN_MS);
-    expect(acts()).toEqual(['slot:done']);
+    expect(ranOut()).toEqual([VOUCHED]);
 
     fresh();
     state({ ...letter, left: NOTCH_FUSE_SEEN_MS - 1 });

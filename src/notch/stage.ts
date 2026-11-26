@@ -267,17 +267,51 @@ export class NotchStage {
    * A send whose going out must be witnessed. `done` only when the page said
    * its window ran out; `undo` when it was taken back; `lost` when no page
    * said either (it went away in the middle). For things that must not happen
-   * on the strength of a line nobody may have seen. With `blocks`, what goes
-   * out is on the notch while the fuse burns (a letter on paper), and `done`
-   * also means its end was on screen.
+   * on the strength of a line nobody may have seen.
    */
-  async fuse(parts: NotchPart[], ms: number, extras: NotchLineExtras & { blocks?: NotchBlock[] } = {}): Promise<'done' | 'undo' | 'lost'> {
+  async fuse(parts: NotchPart[], ms: number, extras: NotchLineExtras = {}): Promise<'done' | 'undo' | 'lost'> {
     const id = this.id();
     this.put({ id, kind: 'send', say: parts, ms, ...extras });
     this.fuses++;
     try {
       const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
       return answer ? (answer.act === 'undo' ? 'undo' : 'done') : 'lost';
+    } finally {
+      this.fuses--;
+    }
+  }
+
+  /**
+   * A fuse with what is going out shown under it (a letter on paper), for
+   * something that must not go unseen. The proof is positive:
+   *
+   *   done    a page said the fuse ran out AND that it had drawn the letter
+   *           with its end on screen (`seen`). Nothing else is a yes
+   *   undo    it was taken back, on any page, before that
+   *   unseen  a page said it ran out and did not vouch for the letter: an
+   *           older page that draws none, one that could not show its end,
+   *           one that was out of sight. Somebody may be there, and saw the
+   *           fuse burn out over a letter that did not go
+   *   lost    no page said anything: it went away in the middle
+   *
+   * A page that does not vouch does not end the wait: another may still
+   * vouch, or take it back, until the time is up.
+   */
+  async letter(parts: NotchPart[], ms: number, blocks: NotchBlock[], extras: NotchLineExtras = {}): Promise<'done' | 'undo' | 'unseen' | 'lost'> {
+    const id = this.id();
+    this.put({ id, kind: 'send', say: parts, ms, blocks, ...extras });
+    this.fuses++;
+    try {
+      const late = this.wait(ms + LATE).then(() => null);
+      late.catch(() => {});
+      let ranOut = false;
+      for (;;) {
+        const answer = await Promise.race([this.answer(id, ['done', 'undo']), late]);
+        if (!answer) return ranOut ? 'unseen' : 'lost';
+        if (answer.act === 'undo') return 'undo';
+        if (answer.seen === true) return 'done';
+        ranOut = true;
+      }
     } finally {
       this.fuses--;
     }

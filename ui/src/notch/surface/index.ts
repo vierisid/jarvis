@@ -226,7 +226,10 @@ export function createNotchSurface(
   const askingListeners = new Set<(asking: boolean) => void>();
   let wasAsking = false;
   function syncAsking(): void {
-    const waits = line !== null && (line.kind === 'offer' || line.kind === 'ask' || (line.kind === 'sheet' && line.stay === true && !!line.yes));
+    // A letter under its fuse is one too, and the work that leads into it: it goes when the fuse is out, so
+    // it must not burn behind a video where nobody sees it and Esc is not the notch's.
+    const waits = line !== null && (line.kind === 'offer' || line.kind === 'ask' || (line.kind === 'sheet' && line.stay === true && !!line.yes)
+      || (line.kind === 'send' && !!line.blocks?.length) || (line.kind === 'work' && line.asks === true));
     const asking = alive && born && cur !== null && !cur.done && waits;
     if (asking === wasAsking) return;
     wasAsking = asking;
@@ -331,6 +334,15 @@ export function createNotchSurface(
   let sheetSeen = false;
   let sheetSeenAt = 0;
   const sawSheetEnd = (): void => { if (!sheetSeen) { sheetSeen = true; sheetSeenAt = clock.now(); } };
+
+  /**
+   * Whether this page says of itself that it is not shown. Not every window that is hidden tells its
+   * page (on Windows a hidden notch still reads "visible"), so this can only ever take a yes away.
+   */
+  const outOfSight = (): boolean => { try { return document.visibilityState === 'hidden'; } catch { return false; } };
+  /** The letter under a fuse that was out of sight at some moment while it burnt: this page does not vouch for it. */
+  let unseenLetter = '';
+  const onVisibility = (): void => { if (outOfSight() && line?.kind === 'send' && line.blocks?.length) unseenLetter = line.id; };
 
   /** A sheet with more below fades at its lower edge. */
   function more(): void {
@@ -724,6 +736,8 @@ export function createNotchSurface(
         };
         if (going) {
           sheetSeen = false;
+          // Drawn anew, not again: whether it was out of sight is counted from here.
+          if (!same) unseenLetter = outOfSight() ? l.id : '';
           const paper = blocksOf(going);
           paper.classList.add('going');
           show({ body: 'sheet', say: l.say, sheet: paper, stag: !same, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
@@ -736,9 +750,16 @@ export function createNotchSurface(
         later(left, () => {
           if (me.done) return;
           wrap.classList.remove('fusing');
-          // A letter whose end was never on the screen was not seen to go: nothing is said to have run
-          // out, the brain counts the fuse as lost, and the yes behind it sends nothing. Esc is still an undo.
-          if (going && !sheetSeen && !sheetAtEnd()) return;
+          if (going) {
+            // The fuse ran out, and that is said. Whether the letter was seen is said beside it, and only
+            // when it was: drawn here, its end on the screen, and this page in sight for all of it. Without
+            // that word the brain sends nothing, and says so.
+            const vouch = (sheetSeen || sheetAtEnd()) && unseenLetter !== l.id && !outOfSight();
+            if (vouch) edge.depart(leftOf(l.src));
+            answer('done', vouch ? { seen: true } : {});
+            settle();
+            return;
+          }
           // It leaves along the edge, toward where it is going: to the side
           // its app is on, and to the right when it goes to a person.
           edge.depart(leftOf(l.src));
@@ -1133,6 +1154,7 @@ export function createNotchSurface(
   notch.addEventListener('wheel', onWheel, { passive: false });
   root.addEventListener('keydown', onKey);
   sheetEl.addEventListener('scroll', onScroll, { passive: true });
+  document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('resize', onResize);
   window.addEventListener('focus', syncKeyboard);
   window.addEventListener('blur', syncKeyboard);
@@ -1311,6 +1333,7 @@ export function createNotchSurface(
       window.removeEventListener('focus', syncKeyboard);
       window.removeEventListener('blur', syncKeyboard);
       sheetEl.removeEventListener('scroll', onScroll);
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', onResize);
       document.fonts?.removeEventListener?.('loadingdone', onFonts);
       root.ownerDocument.documentElement.classList.remove('notch-housed');

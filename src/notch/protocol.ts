@@ -207,6 +207,13 @@ export interface NotchWorkLine extends NotchLineBase {
   done: number;
   /** Show that it can be spoken to while it works. */
   canTalk?: boolean;
+  /**
+   * It leads straight into something the person must see (a letter under
+   * its fuse): the window is not to be out of sight while it is up, as for a
+   * question. Where the notch hides behind a fullscreen video it comes back
+   * for this line, so that it is there when the letter comes.
+   */
+  asks?: boolean;
 }
 
 /**
@@ -227,9 +234,12 @@ export interface NotchSendLine extends NotchLineBase {
   left?: number;
   /**
    * What is going out, shown under the sentence for as long as the fuse
-   * burns: a letter on paper. The page says the fuse ran out only when the
-   * end of it has been on screen: what nobody could read to its end was not
-   * seen to go. Nothing in it is answered: a click away from it is not an
+   * burns: a letter on paper. When the fuse runs out the page's `done`
+   * carries `seen: true` only if it drew the letter, showed it from the
+   * start or for long enough, had its end on screen and was not out of
+   * sight. A `done` without it (an older page that draws no letter says
+   * such) is not proof that anybody saw it, and the brain sends nothing on
+   * it. Nothing in the letter is answered: a click away from it is not an
    * undo, and only Esc is.
    */
   blocks?: NotchBlock[];
@@ -422,6 +432,12 @@ export type NotchFromPage =
   | {
     type: 'answer'; id: string; act: NotchAnswerAct;
     option?: string; index?: number; button?: string; row?: string; word?: string; value?: string; text?: string;
+    /**
+     * With `done` on a send that carried blocks: this page drew what was
+     * going out, and its end was on screen while the fuse burnt. Only ever
+     * true. A page that knows nothing of blocks never says it.
+     */
+    seen?: boolean;
   }
   /** A click on the resting notch, or yes with nothing on it. */
   | { type: 'open' }
@@ -482,6 +498,8 @@ export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
     if (typeof m.index !== 'number' || !Number.isInteger(m.index) || m.index < 0 || m.index > 99) return null;
     answer.index = m.index;
   }
+  // Only the word itself counts: anything else in its place is not a yes to "it was seen".
+  if (m.seen === true) answer.seen = true;
   return answer;
 }
 
@@ -645,6 +663,7 @@ function readLine(value: unknown): NotchLine {
   } else if (raw.kind === 'work') {
     line = { id, kind: 'work', say, steps: number(raw.steps), done: number(raw.done) };
     put(line, 'canTalk', optFlag(raw.canTalk));
+    put(line, 'asks', optFlag(raw.asks));
   } else if (raw.kind === 'listen') {
     line = { id, kind: 'listen', say, heard: text(raw.heard) };
     put(line, 'over', optFlag(raw.over));
