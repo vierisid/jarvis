@@ -24,12 +24,12 @@ import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-exe
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
 import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
-import { NOTCH_FAILURE_LOOK_MS, attachNotchNews } from './news.ts';
+import { notchNewsFeature } from './news.ts';
 import type { NotchNews, NotchOpenFailure } from './news.ts';
 import { attachNotchPause } from './pause.ts';
 import type { NotchPauseDeps } from './pause.ts';
 import { attachNotchPromises } from './promises.ts';
-import { NOTCH_QUESTION_LOOK_MS, attachNotchQuestions } from './questions.ts';
+import { notchQuestionsFeature } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
 import { attachNotchCalls, type NotchCallDeps, type NotchCallPort, type NotchCalls } from './call.ts';
@@ -68,6 +68,9 @@ import { notchBeforeNotes } from './before.ts';
 import type { NotchPart } from './protocol.ts';
 import { attachNotchSaid } from './said.ts';
 import { whereQuestion } from './point.ts';
+import { createNotchRegistry } from './registry.ts';
+
+export { NOTCH_TICK_FAILURE_SAID_MS } from './registry.ts';
 
 export interface NotchRealDeps {
   /** Something else has the notch for now (a demo moment is playing). */
@@ -374,40 +377,8 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   }
 }
 
-/** How often a clock of the notch that keeps failing says so in the log. */
-export const NOTCH_TICK_FAILURE_SAID_MS = 60_000;
-
 function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop: (() => void) | null }): NotchReal {
   const log = deps.log ?? ((line: string) => console.log(line));
-  // From here on there is something to stop, if the making fails further down.
-  built.stop = stop;
-  /**
-   * What a clock runs. A look that fails is said in the log and is tried again
-   * at the next one: a throw out of a timer is an uncaught exception, and that
-   * ends the brain.
-   */
-  const guarded = (what: string, run: () => void): (() => void) => {
-    // One that fails at every look is not said at every look: the first time, with where it failed, and then
-    // once a minute with how often it failed in between.
-    let saidAt: number | null = null;
-    let unsaid = 0;
-    return () => {
-      try {
-        run();
-      } catch (error) {
-        const at = Date.now();
-        if (saidAt !== null && at - saidAt < NOTCH_TICK_FAILURE_SAID_MS) { unsaid++; return; }
-        const why = error instanceof Error ? error.message : String(error);
-        const where = saidAt === null && error instanceof Error && error.stack ? `\n${error.stack}` : '';
-        log(`[notch] ${what} failed${unsaid > 0 ? ` (and ${unsaid} more ${unsaid === 1 ? 'time' : 'times'} since that was last said)` : ''}: ${why}${where}`);
-        saidAt = at;
-        unsaid = 0;
-      }
-    };
-  };
-  // Whether the notch was made whole, and whether it was stopped since. Up here, where `stop` can always read them.
-  let whole = false;
-  let stopped = false;
   // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
   let mail: NotchMailLayer | null = null;
   // Made after the inbox they play on; Today lists what they did.
@@ -416,18 +387,22 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   let teach: NotchTeach | null = null;
   let put: NotchPutter | null = null;
   let standing: NotchStanding | null = null;
-  let standingTimer: ReturnType<typeof setInterval> | null = null;
   // Made further down, once the mail and the day are: what is said and shown before then finds it when it is asked.
   let calls: NotchCalls | null = null;
   let people: NotchPeople | null = null;
-  let callTimer: ReturnType<typeof setInterval> | null = null;
   let notice: NotchNotice | null = null;
-  let noticeTimer: ReturnType<typeof setInterval> | null = null;
   // One of the notch's eyes is citron while something is watched for, or a call is listened to.
   let eyeKept = false, eyeCall = false;
   const paintEye = (): void => surface.setEye(eyeKept || eyeCall);
   let agents: NotchAgents | null = null;
-  let agentsTimer: ReturnType<typeof setInterval> | null = null;
+  // Made further down, and stopped from up here: what is not made yet when the notch is stopped has nothing to stop.
+  let dayOne: NotchDayOne | null = null;
+  let lookAt: NotchLook | null = null;
+  let drop: NotchDrop | null = null;
+  let around: NotchAround | null = null;
+  let stopWhere: () => void = () => {};
+  let stopPromises: () => void = () => {};
+  let stopPause: () => void = () => {};
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
@@ -469,6 +444,23 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     clock: deps.clock,
     log,
   }) : null;
+  // The features, their one scheduler and their one way down (./registry.ts).
+  const registry = createNotchRegistry({
+    surface, settings, clock: deps.clock, now: dayNow, log,
+    paused: () => (deps.emergency ? deps.emergency.getState() !== 'normal' : false),
+  });
+  // From here on there is something to stop, if the making fails further down.
+  built.stop = () => registry.stop();
+  // The parts that are not features yet are stopped after those that are, in the order they always were. Each
+  // is asked for when the notch is stopped: one that was not made by then has nothing to stop.
+  for (const part of [
+    () => stopPromises(), () => stopPause(),
+    () => asks?.stop(), () => people?.stop(), () => dayOne?.stop(), () => lookAt?.stop(), () => drop?.stop(), () => stopWhere(), () => mail?.stop(),
+    () => presence?.stop(), () => around?.stop(), () => jobs?.stop(), () => catcher?.stop(), () => teach?.stop(), () => put?.stop(),
+    () => standing?.stop(), () => calls?.stop(), () => notice?.stop(), () => agents?.stop(),
+  ]) registry.onStop(part);
+  // And reached by their ids by the features that lean on them.
+  registry.lend('agents', () => agents);
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
     clock: deps.clock,
@@ -480,6 +472,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     elsewhere: () => (mail?.store.ready().length ?? 0) > 0,
   });
   calmed = () => inbox.calmed();
+  registry.setInbox(inbox);
   const approvals = attachNotchApprovals(inbox, {
     approvalManager: deps.approvalManager,
     approve: deps.approve,
@@ -506,10 +499,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       log,
     })
     : null;
+  stopWhere = () => where?.stop();
   let talk: NotchTalk | null = null;
-  let lookAt: NotchLook | null = null;
-  let drop: NotchDrop | null = null;
-  const jobTimers: ReturnType<typeof setInterval>[] = [];
   if (deps.asks && deps.jobs) {
     // Doing it in view (pass 10). Before asking, which sends "Watch me" and "run it" here.
     const given = deps.jobs;
@@ -534,9 +525,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     given.watch?.();
     if (!given.noClock) {
       const learned = teach;
-      const every = setInterval(guarded('the clock of the shown jobs', () => learned.tick()), 30_000);
-      every.unref?.();
-      jobTimers.push(every);
+      registry.every('the clock of the shown jobs', 30_000, () => learned.tick());
     }
   }
   if (deps.agents && deps.asks) {
@@ -547,15 +536,12 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
     agents = made;
     if (!deps.agents.noClock) {
-      agentsTimer = setInterval(() => { try { made.tick(); } catch (error) { log(`[notch] the agents' runs could not be looked at: ${error instanceof Error ? error.message : String(error)}`); } }, NOTCH_AGENT_TICK_MS);
-      agentsTimer.unref?.();
+      registry.every("looking at the agents' runs", NOTCH_AGENT_TICK_MS, () => { try { made.tick(); } catch (error) { log(`[notch] the agents' runs could not be looked at: ${error instanceof Error ? error.message : String(error)}`); } });
     }
   }
   // The back office that fits in a sheet (pass 12): what is remembered, the notch's own settings,
   // what is connected, and every movement, playable by hand. Reached from the foot of Home, and by saying so.
   const office = deps.office;
-  // Made further down, when what it leans on is there. Reached through this until then.
-  let dayOne: NotchDayOne | null = null;
   // How a person is always written to ("Always use a short tone with Marco?") is something that was learned:
   // it stands in Memory with everything else that is remembered, and is forgotten there.
   const toneFacts = (about?: string): ReturnType<NotchMemoryDeps['list']> => mailToneFacts(mail?.store.tones() ?? [], about);
@@ -736,26 +722,21 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
   }
   const promises = deps.promises;
-  const stopPromises = promises ? attachNotchPromises(inbox, { executor: promises.executor }) : () => {};
+  if (promises) stopPromises = attachNotchPromises(inbox, { executor: promises.executor });
   // A fixture promise is kept by writing one line, not by a model turn.
   const appendFixtureLog = promises?.appendFixtureLog;
   if (promises && appendFixtureLog) {
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
-  const stopPause = deps.emergency
-    ? attachNotchPause(surface, inbox, {
+  if (deps.emergency) {
+    stopPause = attachNotchPause(surface, inbox, {
       controller: deps.emergency,
       restFace: where ? () => where.face() : undefined,
       changed: where ? () => where.refresh() : undefined,
       log,
-    })
-    : () => {};
-  const questions: NotchQuestions | null = deps.questions
-    ? attachNotchQuestions(inbox, { ...deps.questions, openDashboard: deps.openDashboard, log })
-    : null;
-  questions?.sync();
-  const questionTimer = questions ? setInterval(guarded('looking for questions', () => questions.sync()), NOTCH_QUESTION_LOOK_MS) : null;
-  questionTimer?.unref?.();
+    });
+  }
+  const questions: NotchQuestions | null = registry.add(notchQuestionsFeature(deps.questions ? { ...deps.questions, openDashboard: deps.openDashboard } : undefined));
   if (deps.mail) {
     const emergency = deps.emergency;
     const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
@@ -771,15 +752,12 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       });
       standing = kept;
       if (!deps.standing.noClock) {
-        standingTimer = setInterval(() => { void kept.tick().catch((error) => log(`[notch] a chase's step failed: ${error instanceof Error ? error.message : String(error)}`)); }, NOTCH_STANDING_TICK_MS);
-        standingTimer.unref?.();
+        registry.every("a chase's step", NOTCH_STANDING_TICK_MS, () => { void kept.tick().catch((error) => log(`[notch] a chase's step failed: ${error instanceof Error ? error.message : String(error)}`)); });
       }
     }
   }
   // Pass 8, the rest of it: the calendar as a source, calls and the connection, and the lines of the day.
   let soon: NotchSoon | null = null;
-  let around: NotchAround | null = null;
-  const dayTimers: ReturnType<typeof setInterval>[] = [];
   if (deps.day && settings) {
     const layer = mail;
     const asleep = (): boolean => (deps.emergency ? deps.emergency.getState() !== 'normal' : false);
@@ -810,7 +788,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       });
       calls = kept;
       kept.sweep();
-      if (!deps.calls.noClock) { callTimer = setInterval(guarded('clearing old calls', () => kept.sweep()), 3_600_000); callTimer.unref?.(); }
+      if (!deps.calls.noClock) registry.every('clearing old calls', 3_600_000, () => kept.sweep());
     }
     if (deps.day.around) {
       around = attachNotchAround(surface, inbox, deps.day.around, {
@@ -861,15 +839,13 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       // for the quiet hours to end. Every five minutes: the calendar itself, so that a meeting made a
       // quarter of an hour ahead is still said ten minutes before.
       let ticks = 0;
-      const every = setInterval(guarded('the clock of the day', () => {
+      registry.every('the clock of the day', 30_000, () => {
         ticks++;
         if (asleep()) return;
         meetings?.tick();
         if (ticks % 2 === 0) { theDay.tick(); inbox.calmed(); }
         if (ticks % 10 === 2) void meetings?.look().catch((error) => log(`[notch] the calendar could not be looked at: ${error instanceof Error ? error.message : String(error)}`));
-      }), 30_000);
-      every.unref?.();
-      dayTimers.push(every);
+      });
     }
   }
   // Noticing: in the window the person is in, one thing offered, when their hands rest (./notice.ts).
@@ -892,30 +868,15 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
     notice = kept;
     if (!deps.notice.noClock) {
-      noticeTimer = setInterval(() => { void kept.tick().catch((error) => log(`[notch] noticing failed: ${error instanceof Error ? error.message : String(error)}`)); }, 2000);
-      noticeTimer.unref?.();
+      registry.every('noticing', 2000, () => { void kept.tick().catch((error) => log(`[notch] noticing failed: ${error instanceof Error ? error.message : String(error)}`)); });
     }
   }
-  const news = attachNotchNews(inbox, {
-    openFailures: deps.openFailures, log,
-    // An agent's failure is said as its own, and has a way out when the product names a safe one: the
-    // notch's Connections for a sign-in, and the run again.
-    agent: (flowId) => { const agent = agents?.store.get(flowId) ?? null; return agent ? { name: agent.name } : null; },
-    connections: prefs ? (stage) => prefs.connections(stage) : undefined,
+  const news = registry.must(notchNewsFeature({
+    openFailures: deps.openFailures,
     run: deps.agents ? (flowId) => deps.agents!.workflows.run(flowId) : undefined,
-    paused: deps.emergency ? () => deps.emergency!.getState() !== 'normal' : undefined,
-  });
-  news.sync();
-  const failureTimer = setInterval(guarded('looking for failures', () => news.sync()), NOTCH_FAILURE_LOOK_MS);
-  failureTimer.unref?.();
-  // The task manager is made later in the daemon's start: ask until it is there.
-  let taskTries = 0;
-  const taskTimer = deps.onTaskEnded ? setInterval(guarded('asking to hear the tasks end', () => {
-    // Counted first: one that keeps failing is given up like one that is never there.
-    if (++taskTries > 120) clearInterval(taskTimer!);
-    if (deps.onTaskEnded!(news.taskEnded)) clearInterval(taskTimer!);
-  }), 500) : null;
-  taskTimer?.unref?.();
+    // The task manager is made later in the daemon's start: it is asked for until it is there.
+    onTaskEnded: deps.onTaskEnded,
+  }));
   const recordFixtureFailure = deps.recordFixtureFailure;
   const fixtures = createNotchFixtures({
     failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
@@ -941,9 +902,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     }
   };
   look();
-  const timer = setInterval(look, deps.lookMs ?? NOTCH_APPROVAL_LOOK_MS);
-  // Looking must not keep the process alive.
-  timer.unref?.();
+  registry.every('looking for what waits', deps.lookMs ?? NOTCH_APPROVAL_LOOK_MS, look);
 
   // Day one (pass 12). Made last: it leans on the look, the mail layer and the way to a sign-in.
   if (deps.dayOne && settings && asks) {
@@ -969,63 +928,11 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     surface.onHello(() => made.cameUp());
   }
 
-  whole = true;
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
     // A notch that was stopped tells the person nothing: what it would have said goes where it went before there was a notch.
-    showing: () => !stopped && surface.listening() > 0,
-    stop,
+    showing: () => !registry.stopped() && surface.listening() > 0,
+    stop: () => registry.stop(),
   };
-
-  /**
-   * Stops looking, and takes the notch from whatever has it. Each part by
-   * itself: one that fails to stop does not keep the others going, and one
-   * that was not made yet when the making failed has nothing to stop.
-   */
-  function stop(): void {
-    stopped = true;
-    const steps: (() => void)[] = [
-      // The clocks first, so that nothing new is started while the rest is stopped.
-      () => clearInterval(timer), () => clearInterval(failureTimer),
-      () => { if (taskTimer) clearInterval(taskTimer); },
-      () => { if (questionTimer) clearInterval(questionTimer); },
-      () => { if (standingTimer) clearInterval(standingTimer); },
-      () => { if (callTimer) clearInterval(callTimer); },
-      () => { if (noticeTimer) clearInterval(noticeTimer); },
-      () => { if (agentsTimer) clearInterval(agentsTimer); },
-      () => { for (const one of jobTimers) clearInterval(one); },
-      () => { for (const one of dayTimers) clearInterval(one); },
-      // What is on the notch ends where it is: a yes whose window is still running sends nothing.
-      () => inbox.stop(),
-      () => stopPromises(), () => stopPause(),
-      () => asks?.stop(),
-      () => people?.stop(),
-      () => dayOne?.stop(),
-      () => lookAt?.stop(),
-      () => drop?.stop(),
-      () => where?.stop(),
-      () => mail?.stop(),
-      () => presence?.stop(),
-      () => around?.stop(),
-      () => jobs?.stop(),
-      () => catcher?.stop(),
-      () => teach?.stop(),
-      () => put?.stop(),
-      () => standing?.stop(),
-      () => calls?.stop(),
-      () => notice?.stop(),
-      () => agents?.stop(),
-    ];
-    for (const step of steps) {
-      try {
-        step();
-      } catch (error) {
-        // A part the making had not reached yet is not there to be stopped: that is no failure. On a notch
-        // that was made whole every part is there, and the same error is a part that failed to stop.
-        if (!whole && error instanceof ReferenceError) continue;
-        log(`[notch] a part of the notch did not stop: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
 }

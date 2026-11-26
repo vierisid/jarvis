@@ -23,6 +23,7 @@
  * runs it. A failure with no such step is said, with the agent's name, and
  * asks nothing, as before.
  */
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -176,4 +177,46 @@ export function attachNotchNews(inbox: NotchInbox, deps: NotchNewsDeps = {}): No
   }
 
   return { sync, taskEnded };
+}
+
+/** How often the task manager is asked for, until it is there, and how often at most. */
+const TASKS_ASK_MS = 500;
+const TASKS_ASK_TRIES = 120;
+
+/**
+ * The news as a feature of the notch (./feature.ts): the open failures are
+ * looked at when it is made and every few seconds after, and the end of a
+ * background task is heard once the task manager is there.
+ *
+ * `onTaskEnded` is called until it answers true: the task manager is made
+ * after the notch, so it may not be there yet.
+ */
+export function notchNewsFeature(given: Pick<NotchNewsDeps, 'openFailures' | 'run'> & { onTaskEnded?: (listener: NotchNews['taskEnded']) => boolean }): NotchFeatureDef<'news'> {
+  return {
+    id: 'news',
+    wants: ['agents', 'prefs'],
+    make(ctx) {
+      const prefs = ctx.use('prefs');
+      const api = attachNotchNews(ctx.inbox, {
+        openFailures: given.openFailures, log: ctx.log,
+        // An agent's failure is said as its own, and has a way out when the product names a safe one: the
+        // notch's Connections for a sign-in, and the run again.
+        agent: (flowId) => { const agent = ctx.use('agents')?.store.get(flowId) ?? null; return agent ? { name: agent.name } : null; },
+        connections: prefs ? (stage) => prefs.connections(stage) : undefined,
+        run: given.run,
+        paused: ctx.paused,
+      });
+      api.sync();
+      const hear = given.onTaskEnded;
+      if (hear) {
+        let tries = 0;
+        const asked = ctx.every('asking to hear the tasks end', TASKS_ASK_MS, () => {
+          // Counted first: one that keeps failing is given up like one that is never there.
+          if (++tries > TASKS_ASK_TRIES) asked();
+          if (hear(api.taskEnded)) asked();
+        });
+      }
+      return { api, ticks: [{ name: 'looking for failures', everyMs: NOTCH_FAILURE_LOOK_MS, run: () => api.sync() }] };
+    },
+  };
 }

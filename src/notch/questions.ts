@@ -29,6 +29,7 @@
  * the count and comes round again.
  */
 import type { HumanRequest, InputField } from '../workflows/runtime/human-input-contract.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -237,4 +238,21 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
   }
 
   return { sync, itemId };
+}
+
+/**
+ * The questions as a feature of the notch (./feature.ts): looked for when it
+ * is made, and every few seconds after. Absent on a brain that was not given
+ * the product's questions.
+ */
+export function notchQuestionsFeature(given: Pick<NotchQuestionDeps, 'pending' | 'get' | 'answer' | 'openDashboard'> | undefined): NotchFeatureDef<'questions'> {
+  return {
+    id: 'questions',
+    make(ctx) {
+      if (!given) return null;
+      const api = attachNotchQuestions(ctx.inbox, { ...given, log: ctx.log });
+      api.sync();
+      return { api, ticks: [{ name: 'looking for questions', everyMs: NOTCH_QUESTION_LOOK_MS, run: () => api.sync() }] };
+    },
+  };
 }
