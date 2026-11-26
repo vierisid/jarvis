@@ -37,8 +37,10 @@ export interface MailReplyPlan {
  * press, for that look.
  * `left`: something that was begun in a thread could not be taken away
  * again, and a draft may be left there.
+ * `same`, with MAIL_WHY_DRAFT_THERE: the draft that is in the thread holds
+ * exactly the words that were to be written.
  */
-export type MailStep = { ok: true; left?: boolean } | { ok: false; why: string; pressed?: boolean; since?: number; left?: boolean };
+export type MailStep = { ok: true; left?: boolean } | { ok: false; why: string; pressed?: boolean; since?: number; left?: boolean; same?: boolean };
 
 /** A mail that may have gone, as it is looked for afterwards: where, to whom, and how it begins. */
 export interface MailSentAsk {
@@ -306,7 +308,9 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
           await page.go('mail', `/mail/u/0/?zx=${now().toString(36)}#all/${plan.thread}`);
           const open = await page.run<{ open?: boolean }>('thread-open', { id: plan.thread });
           if (!open?.open) return { ok: false, why: 'the thread did not open' };
-          return stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'write' }));
+          const said = await page.run<StepAnswer & { same?: unknown }>('reply', { ...told, do: 'write' });
+          const stepped = stepOf(said);
+          return !stepped.ok && stepped.why === MAIL_WHY_DRAFT_THERE && said?.same === true ? { ...stepped, same: true } : stepped;
         }),
         async send() {
           // A send that gave no answer (the page went away under it) may have been pressed: only a

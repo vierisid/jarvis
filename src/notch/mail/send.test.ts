@@ -161,6 +161,29 @@ describe('whether it went', () => {
     expect(b.did).toEqual(['write', 'send', 'sent? 700']);
   });
 
+  // The clock here moves at every reading of it, and at every step of the page: a "since" taken
+  // after Send answered would be later than the mail itself, and the look would miss it.
+  test('"since" is read once, after the gate and before Send is pressed', async () => {
+    let clock = 0;
+    const read: number[] = [];
+    const b = box();
+    const real = b.mailbox.reply;
+    b.mailbox.reply = (plan, work) => real(plan, (session) => work({
+      ...session,
+      write: async () => { clock += 1000; return session.write(); },
+      send: async () => { const at = clock; clock += 5000; b.did.push(`pressed at ${at}`); return session.send(); },
+    }));
+    await sendMail(b.mailbox, PLAN, reply({ now: () => { read.push(clock); return clock++; }, gate: async () => { clock += 8000; return true; } }));
+    expect(read).toEqual([9000]);
+    expect(b.did).toEqual(['write', 'pressed at 9001', 'send', 'sent? 9000']);
+  });
+
+  test('a draft that was there with the same words is passed on as that', async () => {
+    const same = box({ write: { ok: false, why: MAIL_WHY_DRAFT_THERE, same: true } });
+    expect(await sendMail(same.mailbox, PLAN, reply())).toEqual({ state: 'not_sent', at: 'write', why: MAIL_WHY_DRAFT_THERE, draft: 'theirs', same: true });
+    expect(same.did).toEqual(['write']);
+  });
+
   test('the look begins at the moment before the press, not when the draft was written', async () => {
     let clock = 100;
     const b = box();

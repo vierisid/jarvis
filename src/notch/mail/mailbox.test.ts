@@ -79,6 +79,21 @@ describe('reading the mailbox through the tab', () => {
 describe('one reply through the tab', () => {
   const plan = { thread: T1, to: ['leo@lumen.example'], cc: ['anna@lumen.example'], text: 'Hi Leo,\nThursday works.\nSam' };
 
+  test('a draft that is there with the same words is said to be so, by that word from the page and no other', async () => {
+    const DRAFT = 'a reply is already being written in that thread';
+    for (const [said, step] of [
+      [{ ok: false, why: DRAFT, same: true }, { ok: false, why: DRAFT, same: true }],
+      [{ ok: false, why: DRAFT, same: false }, { ok: false, why: DRAFT }],
+      [{ ok: false, why: DRAFT, same: 'yes' }, { ok: false, why: DRAFT }],
+      // The word means something only beside that refusal.
+      [{ ok: false, why: 'the reply did not open', same: true }, { ok: false, why: 'the reply did not open' }],
+      [{ ok: true, same: true }, { ok: true }],
+    ] as const) {
+      const { page } = tab({ up: true, reply: () => said });
+      expect(await browserMailbox(page, new MailTabTurn(), { now: () => NOW }).reply(plan, (reply) => reply.write())).toEqual(step);
+    }
+  });
+
   test('opens the thread at its own address, afresh, and writes, with who it goes to handed to the page every time', async () => {
     const { page, calls } = tab({ up: true });
     const box = browserMailbox(page, new MailTabTurn(), { now: () => NOW });

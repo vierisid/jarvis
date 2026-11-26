@@ -57,6 +57,8 @@ export type MailSendEnd =
     draft: MailDraftEnd;
     /** Why the draft could not be taken away, when it could not. */
     leftWhy?: string;
+    /** With `theirs`: the draft that was there holds exactly the words of this mail. */
+    same?: boolean;
   }
   | {
     state: 'unsure';
@@ -106,7 +108,7 @@ export async function sendMail(box: Pick<Mailbox, 'reply'>, plan: MailReplyPlan,
     const theirs = !wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE;
     if (way.stopped?.()) return { state: 'not_sent', at: 'stopped', why: 'stopped', ...(theirs ? { draft: 'theirs' as const } : await discard()) };
     // A write that failed half way is taken away again: nothing half written is left behind.
-    if (!wrote.ok) return { state: 'not_sent', at: 'write', why: wrote.why, ...(theirs ? { draft: 'theirs' as const } : await discard()) };
+    if (!wrote.ok) return { state: 'not_sent', at: 'write', why: wrote.why, ...(theirs ? { draft: 'theirs' as const, ...(wrote.same ? { same: true } : {}) } : await discard()) };
 
     if (way.gate) {
       let go: boolean;

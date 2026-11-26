@@ -251,3 +251,26 @@ describe('pressing Send on a reply', () => {
     expect(await thread().run('send')).toMatchObject({ ok: false, why: 'no reply is being written', pressed: false });
   });
 });
+
+// A brain that stopped while a fuse burnt leaves its reply in the thread, and nothing knows any more
+// that it was the notch's. The page says when the draft that is there holds the very words that
+// were to be written, so that the owner can be told what it most likely is. It is not touched.
+describe('a draft that is there with the same words as the reply', () => {
+  test('is said to be the same, whether it was open or Gmail brought it up, and is left as it is', async () => {
+    const open = thread({ open: { to: [LEO], lines: ['Hi Leo,', 'Thursday works.', 'Sam'] } });
+    expect(await open.run('write')).toEqual({ ok: false, why: MAIL_WHY_DRAFT_THERE, same: true });
+    expect(open.words()).toEqual(['Hi Leo,', 'Thursday works.', 'Sam']);
+    expect(open.pressed).toMatchObject({ reply: 0, bin: 0 });
+
+    const kept = thread({ reply: { to: [LEO], lines: ['Hi Leo,', 'Thursday works.', 'Sam'] } });
+    expect(await kept.run('write')).toEqual({ ok: false, why: MAIL_WHY_DRAFT_THERE, same: true });
+    expect(kept.pressed.bin).toBe(0);
+  });
+
+  test('other words, more words, or none, are not the same', async () => {
+    for (const lines of [['Hi Leo,', 'Friday works.', 'Sam'], ['Hi Leo,', 'Thursday works.', 'Sam', 'PS: call me'], ['Hi Leo,'], undefined]) {
+      const page = thread({ open: { to: [LEO], ...(lines ? { lines } : {}) } });
+      expect(await page.run('write')).toEqual({ ok: false, why: MAIL_WHY_DRAFT_THERE, same: false });
+    }
+  });
+});

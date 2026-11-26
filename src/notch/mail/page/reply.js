@@ -60,6 +60,10 @@ const goesToTheExpected = (frame) => {
 // The words of this refusal are MAIL_WHY_DRAFT_THERE in ../mailbox.ts: the draft is then left alone.
 const DRAFT_THERE = 'a reply is already being written in that thread';
 const flat = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+// Whether words that are in a reply are the ones that were to be written: told by their signs alone,
+// because a line break is a space in one place and nothing in the other.
+const signs = (text) => String(text || '').replace(/[\s\u00a0\u200b]+/g, '');
+const sameWords = (there) => signs(there).length > 0 && signs(there) === signs(args && args.text);
 // The mark "write" leaves on the reply it opened, on its text: "discard" runs in
 // the same page later and has to know that reply from one somebody else began. It is gone with
 // the page: a reply of ours left from an earlier visit is then nobody's to throw away, and stays.
@@ -104,7 +108,9 @@ if (step === 'write') {
   // goes to: a draft whose people the owner had changed was answered "not the expected
   // people", and whoever asked then threw it away.
   const before = editable();
-  if (before) return { ok: false, why: DRAFT_THERE };
+  // When it holds exactly the words that were to be written, that is said: it is then most likely this
+  // same reply, left from an earlier try. It is still not touched: nothing here knows whose it is.
+  if (before) return { ok: false, why: DRAFT_THERE, same: sameWords(written(before)) };
   // To everyone when there are people in copy, to the one who wrote otherwise. Gmail names the two buttons itself.
   const all = expected.size > 1;
   const button = [...document.querySelectorAll(all ? 'span.ams.bkG' : 'span.ams.bkH')].find(visible)
@@ -121,7 +127,7 @@ if (step === 'write') {
   // the old ones after them: the same text twice in one mail, or the owner's unfinished
   // sentence sent in their name. Asked before who it goes to, for the reason above.
   const already = written(box);
-  if (already) return { ok: false, why: DRAFT_THERE };
+  if (already) return { ok: false, why: DRAFT_THERE, same: sameWords(already) };
   // A reply this script opened, with no words in it: it is marked as the one "discard" may
   // throw away, before anything is written, so that a write that fails half way is not left.
   box.setAttribute(MARK, thread);
