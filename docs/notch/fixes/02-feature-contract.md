@@ -62,8 +62,8 @@ reverse). `real.ts` ends as a list. The daemon side moves to
 Steps:
 
 - 0: isolation and stop only. No structure changes.
-- 1: characterisation tests (router order, row order, absence matrix, hello
-  order) before anything moves.
+- 1: characterisation tests (row order, absence matrix, hello order, clocks,
+  stop) before anything moves. Router order is the corpus's.
 - 2: `feature.ts`, `registry.ts`, scheduler; questions and news registered.
 - 3: moves, canDo, memory, prefs, said, promises, pause, suggestions.
 - 4: asks, look, talk, drop, jobs/catch/teach/put, agents; router and home rows
@@ -113,10 +113,47 @@ Known limits of step 0, left for later steps:
   `jobs.ts`) were not looked at for bare throws.
 - A step already handed to the mailbox is not interrupted: stop means no new
   work.
-- After a failed making, stop tells a part that was never made from one that
-  failed to stop by the language's own "not yet declared" error. On a notch
-  that was made whole every error is logged. The registry of step 2 replaces
-  this.
+- (Gone with step 2.) After a failed making, stop told a part that was never
+  made from one that failed to stop by the language's own "not yet declared"
+  error. The registry stops what was made, and every error of a stop is
+  logged.
+
+What steps 1 to 3 do, and what they proved:
+
+- `src/notch/real-wiring.test.ts` pins, with every part given at once: Home's
+  rows and links in their order, Today and Undo out of five places, the rows
+  of Settings, hello (inbox, then day one), every clock with its pace, and the
+  order of stop. Which part takes which words is pinned by the corpus, through
+  `notchSide`, and not again.
+- `src/notch/feature.ts` is the contract, `src/notch/registry.ts` the one
+  scheduler and the one way down. A feature's definition stands in its own
+  file (`notchMovesFeature` in `moves.ts`, and so on); `real.ts` adds it.
+- Ten features are on it: questions, news, moves, canDo, memory, prefs, said,
+  promises, pause, suggestions. The clocks of the parts that are not features
+  yet run through the same scheduler.
+- `route` is not in the contract yet. It stays a method of each `api`, and
+  `real.ts` hands the parts to `notchSide` as before (point 3 is replacing
+  that chain). The eye claim and the four signals are not in the context yet:
+  nothing that was moved uses them.
+- A part that is not a feature yet is lent under its id (`registry.lend`), so
+  that a feature reads `ctx.use('where')` the same before and after that part
+  is moved. Its stop is given to the registry in the old order.
+- Stop order: clocks, inbox, the features from the last made to the first,
+  then the parts that are not features yet, in the order they always had.
+  Reverse order for all of them comes when they are all features.
+- The design's "features in build order" does not hold for what Home shows.
+  Home's rows are people, agents, chases and eyes, calls, and they are made
+  as agents, people, chases and eyes, calls. Settings shows noticing before
+  calls, and calls is made first. Today's `more` is standing before agents.
+  So rows, settings rows, `done` and `undo` need a position of their own
+  before they can be gathered. Until then the registry refuses a feature that
+  names one of them (or `hello`), so that none is silently left out. The
+  quiet links at the foot of Home are in build order, and are gathered.
+- A feature that is absent because the brain was not given what it is made
+  from says nothing (as before). Only a missing `needs` is logged.
+- The clocks of agents, chases and noticing, and the look for approvals, keep
+  their own catch and their own words in the log; the scheduler's guard is
+  around them as well now.
 
 ## Owner decisions
 
@@ -132,9 +169,17 @@ Known limits of step 0, left for later steps:
   shutdown stops the notch" and "notch: review of step 0: a stopped notch
   tells nothing, promises are not kept past it, failures are logged with
   their place and not flooded"
-- Step 1: pending
-- Step 2: pending
-- Step 3: pending
+- Step 1: done in "notch: how the parts are put together is pinned before any
+  of it moves: rows, links, today and undo, settings, hello, clocks, stop" and
+  "notch: more of the wiring is pinned: what looks by itself, the back office,
+  and the pause with the part that knows where the person is". Not pinned: the
+  "Last answer" row, the morning line's sheet with its Undo, and the stops of
+  the chases and of the calls (`real.ts` does not hand those two back).
+- Step 2: done in "notch: a contract for its features and a registry that owns
+  the one scheduler and the one way down; questions and news are the first
+  two"
+- Step 3: done in "notch: moves, what it can do, memory, settings, what is
+  said over a line, promises, the pause and suggestions are features"
 - Step 4: pending
 - Step 5: pending
 - Step 6: pending
