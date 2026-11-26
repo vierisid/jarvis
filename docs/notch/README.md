@@ -3193,7 +3193,9 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 - A brain that restarts forgets the line. Only the desktop app restarting is
   covered.
 - Two desktop apps on one brain show the same line, and the first answer is
-  the one that counts. Nothing yet tells the other notch that it was answered.
+  the one that counts. An answer that ends the line (a no, a fold, a result
+  that was seen) takes it off the other notch too. Nothing yet tells the other
+  notch of a yes: its line stays lit until the brain shows what comes next.
 - On Windows the last 1.5 CSS pixels inside the edge belong to the backdrop
   window, not the page (see "How the edge is drawn"). That band is always
   black, whatever the page paints there.
@@ -3364,7 +3366,23 @@ already drawn. A row that is `gone` is struck through.
 
 After `no`, `fold`, and a `say` that finished, the page has gone to rest by
 itself. After any other answer it keeps the line until the brain says what
-comes next.
+comes next. Another desktop app on the same brain is told `rest` then: it
+still showed the line, and nothing more would have been said about it.
+
+The page reads every message whole before anything on the notch changes
+(`parseNotchToPage`, the counterpart of the brain's `parseNotchFromPage`). One
+that is not exactly a message is dropped: the notch stays as it was, the
+desktop app's log says what kind of message it was, and the page says `hello`
+again so that the brain tells it the whole of it once more. What only dresses
+a line or moves the notch (a mood, a way of arriving, a movement of `act`) is
+left out when it is not known, and the rest stands.
+
+A `say` and a `send` in a `state` carry `left`: how much of their `ms` is
+still to come, by the brain's clock. A page that comes up in the middle of a
+fuse burns what is left of it, and does not start it again. With nothing left
+it burns nothing and says nothing ran out: nobody saw it burn. A page that
+draws its own line again (the keys of the machine changed, a second `state`
+for the line it already shows) goes on by its own count.
 
 ## How the edge is drawn
 
