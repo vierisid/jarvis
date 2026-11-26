@@ -443,9 +443,13 @@ What holds for all of them:
     call sends to and never a name written beside it ("Anna" names
     anna.rossi@..., not "Anna <bob@...>", and never the part after the @);
     to anybody else it is asked about, so "send Anna the file" does not
-    cover a second send that something read in the turn added. "Reply" in
-    his own words names nobody and covers whoever wrote the thing; in a
-    question of the assistant's he only said yes to, it does not. A send
+    cover a second send that something read in the turn added. Who it goes
+    to is read from any field that says so (`recipient_email`, `cc_list`,
+    `toRecipients[].emailAddress.address`) and from any address in the call
+    outside what is sent. A reply that answers the thing by its id goes;
+    one that names its recipients in the call is held to his words like
+    any send, since who wrote the thing is not known here ("reply all" with
+    a cc added is asked about). A send
     done in a window or a page (a click on Send, Ctrl+Enter) carries no
     recipient this side can read, so there the kind alone decides
     (`RECIPIENTS_MUST_BE_NAMED`). And a raw click where the machine cannot

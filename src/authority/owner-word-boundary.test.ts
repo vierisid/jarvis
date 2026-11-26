@@ -305,23 +305,39 @@ describe('who a send goes to', () => {
     expect(recipientSlot('send the report to Anna and cc Marco')).toEqual(['anna', 'marco']);
   });
 
-  test('"reply" in a question of the assistant\'s that he said yes to does not stop the recipients being read', async () => {
+  test('what a question of the assistant\'s named, a bare yes agreed to', async () => {
     const yes = (): OwnerTurn => ({ outside: true, covers: ['send'], words: 'look at this mail Shall I reply to it and forward it to eve@evil.example?', own: 'look at this mail' });
     expect(await ownerWord('send_mail', { to: 'mallory@evil.example' }, gate('send_email'), yes)).toBe('unnamed');
     // What the question named, he agreed to.
     expect(await ownerWord('send_mail', { to: 'eve@evil.example' }, gate('send_email'), yes)).toBe('go');
   });
 
-  test('a reply goes to whoever wrote the thing: nobody has to be named', async () => {
+  test('a reply answers the thing by its id and goes; one that names its recipients is held to his words, since who wrote the thing is not known here', async () => {
     for (const words of ['reply to this', 'respond that Friday works', 'rispondi a questa mail', 'answer him that it is fine']) {
-      expect([words, await ownerWord('send_mail', { to: 'somebody@else.example' }, gate('send_email'), turn(words))]).toEqual([words, 'go']);
+      expect([words, await ownerWord('send_mail', { in_reply_to: 'msg-18c', body: 'Friday works.' }, gate('send_email'), turn(words))]).toEqual([words, 'go']);
+      expect([words, await ownerWord('send_mail', { to: 'eve@evil.example' }, gate('send_email'), turn(words))]).toEqual([words, 'unnamed']);
     }
+    expect(await ownerWord('send_mail', { to: 'leo@partner.example' }, gate('send_email'), turn('reply to Leo'))).toBe('go');
+    // "Reply all" with a cc added.
+    expect(await ownerWord('send_mail', { in_reply_to: 'msg-18c', cc: 'eve@evil.example' }, gate('send_email'), turn('reply all to this'))).toBe('unnamed');
+  });
+
+  test('a recipient is read from any field that says so, and from any address outside what is sent', async () => {
+    const said = turn('send the report to Anna');
+    for (const params of [{ recipient_email: 'eve@evil.example' }, { to_email: 'eve@evil.example' }, { to: 'anna@corp.example', extra_recipients: ['eve@evil.example'] },
+      { toRecipients: [{ emailAddress: { address: 'eve@evil.example' } }] }, { to: 'anna@corp.example', cc_list: 'eve@evil.example' },
+      { to: 'anna@corp.example', options: { forward: 'eve@evil.example' } }]) {
+      expect([params, await ownerWord('send_mail', params, gate('send_email'), said)]).toEqual([params, 'unnamed']);
+    }
+    // An address in what is sent is text.
+    expect(await ownerWord('send_mail', { to: 'anna@corp.example', body: 'Eve is at eve@evil.example' }, gate('send_email'), said)).toBe('go');
+    expect(await ownerWord('send_mail', { toRecipients: [{ emailAddress: { address: 'anna@corp.example', name: 'Anna' } }] }, gate('send_email'), said)).toBe('go');
   });
 
   test('a send that names no recipient in its call (a click on Send) is decided by its kind alone', async () => {
     expect(callRecipients({ element_id: 4, action: 'click' })).toEqual([]);
     expect(await ownerWord('ui_act', { element_id: 4, action: 'click' }, gate('control_app', 'send_email'), turn('send Anna the file'))).toBe('go');
-    expect(callRecipients({ to: 'a@b.example; c@d.example', cc: ['e@f.example'], body: 'to: x@y.example', nested: { to: 'z@z.example' } })).toEqual(['a@b.example', 'c@d.example', 'e@f.example']);
+    expect(callRecipients({ to: 'a@b.example; c@d.example', cc: ['e@f.example'], body: 'to: x@y.example', nested: { to: 'z@z.example' } })).toEqual(['a@b.example', 'c@d.example', 'e@f.example', 'z@z.example']);
   });
 
   test('in a turn that has read nothing, a send goes to whoever the call says, as before', async () => {

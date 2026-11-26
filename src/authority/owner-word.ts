@@ -74,9 +74,12 @@
  *     the owner's words name: "send it to Anna" does not cover a send to
  *     somebody else in the same turn. A name in the place of who it goes to
  *     ("to Anna", "email Anna") is matched against the address the call
- *     sends to, never a name written beside it (`wordsName`); "reply" in his
- *     own words names nobody and covers whoever wrote the thing. Where the
- *     call names no recipient, the kind alone decides: a send done in a
+ *     sends to, never a name written beside it (`wordsName`). Recipients are
+ *     read from any field that says so and from any address outside what is
+ *     sent (`callRecipients`). A reply that answers the thing by its id goes
+ *     by its kind; one that names recipients in the call is held to his
+ *     words like any send, since who wrote the thing is not known on this
+ *     side. Where the call names no recipient, the kind alone decides: a send done in a
  *     window or a page (a click on Send, Ctrl+Enter) carries no recipient
  *     this side can read, so the rule does not reach it;
  *   - a raw click where the machine cannot look by its making (screen
@@ -392,23 +395,44 @@ export function callActs(toolName: string, params: Record<string, unknown>, cate
   return [...acts];
 }
 
-/** The fields of a call that say who a send goes to. */
-const RECIPIENT_KEYS = /^(?:to|cc|bcc|recipients?|receivers?|addressees?|emails?|addresses|chat|chat_?id|chat_?name|channel|channel_?id|channel_?name|phone|phone_?number|number|user|username|user_?id|contact|contacts|peer|person|handle)$/i;
+/**
+ * The fields of a call that say who a send goes to: any whose name says
+ * recipient, to, cc, bcc, an email or an address (`recipient_email`,
+ * `to_email`, `extra_recipients`, `cc_list`, Graph's `toRecipients`), and
+ * the names chats use for who they go to.
+ */
+const RECIPIENT_KEY = /recipient|receiver|addressee|^to$|^to_|_to$|^to[A-Z]|email|^cc|^bcc|_cc$|_bcc$|address|^(?:chat|chat_?id|chat_?name|channel|channel_?id|channel_?name|phone|phone_?number|number|user|username|user_?id|contact|contacts|peer|person|handle)$/i;
+/** Fields that name the thing replied to, not a person: a message's or a thread's id. */
+const REPLIED_TO_KEY = /^(?:in_?reply_?to|reply_?to_?(?:message|msg|id|message_?id)|message_?id|thread_?id|conversation_?id)$/i;
+/** Inside a person written as an object: what it is called by, and where an address may sit deeper (`emailAddress.address`). */
+const PERSON_KEY = /name|email|address|^id$|handle|phone|number|user/i;
+/** Fields that hold what is sent, not who it goes to: an address in them is text, not a recipient. */
+const CONTENT_KEY = /^(?:body|text|content|message|subject|html|markdown|note|notes|comment|caption|title|description|signature|summary|attachments?|files?|path)$/i;
+const ADDRESS = /[^\s<>"'(),;:]+@[^\s<>"'(),;:]+\.[^\s<>"'(),;:]+/g;
 
 function recipientsOf(value: unknown, depth = 0): string[] {
   if (typeof value === 'string') return value.split(/[;,]/).map((one) => one.trim()).filter(Boolean);
   if (typeof value === 'number') return [String(value)];
-  if (depth > 2 || !value || typeof value !== 'object') return [];
+  if (depth > 3 || !value || typeof value !== 'object') return [];
   if (Array.isArray(value)) return value.flatMap((one) => recipientsOf(one, depth + 1));
-  // A person as an object: whatever it is called by.
+  // A person as an object: whatever it is called by, and an object of theirs holding an address.
   return Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => /^(?:name|email|address|display_?name|id|handle|phone|number|username)$/i.test(key))
+    .filter(([key, one]) => PERSON_KEY.test(key) || (typeof one === 'object' && one !== null))
     .flatMap(([, one]) => recipientsOf(one, depth + 1));
 }
 
-/** Who a call sends to, as far as the call says: every value of a field that names a recipient. */
+/** Every address anywhere in the call outside what is sent: a recipient in a field this side does not read as one is still one. */
+function addressesIn(value: unknown, depth = 0): string[] {
+  if (typeof value === 'string') return value.match(ADDRESS) ?? [];
+  if (depth > 4 || !value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) return value.flatMap((one) => addressesIn(one, depth + 1));
+  return Object.entries(value as Record<string, unknown>).filter(([key]) => !CONTENT_KEY.test(key)).flatMap(([, one]) => addressesIn(one, depth + 1));
+}
+
+/** Who a call sends to, as far as the call says: every value of a field that names a recipient, and every address outside what is sent. */
 export function callRecipients(params: Record<string, unknown>): string[] {
-  return Object.entries(params).filter(([key]) => RECIPIENT_KEYS.test(key)).flatMap(([, value]) => recipientsOf(value));
+  const named = Object.entries(params).filter(([key]) => RECIPIENT_KEY.test(key) && !REPLIED_TO_KEY.test(key)).flatMap(([, value]) => recipientsOf(value));
+  return [...new Set([...named, ...addressesIn(params)])];
 }
 
 const plain = (text: string): string => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -473,9 +497,6 @@ export function wordsName(words: string, recipient: string): boolean {
   const parts = named.split(/[^\p{L}\p{N}]+/u).filter((part) => part.length >= 2);
   return recipientSlot(words).some((word) => parts.some((part) => part === word || (word.length >= 4 && part.startsWith(word))));
 }
-
-/** Words that send to whoever wrote the thing in front, and so name nobody: a reply. */
-const REPLIES = /\b(?:reply|respond|answer|rispond\w+|risposta)\b/i;
 
 /**
  * Whether sends to somebody the owner's words do not name are asked about.
@@ -1043,8 +1064,10 @@ export async function ownerWord(
       || (now.covers.includes('settings') && commandSets(command) && (!commandSecurity(command) || wordsNameSecurity(now.words))))) continue;
     return `unasked-${act}`;
   }
-  // "Reply" in his own words names whoever wrote the thing; in a question of the assistant's he only said yes to, it does not.
-  if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send') && !REPLIES.test(now.own ?? now.words)) {
+  // A reply names nobody: who wrote the thing replied to is not known on this side, so a reply that names its
+  // recipients in the call is held to his words like any send, and one that answers the thing by its id (no
+  // recipient in the call) goes by its kind. "Reply all" with a cc added is asked about the same way.
+  if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send')) {
     if (callRecipients(params).some((recipient) => !wordsName(now.words, recipient))) return 'unnamed';
   }
   return 'go';
