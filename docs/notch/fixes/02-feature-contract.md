@@ -131,10 +131,23 @@ What steps 1 to 3 do, and what they proved:
 - Ten features are on it: questions, news, moves, canDo, memory, prefs, said,
   promises, pause, suggestions. The clocks of the parts that are not features
   yet run through the same scheduler.
-- `route` is not in the contract yet. It stays a method of each `api`, and
-  `real.ts` hands the parts to `notchSide` as before (point 3 is replacing
-  that chain). The eye claim and the four signals are not in the context yet:
+- `route` is not in the contract. It stays a method of each `api`; once the
+  intent table of point 3 has landed, a feature contributes its words through
+  that table. The eye claim and the four signals are not in the context yet:
   nothing that was moved uses them.
+- `ctx.surface` is effects only: `resting`, `current`, `setSound`, `onStop`,
+  `setFace`, `act`. What is shown goes through the inbox.
+- `ctx.use(id)` hands a feature only the parts it named in `needs` or
+  `wants`. Asking for another throws, by name, in production as in tests: the
+  list in the definition is then the whole list of what it leans on.
+- Rule for a feature: where one of its members does what a method of its
+  `api` does (`stop` today; `done`, `hello` later), it calls that method when
+  it is itself called, `stop: () => api.stop()`, never `stop: api.stop`. The
+  `api` is the object `real.ts` hands back, and `real-wiring.test.ts` stands
+  in for single methods of it; a kept function would go past the stand-in.
+- The scheduler can skip a run while the one before it is still under way
+  (`skipWhileRunning`, for runs that come back with a promise). It is off
+  everywhere: every clock runs as it did.
 - A part that is not a feature yet is lent under its id (`registry.lend`), so
   that a feature reads `ctx.use('where')` the same before and after that part
   is moved. Its stop is given to the registry in the old order.
@@ -145,10 +158,12 @@ What steps 1 to 3 do, and what they proved:
   Home's rows are people, agents, chases and eyes, calls, and they are made
   as agents, people, chases and eyes, calls. Settings shows noticing before
   calls, and calls is made first. Today's `more` is standing before agents.
-  So rows, settings rows, `done` and `undo` need a position of their own
-  before they can be gathered. Until then the registry refuses a feature that
-  names one of them (or `hello`), so that none is silently left out. The
-  quiet links at the foot of Home are in build order, and are gathered.
+  The quiet links at the foot of Home are in build order, and are gathered.
+- What step 4 must add to the contract, each with a position of its own, and
+  gather in the registry: `homeRows` with `open`, `done`, `undo`; step 5 adds
+  `settingsRows` and `hello` (after the inbox, day one last). They are not in
+  `NotchFeature` until then, so that naming one does not compile, instead of
+  being silently left out.
 - A feature that is absent because the brain was not given what it is made
   from says nothing (as before). Only a missing `needs` is logged.
 - The clocks of agents, chases and noticing, and the look for approvals, keep
@@ -173,8 +188,9 @@ What steps 1 to 3 do, and what they proved:
   of it moves: rows, links, today and undo, settings, hello, clocks, stop" and
   "notch: more of the wiring is pinned: what looks by itself, the back office,
   and the pause with the part that knows where the person is". Not pinned: the
-  "Last answer" row, the morning line's sheet with its Undo, and the stops of
-  the chases and of the calls (`real.ts` does not hand those two back).
+  "Last answer" row and the morning line's sheet with its Undo. The stops of
+  the chases and of the calls are pinned by what they do: a stopped notch
+  sends no due chase, and lets go of a call it listens to.
 - Step 2: done in "notch: a contract for its features and a registry that owns
   the one scheduler and the one way down; questions and news are the first
   two"
