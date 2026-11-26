@@ -167,3 +167,36 @@ describe('throwing a reply away', () => {
     expect(await thread().run('discard')).toMatchObject({ ok: true, discarded: false });
   });
 });
+
+// README 62: sent means it is the last word in its thread. The page says two smaller things:
+// whether Send was pressed, and whether Gmail said it went.
+describe('pressing Send on a reply', () => {
+  test('Gmail says it went: pressed, and said', async () => {
+    const page = thread();
+    await page.run('write');
+    expect(await page.run('send')).toMatchObject({ ok: true, pressed: true, said: true, closed: true });
+    expect(page.pressed.send).toBe(1);
+  });
+
+  test('the reply closing is not Gmail saying it went', async () => {
+    const page = thread({ says: false });
+    await page.run('write');
+    expect(await page.run('send')).toMatchObject({ ok: false, why: 'Gmail did not say it was sent', pressed: true, closed: true });
+    expect(page.pressed.send).toBe(1);
+  });
+
+  test('words in the thread that read like Gmail\'s are not Gmail saying so', async () => {
+    const page = thread({ mail: 'Your message has been sent to the team. Does Thursday work?', says: false, closes: false });
+    await page.run('write');
+    expect(await page.run('send')).toMatchObject({ ok: false, pressed: true, closed: false });
+  });
+
+  test('a reply that goes to somebody else, or is not the one shown: Send is not pressed, and the answer says so', async () => {
+    const page = thread();
+    await page.run('write');
+    expect(await page.run('send', { to: ['anna@acme.example'] })).toMatchObject({ ok: false, why: 'the reply does not go to exactly the expected people', pressed: false });
+    expect(await page.run('send', { text: 'Something else' })).toMatchObject({ ok: false, why: 'the reply is not the one that was shown', pressed: false });
+    expect(page.pressed.send).toBe(0);
+    expect(await thread().run('send')).toMatchObject({ ok: false, why: 'no reply is being written', pressed: false });
+  });
+});

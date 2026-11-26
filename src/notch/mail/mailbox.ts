@@ -29,7 +29,22 @@ export interface MailReplyPlan {
   text: string;
 }
 
-export type MailStep = { ok: true } | { ok: false; why: string };
+/**
+ * `pressed`, on a no: Send was pressed, or it is not known that it was not.
+ * The mail may be on its way, so it is never sent again on the strength of
+ * this no. Without it, nothing went.
+ */
+export type MailStep = { ok: true } | { ok: false; why: string; pressed?: boolean };
+
+/**
+ * Why a new mail is called not sent when Send was pressed and the Sent folder
+ * does not show it. Short: the notch shows 80 signs of it.
+ */
+export const MAIL_WHY_UNSURE = 'Gmail did not confirm it went. Look in Sent before trying again';
+
+/** How often the Sent folder is asked again for a mail it does not show yet, and how long between. */
+export const MAIL_SENT_ASKS = 3;
+export const MAIL_SENT_WAIT_MS = 2000;
 
 /**
  * Why a reply was not written when its thread already holds a draft with
@@ -42,7 +57,10 @@ export const MAIL_WHY_DRAFT_THERE = 'a reply is already being written in that th
 export interface MailReplySession {
   /** Opens the thread and writes the reply into it. Gmail keeps it as a draft. Nothing is sent. */
   write(): Promise<MailStep>;
-  /** Presses Send, once. */
+  /**
+   * Presses Send, once. Yes means Gmail said it went, which is not yet
+   * "sent": that is what `sent` is asked. A no says whether Send was pressed.
+   */
   send(): Promise<MailStep>;
   /** Throws the reply away: nothing is left in Drafts. */
   discard(): Promise<MailStep>;
@@ -76,6 +94,8 @@ export interface Mailbox {
    * Nothing is sent unless the writing window holds exactly this mail, to
    * exactly this person (page/compose-send.js). When it says no after the
    * window opened, a draft may be left in Gmail: the reason says what failed.
+   * Yes means the Sent folder shows it, not that Gmail said so: a no with
+   * `pressed` is a mail that may have gone all the same.
    */
   write(plan: MailNewPlan): Promise<MailStep>;
   /** The threads a search of the mailbox finds, newest first. */
@@ -88,8 +108,29 @@ interface StepAnswer { ok?: unknown; why?: unknown }
 const stepOf = (answer: StepAnswer | null): MailStep =>
   (answer?.ok === true ? { ok: true } : { ok: false, why: typeof answer?.why === 'string' ? answer.why.slice(0, 200) : 'the page did not answer' });
 
-export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, options: { now?: () => number } = {}): Mailbox {
+export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, options: { now?: () => number; sleep?: (ms: number) => Promise<void> } = {}): Mailbox {
   const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const flat = (text: string): string => text.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  /**
+   * After Send was pressed on a new mail: does the Sent folder show a mail of
+   * the owner's to that person, with that subject, sent since then? Null when
+   * that could not be read. Asked with the tab's turn already held.
+   */
+  const inSent = async (to: string, subject: string, since: number): Promise<boolean | null> => {
+    try {
+      const owner = (await page.run<{ address: string }>('owner')).address.toLowerCase();
+      const rows = (await gmailSearch(page, `in:sent to:${to} newer_than:1d`, { pages: 1 })).filter((row) => flat(row.subject) === flat(subject)).slice(0, 2);
+      if (rows.length === 0) return false;
+      const { threads } = await gmailThreads(page, rows, { batch: 2, pauses: [] });
+      if (threads.length === 0) return null;
+      // Gmail prints when a mail was sent to the minute: one sent at 9:05:40 reads as 9:05.
+      return threads.some((thread) => thread.messages.some((message) => message.from.address === owner && message.at >= since - 120_000));
+    } catch {
+      return null;
+    }
+  };
 
   /** Gmail up in the tab: the tab may have been left on the calendar, on Drive, or on nothing. */
   const gmailUp = async (): Promise<void> => {
@@ -149,10 +190,23 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
         const window = await page.run<{ subject?: number | null; body?: number | null; send?: boolean }>('shape-compose', { wait: 9000 });
         if (window?.subject !== plan.subject.length || !window.body || !window.send) return { ok: false, why: 'the writing window did not open as expected' };
         // Send is told exactly whom this mail may go to: that one person, or those people and nobody else.
-        const sent = await page.run<{ sent?: boolean; why?: string }>('compose-send', { subject: plan.subject, to: people.length === 1 ? people[0] : people });
+        const since = now();
+        // A page that went away while Send was being pressed gives no answer: the mail may have gone all the same.
+        const sent = await page.run<{ sent?: boolean; pressed?: boolean; why?: string }>('compose-send', { subject: plan.subject, to: people.length === 1 ? people[0] : people })
+          .catch(() => ({ sent: false, pressed: true, why: '' }));
         // The writing window is left: the tab goes back to the list for whoever reads next.
         await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
-        return sent?.sent ? { ok: true } : { ok: false, why: typeof sent?.why === 'string' && sent.why ? sent.why.slice(0, 200) : 'Gmail did not say it was sent' };
+        // Refused before Send was pressed: nothing went, and the reason is the page's.
+        if (!sent?.sent && sent?.pressed !== true) return { ok: false, why: typeof sent?.why === 'string' && sent.why ? sent.why.slice(0, 200) : 'Gmail did not say it was sent' };
+        // Send was pressed. "Sent" is the Sent folder showing it (README 62), not Gmail saying
+        // "Message sent": those words were looked for anywhere on the page, and a mail that
+        // did not go was written down as sent. The folder takes a moment to show a mail.
+        let there = await inSent(people[0]!, plan.subject, since);
+        for (let asks = 1; there === false && asks < MAIL_SENT_ASKS; asks++) { await sleep(MAIL_SENT_WAIT_MS); there = await inSent(people[0]!, plan.subject, since); }
+        await page.go('mail', '/mail/u/0/#inbox').catch(() => {});
+        // Not readable is not no: then Gmail's own word stands, when it gave it.
+        if (there === true || (there === null && sent.sent === true)) return { ok: true };
+        return { ok: false, why: MAIL_WHY_UNSURE, pressed: true };
       } catch (error) {
         return { ok: false, why: (error instanceof Error ? error.message : String(error)).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '(an address)').slice(0, 200) };
       }
@@ -176,7 +230,16 @@ export function browserMailbox(page: Required<GooglePage>, turn: MailTabTurn, op
           if (!open?.open) return { ok: false, why: 'the thread did not open' };
           return stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'write' }));
         }),
-        send: () => step(async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'send' }))),
+        async send() {
+          // A send that gave no answer (the page went away under it) may have been pressed: only a
+          // page that says it did not press is a send that did not happen.
+          const answer = await step(async () => {
+            const said = await page.run<StepAnswer & { pressed?: unknown }>('reply', { ...told, do: 'send' });
+            const stepped = stepOf(said);
+            return stepped.ok ? stepped : { ...stepped, pressed: said?.pressed !== false };
+          });
+          return answer.ok || answer.pressed !== undefined ? answer : { ...answer, pressed: true };
+        },
         discard: () => step(async () => stepOf(await page.run<StepAnswer>('reply', { ...told, do: 'discard' }))),
         async sent(since) {
           try {

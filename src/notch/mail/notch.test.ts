@@ -418,13 +418,40 @@ describe('a prepared reply on the notch', () => {
   });
 
   test('when it cannot be sent, it says so and where the draft is, and is not called sent', async () => {
-    const h = harness([row()], { steps: { send: { ok: false, why: 'no way to send was found' } } });
+    const h = harness([row()], { steps: { send: { ok: false, why: 'no way to send was found', pressed: false } } });
     await h.arrive();
     await h.answer('yes');
     await h.answer('yes');
     await h.answer('done');
     expect(h.said()).toBe('I could not send it. It is in your Gmail drafts.');
+    expect(h.did).toEqual(['write', 'send']);
     expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  // Send was pressed and Gmail said nothing in the time it was waited for. It was called "in your
+  // Gmail drafts" without the thread being asked: a reply that had gone was offered again.
+  test('Send was pressed and Gmail said nothing: the thread is asked, and a reply it shows is sent', async () => {
+    const h = harness([row()], { steps: { send: { ok: false, why: 'Gmail did not say it was sent', pressed: true } }, sent: [true] });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.did).toEqual(['write', 'send', 'sent?']);
+    expect(h.said()).toBe('Sent to Leo.');
+    expect(h.store.proposal(row().id)!.state).toBe('sent');
+  });
+
+  test('Send was pressed, Gmail said nothing and the thread does not show it: not called sent, and not called a draft', async () => {
+    for (const shows of [false, null]) {
+      const h = harness([row()], { steps: { send: { ok: false, why: 'Gmail did not say it was sent', pressed: true } }, sent: [shows] });
+      await h.arrive();
+      await h.answer('yes');
+      await h.answer('yes');
+      await h.answer('done');
+      await h.advance(1500);
+      expect(h.said()).toBe('I pressed Send, and nothing says it went. Look in the thread before sending it again.');
+      expect(h.store.proposal(row().id)!.state).toBe('ready');
+    }
   });
 
   // Gmail's word is not enough: sent means it is the last word in the thread.

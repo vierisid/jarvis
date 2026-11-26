@@ -2,6 +2,8 @@
 //   "write"    start the reply (to everyone when it has people in copy), check who it
 //              goes to, and write args.text into it. Gmail keeps it as a draft. Not sent.
 //   "send"     press Send on the reply being written, once, and wait for Gmail to say it went.
+//              The answer says whether Send was pressed (`pressed`) and whether Gmail said so
+//              (`ok`). Neither is "sent": that is asked of the thread afterwards.
 //   "discard"  throw the reply being written away. Nothing is left in Drafts. Only a reply
 //              that holds args.text, or no words at all, is thrown away: anything else is
 //              somebody's, and it is left where it is.
@@ -135,19 +137,29 @@ if (step === 'write') {
 if (step === 'send') {
   const box = editable();
   const frame = box ? frameOf(box) : null;
-  if (!box || !frame) return { ok: false, why: 'no reply is being written' };
-  if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', people: addressedIn(frame).size, expected: expected.size };
-  const wanted = String(args.text || '').replace(/\s+/g, ' ').trim();
-  if (!wanted || !(box.innerText || '').replace(/\s+/g, ' ').trim().startsWith(wanted)) return { ok: false, why: 'the reply is not the one that was shown' };
+  // `pressed` is in every answer: whoever asked has to know whether the mail may be on its way.
+  if (!box || !frame) return { ok: false, why: 'no reply is being written', pressed: false };
+  if (!goesToTheExpected(frame)) return { ok: false, why: 'the reply does not go to exactly the expected people', pressed: false, people: addressedIn(frame).size, expected: expected.size };
+  const wanted = flat(args.text);
+  if (!wanted || !flat(box.innerText).startsWith(wanted)) return { ok: false, why: 'the reply is not the one that was shown', pressed: false };
   const send = [...frame.querySelectorAll('div[role="button"]')].find((node) => visible(node) && /^send\b/i.test(node.getAttribute('aria-label') || node.getAttribute('data-tooltip') || ''));
-  if (!send) return { ok: false, why: 'no way to send was found' };
+  if (!send) return { ok: false, why: 'no way to send was found', pressed: false };
+  // Gmail's own words, and only when they were not on the page before Send was pressed: a mail in
+  // the thread that says "your message has been sent" is not Gmail saying so about this one.
+  const says = () => /message sent|your message has been sent/i.test(document.body.innerText || '');
+  const stale = says();
   press(send);
+  const open = () => document.contains(box) && visible(box);
   let said = false;
-  for (let tries = 0; tries < 60 && !said; tries++) {
+  // The reply closing is not Gmail saying it went: it closes when it is thrown away too. Once it
+  // has closed, the words are waited for a little longer and no more.
+  for (let tries = 0, shut = 0; tries < 60 && !said && shut < 8; tries++) {
     await sleep(250);
-    said = /message sent|your message has been sent/i.test(document.body.innerText || '') || !editable();
+    said = !stale && says();
+    if (!open()) shut++;
   }
-  return said ? { ok: true, sent: true } : { ok: false, why: 'Gmail did not say it was sent', stillWriting: !!editable() };
+  // Not "sent": Gmail said so, or did not. Whether it went is asked of the thread (../mailbox.ts, `sent`).
+  return said ? { ok: true, pressed: true, said: true, closed: !open() } : { ok: false, why: 'Gmail did not say it was sent', pressed: true, said: false, closed: !open() };
 }
 
 return { ok: false, why: 'not a step of a reply' };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { browserMailbox } from './mailbox.ts';
+import { MAIL_SENT_ASKS, MAIL_WHY_UNSURE, browserMailbox } from './mailbox.ts';
 import type { GooglePage } from './page.ts';
 import { MailSignedOut, MailTabTurn } from './tab.ts';
 
@@ -104,6 +104,16 @@ describe('one reply through the tab', () => {
     expect(step).toEqual({ ok: false, why: 'Execution context was destroyed at (an address)' });
   });
 
+  // Whoever asked must never send a second time a mail that may be on its way.
+  test('a send that did not go says whether Send was pressed, and one that gave no answer may have been', async () => {
+    const send = (reply: (args: Record<string, unknown>) => unknown) => browserMailbox(tab({ up: true, reply }).page, new MailTabTurn()).reply(plan, (session) => session.send());
+    expect(await send(() => ({ ok: false, why: 'no way to send was found', pressed: false }))).toEqual({ ok: false, why: 'no way to send was found', pressed: false });
+    expect(await send(() => ({ ok: false, why: 'Gmail did not say it was sent', pressed: true }))).toEqual({ ok: false, why: 'Gmail did not say it was sent', pressed: true });
+    expect(await send(() => { throw new Error('the page went away'); })).toEqual({ ok: false, why: 'the page went away', pressed: true });
+    expect(await send(() => ({}))).toEqual({ ok: false, why: 'the page did not answer', pressed: true });
+    expect(await send(() => ({ ok: true, pressed: true }))).toEqual({ ok: true });
+  });
+
   // Nothing may navigate the tab away between the draft being written and it being sent or thrown away.
   test('a reply has the tab to itself from its first step to its last', async () => {
     const { page, names } = tab({ up: true });
@@ -139,8 +149,15 @@ describe('one reply through the tab', () => {
 // mail, to one person, sent only when the writing window holds exactly it.
 describe('writing a new mail to one person', () => {
   /** A tab whose writing window says what it holds, and whose Send answers as told. */
-  function writing(options: { window?: Record<string, unknown>; sent?: Record<string, unknown> | Error } = {}) {
+  function writing(options: {
+    window?: Record<string, unknown>;
+    sent?: Record<string, unknown> | Error;
+    /** What the Sent folder shows each time it is asked: the mail, nothing of it, or it cannot be read. The last answer stands. */
+    folder?: ('shows' | 'empty' | 'old' | 'unreadable')[];
+  } = {}) {
     const calls: { name: string; args?: unknown }[] = [];
+    const folder = [...(options.folder ?? ['shows'])];
+    let shown = 'shows';
     const page: Required<GooglePage> = {
       go: async (site, path) => { calls.push({ name: `go ${site}`, args: path }); },
       run: async <T>(name: string, args?: unknown) => {
@@ -148,26 +165,66 @@ describe('writing a new mail to one person', () => {
         if (name === 'shape-compose') return (options.window ?? { subject: 12, body: 40, send: true }) as T;
         if (name === 'compose-send') {
           if (options.sent instanceof Error) throw options.sent;
-          return (options.sent ?? { sent: true, why: '' }) as T;
+          return (options.sent ?? { sent: true, pressed: true, why: '' }) as T;
         }
+        if (name === 'owner') return { address: 'sam@northwind.example' } as T;
+        if (name === 'go') return { there: false } as T;
+        if (name === 'list') {
+          shown = folder.length > 1 ? folder.shift()! : folder[0]!;
+          if (shown === 'unreadable') throw new Error('Gmail did not answer');
+          // Another mail to the same person is in Sent too: only the one with this subject counts.
+          return { there: true, rows: [{ ...row('19a1b2c3d4e5f6ff'), subject: 'Lunch' }, ...(shown === 'empty' ? [] : [{ ...row(T1), subject: 'The  contract' }])] } as T;
+        }
+        if (name === 'threads') return (args as { ids: string[] }).ids.map((id) => printed(id, 'Sam Rossi <sam@northwind.example>', shown === 'old' ? NOW - 3_600_000 : NOW)) as T;
         throw new Error(`no such script: ${name}`);
       },
     };
-    return { page, calls, names: () => calls.map((call) => call.name) };
+    return { page, calls, names: () => calls.map((call) => call.name), box: () => browserMailbox(page, new MailTabTurn(), { now: () => NOW + 30_000, sleep: async () => {} }) };
   }
   const plan = { to: 'leo@lumen.example', subject: 'The contract', text: 'Hi Leo,\n\nA quick nudge on this: could you get back to me by Friday?\n\nThanks,\nSam' };
 
-  test('the writing window is opened with the mail in it, checked, and Send is pressed once', async () => {
+  test('the writing window is opened with the mail in it, checked, Send is pressed once, and the Sent folder is asked', async () => {
     const { page, calls, names } = writing();
-    expect(await browserMailbox(page, new MailTabTurn()).write(plan)).toEqual({ ok: true });
-    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail']);
+    expect(await browserMailbox(page, new MailTabTurn(), { now: () => NOW + 30_000 }).write(plan)).toEqual({ ok: true });
+    expect(names()).toEqual(['go mail', 'shape-compose', 'compose-send', 'go mail', 'owner', 'go', 'list', 'threads', 'go mail']);
     // Who it goes to, what it is called and what it says travel in the address that opens the window.
     const opened = String(calls[0]!.args);
     expect(opened.startsWith('/mail/u/0/?view=cm&fs=1&tf=1&to=leo%40lumen.example&su=The%20contract&body=Hi%20Leo')).toBe(true);
     // Send is told exactly which mail it may send, and to whom.
     expect(calls[2]!.args).toEqual({ subject: 'The contract', to: 'leo@lumen.example' });
+    // The Sent folder is asked for what went to that person today, and only the thread with this subject is read.
+    expect(decodeURIComponent((calls[5]!.args as { place: string }).place)).toContain('in:sent to:leo@lumen.example newer_than:1d');
+    expect(calls[7]!.args).toEqual({ ids: [T1] });
     // The tab is left on the list again for whoever reads next.
-    expect(calls[3]!.args).toBe('/mail/u/0/#inbox');
+    expect(calls[8]!.args).toBe('/mail/u/0/#inbox');
+  });
+
+  // README 62: Gmail saying "Message sent" is not taken for it. A new mail was, and a mail that
+  // did not go was written down as sent.
+  test('Gmail says it went and the Sent folder does not show it: not called sent, and it may have gone', async () => {
+    for (const folder of [['empty'], ['old']] as const) {
+      const { box, names } = writing({ folder: [...folder] });
+      expect(await box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
+      // Asked more than once: the folder takes a moment to show a mail.
+      expect(names().filter((name) => name === 'list')).toHaveLength(MAIL_SENT_ASKS);
+    }
+    expect(MAIL_WHY_UNSURE.length).toBeLessThanOrEqual(80);
+  });
+
+  test('the Sent folder shows it a moment later: sent', async () => {
+    const { box, names } = writing({ folder: ['empty', 'shows'] });
+    expect(await box().write(plan)).toEqual({ ok: true });
+    expect(names().filter((name) => name === 'list')).toHaveLength(2);
+  });
+
+  test('Gmail says nothing and the Sent folder shows it: sent, and not sent again', async () => {
+    const { box } = writing({ sent: { sent: false, pressed: true, why: 'Gmail did not say it was sent' } });
+    expect(await box().write(plan)).toEqual({ ok: true });
+  });
+
+  test('the Sent folder cannot be read: Gmail\'s own word stands when it gave it, and not when it did not', async () => {
+    expect(await writing({ folder: ['unreadable'] }).box().write(plan)).toEqual({ ok: true });
+    expect(await writing({ folder: ['unreadable'], sent: { sent: false, pressed: true, why: 'Gmail did not say it was sent' } }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
   });
 
   test('a writing window that does not hold the mail is not sent from', async () => {
@@ -178,19 +235,23 @@ describe('writing a new mail to one person', () => {
     }
   });
 
-  test('when Gmail does not say it went, it is not called sent, and the reason is given', async () => {
+  test('a send the page refused before pressing anything sent nothing: the reason is given, and the Sent folder is not asked', async () => {
     const refused = writing({ sent: { sent: false, why: 'it does not go to the one expected person' } });
-    expect(await browserMailbox(refused.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'it does not go to the one expected person' });
+    expect(await refused.box().write(plan)).toEqual({ ok: false, why: 'it does not go to the one expected person' });
+    expect(refused.names()).not.toContain('list');
     const silent = writing({ sent: { sent: false, why: '' } });
-    expect(await browserMailbox(silent.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'Gmail did not say it was sent' });
-    // A page that went away is a mail that was not sent, with no address in the reason.
-    const gone = writing({ sent: new Error('the tab left https://mail.google.com/mail/u/0/?view=cm for elsewhere') });
-    expect(await browserMailbox(gone.page, new MailTabTurn()).write(plan)).toEqual({ ok: false, why: 'the tab left (an address) for elsewhere' });
+    expect(await silent.box().write(plan)).toEqual({ ok: false, why: 'Gmail did not say it was sent' });
+  });
+
+  test('a page that went away while Send was pressed: the mail may have gone, and the Sent folder says', async () => {
+    const gone = new Error('the tab left https://mail.google.com/mail/u/0/?view=cm for elsewhere');
+    expect(await writing({ sent: gone }).box().write(plan)).toEqual({ ok: true });
+    expect(await writing({ sent: gone, folder: ['empty'] }).box().write(plan)).toEqual({ ok: false, why: MAIL_WHY_UNSURE, pressed: true });
   });
 
   test('a mail to several people the owner named goes to exactly those, and Send is told so', async () => {
-    const { page, calls } = writing();
-    expect(await browserMailbox(page, new MailTabTurn()).write({ ...plan, also: ['Anna@Acme.example', 'leo@lumen.example', 'tony@acme.example'] })).toEqual({ ok: true });
+    const { box, calls } = writing();
+    expect(await box().write({ ...plan, also: ['Anna@Acme.example', 'leo@lumen.example', 'tony@acme.example'] })).toEqual({ ok: true });
     // Each of them once, in the address that opens the window.
     expect(String(calls[0]!.args).startsWith('/mail/u/0/?view=cm&fs=1&tf=1&to=leo%40lumen.example,anna%40acme.example,tony%40acme.example&su=The%20contract')).toBe(true);
     expect(calls[2]!.args).toEqual({ subject: 'The contract', to: ['leo@lumen.example', 'anna@acme.example', 'tony@acme.example'] });

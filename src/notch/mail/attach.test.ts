@@ -8,7 +8,7 @@ import { Database } from 'bun:sqlite';
 import { NotchInbox } from '../inbox.ts';
 import type { NotchLine, NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
-import { NUDGE_UNSURE, attachMailLayer, sendNudge } from './attach.ts';
+import { NUDGE_SENT_ASKS, NUDGE_SENT_WAIT_MS, NUDGE_UNSURE, attachMailLayer, sendNudge } from './attach.ts';
 import type { MailReplySession, MailStep } from './mailbox.ts';
 import type { MailBrowser } from './browser.ts';
 import { MailSignedOut } from './tab.ts';
@@ -118,7 +118,8 @@ describe('a nudge is sent once', () => {
     };
   }
   const plan = { address: 'sam@northwind.example', thread: 'T1', subject: 'The contract', text: 'Any news?' };
-  const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, () => {});
+  const waited: number[] = [];
+  const send = (b: ReturnType<typeof box>, with_ = plan) => sendNudge(b as never, with_, () => NOW, () => {}, async (ms) => { waited.push(ms); });
 
   test('to several people it is a mail of its own, never a reply in one person\'s thread', async () => {
     const written: unknown[] = [];
@@ -128,10 +129,34 @@ describe('a nudge is sent once', () => {
     expect(written).toEqual([{ to: 'sam@northwind.example', also: ['leo@lumen.example'], subject: 'The contract', text: 'Any news?' }]);
   });
 
-  test('Gmail says it went: it is sent, whatever the thread shows yet, and no new mail follows', async () => {
-    const b = box({ sent: async () => false });
+  // README 62, 26 November 2026: sent is the thread showing it. Gmail saying so was taken for it
+  // here ("it is sent, whatever the thread shows yet"), and a nudge that had not gone was written
+  // down as sent. The thread is given a moment, and it is still never sent again as a new mail.
+  test('Gmail says it went and the thread shows it: sent', async () => {
+    const b = box({ sent: async () => true });
     expect(await send(b)).toEqual({ ok: true });
-    expect(b.did).toEqual(['write', 'send']);
+    expect(b.did).toEqual(['write', 'send', 'read back']);
+  });
+
+  test('Gmail says it went and the thread shows it only a moment later: sent, once', async () => {
+    const shows = [false, false, true];
+    const b = box({ sent: async () => shows.shift()! });
+    waited.length = 0;
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'send', 'read back', 'read back', 'read back']);
+    expect(waited).toEqual([NUDGE_SENT_WAIT_MS, NUDGE_SENT_WAIT_MS]);
+  });
+
+  test('Gmail says it went and the thread never shows it: not called sent, and no new mail follows', async () => {
+    const b = box({ sent: async () => false });
+    expect(await send(b)).toEqual({ ok: false, why: NUDGE_UNSURE, pressed: true });
+    expect(b.did).toEqual(['write', 'send', ...Array.from({ length: NUDGE_SENT_ASKS }, () => 'read back')]);
+  });
+
+  test('Gmail says it went and the thread cannot be read: its word stands', async () => {
+    const b = box({ sent: async () => null });
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'send', 'read back']);
   });
 
   test('no answer to the send, and the thread shows it: sent, once', async () => {
@@ -141,12 +166,22 @@ describe('a nudge is sent once', () => {
   });
 
   test('no answer to the send, and the thread does not show it: not sent again as a new mail', async () => {
-    const b = box({ send: async () => ({ ok: false, why: 'Gmail did not answer' }), sent: async () => false });
-    // It may have gone all the same: the reason says to look first.
-    expect(await send(b)).toEqual({ ok: false, why: NUDGE_UNSURE });
+    for (const pressed of [true, undefined]) {
+      const b = box({ send: async () => ({ ok: false, why: 'Gmail did not answer', ...(pressed ? { pressed } : {}) }), sent: async () => false });
+      // It may have gone all the same: the reason says to look first.
+      expect(await send(b)).toEqual({ ok: false, why: NUDGE_UNSURE, pressed: true });
+      expect(b.did).toEqual(['write', 'send', ...Array.from({ length: NUDGE_SENT_ASKS }, () => 'read back'), 'discard']);
+      expect(b.did).not.toContain('new mail');
+    }
     expect(NUDGE_UNSURE.length).toBeLessThanOrEqual(80);
-    expect(b.did).toEqual(['write', 'send', 'read back', 'discard']);
-    expect(b.did).not.toContain('new mail');
+  });
+
+  // It was called "Gmail did not confirm it went" though nothing had been pressed: the chase asked
+  // the owner to look in the thread for a mail that could not be there.
+  test('the page refused to press Send: nothing went, what was written is taken away, and it goes as a mail of its own', async () => {
+    const b = box({ send: async () => ({ ok: false, why: 'no way to send was found', pressed: false }) });
+    expect(await send(b)).toEqual({ ok: true });
+    expect(b.did).toEqual(['write', 'send', 'discard', 'new mail']);
   });
 
   test('the thread would not take the words: nothing was pressed, so it goes as a mail of its own', async () => {

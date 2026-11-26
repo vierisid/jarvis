@@ -10,9 +10,9 @@ import { join } from 'node:path';
 const source = readFileSync(join(import.meta.dir, 'page', 'compose-send.js'), 'utf8');
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...names: string[]) => (...values: unknown[]) => Promise<{ sent: boolean; why: string; people?: number }>;
 
-async function compose(args: { subject: string; to: string | string[] }, window: { subject?: string; chips?: string[]; typed?: string; sends?: boolean } = {}) {
+async function compose(args: { subject: string; to: string | string[] }, window: { subject?: string; chips?: string[]; typed?: string; sends?: boolean; holds?: string } = {}) {
   let pressed = 0;
-  const body = { innerText: '' };
+  const body = { innerText: window.holds ?? '' };
   const node = (attrs: Record<string, string>, value = '') => ({ offsetParent: {}, value, getAttribute: (name: string) => attrs[name] ?? null });
   const people = [...(window.chips ?? []).map((address) => node({ 'data-hovercard-id': address })), ...(window.typed ? [node({}, window.typed)] : [])];
   const form = { querySelectorAll: () => people };
@@ -69,6 +69,20 @@ describe('pressing Send on a new mail', () => {
   test('when Gmail does not say it went, it is not called sent', async () => {
     const { said, pressed } = await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], sends: false });
     expect(said).toMatchObject({ sent: false, why: 'Gmail did not say it was sent' });
+    expect(pressed).toBe(1);
+  });
+
+  // Whoever asked has to know whether the mail may be on its way: a refusal before Send sent nothing.
+  test('the answer says whether Send was pressed', async () => {
+    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'] })).said).toMatchObject({ sent: true, pressed: true });
+    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], sends: false })).said).toMatchObject({ sent: false, pressed: true });
+    expect((await compose({ subject, to: 'sam@northwind.example' }, { chips: ['leo@lumen.example'] })).said).not.toHaveProperty('pressed');
+  });
+
+  // The words were looked for anywhere on the page: a mail that itself says them was called sent.
+  test('a mail that itself says "message sent" is not Gmail saying so', async () => {
+    const { said, pressed } = await compose({ subject, to: 'sam@northwind.example' }, { chips: ['sam@northwind.example'], sends: false, holds: 'Hi Sam, your message has been sent to the team.' });
+    expect(said).toMatchObject({ sent: false, pressed: true });
     expect(pressed).toBe(1);
   });
 });

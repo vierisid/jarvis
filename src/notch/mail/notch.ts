@@ -500,14 +500,22 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         }
         const since = now();
         const sent = await reply.send();
-        if (!sent.ok) {
+        // The page refused before it pressed Send: nothing went.
+        if (!sent.ok && sent.pressed === false) {
           log(`[notch] a reply could not be sent: ${sent.why}`);
           await stage.say(['I could not send it. It is in your Gmail drafts.'], 4600, { mood: 'worried', mark: 'fail', src: 'mail' });
           return 'waits';
         }
-        // Gmail said it went. The mailbox is asked too: a reply is called sent when it is the last word in its thread.
+        // Send was pressed. The mailbox is asked: a reply is called sent when it is the last word in its thread.
         let there = await reply.sent(since);
         if (there === false) { await stage.wait(1500); there = await reply.sent(since); }
+        if (!sent.ok && there !== true) {
+          // Gmail did not say it went, and the thread does not show it. It may have gone all the same:
+          // it used to be called "in your Gmail drafts", and the owner sent it a second time.
+          log(`[notch] a reply was sent and nothing confirms it: ${sent.why}`);
+          await stage.say(['I pressed Send, and nothing says it went. Look in the thread before sending it again.'], 5200, { mood: 'worried', src: 'mail' });
+          return 'waits';
+        }
         if (there === false) {
           await stage.say(['Gmail says it was sent, but I do not see it in the thread yet. I will look again.'], 4600, { mood: 'curious', src: 'mail' });
           return 'waits';

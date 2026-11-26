@@ -1,4 +1,5 @@
 // Presses Send on the mail being written, once, and waits for Gmail to say it went.
+// The answer has `pressed` only when Send was pressed: a refusal before that sent nothing.
 // Refuses unless the mail is exactly the one expected: its subject is args.subject
 // and it goes to args.to and to nobody else. args.to is one address, or a list
 // of them: then it goes to exactly those people.
@@ -21,10 +22,16 @@ if (want.size === 0 || addressed.size !== want.size || [...want].some((one) => !
   return { sent: false, why: want.size > 1 ? 'it does not go to exactly the expected people' : 'it does not go to the one expected person', people: addressed.size };
 }
 const press = (node) => { for (const type of ['mousedown', 'mouseup', 'click']) node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 })); };
+// Gmail's own words, and only when they were not on the page before Send was pressed: a mail
+// that itself says "message sent" is not Gmail saying so.
+const says = () => /message sent|your message has been sent/i.test(document.body.innerText || '');
+const stale = says();
 press(send);
 let said = false;
 for (let tries = 0; tries < 60 && !said; tries++) {
   await sleep(250);
-  said = /message sent|your message has been sent/i.test(document.body.innerText || '');
+  said = !stale && says();
 }
-return { sent: said, why: said ? '' : 'Gmail did not say it was sent', stillWriting: visible(subject) };
+// `pressed`: from here on the mail may be on its way, whatever Gmail says. Whether it went is
+// asked of the Sent folder afterwards (../mailbox.ts).
+return { sent: said, pressed: true, why: said ? '' : 'Gmail did not say it was sent', stillWriting: visible(subject) };

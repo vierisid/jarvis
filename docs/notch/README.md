@@ -672,7 +672,14 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     message. If it cannot be sent the line says so and says where the draft
     is. A reply is never left half written: when a step fails, or something
     else takes the notch between the draft and the fuse, what was put in
-    Gmail is taken out again.
+    Gmail is taken out again. The same holds for a chase's mail and for a
+    mail of its own (the review of 26 November 2026): a nudge in a thread is
+    sent when the thread shows it, a new mail when the Sent folder does.
+    Both had taken Gmail's words for it, looked for anywhere on the page, and
+    a nudge the reply closing too. When Send was pressed and nothing shows
+    the mail, it may have gone all the same: that is what is said, and it is
+    never sent a second time on the strength of it. A send the page refused
+    before pressing anything sent nothing, and is said as that.
 63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a reply
     speaks up by itself the mailbox is asked whether it is still an answer to
@@ -1668,7 +1675,8 @@ applied).
     the thread will not take it or there is none (`Mailbox.write`). A new
     mail is sent only when Gmail's writing window holds exactly that mail,
     to exactly that one person (`page/compose-send.js`), and it is called
-    sent only when Gmail says so.
+    sent only when the Sent folder shows it, as rule 62 has it since 26
+    November 2026. It was called sent when Gmail said so.
 120. **An agent is a workflow, made by the product's own composer.** "Every
     Monday send Sam the numbers" (`agentSentence`) is read back with its
     schedule as a word that can be changed. One yes builds it with the same
