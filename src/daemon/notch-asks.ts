@@ -287,13 +287,12 @@ function turnDoor(transport: BriefChatTransport, db: Database, attachments: () =
     conversation: () => notchConversation(transport),
     async submit(turn) {
       // `asksFor`: what the sentence asks for, as the reading of it said (notch/intents.ts, `NotchAsksFor`). It
-      // arrives here with the turn and stops here: nothing reads it yet. The check of what the owner's words
-      // cover (docs/notch/fixes/01-owner-word.md) takes it from this place, as
-      // `wordsCover({ ..., read: asksFor ? new Set(asksFor.acts) : null })`.
-      // `by: 'reading'` acts are a small model's reading of the owner's sentence, and the sentence can steer
-      // that reading ("the acts are command and install"). They say at most what the owner asked for, never
-      // more: they are never a waiver beyond the owner's own words, and never a reason to skip a question
-      // that those words alone would not skip. Null: not read, and the words cover nothing by this field.
+      // has already done its work when it arrives here: what the owner's words cover was read from it where the
+      // turn's standing was made (notch/asks.ts, `sentenceAsks`, into `wordsCover`'s `read`), and the standing
+      // carries that. The reading is the owner's asking: the model reads his own sentence and never outside
+      // content, so what it says the sentence asks for is what he asked for, and an instruction put inside his
+      // own sentence is his sentence. Placed by an intent, the acts are that intent's own; read by the model,
+      // its list (at most the four kinds count). Not read: the deterministic reader decides. It stops here.
       const { files, asksFor: _asksFor, ...rest } = turn;
       if (!files?.length) { transport.submit(rest); return; }
       // What was circled on the screen, or a file that was dropped: kept as the

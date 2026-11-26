@@ -18,7 +18,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await P
 /** A turn store that does what it is told, turn by turn. */
 function fakeDoor() {
   const listeners = new Set<(event: BriefChatEvent) => void>();
-  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string }; who?: string | null; real?: boolean; asksFor?: unknown }>();
+  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string }; who?: string | null; real?: boolean; asksFor?: unknown; covers?: readonly string[] | null }>();
   let sequence = 0;
   let busy = false;
   let ready = true;
@@ -36,7 +36,7 @@ function fakeDoor() {
       if (busy) throw Object.assign(new Error('Conversation already has an active turn'), { status: 409 });
       if (turns.has(turn.turnId)) return;
       turns.set(turn.turnId, { ref: { conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId }, text: turn.text, state: 'running', reply: '',
-        who: turn.standing?.origin ?? null, real: isUnusedStanding(turn.standing), asksFor: 'asksFor' in turn ? turn.asksFor : 'not given' });
+        who: turn.standing?.origin ?? null, real: isUnusedStanding(turn.standing), asksFor: 'asksFor' in turn ? turn.asksFor : 'not given', covers: turn.standing?.covers ?? null });
     },
     cancel(ref) { if (turns.get(ref.turnId)?.state === 'running') emit(ref.turnId, { kind: 'terminal', state: 'cancelled' }); },
     onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -57,6 +57,8 @@ function fakeDoor() {
     texts: (): string[] => [...turns.values()].map((turn) => turn.text),
     /** What each turn was said to ask for, as the door was told: 'not given' when it was told nothing. */
     asksFor: (): unknown[] => [...turns.values()].map((turn) => turn.asksFor),
+    /** What the standing of each turn says its words cover, as the door was given it. */
+    covers: (): (readonly string[] | null | undefined)[] => [...turns.values()].map((turn) => turn.covers),
     /** Who wrote the words of each turn, as the door was told, and whether what it was told is the notch's own mint. */
     who: (): [string | null, boolean][] => [...turns.values()].map((turn) => [turn.who ?? null, turn.real === true]),
   };
@@ -2320,6 +2322,46 @@ describe('a sentence the fixed words miss is read once, before it runs', () => {
     await h.type('what is the weather in Rome');
     expect(h.door.asksFor()).toEqual([{ acts: ['send'], by: 'reading' }, { acts: [], by: 'reading' }]);
     await h.advance(20_000);
+  });
+
+  /** Types each sentence in a notch of its own, read as `acts` (null: not read in time), and says what its turn's words covered. */
+  const covered = async (words: string, acts: string[] | null, by: 'reading' | 'intent' = 'reading'): Promise<unknown> => {
+    const h = harness({ deps: { read: () => Promise.resolve({ hit: null, asksFor: acts ? { acts: acts as never, by } : null, how: acts ? 'read' as const : 'late' as const, ms: 10 }) } });
+    await h.type(words);
+    await settle();
+    const covers = h.door.covers();
+    h.asks.stop();
+    return covers[0];
+  };
+
+  test('what the words cover is the reading of the sentence: the deterministic reader\'s over-reads cover what the reading says', async () => {
+    for (const words of ['do not under any circumstances send this', 'summarise what to send', 'run a search for flights', 'make it run faster']) {
+      expect([words, await covered(words, [])]).toEqual([words, []]);
+      // Not read: the deterministic reader decides, as before.
+      expect([words, ((await covered(words, null)) as string[]).length]).toEqual([words, 1]);
+    }
+  });
+
+  test('and its misses are covered when the reading says so', async () => {
+    for (const [words, acts] of [['update Chrome', ['install']], ['set up docker', ['install']], ['write an email to Anna', ['send']],
+      ['pull the latest changes', ['command']], ['dark mode please', ['settings']], ['install vite and email Anna the log', ['install', 'send']]] as const) {
+      expect([words, await covered(words, [...acts])]).toEqual([words, ['send', 'command', 'install', 'settings'].filter((act) => (acts as readonly string[]).includes(act))]);
+      expect([words, await covered(words, null)]).toEqual([words, words.startsWith('install') ? ['send', 'install'] : []]);
+    }
+    // Placed by an intent: that intent's own acts.
+    expect(await covered('update Chrome', ['install'], 'intent')).toEqual(['install']);
+  });
+
+  test('a reading never widens past the four kinds, a question keeps none of them, and a shown turn covers nothing whatever is read', async () => {
+    expect(await covered('show me the new design and make it', ['screen', 'create', 'send', 'delete', 'pay'])).toEqual(['send']);
+    for (const words of ['what did Leo send?', 'how do I install node', 'why did the build run twice?']) {
+      expect([words, await covered(words, ['send', 'install', 'command', 'settings'])]).toEqual([words, []]);
+    }
+    const h = harness({ deps: { read: () => Promise.resolve({ hit: null, asksFor: { acts: ['send', 'command', 'install', 'settings'] as never, by: 'reading' as const }, how: 'read' as const, ms: 10 }) } });
+    h.asks.shown('What does this tell me?', [{ kind: 'document', name: 'Deck.pdf', mediaType: 'application/pdf', bytes: new Uint8Array(8) }]);
+    await settle();
+    expect(h.door.covers()).toEqual([[]]);
+    h.asks.stop();
   });
 
   test('with no model set up nothing is asked: the sentence is refused as it was', async () => {

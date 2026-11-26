@@ -408,9 +408,15 @@ What holds for all of them:
     node?"), and to draft a reply is not to send it. When it cannot place a
     sentence, the sentence asked for nothing and the act is asked about:
     one question more, never one fewer. The rows it gets wrong, in both
-    directions, are pinned in `words-cover.test.ts`. The notch's classifier
-    (261, fixes/03) is to take the reader's place for a sentence the fixed
-    words missed; the place it enters is marked (`read`).
+    directions, are pinned in `words-cover.test.ts`. When the notch's
+    reading of the sentence (261, fixes/03, `NotchAsksFor`) answered, it
+    takes that reader's place (`sentenceAsks` into `read`): the model reads
+    his own sentence and nothing else, so what it says the sentence asks
+    for is his asking, and an instruction put inside his own sentence is
+    his sentence. Only the four kinds count, a sentence that only asks
+    something keeps none of them, and a shown turn covers nothing whatever
+    is read. Not read (no model, too slow, a failure, the reader resting):
+    the small reader decides, as above.
     Three narrower things follow. "Install ..." also asks for the command
     that installs (`npm install`, `winget install`, an installer), and "turn
     on ..." for the command that sets (`reg add`, `defaults write`): he

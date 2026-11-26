@@ -33,8 +33,8 @@ import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 import { pointsAtScreen, whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
-import type { NotchAsksFor, NotchIntent, NotchIntentHit } from './intents.ts';
-import type { NotchRead } from './intent-read.ts';
+import type { NotchAsksFor, NotchIntent, NotchIntentHit, NotchSentenceAct } from './intents.ts';
+import { plainQuestion, type NotchRead } from './intent-read.ts';
 import { runItRequest } from './teach.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
@@ -566,6 +566,20 @@ export function ledgerDetail(row: NotchAskRow): NotchBlock[] {
   return blocks;
 }
 
+/**
+ * What the owner's sentence asks for, as the reading of it said (./intents.ts, `NotchAsksFor`), for what his
+ * words cover (authority/words-cover.ts, `read`). The reading is the owner's asking: the model reads his own
+ * sentence and nothing else (no page, no file, no window), so what it says the sentence asks for is what he
+ * asked for. An instruction put inside his own sentence is his sentence. Placed by an intent, the acts are
+ * that intent's own; read by the model, its list. A sentence that only asks something keeps nothing but the
+ * screen, as point 3 allowed (a question is never a send). Null: not read (no reader, late, failed, resting),
+ * and the deterministic reader decides as before.
+ */
+export function sentenceAsks(text: string, asksFor: NotchAsksFor | null): readonly NotchSentenceAct[] | null {
+  if (!asksFor) return null;
+  return plainQuestion(text) ? asksFor.acts.filter((act) => act === 'screen') : asksFor.acts;
+}
+
 export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAsks {
   const log = deps.log ?? ((line: string) => console.log(line));
   const ledger = deps.ledger;
@@ -837,16 +851,16 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         // What the words asked for goes with the standing (the owner's decision of 26 November 2026). A yes to
         // what a turn with the owner's word asked back covers what that question asked and what those words
         // covered, and carries outside content only when the turn that asked held some. Anything else covers
-        // what it says itself. No fixed intent's sentence becomes a turn today
-        // (the notch does those itself), so `intent` is empty here; THE SEAM for the classifier's reading of
-        // a sentence the fixed words missed is `read`, in authority/words-cover.ts.
+        // what it says itself: by the reading of his sentence when there is one (`sentenceAsks`), and by the
+        // deterministic reader when there is none. No fixed intent's sentence becomes a turn today (the notch does
+        // those itself), so `intent` is empty here.
         const said = agrees && ask.answers
           ? { words: `${ask.answers.words} ${ask.answers.question}`.trim(), own: ask.answers.own, covers: OWNER_ACTS.filter((act) => ask.answers!.covers.includes(act) || readActs(ask.answers!.question, 'question').includes(act)), answers: ask.answers.held === null || ask.answers.held.length > 0, held: ask.answers.held ?? [] }
           // A bare yes with no question known to answer (the question was lost to a restart, or was asked where
           // the notch did not see it) agrees to something nobody here can read: as a yes to a turn that read anything.
           : ask.answers === undefined && (isBareAffirmation(text) || notchBareGoAhead(text))
             ? { words: text, covers: [], answers: true }
-            : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null }) };
+            : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null, read: sentenceAsks(text, ask.got?.asksFor ?? null) }) };
         // (A standing with no word of the owner's keeps no words and covers nothing, whatever it is handed.)
         const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source, said);
         if (standing && standing.origin !== 'shown') ask.stood = { words: standing.words, own: standing.own, covers: standing.covers };

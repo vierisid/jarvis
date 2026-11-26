@@ -17,11 +17,11 @@
  *   2. a reading of the sentence by the notch's own classifier
  *      (notch/intent-read.ts, point 3 of the review): the acts it returns for
  *      a sentence the fixed words missed, as a set, since a sentence can ask
- *      for two ("install vite and email Anna the log"). THE SEAM: that
- *      classifier is not on this branch yet, so nobody passes `read` today.
- *      When it is, its answer takes the place of the reader below, and the
- *      reader stays as what is used when the classifier could not answer in
- *      time;
+ *      for two ("install vite and email Anna the log"). The notch passes it
+ *      (notch/asks.ts, `sentenceAsks`): it takes the place of the reader
+ *      below, and the reader is what is used when the sentence was not read
+ *      (no model, too slow, a failure, the reader resting). It reads only
+ *      the owner's own sentence, so what it says is his asking;
  *   3. the reader below, which is deliberately small: verb families in
  *      English and Italian, matched on the sentence with no model.
  *

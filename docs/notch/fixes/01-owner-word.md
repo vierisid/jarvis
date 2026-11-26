@@ -227,10 +227,12 @@ command key with backspace in a text field on the desktop.
 - C4 what the words cover: done in the same commit
   (`authority/words-cover.ts`). No fixed intent's sentence becomes a turn
   today, so the intent table's `act` is read through `actsOfIntent` only by
-  the seam; sentences are read by the deterministic reader until point 3's
-  classifier passes its acts as `read` (a set: "install vite and email Anna
-  the log" asks for two). The fuse line for a send he asked
-  for (open decision) is not built.
+  the seam; point 3's reading of the sentence is passed as `read` (a set:
+  "install vite and email Anna the log" asks for two) in "notch: what the
+  owner's words cover is the reading of his sentence when it answered, and
+  the small reader when it did not", and the deterministic reader decides
+  when the sentence was not read. The fuse line for a send he asked for
+  (open decision) is not built.
 - C5 delete reader and click check: done in "notch: a delete by its path,
   behind a wrapper or by the command key is read, and a click is not pressed
   blind". Not done under C5: Enter on a focused button is not looked at
