@@ -40,7 +40,7 @@ function build(more: Partial<AuthorityConfig> = {}, gating: Parameters<typeof bu
     execute: async (params) => { calls.push(`${name} ${JSON.stringify(params)}`); return ANSWERS[name]?.(params) ?? 'ok'; },
   });
   for (const one of [
-    tool('desktop_launch_app', 'desktop'), tool('desktop_click', 'desktop'), tool('desktop_type', 'desktop'), tool('desktop_snapshot', 'desktop'), tool('desktop_screenshot', 'desktop'),
+    tool('desktop_launch_app', 'desktop'), tool('desktop_click', 'desktop'), tool('desktop_type', 'desktop'), tool('desktop_snapshot', 'desktop'), tool('desktop_screenshot', 'desktop'), tool('desktop_focus_window', 'desktop'),
     tool('browser_snapshot', 'browser'), tool('browser_navigate', 'browser'), tool('browser_click', 'browser'), tool('browser_press_key', 'browser'), tool('desktop_press_keys', 'desktop'), tool('run_command', 'terminal'), tool('write_file', 'file-ops'), tool('read_file', 'file-ops'),
     // (A category the product reads as a read, raised by the tool's own gate: a tool nobody classified is a command.)
     tool('send_mail', 'productivity', 'send_email'), tool('post_message', 'productivity', 'send_message'), tool('install_app', 'productivity', 'install_software'),
@@ -261,7 +261,10 @@ describe('what opening an app gives, and what it does not', () => {
       ['"open Mail and summarise the newest message"', 'open Mail and summarise the newest message', [['desktop_launch_app', { executable: 'Mail' }], ['desktop_snapshot', {}]]],
       ['a browser', 'open Chrome', [['desktop_launch_app', { executable: 'chrome' }], ['desktop_snapshot', {}]]],
       ['a PDF viewer', 'open Acrobat', [['desktop_launch_app', { executable: 'C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe' }]]],
-      ['a picture of the whole screen', 'open Notepad and write a poem', [['desktop_launch_app', { executable: 'notepad' }], ['desktop_screenshot', {}]]],
+      ['a picture of the whole screen after another window was brought forward', 'open Notepad and write a poem',
+        [['desktop_launch_app', { executable: 'notepad' }], ['desktop_focus_window', { pid: 777 }], ['desktop_screenshot', {}]]],
+      ['a picture of the whole screen after a page was read', 'open Notepad and write a poem',
+        [['desktop_launch_app', { executable: 'notepad' }], ['browser_snapshot', {}], ['desktop_screenshot', {}]]],
     ];
     for (const [what, words, steps] of cases) {
       const h = build();
@@ -280,6 +283,51 @@ describe('what opening an app gives, and what it does not', () => {
     for (const [name, args] of [['desktop_launch_app', { executable: 'TextEdit' }], ['desktop_snapshot', { pid: 4243 }], ['desktop_snapshot', {}], ['desktop_screenshot', { pid: 4242 }],
       ['desktop_click', { element_id: 3 }]] as const) {
       expect([name, asked(await typed('open TextEdit and write a poem', () => h.run(name, args, turn)))]).toEqual([name, false]);
+    }
+  });
+});
+
+describe('on a machine that cannot look (a Mac, Linux, screen awareness off): the app the turn opened, in front', () => {
+  const owner = (h: ReturnType<typeof build>, words: string, turn: Set<string>) => async (name: string, args: Record<string, unknown>) =>
+    asked(await typed(words, () => h.run(name, args, turn)));
+  beforeEach(() => { setOwnerWordProbe(async () => 'blind'); setOwnerWordFrontProbe(async () => 'blind'); });
+
+  test('"open TextEdit and write a poem", with a picture of the screen: no question at the click, the line breaks or Enter', async () => {
+    const h = build();
+    const go = owner(h, 'open TextEdit and write a poem', new Set());
+    for (const [name, args] of [['desktop_launch_app', { executable: 'TextEdit' }], ['desktop_screenshot', {}], ['desktop_click', { x: 100, y: 100 }],
+      ['desktop_type', { text: 'Roses are red\nViolets are blue' }], ['desktop_press_keys', { keys: 'enter' }]] as const) {
+      expect([name, await go(name, args)]).toEqual([name, false]);
+    }
+  });
+
+  test('"summarise ~/notes.txt into a Word document": the file is read, Word opened, and the summary typed with its line breaks, with no question', async () => {
+    const h = build();
+    const go = owner(h, 'summarise ~/notes.txt into a Word document', new Set());
+    for (const [name, args] of [['read_file', { path: '~/notes.txt' }], ['desktop_launch_app', { executable: 'Microsoft Word' }], ['desktop_type', { text: 'Summary line one' }],
+      ['desktop_type', { text: 'para 1\npara 2' }], ['desktop_press_keys', { keys: 'enter' }]] as const) {
+      expect([name, await go(name, args)]).toEqual([name, false]);
+    }
+  });
+
+  test('the same after another window was brought forward, or a page was read, is asked; and so in a terminal or a mail client the turn opened', async () => {
+    for (const [what, between] of [['another window', ['desktop_focus_window', { pid: 777 }]], ['a page', ['browser_snapshot', {}]]] as const) {
+      const h = build();
+      const go = owner(h, 'summarise ~/notes.txt into a Word document', new Set());
+      await go('read_file', { path: '~/notes.txt' });
+      await go('desktop_launch_app', { executable: 'Microsoft Word' });
+      await go(between[0], between[1]);
+      expect([what, await go('desktop_type', { text: 'para 1\npara 2' })]).toEqual([what, true]);
+      expect([what, await go('desktop_press_keys', { keys: 'enter' })]).toEqual([what, true]);
+      // Typing with no line break is never held.
+      expect([what, await go('desktop_type', { text: 'para 3' })]).toEqual([what, false]);
+    }
+    for (const app of ['Terminal', 'Mail', 'Slack']) {
+      const h = build();
+      const go = owner(h, 'summarise ~/notes.txt', new Set());
+      await go('read_file', { path: '~/notes.txt' });
+      await go('desktop_launch_app', { executable: app });
+      expect([app, await go('desktop_press_keys', { keys: 'enter' })]).toEqual([app, true]);
     }
   });
 });

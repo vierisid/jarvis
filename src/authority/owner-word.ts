@@ -509,8 +509,23 @@ export function withOutsideContent<T>(marks: ReadonlySet<string>, run: () => T, 
  * are not in the set). See `noteToolRun`.
  */
 const alsoRead = new WeakMap<ReadonlySet<string>, Set<string>>();
-/** The processes an app the loop opened runs as (the launcher's and its window's). */
-const opened = new WeakMap<ReadonlySet<string>, Set<number>>();
+/**
+ * What a tool loop knows of the desktop, by the loop's set: the processes an
+ * app it opened runs as (the launcher's and its window's), which program
+ * that was, whether its window is still the one in front (nothing else was
+ * read, brought forward or worked in since), and what was typed since the
+ * last Enter, and whether into a run place (Win+R, Spotlight).
+ */
+interface Desk { pids: Set<number>; launched: string | null; front: boolean; place: boolean; typed: string }
+const desks = new WeakMap<ReadonlySet<string>, Desk>();
+function deskOf(marks: ReadonlySet<string>): Desk {
+  let desk = desks.get(marks);
+  if (!desk) {
+    desk = { pids: new Set(), launched: null, front: false, place: false, typed: '' };
+    desks.set(marks, desk);
+  }
+  return desk;
+}
 
 const alsoOf = (marks: ReadonlySet<string>): ReadonlySet<string> => alsoRead.get(marks) ?? new Set<string>();
 
@@ -583,17 +598,28 @@ export function noteToolRun(name: string, params: Record<string, unknown>, resul
       alsoRead.set(marks, set);
     };
     if (READ_BY_THE_BOUNDARY.has(name) || commandText(name, params)) add(name);
-    const mine = opened.get(marks) ?? new Set<number>();
+    const desk = deskOf(marks);
     if (name === 'desktop_launch_app') {
-      for (const pid of pidsIn(result)) mine.add(pid);
-      opened.set(marks, mine);
+      for (const pid of pidsIn(result)) desk.pids.add(pid);
       const program = typeof params.executable === 'string' ? params.executable.split(/[\\/]/).pop()!.replace(/\.(?:exe|app)$/i, '') : '';
+      desk.launched = program;
+      desk.front = true;
       if (SHOWS_OTHERS.test(program)) add(OPENED_APP_SHOWS_OTHERS);
     } else if (name === 'desktop_snapshot' || name === 'desktop_find_element' || name === 'desktop_focus_window') {
       const pid = typeof params.pid === 'number' ? params.pid : pidsIn(result)[0];
-      if (pid === undefined || !mine.has(pid)) add(NOT_THE_OPENED_APP);
+      if (pid === undefined || !desk.pids.has(pid)) {
+        add(NOT_THE_OPENED_APP);
+        desk.front = false;
+      }
     } else if (name === 'desktop_screenshot' || name === 'capture_screen') {
-      if (!(typeof params.pid === 'number' && mine.has(params.pid))) add(WHOLE_SCREEN);
+      const ofTheApp = typeof params.pid === 'number' ? desk.pids.has(params.pid)
+        // The whole screen while the app this loop opened is in front, and nothing else was read or brought
+        // forward since: a picture of that app (on a Mac and on Linux a picture is always of the whole screen).
+        : desk.front && desk.launched !== null && !SHOWS_OTHERS.test(desk.launched);
+      if (!ofTheApp) add(WHOLE_SCREEN);
+    } else if (name.startsWith('browser_')) {
+      // A page was worked in: the browser may be in front now.
+      desk.front = false;
     }
   } catch {
     // It only reads; a tool that ran is never failed by it.
@@ -722,7 +748,7 @@ export function setOwnerWordFrontProbe(next: OwnerWordFrontProbe | null): void {
  * browser cannot be read here. Set by the browser tools
  * (actions/tools/builtin.ts); it only reads.
  */
-export type OwnerWordBrowserReader = (toolName: string, params: Record<string, unknown>) => { page: string | null; element: string | null } | null;
+export type OwnerWordBrowserReader = (toolName: string, params: Record<string, unknown>) => { page: string | null; element: string | readonly string[] | null } | null;
 
 let browserReader: OwnerWordBrowserReader | null = null;
 
@@ -743,25 +769,34 @@ const keysHeld = (params: Record<string, unknown>): string[] => {
   return typeof keys === 'string' ? keys.split(/[,+]/).map((key) => key.trim().toLowerCase()).filter(Boolean) : [];
 };
 const ENTER = /^(?:enter|return|kp_enter|numpadenter)$/;
+const CTRL = /^(?:ctrl|control)$/;
 const COMMAND_KEY = /^(?:ctrl|control|cmd|command|meta)$/;
+/** The system key, by any of its names: the desktop apps send meta as Win on Windows and as Cmd on a Mac. */
+const SYSTEM_KEY = /^(?:win|windows|super|lwin|rwin|meta|cmd|command)$/;
 
-/** A press that opens a place where what is typed next is run or opened: Win+R, the Start menu, Spotlight, Alt+F2. */
+/** A press that is Enter: Enter or Return in any chord, or Ctrl+M and Ctrl+J, which a terminal reads as Enter. */
+const pressesEnter = (keys: string[]): boolean => keys.some((key) => ENTER.test(key)) || (keys.length === 2 && keys.some((key) => CTRL.test(key)) && keys.some((key) => key === 'm' || key === 'j'));
+/** Shift with Enter and no Ctrl or Cmd: a new line in a chat, not a send. */
+const newLineOnly = (keys: string[]): boolean => keys.includes('shift') && !keys.some((key) => COMMAND_KEY.test(key));
+
+/** A press that opens a place where what is typed next is run or opened: the Start menu (Win, Ctrl+Esc), Win+R, Spotlight, Alt+F2. */
 function opensRunPlace(keys: string[]): boolean {
   const has = (pattern: RegExp): boolean => keys.some((key) => pattern.test(key));
-  if (keys.length === 1 && /^(?:win|windows|super|lwin|rwin)$/.test(keys[0]!)) return true;
-  if (keys.length === 2 && has(/^(?:win|windows|super|lwin|rwin)$/) && has(/^r$/)) return true;
-  if (keys.length === 2 && has(/^(?:cmd|command|meta)$/) && has(/^space$/)) return true;
+  if (keys.length === 1 && SYSTEM_KEY.test(keys[0]!)) return true;
+  if (keys.length === 2 && has(SYSTEM_KEY) && has(/^(?:r|space)$/)) return true;
+  if (keys.length === 2 && has(CTRL) && has(/^(?:esc|escape)$/)) return true;
   return keys.length === 2 && has(/^alt$/) && has(/^f2$/);
 }
 
 /** A press that opens a terminal: Ctrl+Alt+T. Starting a shell is a command by another name, as for an app. */
-const opensTerminal = (keys: string[]): boolean => keys.length === 3 && keys.includes('t') && keys.includes('alt') && keys.some((key) => /^(?:ctrl|control)$/.test(key));
+const opensTerminal = (keys: string[]): boolean => keys.length === 3 && keys.includes('t') && keys.includes('alt') && keys.some((key) => CTRL.test(key));
 
-/** What was typed since a run place was opened, by the tool loop it was opened in. */
-const runPlaces = new WeakMap<ReadonlySet<string>, { typed: string }>();
+/** A window that is a run place itself: the Run dialog, Spotlight. */
+const isRunPlace = (front: { program: string; title: string }): boolean =>
+  (/^explorer(?:\.exe)?$/i.test(front.program) && /^run$/i.test(front.title.trim())) || /spotlight/i.test(front.program);
 
 /** What is run when a run place is sent: an app named as a person names one is an app opened, anything else a command. */
-const runPlaceRuns = (typed: string): ActionCategory[] => (plainAppOpen('desktop_launch_app', { executable: typed.trim() }) ? [] : ['execute_command']);
+const runPlaceRuns = (typed: string): ActionCategory[] => (!typed.trim() || plainAppOpen('desktop_launch_app', { executable: typed.trim() }) ? [] : ['execute_command']);
 
 /**
  * What a key press, typed text, or a browser click, key or typing sends or
@@ -770,58 +805,83 @@ const runPlaceRuns = (typed: string): ActionCategory[] => (plainAppOpen('desktop
  * of the four is asked about; a run place opened is followed either way.
  *
  *   - a browser click on an element that says Send, Post, Forward, Submit
- *     (`uiEffectHints`, on what the element says and the page): a send;
- *     where the browser cannot be read (a browser on another machine whose
- *     snapshot this side did not keep), `'blind'`;
+ *     (`uiEffectHints`, on each thing the element says and the page): a
+ *     send; where the browser cannot be read (a browser on another machine
+ *     whose snapshot this side did not keep), `'blind'`;
  *   - Ctrl or Cmd with Enter in a mail or chat window or page: a send; Enter
- *     alone, or text with a line break, in a chat: a send; a browser typing
- *     with `submit` on a chat page: a send;
- *   - Enter, or text typed, into a window whose program is a shell, a
- *     terminal or a script host (`runsWhatIsTyped`): a command;
- *   - Ctrl+Alt+T: a command; Win+R, the Start menu, Spotlight or Alt+F2
- *     followed by typed text and Enter: what was typed is an app opened when
+ *     alone, or text with a line break, in a chat (Shift+Enter is a new
+ *     line): a send; Alt+S in a mail window: a send; Enter or Space on a mail
+ *     page (what has focus there cannot be read, and may be Send): a send; a
+ *     browser typing with `submit` on a chat page: a send;
+ *   - Enter (also Ctrl+M, Ctrl+J), or text typed, into a window whose
+ *     program is a shell, a terminal or a script host (`runsWhatIsTyped`): a
+ *     command;
+ *   - Ctrl+Alt+T: a command; the Start menu (Win, Ctrl+Esc), Win+R,
+ *     Spotlight or Alt+F2, or the Run dialog or Spotlight in front, then
+ *     typed text and Enter or a click: what was typed is an app opened when
  *     it names one as a person does, and a command otherwise;
- *   - Enter (or a line break typed, or Ctrl/Cmd+Enter in a page) where the
- *     window cannot be read: `'blind'`. Text typed with no line break is
- *     never held for this: nothing is sent or run until Enter.
+ *   - Enter (or a line break typed, Alt+S, or Ctrl/Cmd+Enter in a page)
+ *     where the window cannot be read: `'blind'`, unless the window in front
+ *     is the app this loop opened, and that app is no shell, terminal,
+ *     script host, mail or chat client, nor one that shows what others wrote
+ *     (the owner's decision taken by the coordinator, 27 November 2026). Text
+ *     typed with no line break is never held for this.
  */
 async function uiReads(toolName: string, params: Record<string, unknown>, outside: boolean): Promise<ActionCategory[] | 'blind'> {
   const loop = held.getStore()?.marks;
-  // Anything else done on the desktop leaves the run place: what is typed after it goes elsewhere.
-  if (loop && /^desktop_(?:click|pointer|launch_app|focus_window)$/.test(toolName)) runPlaces.delete(loop);
+  const desk = loop ? deskOf(loop) : null;
+  if (/^desktop_(?:click|pointer)$/.test(toolName)) {
+    // A click while a run place holds typed text sends it, as its OK button or Enter does.
+    const sent = desk?.place ? runPlaceRuns(desk.typed) : [];
+    if (desk) { desk.place = false; desk.typed = ''; }
+    return sent;
+  }
+  if (/^desktop_(?:launch_app|focus_window)$/.test(toolName)) {
+    if (desk) { desk.place = false; desk.typed = ''; }
+    return [];
+  }
   if (toolName === 'desktop_press_keys' || toolName === 'desktop_type') {
     const keys = toolName === 'desktop_press_keys' ? keysHeld(params) : [];
     const text = toolName === 'desktop_type' && typeof params.text === 'string' ? params.text : '';
     if (opensRunPlace(keys)) {
-      if (loop) runPlaces.set(loop, { typed: '' });
+      if (desk) { desk.place = true; desk.typed = ''; }
       return [];
     }
     if (opensTerminal(keys)) return ['execute_command'];
-    const place = loop ? runPlaces.get(loop) : undefined;
-    const enter = keys.some((key) => ENTER.test(key)) || /[\r\n]/.test(text);
-    if (place) {
-      if (!enter) {
-        if (keys.some((key) => key === 'escape' || key === 'esc')) runPlaces.delete(loop!);
-        else place.typed += text;
-        return [];
-      }
-      runPlaces.delete(loop!);
-      const typed = place.typed + text.split(/[\r\n]/)[0];
-      if (typed.trim()) return runPlaceRuns(typed);
+    const enter = pressesEnter(keys) || /[\r\n]/.test(text);
+    const altS = keys.length === 2 && keys.includes('alt') && keys.includes('s');
+    // What this Enter sends: what was typed since the last one, up to the line break.
+    const typed = (desk?.typed ?? '') + text.split(/[\r\n]/)[0];
+    if (desk) {
+      if (keys.some((key) => key === 'escape' || key === 'esc')) { desk.place = false; desk.typed = ''; }
+      else if (!enter) desk.typed += text;
     }
-    if (!outside || (toolName === 'desktop_press_keys' && !enter)) return [];
+    if (enter && desk) {
+      const place = desk.place;
+      desk.place = false;
+      desk.typed = text.split(/[\r\n]/).pop() ?? '';
+      if (place && typed.trim()) return runPlaceRuns(typed);
+    }
+    if (!outside || (toolName === 'desktop_press_keys' && !enter && !altS)) return [];
     let front: Awaited<ReturnType<OwnerWordFrontProbe>> = frontProbe ? null : 'blind';
     try {
       if (frontProbe) front = await frontProbe(toolName, params);
     } catch {
       front = null;
     }
-    if (front === null || front === 'blind') return enter ? 'blind' : [];
+    if (front === null || front === 'blind') {
+      if (!enter && !altS) return [];
+      const own = desk?.front === true && desk.launched !== null ? desk.launched : null;
+      const plainApp = own !== null && !runsWhatIsTyped(own) && !MAIL_PLACE.test(own) && !CHAT_PLACE.test(own) && !SHOWS_OTHERS.test(own);
+      return plainApp ? [] : 'blind';
+    }
+    if (enter && isRunPlace(front)) return runPlaceRuns(typed);
     if (runsWhatIsTyped(front.program, front.title)) return ['execute_command'];
-    if (!enter) return [];
     const where = `${front.program} ${front.title}`;
+    if (altS) return MAIL_PLACE.test(where) ? ['send_email'] : [];
+    if (!enter) return [];
     const withCommand = keys.some((key) => COMMAND_KEY.test(key));
-    if (CHAT_PLACE.test(where)) return ['send_message'];
+    if (CHAT_PLACE.test(where) && !newLineOnly(keys)) return ['send_message'];
     if (withCommand && MAIL_PLACE.test(where)) return ['send_email'];
     return [];
   }
@@ -830,17 +890,19 @@ async function uiReads(toolName: string, params: Record<string, unknown>, outsid
     if (params.button === 'right') return [];
     const seen = browserReader?.(toolName, params) ?? null;
     if (!seen || seen.element === null) return 'blind';
-    return uiEffectHints('click', seen.element, seen.page ?? '');
+    const says = typeof seen.element === 'string' ? [seen.element] : seen.element;
+    return [...new Set(says.flatMap((one) => uiEffectHints('click', one, seen.page ?? '')))];
   }
   if (toolName === 'browser_press_key' || toolName === 'browser_type') {
     const keys = toolName === 'browser_press_key' ? keysHeld(params) : [];
-    const enter = keys.some((key) => ENTER.test(key)) || (toolName === 'browser_type' && params.submit === true);
-    if (!enter) return [];
+    const enter = pressesEnter(keys) || (toolName === 'browser_type' && params.submit === true);
+    const space = keys.length === 1 && keys[0] === 'space';
+    if (!enter && !space) return [];
     const withCommand = keys.some((key) => COMMAND_KEY.test(key));
     const page = browserReader?.(toolName, params)?.page ?? null;
     if (page === null) return withCommand ? 'blind' : [];
-    if (CHAT_PLACE.test(page)) return ['send_message'];
-    if (withCommand && MAIL_PLACE.test(page)) return ['send_email'];
+    if (enter && CHAT_PLACE.test(page) && !newLineOnly(keys)) return ['send_message'];
+    if (MAIL_PLACE.test(page) && (withCommand || (keys.length === 1 && (enter || space)))) return ['send_email'];
     return [];
   }
   return [];

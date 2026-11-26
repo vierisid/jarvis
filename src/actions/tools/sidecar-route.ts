@@ -1010,15 +1010,18 @@ function recordRemoteSnapshotGeneration(key: string, gen: string): void {
  * and the only part that keeps its line breaks) cannot come after. Capped
  * like the generations; a restart clears it.
  */
-const remoteSnapshotElements = new Map<string, { page: string | null; lines: Map<number, string> }>();
+const remoteSnapshotElements = new Map<string, { page: string | null; lines: Map<number, readonly string[]> }>();
 
 function recordRemoteSnapshotElements(key: string, text: unknown, pageUrl: string | null): void {
   remoteSnapshotElements.delete(key);
   if (typeof text !== 'string') return;
-  const header = text.lastIndexOf('--- Interactive Elements (');
-  const lines = new Map<number, string>();
+  // The header as a line of its own: an element's line starts with its [id], so no text of one is a header.
+  const all = text.split('\n');
+  let header = -1;
+  for (let i = all.length - 1; i >= 0; i -= 1) if (all[i]!.startsWith('--- Interactive Elements (')) { header = i; break; }
+  const lines = new Map<number, readonly string[]>();
   if (header >= 0) {
-    for (const line of text.slice(header).split('\n').slice(1)) {
+    for (const line of all.slice(header + 1)) {
       const match = /^\[(\d+)\]\s+(.*)$/.exec(line);
       if (match) lines.set(Number(match[1]), elementSays(match[2]!));
     }
@@ -1032,21 +1035,24 @@ function recordRemoteSnapshotElements(key: string, text: unknown, pageUrl: strin
 }
 
 /**
- * What an element's line says: its text (the quoted string after its tag) and
- * its aria-label, as written, without the tag or the other attributes.
+ * What an element's line says, each thing on its own: every quoted piece of
+ * the line but its link (its text, aria-label, name, placeholder, and
+ * anything a page put inside one of them), the words of its test id, and a
+ * submit button as "Submit". More pieces can only find more: a label that
+ * hides "Send" inside another attribute is still read.
  */
-function elementSays(line: string): string {
-  const quoted = (raw: string): string => { try { return String(JSON.parse(raw)); } catch { return raw.slice(1, -1); } };
-  const said: string[] = [];
-  const text = /^[\w-]+\s+("(?:[^"\\]|\\.)*")/.exec(line);
-  if (text) said.push(quoted(text[1]!));
-  const label = /\baria-label=("(?:[^"\\]|\\.)*")/.exec(line);
-  if (label) said.push(quoted(label[1]!));
-  return said.join(' ').slice(0, 400);
+function elementSays(line: string): readonly string[] {
+  const withoutLink = line.replace(/\bhref="(?:[^"\\]|\\.)*"/g, '');
+  const said = withoutLink.split('"').slice(1).map((piece) => piece.replace(/\\(.)/g, '$1').trim())
+    .filter((piece) => piece !== '' && !/^[\w-]+=$/.test(piece) && !/^\s*[\w-]+=\s*$/.test(piece));
+  const testId = /\bdata-testid="([^"]*)"/.exec(line)?.[1];
+  if (testId) said.push(testId.replace(/[-_]+/g, ' '), ...testId.split(/[-_\s]+/));
+  if (/\btype="submit"/i.test(line)) said.push('Submit');
+  return said.map((piece) => piece.slice(0, 200)).slice(0, 24);
 }
 
 /** What the newest snapshot this reader took on that sidecar showed: its page, and what each element says. Null: none was taken. */
-export function remoteSnapshotSeen(sidecarId: string): { page: string | null; line(elementId: number): string | null } | null {
+export function remoteSnapshotSeen(sidecarId: string): { page: string | null; line(elementId: number): readonly string[] | null } | null {
   const seen = remoteSnapshotElements.get(readerKey(sidecarId));
   return seen ? { page: seen.page, line: (elementId) => seen.lines.get(elementId) ?? null } : null;
 }
@@ -1063,6 +1069,14 @@ export function forgetSnapshotReader(scopeId: string): void {
   for (const key of [...remoteSnapshotGenerations.keys()]) {
     if (key.endsWith(suffix)) remoteSnapshotGenerations.delete(key);
   }
+  for (const key of [...remoteSnapshotElements.keys()]) {
+    if (key.endsWith(suffix)) remoteSnapshotElements.delete(key);
+  }
+}
+
+/** Test seam: how many readers' element records are kept. */
+export function remoteSnapshotElementsCount(): number {
+  return remoteSnapshotElements.size;
 }
 
 /** Test seam: how many generations are recorded. */
@@ -1137,6 +1151,7 @@ export function remoteSnapshotGeneration(sidecarId: string): string | null {
 /** Test seam: forget every recorded generation. */
 export function resetRemoteSnapshotGenerations(): void {
   remoteSnapshotGenerations.clear();
+  remoteSnapshotElements.clear();
 }
 
 /**

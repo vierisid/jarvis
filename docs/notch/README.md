@@ -496,13 +496,24 @@ What holds for all of them:
     are done with a click, a key or typed text: a control that says Send,
     Post, Forward or Submit (on the desktop by what the machine says is
     there, in a page by the snapshot the model read, on a browser on
-    another machine by the newest snapshot it gave) is a send; Ctrl or Cmd
-    with Enter in mail or chat, and Enter in a chat, is a send; Enter or
-    text into a shell, Ctrl+Alt+T, and a command typed into Win+R, the
-    Start menu, Spotlight or Alt+F2 is a command (an app named there is an
-    app opened); where the window cannot be read (a Mac, Linux, screen
-    awareness off), Enter is asked like a blind click, and so is a browser
-    click the snapshot does not name. What does not: other clicks, text
+    another machine by the newest snapshot it gave, each thing the element
+    says read on its own) is a send; Ctrl or Cmd with Enter in mail or
+    chat, Enter in a chat (Shift+Enter is a new line), Alt+S in a mail
+    window, and Enter or Space on a mail page (what has focus there cannot
+    be read) is a send; Enter (also Ctrl+M and Ctrl+J) or text into a
+    shell, Ctrl+Alt+T, and a command typed into the Start menu (Win, Meta,
+    Ctrl+Esc), Win+R, Spotlight or Alt+F2, or into the Run dialog or
+    Spotlight found in front, sent by Enter or by a click on OK, is a
+    command (an app named there is an app opened); where the window cannot
+    be read (a Mac, Linux, screen awareness off), Enter is asked like a
+    blind click, and so is a browser click the snapshot does not name.
+    Decided by the coordinator on 27 November 2026, for the owner to
+    confirm: on such a machine, Enter and typed line breaks go ahead while
+    the window in front is the app this turn opened (nothing else read,
+    brought forward or worked in since) and that app is no shell,
+    terminal, script host, mail or chat client, nor one that shows what
+    others wrote; and a picture of the whole screen taken then is a picture
+    of that app. What does not: other clicks, text
     typed with no Enter, a nameless button, and a form submitted with Enter
     on a page that is no chat, so text that was read can still drive an app
     by buttons that say none of those words; and when he did ask for a send

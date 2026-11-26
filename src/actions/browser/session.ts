@@ -521,7 +521,7 @@ export class BrowserController {
   /** Tag and visible text of each element of the last snapshot, for an approval card. Page content: display only. */
   private elementLabels = new Map<number, string>();
   /** What each element says (its text, else its aria-label or title), as the page gave it: for reading what a click presses. */
-  private elementTexts = new Map<number, string>();
+  private elementTexts = new Map<number, readonly string[]>();
 
   /**
    * Which DOCUMENT the coordinates and element refs above were minted in, and
@@ -1424,7 +1424,8 @@ export class BrowserController {
     for (const el of data.elements) {
       this.elementCoords.set(el.id, { x: el.x, y: el.y });
       this.elementLabels.set(el.id, elementCardLabel(el));
-      this.elementTexts.set(el.id, [el.text, el.attrs?.['aria-label'], el.attrs?.title, el.attrs?.value].filter((one): one is string => typeof one === 'string' && one.trim() !== '').join(' ').slice(0, 400));
+      this.elementTexts.set(el.id, [el.text, el.attrs?.['aria-label'], el.attrs?.title, el.attrs?.value, el.attrs?.type === 'submit' ? 'Submit' : undefined]
+        .filter((one): one is string => typeof one === 'string' && one.trim() !== '').map((one) => one.slice(0, 200)));
       // Which frame the element came from, from the marker the snapshot script
       // already sets. Not forgeable by the page: `iframe` is not in the
       // script's attribute allowlist, and the marker is written after that loop
@@ -1514,8 +1515,8 @@ export class BrowserController {
     return this.elementLabels.get(elementId) ?? null;
   }
 
-  /** What an element of the last snapshot says, unescaped, or null when it is not in the current map. For reading only, never shown. */
-  snapshotElementText(elementId: number): string | null {
+  /** What an element of the last snapshot says (its text, label, title, value), each unescaped, or null when it is not in the current map. For reading only, never shown. */
+  snapshotElementText(elementId: number): readonly string[] | null {
     return this.elementTexts.get(elementId) ?? null;
   }
 
