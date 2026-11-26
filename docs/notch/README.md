@@ -280,7 +280,8 @@ What holds for all of them:
     its first step (`answers`; the question may have come from that
     content), so the boundary of 44 is on; after a turn that read nothing
     the yes is a clean turn, as a typed one is. Not knowing what the asking
-    turn read (after a restart) is taken as read. "Yes, send it to Anna" has
+    turn read (after a restart) is taken as read, and so is a bare yes with
+    no question known to answer. "Yes, send it to Anna" has
     words of its own and is judged by them, as any sentence is.
     What the words of a turn covered is kept in memory only: to an answer
     brought back after a restart, a yes covers what its question asks and

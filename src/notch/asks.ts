@@ -842,7 +842,11 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         // a sentence the fixed words missed is `read`, in authority/words-cover.ts.
         const said = agrees && ask.answers
           ? { words: `${ask.answers.words} ${ask.answers.question}`.trim(), own: ask.answers.own, covers: OWNER_ACTS.filter((act) => ask.answers!.covers.includes(act) || readActs(ask.answers!.question, 'question').includes(act)), answers: ask.answers.held === null || ask.answers.held.length > 0, held: ask.answers.held ?? [] }
-          : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null }) };
+          // A bare yes with no question known to answer (the question was lost to a restart, or was asked where
+          // the notch did not see it) agrees to something nobody here can read: as a yes to a turn that read anything.
+          : ask.answers === undefined && (isBareAffirmation(text) || notchBareGoAhead(text))
+            ? { words: text, covers: [], answers: true }
+            : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null }) };
         // (A standing with no word of the owner's keeps no words and covers nothing, whatever it is handed.)
         const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source, said);
         if (standing && standing.origin !== 'shown') ask.stood = { words: standing.words, own: standing.own, covers: standing.covers };
