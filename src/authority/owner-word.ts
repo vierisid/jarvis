@@ -65,8 +65,11 @@
  *     a setting (`reg add`, `defaults write`) by "turn on ...": the owner
  *     named the thing, not the tool (`commandInstalls`, `commandSets`). No
  *     other command is covered by those words, and every command in the line
- *     is held to it (`commandParts`). A setting that guards the machine is
- *     covered only by words that name it (`commandSecurity`);
+ *     is held to it (`commandParts`): an installer is covered only as the
+ *     program the command starts, never as a file named to another program.
+ *     A setting that guards the machine is covered only by words that name
+ *     it (`commandSecurity`), and one that runs something when it changes
+ *     (log-on entries, a debugger, the environment, a proxy) never is;
  *   - a send whose recipients can be read from the call must go to somebody
  *     the owner's words name: "send it to Anna" does not cover a send to
  *     somebody else in the same turn. A name in the place of who it goes to
@@ -289,13 +292,15 @@ const BEFORE_PROGRAM = String.raw`^(?:sudo\s+(?:-\S+\s+)*)?`;
  * (curl, wget, iwr) installs nothing, whatever file it names.
  */
 const INSTALLS: readonly RegExp[] = [
-  new RegExp(`${BEFORE_PROGRAM}(?:npm|pnpm|yarn|bun|pip|pip3|pipx|uv|brew|apt|apt-get|dnf|yum|zypper|winget|choco|scoop|cargo|gem|go|snap|flatpak|port|conda|mamba|composer|dotnet\\s+tool)(?:\\.exe|\\.cmd)?\\s+(?:-\\S+\\s+)*(?:i|install|add|upgrade|update)\\b`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:npm|pnpm|yarn|bun|pip|pip3|pipx|uv|brew|apt|apt-get|dnf|yum|zypper|winget|choco|scoop|cargo|gem|go|snap|flatpak|port|conda|mamba|composer|dotnet\\s+tool)(?:\\.exe|\\.cmd)?\\s+(?:-\\S+\\s+)*(?:i|install|add|upgrade|update)(?=\\s|$)`, 'i'),
   new RegExp(`${BEFORE_PROGRAM}(?:(?:pacman|yay|paru)\\s+-S|code(?:\\.cmd)?\\s+--install-extension\\b)`),
   new RegExp(`${BEFORE_PROGRAM}msiexec(?:\\.exe)?\\s+(?:\\S+\\s+)*\\/i\\b`, 'i'),
   new RegExp(`${BEFORE_PROGRAM}(?:dpkg\\s+-i\\b|rpm\\s+-[iU]|installer\\s+-pkg\\b|Install-(?:Module|Package|Script)\\b|Add-AppxPackage\\b)`, 'i'),
-  // An installer started by its own name, or opened (a .dmg or .pkg on a Mac). Not a shell script: a script
-  // that calls itself install.sh is a script, and run by a shell it can do anything.
-  new RegExp(`${BEFORE_PROGRAM}(?:start\\s+(?:""\\s+)?|open\\s+|&\\s*)?["']?(?:[A-Za-z]:)?[\\w .()\\\\/~-]*(?:setup|install(?:er)?)[\\w .()-]*\\.(?:exe|msi|pkg|dmg|deb|rpm|appimage)["']?(?:\\s+\\/\\S+)*$`, 'i'),
+  // An installer started as the program itself, or opened (a .dmg or .pkg on a Mac): the first word of the part
+  // is the installer, a path with no spaces or one in quotes, followed only by its own switches. Not a shell
+  // script (one that calls itself install.sh can do anything), and not a file named as an argument of another
+  // program (`bash payload.sh setup.exe`).
+  new RegExp(`${BEFORE_PROGRAM}(?:start\\s+(?:""\\s+)?|open\\s+|&\\s*)?(?:"[^"]*[\\\\/]?[^"\\\\/]*(?:setup|install(?:er)?)[^"\\\\/]*\\.(?:exe|msi|pkg|dmg|deb|rpm|appimage)"|'[^']*[\\\\/]?[^'\\\\/]*(?:setup|install(?:er)?)[^'\\\\/]*\\.(?:exe|msi|pkg|dmg|deb|rpm|appimage)'|[^\\s"']*(?:setup|install(?:er)?)[^\\s"'\\\\/]*\\.(?:exe|msi|pkg|dmg|deb|rpm|appimage))(?:\\s+[-/]\\S+)*$`, 'i'),
 ];
 
 /** Whether a command installs something and does nothing else: every part of it installs (or only goes into a folder). */
@@ -305,19 +310,35 @@ export function commandInstalls(command: unknown): boolean {
   return parts.length > 0 && parts.every((part) => INSTALLS.some((pattern) => pattern.test(part)));
 }
 
-/** A part that changes a setting of the system by the system's own tool for it, as the program the part starts with. */
+/**
+ * A part that changes a setting of the system by the system's own tool for it, as the program the part starts
+ * with. The registry only in the user's own hive (HKCU), never the machine's; `netsh` only for the firewall
+ * (which needs words that name it, below); `setx` never (an environment variable is what every program
+ * started later runs with).
+ */
 const SETS: readonly RegExp[] = [
-  new RegExp(`${BEFORE_PROGRAM}(?:reg(?:\\.exe)?\\s+add\\b|(?:Set|New)-ItemProperty\\b|Set-(?:ExecutionPolicy|TimeZone|Culture|WinUserLanguageList|MpPreference|NetConnectionProfile|DnsClientServerAddress)\\b)`, 'i'),
-  new RegExp(`${BEFORE_PROGRAM}(?:defaults\\s+write\\b|(?:networksetup|systemsetup|pmset)\\s+-\\w|scutil\\s+--set\\b)`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:reg(?:\\.exe)?\\s+add\\s+"?(?:HKCU|HKEY_CURRENT_USER)\\\\|(?:Set|New)-ItemProperty\\b.*\\b(?:HKCU|HKEY_CURRENT_USER):|Set-(?:ExecutionPolicy|TimeZone|Culture|WinUserLanguageList|MpPreference|NetConnectionProfile|DnsClientServerAddress)\\b)`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:defaults\\s+write\\s+(?:-g\\b|-globalDomain\\b|NSGlobalDomain\\b|[\\w.-]+\\s)|(?:networksetup|systemsetup|pmset)\\s+-\\w|scutil\\s+--set\\b)`, 'i'),
   new RegExp(`${BEFORE_PROGRAM}(?:gsettings\\s+set\\b|dconf\\s+write\\b|timedatectl\\s+set-|nmcli\\b.*\\b(?:on|off|up|down|modify)\\b|xdg-settings\\s+set\\b)`, 'i'),
-  new RegExp(`${BEFORE_PROGRAM}(?:powercfg|netsh|setx)(?:\\.exe)?\\s`, 'i'),
+  new RegExp(`${BEFORE_PROGRAM}(?:powercfg(?:\\.exe)?\\s|netsh(?:\\.exe)?\\s+advfirewall\\s)`, 'i'),
 ];
+
+/**
+ * Settings that run something when they change or when the machine starts, which "turn on ..." never covers
+ * (the same places a file write there is gated as, actions/tools/file-path-policy.ts `execOnWrite`): what runs
+ * at log-on (Run, RunOnce, Winlogon, Userinit, Startup, LaunchAgents and LaunchDaemons, autostart, login
+ * items), a debugger put before a program (Image File Execution Options, SilentProcessExit), what every
+ * program loads or starts with (Environment, AppInit_DLLs, a .NET profiler, KnownDLLs), services, a program a
+ * file type or a shell opens with, the proxy everything goes through, saved Wi-Fi keys, and a desktop's
+ * commands (a default terminal, a key bound to a command).
+ */
+const RUNS_ON_CHANGE = /(?:\\(?:Run|RunOnce|RunOnceEx|RunServices|RunServicesOnce)\b|Image File Execution Options|SilentProcessExit|Winlogon|Userinit|\\Environment\b|Session Manager|AppInit_DLLs|AppCertDlls|COR_PROFILER|COR_ENABLE_PROFILING|CORECLR_PROFILER|KnownDLLs|\\Services\\|CurrentControlSet|\\Shell\\[^\\]*\\Command|\\shell\\open|Startup|Policies\\Explorer|Explorer\\Run|ProxyServer|ProxyEnable|AutoConfigURL|winhttp|\bproxy\b|wlan\s+export|key=clear|LaunchAgents|LaunchDaemons|LoginItems|LoginHook|LogoutHook|RunAtLoad|ProgramArguments|autostart|default-applications|\bexec\b|keybinding|custom-command|\.plist\b|[~/][\w./-]*\/)/i;
 
 /** Whether a command changes settings and does nothing else: every part of it sets one (or only goes into a folder). */
 export function commandSets(command: unknown): boolean {
   if (typeof command !== 'string' || command.trim() === '') return false;
   const parts = commandParts(command).filter((part) => !NOTHING_BY_ITSELF.test(part));
-  return parts.length > 0 && parts.every((part) => SETS.some((pattern) => pattern.test(part)));
+  return parts.length > 0 && parts.every((part) => SETS.some((pattern) => pattern.test(part)) && !RUNS_ON_CHANGE.test(part));
 }
 
 /**

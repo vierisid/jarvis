@@ -428,7 +428,16 @@ What holds for all of them:
     not covered. A setting that guards the machine (the firewall, the
     antivirus, the execution policy, UAC, Gatekeeper, SELinux and their kin)
     is covered only by words that name it ("turn off the firewall"), never
-    by "turn on dark mode". A send whose recipients the call names goes to
+    by "turn on dark mode". An installer is covered only as the program the
+    command starts (`setup.exe /S`), never as a file named to another
+    program (`bash payload.sh setup.exe`). A setting is covered only by the
+    tools that set one in the user's own place (`reg add HKCU\...`,
+    `defaults write`, `gsettings set`), never `setx` or `netsh` (but for the
+    firewall), and never at a place that runs something when it changes:
+    log-on entries (Run, RunOnce, Winlogon, LaunchAgents), a debugger put
+    before a program, the environment, a profiler, services, the proxy,
+    saved Wi-Fi keys, a desktop's default terminal or a key bound to a
+    command (`RUNS_ON_CHANGE`). A send whose recipients the call names goes to
     somebody his words name in the place that says who it goes to ("to
     Anna", "email Anna": `recipientSlot`), matched against the address the
     call sends to and never a name written beside it ("Anna" names
