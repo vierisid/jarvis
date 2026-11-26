@@ -37,6 +37,8 @@ function harness(rows: MailProposalRow[], options: {
   /** The page takes its time to write: the step answers when this does. */
   writeWhen?: Promise<void>;
   sent?: (boolean | null)[];
+  /** The page breaks off while Send is being pressed: the step throws. */
+  sendThrows?: boolean;
   stillWaits?: boolean | null;
   /** Read at each asking: so that a test can change the answer while a line is up. */
   stillWaitsFrom?: (boolean | null)[];
@@ -96,7 +98,7 @@ function harness(rows: MailProposalRow[], options: {
       plans.push(plan);
       const session: MailReplySession = {
         write: async () => { did.push('write'); await options.writeWhen; return options.steps?.write ?? { ok: true }; },
-        send: async () => { did.push('send'); return options.steps?.send ?? { ok: true }; },
+        send: async () => { did.push('send'); if (options.sendThrows) throw new Error('the tab went away'); return options.steps?.send ?? { ok: true }; },
         discard: async () => { did.push('discard'); return options.steps?.discard ?? { ok: true }; },
         sent: async () => { did.push('sent?'); return sent.length > 1 ? sent.shift()! : sent[0]!; },
       };
@@ -2123,6 +2125,32 @@ describe('what is written down of a reply (the list of what the notch did)', () 
     expect(entries(h)[0]).toMatchObject({ kind: 'mail_reply', outcome: 'not_done', how: 'key' });
     // Nothing that was not done is a row of what was done.
     expect(h.actions.today(0)).toEqual([]);
+  });
+
+  test('the page breaks off while Send is pressed: it may have gone, and that is the one entry', async () => {
+    const h = harness([row()], { sendThrows: true });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    expect(entries(h)).toEqual([]);
+    await h.answer('done');
+    await settle();
+    expect(h.did).toContain('send');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'mail_reply', outcome: 'unsure', seen: 'sheet', how: 'key', fuseMs: MAIL_FUSE_MS });
+  });
+
+  test('the notch is stopped after Send was pressed, between two looks: it may have gone, and that is the one entry', async () => {
+    const h = harness([row()], { sent: [false, false, false] });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('done');
+    await settle();
+    expect(entries(h)).toEqual([]);
+    h.inbox.stop();
+    await settle();
+    expect(entries(h)).toMatchObject([{ kind: 'mail_reply', outcome: 'unsure' }]);
   });
 
   describe('a reply that may have gone', () => {
