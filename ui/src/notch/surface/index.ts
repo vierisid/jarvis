@@ -177,6 +177,12 @@ export function createNotchSurface(
   let tok = 0, shownAt = 0;
   /** What `tok` was when the last thing was drawn whole. Not `tok` any more: what was scheduled for it is void. */
   let shownTok = 0;
+  /**
+   * When the line that is up runs out, for a result and a burning fuse: so
+   * that drawn again in the middle (the keys of the machine changed, the page
+   * said hello again) it goes on from where it was, and does not start again.
+   */
+  let due: { id: string; at: number } | null = null;
   let foldTimer = 0, folding = false;
   /** A look given at rest goes back to the resting face after this long. */
   let moodBack = 0;
@@ -472,6 +478,7 @@ export function createNotchSurface(
     stopFold();
     cur = null;
     line = null;
+    due = null;
     show({ body: 'rest' }, instant);
   }
 
@@ -538,27 +545,41 @@ export function createNotchSurface(
    * the screen, and the keys answering for the new one that nobody saw.
    */
   function drawLine(l: NotchLine, instant = false): void {
-    const before = { line, cur, folding };
+    const before = { line, cur, due, folding };
     try { showLine(l, instant); } catch (error) {
       console.error('[notch] a line could not be drawn', error);
       line = before.line;
       cur = before.cur;
+      due = before.due;
       if (!cur) { try { rest(true); } catch { /* nothing more can be done here */ } return; }
       // What was scheduled for the line that stays may have gone with the attempt (a draw that got as far
       // as the screen makes it void, and any attempt stops its fold): a result then stayed up for ever, and
-      // an offer never folded. Then it is drawn again as it stands. When
+      // an offer never folded. Then it is drawn again as it stands, with what is left of its time. When
       // nothing of it was touched it is left alone: drawing it again would empty a field being typed in.
       if (tok === shownTok && !before.folding) return;
       try { again(); } catch { try { rest(true); } catch { /* nothing more can be done here */ } }
     }
   }
 
-  /** Draws the line that is up again as it stands, unless it was answered. */
+  /** Draws the line that is up again as it stands, unless it was answered: with what is left of its time, not all of it. */
   function again(): void {
-    if (line && cur && !cur.done) showLine(structuredClone(line), true);
+    if (line && cur && !cur.done) showLine(structuredClone(line), true, true);
   }
 
-  function showLine(l: NotchLine, instant = false): void {
+  /**
+   * `same` says this is the line that is already up, drawn again: its time
+   * goes on from where the page has it, and does not start again.
+   */
+  function showLine(l: NotchLine, instant = false, same = false): void {
+    // What is left of its time: by the page's own count when it is the line it already shows, or else as the
+    // brain says (for a page that came up in the middle of it), or else all of it.
+    const timed = l.kind === 'say' || l.kind === 'send' ? l : null;
+    const own = same && timed && due?.id === l.id ? Math.max(0, due.at - performance.now()) : undefined;
+    const total = timed ? Math.max(0, timed.ms) : 0;
+    const left = Math.min(total, Math.max(0, own ?? timed?.left ?? total));
+    // A fuse the brain says has nothing left was not seen to burn by this page: it cannot say it ran out.
+    const seen = own !== undefined || left > 0 || total === 0;
+    due = null;
     dropKeyboard();
     line = l;
     cur = { id: l.id };
@@ -576,7 +597,8 @@ export function createNotchSurface(
       // Esc on a result is "seen": it goes, like yes.
       me.onEsc = () => { answer('done'); rest(); };
       show({ body: 'line', say: l.say, ...common }, instant);
-      later(Math.max(0, l.ms), () => { answer('done'); rest(); });
+      due = { id: l.id, at: performance.now() + left };
+      later(left, () => { answer('done'); rest(); });
       return;
     }
     if (l.kind === 'offer') {
@@ -691,8 +713,10 @@ export function createNotchSurface(
           settle();
         };
         show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
-        shape.burn(Math.max(0, l.ms));
-        later(Math.max(0, l.ms), () => {
+        if (!seen) return;
+        due = { id: l.id, at: performance.now() + left };
+        shape.burn(total, left);
+        later(left, () => {
           if (me.done) return;
           wrap.classList.remove('fusing');
           // It leaves along the edge, toward where it is going: to the side
@@ -917,7 +941,7 @@ export function createNotchSurface(
             edge.appear();
             // A line that cannot be drawn must not leave the page unborn: it then drew nothing and heard
             // nothing more until it was loaded again. It rests, and can be shown the next thing.
-            try { showLine(structuredClone(message.line), true); } catch (error) {
+            try { showLine(structuredClone(message.line), true, message.line.id === line?.id); } catch (error) {
               console.error('[notch] a line could not be drawn', error);
               try { rest(true); } catch { /* nothing more can be done here */ }
             }

@@ -4,7 +4,7 @@ import type { NotchAnswer, NotchSurfacePort } from './surface.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
 
 /** A stand-in for the sidecar manager that records what is pushed. */
-function harness() {
+function harness(now?: () => number) {
   const pushed: { to: string; message: NotchToPage }[] = [];
   const logs: string[] = [];
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
@@ -20,7 +20,7 @@ function harness() {
     onEvent(listener) { onEvent = listener; },
     onSidecarDisconnected(listener) { onGone = listener; },
   };
-  const surface = new NotchSurface(port, (line) => logs.push(line));
+  const surface = new NotchSurface(port, (line) => logs.push(line), ...(now ? [now] : []));
   return {
     surface, pushed, logs,
     say: (sidecarId: string, message: unknown) => onEvent(sidecarId, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } }),
@@ -241,5 +241,76 @@ describe('changes to the line on the notch', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(h.logs.some((line) => line.includes('did not reach the notch'))).toBe(true);
+  });
+});
+
+// Point 7 of the notch review, 26 November 2026 (docs/notch/fixes/07-page-renderer.md).
+describe('a page that comes up in the middle of a line that runs out', () => {
+  const stateLine = (h: ReturnType<typeof harness>): NotchLine | null => {
+    const last = h.pushed.at(-1)!.message;
+    return last.type === 'state' ? last.line : null;
+  };
+
+  test('is told how much of a fuse is left, so it goes on from there and does not start again', () => {
+    let t = 1000;
+    const h = harness(() => t);
+    const send: NotchLine = { id: 'f1', kind: 'send', say: ['Sending to ', { em: 'Marco' }], ms: 4000 };
+    h.surface.show(send);
+    t += 1500;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...send, left: 2500 });
+    // The line the brain keeps is as it was: what is left is worked out for each page that asks.
+    expect(h.surface.current().line).toEqual(send);
+    t += 1000;
+    h.say('laptop', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...send, left: 1500 });
+    // Past its time (the brain waits a little longer for the page's word): nothing is left, never less.
+    t += 2000;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...send, left: 0 });
+  });
+
+  test('and how much of a result is left', () => {
+    let t = 0;
+    const h = harness(() => t);
+    const result: NotchLine = { id: 'r1', kind: 'say', say: ['Sent.'], ms: 2400 };
+    h.surface.show(result);
+    t += 400.4;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...result, left: 2000 });
+  });
+
+  test('a line shown to pages that are there is shown as it is: all of its time is left', () => {
+    let t = 0;
+    const h = harness(() => t);
+    h.say('pc', { type: 'hello', v: 1 });
+    const send: NotchLine = { id: 'f1', kind: 'send', say: ['Sending'], ms: 4000 };
+    h.surface.show(send);
+    expect(h.pushed.at(-1)!.message).toEqual({ type: 'show', line: send });
+    // Shown again, its time starts again.
+    t += 3000;
+    h.surface.show(send);
+    t += 500;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...send, left: 3500 });
+  });
+
+  test('a line that does not run out by itself is told as it is', () => {
+    let t = 0;
+    const h = harness(() => t);
+    h.surface.show(offer);
+    t += 5000;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual(offer);
+  });
+
+  test('a clock that was set back does not leave more than all of it', () => {
+    let t = 5000;
+    const h = harness(() => t);
+    const send: NotchLine = { id: 'f1', kind: 'send', say: ['Sending'], ms: 4000 };
+    h.surface.show(send);
+    t = 100;
+    h.say('pc', { type: 'hello', v: 1 });
+    expect(stateLine(h)).toEqual({ ...send, left: 4000 });
   });
 });

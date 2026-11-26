@@ -120,6 +120,12 @@ interface NotchLineBase {
 export interface NotchSayLine extends NotchLineBase {
   kind: 'say';
   ms: number;
+  /**
+   * How much of `ms` is left, when the line is told to a page that comes up
+   * in the middle of it (the brain fills it in the `state` that answers a
+   * hello). Not given: all of it.
+   */
+  left?: number;
 }
 
 /**
@@ -211,6 +217,14 @@ export interface NotchWorkLine extends NotchLineBase {
 export interface NotchSendLine extends NotchLineBase {
   kind: 'send';
   ms: number;
+  /**
+   * How much of the window is left, when the line is told to a page that
+   * comes up in the middle of it: the fuse goes on from there, and does not
+   * start again. Not given: all of it. With none left the page burns nothing
+   * and says nothing ran out: a fuse it did not see burn is not one it can
+   * vouch for. Esc is still an undo.
+   */
+  left?: number;
 }
 
 /**
@@ -588,7 +602,9 @@ function readLine(value: unknown): NotchLine {
   const say = readParts(raw.say);
   let line: NotchLine;
   if (raw.kind === 'say' || raw.kind === 'send') {
-    line = { id, kind: raw.kind, say, ms: number(raw.ms) };
+    const timed: NotchSayLine | NotchSendLine = { id, kind: raw.kind, say, ms: number(raw.ms) };
+    put(timed, 'left', optNumber(raw.left));
+    line = timed;
   } else if (raw.kind === 'offer') {
     line = { id, kind: 'offer', say };
     put(line, 'yes', optText(raw.yes));

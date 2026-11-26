@@ -16,13 +16,13 @@ const blocks: NotchBlock[] = [
 
 /** Every kind of line, with everything a line can carry. */
 const lines: NotchLine[] = [
-  { id: 'say-1', kind: 'say', say: ['Sent to ', { em: 'Marco' }, '.'], ms: 2400, mood: 'happy', mark: 'check', who: 'Scout', src: 'mail', arrive: 'left', unasked: true, step: 'step 3/11' },
+  { id: 'say-1', kind: 'say', say: ['Sent to ', { em: 'Marco' }, '.'], ms: 2400, left: 900, mood: 'happy', mark: 'check', who: 'Scout', src: 'mail', arrive: 'left', unasked: true, step: 'step 3/11' },
   { id: 'offer-1', kind: 'offer', say: ['Reply to ', { em: 'Marco' }, '?'], yes: 'show', fold: 0, keys: 'talk' },
   { id: 'offer-2', kind: 'offer', say: ['Which one?'], options: ['This', 'That'], fold: 14000 },
   { id: 'sheet-1', kind: 'sheet', say: ['A draft'], blocks, yes: 'send', stay: true, no: 'back', whole: true },
   { id: 'ask-1', kind: 'ask', say: [], placeholder: 'Tell me', yes: 'ask', blocks: [], focus: true, stay: true },
   { id: 'work-1', kind: 'work', say: ['Pasting'], steps: 9, done: 2, canTalk: true },
-  { id: 'send-1', kind: 'send', say: ['Sending'], ms: 4000 },
+  { id: 'send-1', kind: 'send', say: ['Sending'], ms: 4000, left: 0 },
   { id: 'listen-1', kind: 'listen', say: [], heard: 'send the deck', over: true },
 ];
 
@@ -87,7 +87,9 @@ describe('a message from the brain, read by the page', () => {
       { type: 'show', line: { id: 'a', kind: 'say', say } },
       { type: 'show', line: { id: 'a', kind: 'say', say, ms: '100' } },
       { type: 'show', line: { id: 'a', kind: 'say', say, ms: null } },
+      { type: 'show', line: { id: 'a', kind: 'say', say, ms: 100, left: 'some' } },
       { type: 'show', line: { id: 'a', kind: 'send', say } },
+      { type: 'show', line: { id: 'a', kind: 'send', say, ms: 100, left: {} } },
       // A part of a sentence that is not one.
       { type: 'show', line: { id: 'a', kind: 'say', say: [7], ms: 100 } },
       { type: 'show', line: { id: 'a', kind: 'say', say: [null], ms: 100 } },

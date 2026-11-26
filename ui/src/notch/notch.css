@@ -50,7 +50,7 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .blob .lip { fill: none; stroke: rgba(255,255,255,.14); stroke-width: 1; }
 .blob .meas { fill: none; stroke: none; }
 .blob .burn { fill: none; stroke: var(--citron); stroke-width: 2.4; stroke-linecap: round; opacity: 0; } /* the undo window burns along the notch's own edge, toward the eyes */
-.wrap.fusing .burn { opacity: 1; animation: burn var(--fuse, 4000ms) linear forwards; }
+.wrap.fusing .burn { opacity: 1; animation: burn var(--fuse, 4000ms) linear var(--fuse-from, 0ms) forwards; }
 @keyframes burn { from { stroke-dashoffset: 0; } to { stroke-dashoffset: var(--len, 900); } }
 .notch {
   position: relative; overflow: hidden; color: var(--n-ink); width: 88px; height: 30px; border-radius: 0 0 16px 16px;
@@ -410,7 +410,7 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 /* Reduced motion. A class, not a media query, so it can also be forced on or
    off from outside (the surface sets it from the system setting by default). */
 .notch-still *, .notch-still *::before, .notch-still *::after { animation-duration: .01ms !important; animation-delay: 0ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-.notch-still .wrap.fusing .burn { animation-duration: var(--fuse, 4000ms) !important; }
+.notch-still .wrap.fusing .burn { animation-duration: var(--fuse, 4000ms) !important; animation-delay: var(--fuse-from, 0ms) !important; }
 .notch-still .mark svg { stroke-dashoffset: 0; }
 
 /* Additions for the product page, not in the prototype. */

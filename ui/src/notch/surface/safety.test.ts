@@ -1,11 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
-import type { NotchFromPage, NotchLine } from '../../../../src/notch/protocol.ts';
+import type { NotchFromPage, NotchLine, NotchToPage } from '../../../../src/notch/protocol.ts';
 import type { NotchSurface } from './index.ts';
 
-// Point 7 of the notch review, 26 November 2026: the small things that made
-// the page unsafe before it becomes a renderer. A message it cannot read must
-// not leave it dead. See docs/notch/fixes/07-page-renderer.md.
+// Point 7 of the notch review, 26 November 2026: the three small things that
+// made the page unsafe before it becomes a renderer. A message it cannot read
+// must not leave it dead; a line drawn again must not start its time again;
+// see docs/notch/fixes/07-page-renderer.md.
 let createNotchSurface: (typeof import('./index.ts'))['createNotchSurface'];
 let root: HTMLElement, surface: NotchSurface, sent: NotchFromPage[], dropped: string[];
 
@@ -52,6 +53,7 @@ function withOneSentenceLost(fn: () => void): void {
 }
 
 const undrawable: NotchLine = { id: 'q', kind: 'ask', say: [], placeholder: 'Tell me', yes: 'ask', blocks: [] };
+const otherPairs = { talk: ['ctrl', 'alt'], yes: ['meta', 'shift'] };
 const usualPairs = { talk: ['ctrl', 'meta'], yes: ['meta', 'alt'] };
 
 beforeAll(async () => {
@@ -166,5 +168,87 @@ describe('a line that is well formed and still cannot be drawn', () => {
     await wait(600);
     expect(acts()).toEqual(['o:fold']);
     expect(body()).toBe('rest');
+  });
+});
+
+describe('a line that is drawn again in the middle of its time', () => {
+  test('a fuse goes on from where it was when the keys of the machine change: it does not start again', async () => {
+    show({ id: 'f', kind: 'send', say: ['Sending to Marco'], ms: 800 });
+    await wait(500);
+    surface.setPairs(otherPairs);
+    expect(acts()).toEqual([]);
+    // 300 ms were left. Started again, it would burn until 1300.
+    await wait(500);
+    expect(acts()).toEqual(['f:done']);
+  });
+
+  test('a result is shown for what was left of its time, not all of it again', async () => {
+    show({ id: 'r', kind: 'say', say: ['Sent.'], ms: 800 });
+    await wait(500);
+    surface.setPairs(otherPairs);
+    expect(said()).toContain('Sent.');
+    await wait(500);
+    expect(acts()).toEqual(['r:done']);
+  });
+
+  test('a page that comes up in the middle of a fuse burns what the brain says is left of it', async () => {
+    fresh();
+    surface.receive({ type: 'state', count: 0, line: { id: 'f', kind: 'send', say: ['Sending'], ms: 60000, left: 150 } });
+    expect($('.wrap')?.classList.contains('fusing')).toBe(true);
+    // The fuse is drawn as far burnt as it is: 59.85 of its 60 seconds are behind it.
+    expect($('.wrap')?.style.getPropertyValue('--fuse')).toBe('60000ms');
+    expect($('.wrap')?.style.getPropertyValue('--fuse-from')).toBe('-59850ms');
+    expect(acts()).toEqual([]);
+    await wait(450);
+    expect(acts()).toEqual(['f:done']);
+  });
+
+  test('and a result for what is left of it', async () => {
+    fresh();
+    surface.receive({ type: 'state', count: 0, line: { id: 'r', kind: 'say', say: ['Sent.'], ms: 60000, left: 100 } });
+    expect(said()).toContain('Sent.');
+    await wait(400);
+    expect(acts()).toEqual(['r:done']);
+    expect(body()).toBe('rest');
+  });
+
+  test('a fuse with nothing left burns nothing and is not said to have run out: nobody saw it. Esc still takes it back', async () => {
+    fresh();
+    surface.receive({ type: 'state', count: 0, line: { id: 'f', kind: 'send', say: ['Sending'], ms: 3000, left: 0 } });
+    expect(said()).toContain('Sending');
+    expect($('.wrap')?.classList.contains('fusing')).toBe(false);
+    await wait(250);
+    expect(acts()).toEqual([]);
+    surface.key('esc');
+    expect(acts()).toEqual(['f:undo']);
+  });
+
+  test('a page that already burns that fuse and is told it again keeps its own count of what is left', async () => {
+    const line: NotchLine = { id: 'f', kind: 'send', say: ['Sending'], ms: 800 };
+    show(line);
+    await wait(500);
+    // The page said hello again (a message was lost on the way): the brain tells it the whole of it once more,
+    // and by the brain's count more is left than the page has.
+    surface.receive({ type: 'state', count: 0, line: { ...line, left: 5000 } });
+    expect(acts()).toEqual([]);
+    await wait(500);
+    expect(acts()).toEqual(['f:done']);
+  });
+
+  test('a line that is shown anew has all of its time, whatever the one before it had left', async () => {
+    show({ id: 'f', kind: 'send', say: ['Sending'], ms: 300 });
+    await wait(200);
+    show({ id: 'f', kind: 'send', say: ['Sending'], ms: 300 });
+    await wait(200);
+    expect(acts()).toEqual([]);
+    await wait(300);
+    expect(acts()).toEqual(['f:done']);
+  });
+
+  test('more than all of it cannot be left', async () => {
+    fresh();
+    surface.receive({ type: 'state', count: 0, line: { id: 'r', kind: 'say', say: ['Sent.'], ms: 100, left: 60000 } } satisfies NotchToPage);
+    await wait(400);
+    expect(acts()).toEqual(['r:done']);
   });
 });

@@ -192,7 +192,8 @@ export interface Shape {
   morphStop(): void;
   shapeFor(m: NotchMood): void;
   shapeGesture(g: NotchGesture): void;
-  burn(ms: number): void;
+  /** The fuse: it burns for `ms` in all, of which `left` are still to come (all of it when not given). */
+  burn(ms: number, left?: number): void;
   /** The mouth that takes a file: the notch is measured that much bigger while it is open. */
   setFeeding(on: boolean): void;
   /** The birth that draws the outline first: returns the length of that line. */
@@ -362,12 +363,14 @@ export function createShape(deps: ShapeDeps): Shape {
   const settled = (): BodyShape => ({ w: N.tw, h: N.th, big: false, shr: 0, sag: 0, bow: 0, lip: 0, lean: 0, wave: null });
 
   /** a true timer: the dash is exactly as long as the edge it burns along, measured at the size the notch is settling to */
-  function burn(ms: number): void {
+  function burn(ms: number, left = ms): void {
     const inner = bodyPaths(settled(), FUSE_IN, camFor(N.tw, 0)).edge;
     pMeas.setAttribute('d', inner);
     const len = Math.ceil(lengthOf(pMeas, 2 * N.th + N.tw)) + 2;
     pBurn.style.strokeDasharray = String(len);
     wrap.style.setProperty('--len', String(len)); wrap.style.setProperty('--fuse', ms + 'ms');
+    // Drawn again in the middle, it is as far burnt as it was: the part behind it is not burnt a second time.
+    wrap.style.setProperty('--fuse-from', -Math.round(Math.max(0, Math.min(ms, ms - left))) + 'ms');
     wrap.classList.add('fusing');
     pBurn.setAttribute('d', inner);
     draw(N.t);

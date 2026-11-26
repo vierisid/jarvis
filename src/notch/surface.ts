@@ -48,10 +48,14 @@ export class NotchSurface {
   private readonly signedOutListeners = new Set<(sidecarId: string) => void>();
   private readonly helloListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
+  /** When the line on the notch was shown, by `now`. */
+  private shownAt = 0;
 
+  /** `now` is a clock in ms that only goes forward: it is only ever used to tell how long a line has been up. */
   constructor(
     private readonly port: NotchSurfacePort,
     private readonly log: (line: string) => void = (line) => console.log(line),
+    private readonly now: () => number = () => performance.now(),
   ) {
     port.onEvent((sidecarId, event) => {
       if (event.event_type !== NOTCH_MESSAGE_EVENT) return;
@@ -65,6 +69,7 @@ export class NotchSurface {
   /** Puts a line on the notch, in place of whatever is there. */
   show(line: NotchLine): void {
     this.line = structuredClone(line);
+    this.shownAt = this.now();
     this.push({ type: 'show', line: this.line });
   }
 
@@ -203,7 +208,7 @@ export class NotchSurface {
         this.log(`[notch] the page speaks version ${message.v} of the messages, the brain version ${NOTCH_PROTOCOL_VERSION}`);
       }
       this.pages.add(sidecarId);
-      const state: NotchToPage = { type: 'state', line: this.line, count: this.count };
+      const state: NotchToPage = { type: 'state', line: this.lineNow(), count: this.count };
       if (this.face !== 'idle') state.face = this.face;
       if (this.where) state.where = this.where;
       if (this.eye) state.eye = true;
@@ -248,6 +253,21 @@ export class NotchSurface {
       || (line.kind === 'say' && (message.act === 'done' || message.act === 'yes'));
     if (gone) this.line = null;
     for (const listener of this.answerListeners) listener(message, sidecarId);
+  }
+
+  /**
+   * The line as a page that comes up now is told it. A result and a fuse run
+   * out by themselves: such a line says how much of its time is left, so that
+   * the page goes on from there. It used to start again from the beginning,
+   * while the script that waits for it here did not: a fuse then burnt past
+   * the time it is waited for, and the yes behind it was dropped without a word.
+   */
+  private lineNow(): NotchLine | null {
+    const line = this.line;
+    if (!line || (line.kind !== 'say' && line.kind !== 'send')) return line;
+    const total = Math.max(0, line.ms);
+    const left = Math.max(0, Math.min(total, Math.round(total - (this.now() - this.shownAt))));
+    return { ...line, left };
   }
 
   private push(message: NotchToPage, only?: string): void {
