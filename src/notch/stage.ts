@@ -258,9 +258,11 @@ export class NotchStage {
    * A send whose going out must be witnessed. `done` only when the page said
    * its window ran out; `undo` when it was taken back; `lost` when no page
    * said either (it went away in the middle). For things that must not happen
-   * on the strength of a line nobody may have seen.
+   * on the strength of a line nobody may have seen. With `blocks`, what goes
+   * out is on the notch while the fuse burns (a letter on paper), and `done`
+   * also means its end was on screen.
    */
-  async fuse(parts: NotchPart[], ms: number, extras: NotchLineExtras = {}): Promise<'done' | 'undo' | 'lost'> {
+  async fuse(parts: NotchPart[], ms: number, extras: NotchLineExtras & { blocks?: NotchBlock[] } = {}): Promise<'done' | 'undo' | 'lost'> {
     const id = this.id();
     this.put({ id, kind: 'send', say: parts, ms, ...extras });
     this.fuses++;

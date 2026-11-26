@@ -350,6 +350,8 @@ html.notch-window, html.notch-window body { margin: 0; height: 100%; overflow: h
 .paper .to b { color: var(--paper-ink); font-weight: 600; }
 .paper b { font-weight: 600; }
 .paper .live { color: var(--citron-ink); background: var(--citron); }
+/* A letter under its fuse: what was picked for it is lit, and is not a word that can be changed. */
+.going .paper p:not(.to) b { color: var(--citron-ink); background: var(--citron); border-radius: 4px; padding: 1px 4px; }
 .paper .live:hover { background: var(--citron-hi); }
 .paper .live:focus-visible { outline-color: var(--paper-ink); }
 .paper ul { margin: 0; padding: 0; list-style: none; }

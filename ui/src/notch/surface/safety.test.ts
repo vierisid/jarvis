@@ -404,3 +404,135 @@ describe('a page that is told again the line it already shows (it said hello aga
     expect(body()).toBe('rest');
   });
 });
+
+// Point 5, the owner's decision of 26 November 2026: a time picked for a reply is no longer sent
+// unseen. The letter is on the notch while its fuse burns. A send line carries it as blocks.
+describe('a letter under its fuse', () => {
+  const letter: NotchLine = {
+    id: 'slot', kind: 'send', say: ['Offering ', { em: 'Tuesday at 10:00' }, ' to Leo…'], ms: 8000,
+    blocks: [{ kind: 'paper', to: ['To ', { em: 'Leo Bianchi' }], lines: [['Hi Leo,'], [{ em: 'Tuesday at 10:00' }, ' would suit me.'], ['Sam']] }],
+  };
+  /** There is no layout here: the sheet is given a height and a length of its own. */
+  const sized = (visible: number, total: number): HTMLElement => {
+    const el = $('.sheet')!;
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => visible });
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => total });
+    return el;
+  };
+  const paper = (): string => ($('.sheet .paper')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+  test('is on the notch, whole, with the picked time lit, while the fuse burns, and then it is said to have run out', () => {
+    show(letter);
+    expect(body()).toBe('sheet');
+    expect(said()).toContain('Offering Tuesday at 10:00 to Leo');
+    expect(paper()).toBe('To Leo BianchiHi Leo,Tuesday at 10:00 would suit me.Sam');
+    // Lit, and not a word that can be changed: nothing in the letter is a button.
+    expect($('.sheet .going .paper p:not(.to) b')?.textContent).toBe('Tuesday at 10:00');
+    expect($('.sheet button')).toBeNull();
+    expect(fusing()).toBe(true);
+    expect($('.wrap')?.style.getPropertyValue('--fuse')).toBe('8000ms');
+    clock.advance(7999);
+    expect(acts()).toEqual([]);
+    // The letter is still there for as long as it can be taken back.
+    expect(paper()).toContain('would suit me.');
+    clock.advance(1);
+    expect(acts()).toEqual(['slot:done']);
+  });
+
+  test('Esc at any moment of it is an undo, once, and it is never then said to have run out', () => {
+    for (const at of [0, 400, 7999]) {
+      fresh();
+      state(null);
+      show(letter);
+      clock.advance(at);
+      surface.key('esc');
+      expect(acts()).toEqual(['slot:undo']);
+      expect(fusing()).toBe(false);
+      surface.key('esc');
+      clock.advance(20000);
+      expect(acts().filter((act) => act.startsWith('slot:'))).toEqual(['slot:undo']);
+    }
+  });
+
+  test('the yes keys and a click somewhere else on the screen answer nothing: the person goes on working while it burns', () => {
+    show(letter);
+    clock.advance(1000);
+    surface.key('yes');
+    surface.pointer(5, 600, true);
+    surface.pointer(5, 600, false);
+    expect(acts()).toEqual([]);
+    expect(fusing()).toBe(true);
+    clock.advance(7000);
+    expect(acts()).toEqual(['slot:done']);
+  });
+
+  test('a letter whose end was never on screen is not said to have run out; Esc is still an undo', () => {
+    show(letter);
+    sized(300, 900);
+    clock.advance(20000);
+    expect(acts()).toEqual([]);
+    surface.key('esc');
+    expect(acts()).toEqual(['slot:undo']);
+  });
+
+  test('scrolled to its end before the fuse is out, it was seen', () => {
+    show(letter);
+    const el = sized(300, 900);
+    clock.advance(4000);
+    el.scrollTop = 600;
+    clock.advance(4000);
+    expect(acts()).toEqual(['slot:done']);
+  });
+
+  test('told again to the page that shows it (a hello in the middle), it is not drawn again: the fuse goes on, and an undo stays an undo', () => {
+    show(letter);
+    const drawn = $('.sheet .paper');
+    clock.advance(3000);
+    state({ ...letter, left: 5000 });
+    expect($('.sheet .paper')).toBe(drawn);
+    clock.advance(4999);
+    expect(acts()).toEqual([]);
+    clock.advance(1);
+    expect(acts()).toEqual(['slot:done']);
+
+    fresh();
+    state(null);
+    show(letter);
+    surface.key('esc');
+    state({ ...letter, left: 7000 });
+    clock.advance(20000);
+    expect(acts()).toEqual(['slot:undo']);
+  });
+
+  test('a page that comes up in the middle shows the letter and burns what is left; with too little left it does not vouch for it', () => {
+    fresh();
+    state({ ...letter, left: NOTCH_FUSE_SEEN_MS });
+    expect(paper()).toContain('would suit me.');
+    expect(fusing()).toBe(true);
+    clock.advance(NOTCH_FUSE_SEEN_MS);
+    expect(acts()).toEqual(['slot:done']);
+
+    fresh();
+    state({ ...letter, left: NOTCH_FUSE_SEEN_MS - 1 });
+    expect(paper()).toContain('would suit me.');
+    expect(fusing()).toBe(false);
+    clock.advance(60000);
+    expect(acts()).toEqual([]);
+    surface.key('esc');
+    expect(acts()).toEqual(['slot:undo']);
+  });
+
+  test('a letter the page cannot read is no fuse at all: nothing is shown, nothing burns, nothing is said to run out', () => {
+    show({ ...letter, blocks: [{ kind: 'scroll', lines: [] }] } as unknown as NotchLine);
+    expect(dropped).toEqual(['show send']);
+    expect(body()).toBe('rest');
+    clock.advance(20000);
+    expect(acts().filter((act) => act.startsWith('slot:'))).toEqual([]);
+  });
+
+  test('a send with no letter is the line it always was', () => {
+    show({ id: 'f', kind: 'send', say: ['Sending'], ms: 4000 });
+    expect(body()).toBe('line');
+    expect($('.sheet .paper')).toBeNull();
+  });
+});

@@ -70,7 +70,7 @@ function harness(start = at(10)) {
     real, line, item,
     said: (): string => text(line()?.say),
     count: (): number => surface.current().count,
-    blocks: (): NotchBlock[] => { const shown = line(); return shown && 'blocks' in shown ? shown.blocks : []; },
+    blocks: (): NotchBlock[] => { const shown = line(); return shown && 'blocks' in shown ? shown.blocks ?? [] : []; },
     /** The desktop app's word about the person's hands. */
     async hands(still: boolean): Promise<void> { send(NOTCH_WHERE_EVENT, { app: 'code', name: 'Code', title: 'x', look: '', still, never: [] }); await settle(); },
     async around(payload: Record<string, unknown>): Promise<void> { send(NOTCH_AROUND_EVENT, payload); await settle(); },

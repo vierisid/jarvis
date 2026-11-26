@@ -23,6 +23,8 @@ const lines: NotchLine[] = [
   { id: 'ask-1', kind: 'ask', say: [], placeholder: 'Tell me', yes: 'ask', blocks: [], focus: true, stay: true },
   { id: 'work-1', kind: 'work', say: ['Pasting'], steps: 9, done: 2, canTalk: true },
   { id: 'send-1', kind: 'send', say: ['Sending'], ms: 4000, left: 0 },
+  // A letter under its fuse: what goes out is on the notch while it burns.
+  { id: 'send-2', kind: 'send', say: ['Offering ', { em: 'Tuesday at 10:00' }, ' to Leo'], ms: 8000, left: 5000, blocks: [{ kind: 'paper', to: ['To ', { em: 'Leo' }], lines: [['Hi Leo,'], [{ em: 'Tuesday at 10:00' }, ' would suit me.']] }] },
   { id: 'listen-1', kind: 'listen', say: [], heard: 'send the deck', over: true },
 ];
 
@@ -90,6 +92,10 @@ describe('a message from the brain, read by the page', () => {
       { type: 'show', line: { id: 'a', kind: 'say', say, ms: 100, left: 'some' } },
       { type: 'show', line: { id: 'a', kind: 'send', say } },
       { type: 'show', line: { id: 'a', kind: 'send', say, ms: 100, left: {} } },
+      // A letter under a fuse that cannot be read whole is no fuse at all: the page must not burn it over nothing.
+      { type: 'show', line: { id: 'a', kind: 'send', say, ms: 100, blocks: 'a letter' } },
+      { type: 'show', line: { id: 'a', kind: 'send', say, ms: 100, blocks: [{ kind: 'scroll', lines: [] }] } },
+      { type: 'show', line: { id: 'a', kind: 'send', say, ms: 100, blocks: [{ kind: 'paper', lines: 'Hi' }] } },
       // A part of a sentence that is not one.
       { type: 'show', line: { id: 'a', kind: 'say', say: [7], ms: 100 } },
       { type: 'show', line: { id: 'a', kind: 'say', say: [null], ms: 100 } },

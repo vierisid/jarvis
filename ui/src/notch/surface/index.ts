@@ -711,6 +711,8 @@ export function createNotchSurface(
       return;
     }
     if (l.kind === 'send') {
+      // What goes out, on paper under the sentence, for as long as the fuse burns.
+      const going = l.blocks?.length ? l.blocks : null;
       const go = (): void => {
         if (cur !== me) return;
         me.onEsc = () => {
@@ -720,13 +722,23 @@ export function createNotchSurface(
           answer('undo');
           settle();
         };
-        show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
+        if (going) {
+          sheetSeen = false;
+          const paper = blocksOf(going);
+          paper.classList.add('going');
+          show({ body: 'sheet', say: l.say, sheet: paper, stag: !same, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
+        } else {
+          show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
+        }
         if (!seen) return;
         due = { id: l.id, at: clock.now() + left };
         shape.burn(total, left);
         later(left, () => {
           if (me.done) return;
           wrap.classList.remove('fusing');
+          // A letter whose end was never on the screen was not seen to go: nothing is said to have run
+          // out, the brain counts the fuse as lost, and the yes behind it sends nothing. Esc is still an undo.
+          if (going && !sheetSeen && !sheetAtEnd()) return;
           // It leaves along the edge, toward where it is going: to the side
           // its app is on, and to the right when it goes to a person.
           edge.depart(leftOf(l.src));
@@ -734,8 +746,8 @@ export function createNotchSurface(
           settle();
         });
       };
-      // A sheet of paper folds away before it goes.
-      const paper = sheetEl.querySelector('.paper');
+      // A sheet of paper folds away before it goes. Not for a letter that stays up while its fuse burns.
+      const paper = going ? null : sheetEl.querySelector('.paper');
       if (paper && !reduce && !instant) {
         paper.classList.add('fold');
         timers.after(190, go);
@@ -1183,6 +1195,9 @@ export function createNotchSurface(
     // and one with a yes (it came seconds after it was asked for, and the person's next click in their own
     // app closed it and silently turned it down).
     if (line?.kind === 'sheet' && (line.stay || line.yes)) return;
+    // Nor is a letter under its fuse taken back by one: the person goes on with their own work while
+    // it burns, and only Esc is an undo.
+    if (line?.kind === 'send') return;
     // Nor is a question about a file that was dropped: the press that picks up a second file to drop
     // beside it is a click away, and the first file was forgotten.
     if (line?.kind === 'ask' && line.blocks.some((block) => block.kind === 'file')) return;

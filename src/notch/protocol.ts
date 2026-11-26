@@ -225,6 +225,14 @@ export interface NotchSendLine extends NotchLineBase {
    * vouch for. Esc is still an undo.
    */
   left?: number;
+  /**
+   * What is going out, shown under the sentence for as long as the fuse
+   * burns: a letter on paper. The page says the fuse ran out only when the
+   * end of it has been on screen: what nobody could read to its end was not
+   * seen to go. Nothing in it is answered: a click away from it is not an
+   * undo, and only Esc is.
+   */
+  blocks?: NotchBlock[];
 }
 
 /**
@@ -615,6 +623,8 @@ function readLine(value: unknown): NotchLine {
   if (raw.kind === 'say' || raw.kind === 'send') {
     const timed: NotchSayLine | NotchSendLine = { id, kind: raw.kind, say, ms: number(raw.ms) };
     put(timed, 'left', optNumber(raw.left));
+    // What goes out under the fuse is read as strictly as a sheet: a paper that cannot be read is no fuse at all.
+    if (timed.kind === 'send' && !absent(raw.blocks)) timed.blocks = readBlocks(raw.blocks);
     line = timed;
   } else if (raw.kind === 'offer') {
     line = { id, kind: 'offer', say };
