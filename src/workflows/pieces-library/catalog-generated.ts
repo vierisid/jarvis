@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-11-15";
+export const GENERATED_AT = "2026-11-22";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -112,8 +112,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "ai",
     npmPackage: "@activepieces/piece-ai",
-    versionRange: "^0.15.4",
-    latestVersion: "0.15.4",
+    versionRange: "^0.16.0",
+    latestVersion: "0.16.0",
     displayName: "Ai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/ai",
@@ -352,8 +352,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "apify",
     npmPackage: "@activepieces/piece-apify",
-    versionRange: "^0.4.2",
-    latestVersion: "0.4.2",
+    versionRange: "^0.4.3",
+    latestVersion: "0.4.3",
     displayName: "Apify",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/apify",
@@ -1622,8 +1622,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "discord",
     npmPackage: "@activepieces/piece-discord",
-    versionRange: "^0.8.5",
-    latestVersion: "0.8.5",
+    versionRange: "^0.9.0",
+    latestVersion: "0.9.0",
     displayName: "Discord",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/discord",
@@ -1632,8 +1632,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "discourse",
     npmPackage: "@activepieces/piece-discourse",
-    versionRange: "^0.3.1",
-    latestVersion: "0.3.1",
+    versionRange: "^0.3.4",
+    latestVersion: "0.3.4",
     displayName: "Discourse",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/discourse",
@@ -1702,8 +1702,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "drip",
     npmPackage: "@activepieces/piece-drip",
-    versionRange: "^0.6.1",
-    latestVersion: "0.6.1",
+    versionRange: "^0.6.2",
+    latestVersion: "0.6.2",
     displayName: "Drip",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/drip",
@@ -2412,8 +2412,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-cloud-storage",
     npmPackage: "@activepieces/piece-google-cloud-storage",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Google Cloud Storage",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-cloud-storage",
@@ -2442,8 +2442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-drive",
     npmPackage: "@activepieces/piece-google-drive",
-    versionRange: "^0.13.1",
-    latestVersion: "0.13.1",
+    versionRange: "^0.14.1",
+    latestVersion: "0.14.1",
     displayName: "Google Drive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-drive",
@@ -2582,8 +2582,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "gravityforms",
     npmPackage: "@activepieces/piece-gravityforms",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.2.1",
+    latestVersion: "0.2.1",
     displayName: "Gravityforms",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/gravityforms",
@@ -2752,8 +2752,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "housecall-pro",
     npmPackage: "@activepieces/piece-housecall-pro",
-    versionRange: "^0.2.1",
-    latestVersion: "0.2.1",
+    versionRange: "^0.2.3",
+    latestVersion: "0.2.3",
     displayName: "Housecall Pro",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/housecall-pro",
@@ -2842,8 +2842,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "imap",
     npmPackage: "@activepieces/piece-imap",
-    versionRange: "^0.6.5",
-    latestVersion: "0.6.5",
+    versionRange: "^0.6.6",
+    latestVersion: "0.6.6",
     displayName: "Imap",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/imap",
@@ -2852,8 +2852,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "influencers-club",
     npmPackage: "@activepieces/piece-influencers-club",
-    versionRange: "^0.1.0",
-    latestVersion: "0.1.0",
+    versionRange: "^0.1.1",
+    latestVersion: "0.1.1",
     displayName: "Influencers Club",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/influencers-club",
@@ -3202,8 +3202,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "lemlist",
     npmPackage: "@activepieces/piece-lemlist",
-    versionRange: "^0.2.1",
-    latestVersion: "0.2.1",
+    versionRange: "^0.2.2",
+    latestVersion: "0.2.2",
     displayName: "Lemlist",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/lemlist",
@@ -3222,8 +3222,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "lets-calendar",
     npmPackage: "@activepieces/piece-lets-calendar",
-    versionRange: "^0.1.1",
-    latestVersion: "0.1.1",
+    versionRange: "^0.1.3",
+    latestVersion: "0.1.3",
     displayName: "Lets Calendar",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/lets-calendar",
@@ -3272,8 +3272,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "linear",
     npmPackage: "@activepieces/piece-linear",
-    versionRange: "^0.9.1",
-    latestVersion: "0.9.1",
+    versionRange: "^0.9.3",
+    latestVersion: "0.9.3",
     displayName: "Linear",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/linear",
@@ -3722,8 +3722,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-dynamics-crm",
     npmPackage: "@activepieces/piece-microsoft-dynamics-crm",
-    versionRange: "^0.4.1",
-    latestVersion: "0.4.1",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Microsoft Dynamics Crm",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-dynamics-crm",
@@ -3732,8 +3732,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-excel-365",
     npmPackage: "@activepieces/piece-microsoft-excel-365",
-    versionRange: "^0.8.5",
-    latestVersion: "0.8.5",
+    versionRange: "^0.9.0",
+    latestVersion: "0.9.0",
     displayName: "Microsoft Excel 365",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-excel-365",
@@ -3762,8 +3762,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-outlook",
     npmPackage: "@activepieces/piece-microsoft-outlook",
-    versionRange: "^0.7.7",
-    latestVersion: "0.7.7",
+    versionRange: "^0.7.8",
+    latestVersion: "0.7.8",
     displayName: "Microsoft Outlook",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-outlook",
@@ -3812,8 +3812,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-todo",
     npmPackage: "@activepieces/piece-microsoft-todo",
-    versionRange: "^0.5.3",
-    latestVersion: "0.5.3",
+    versionRange: "^0.5.4",
+    latestVersion: "0.5.4",
     displayName: "Microsoft Todo",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-todo",
@@ -4002,8 +4002,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "mysendingbox",
     npmPackage: "@activepieces/piece-mysendingbox",
-    versionRange: "^0.1.0",
-    latestVersion: "0.1.0",
+    versionRange: "^0.1.2",
+    latestVersion: "0.1.2",
     displayName: "Mysendingbox",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/mysendingbox",
@@ -4442,8 +4442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "phantombuster",
     npmPackage: "@activepieces/piece-phantombuster",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.2.1",
+    latestVersion: "0.2.1",
     displayName: "Phantombuster",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/phantombuster",
@@ -4772,8 +4772,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "rabbitmq",
     npmPackage: "@activepieces/piece-rabbitmq",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.2.2",
+    latestVersion: "0.2.2",
     displayName: "Rabbitmq",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/rabbitmq",
@@ -5162,8 +5162,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "sendpulse",
     npmPackage: "@activepieces/piece-sendpulse",
-    versionRange: "^0.2.2",
-    latestVersion: "0.2.2",
+    versionRange: "^0.2.3",
+    latestVersion: "0.2.3",
     displayName: "Sendpulse",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/sendpulse",
@@ -5352,8 +5352,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "slack",
     npmPackage: "@activepieces/piece-slack",
-    versionRange: "^0.23.2",
-    latestVersion: "0.23.2",
+    versionRange: "^0.23.3",
+    latestVersion: "0.23.3",
     displayName: "Slack",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/slack",
@@ -5462,8 +5462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "softr",
     npmPackage: "@activepieces/piece-softr",
-    versionRange: "^0.3.1",
-    latestVersion: "0.3.1",
+    versionRange: "^0.3.2",
+    latestVersion: "0.3.2",
     displayName: "Softr",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/softr",
@@ -6562,8 +6562,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "zoho-mail",
     npmPackage: "@activepieces/piece-zoho-mail",
-    versionRange: "^0.2.3",
-    latestVersion: "0.2.3",
+    versionRange: "^0.2.4",
+    latestVersion: "0.2.4",
     displayName: "Zoho Mail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/zoho-mail",

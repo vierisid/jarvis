@@ -34,7 +34,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "discord": {
-    version: "0.8.5",
+    version: "0.9.0",
     actions: [
       {"name":"add_role_to_member","classification":"WRITE","props":["guild_id","role_id","user_id"]},
       {"name":"ban_guild_member","classification":"DESTRUCTIVE","props":["ban_reason","guild_id","user_id"]},
@@ -195,7 +195,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "google-drive": {
-    version: "0.13.1",
+    version: "0.14.1",
     actions: [
       {"name":"create_new_gdrive_file","classification":"WRITE","props":["fileName","fileType","include_team_drives","parentFolder","text"]},
       {"name":"create_new_gdrive_folder","classification":"WRITE","props":["folderName","include_team_drives","parentFolder"]},
