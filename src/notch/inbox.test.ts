@@ -996,3 +996,62 @@ describe('a hold that lets the person\'s own things through does not keep them f
   });
 });
 
+describe('stopped (the brain is going down)', () => {
+  /** An item that sends something when its window has run out, as a prepared reply does. */
+  const sending = (sent: string[]): NotchItem => ({
+    id: 'reply', subject: 'reply', class: 'person', speaks: true,
+    title: () => ['A reply waits'],
+    async play(stage: NotchStage): Promise<NotchItemEnd> {
+      const answer = await stage.offer(['Send it?'], 'send');
+      if (answer.act !== 'yes') return 'waits';
+      const how = await stage.fuse(['Sending'], 8000);
+      if (how !== 'done') return 'waits';
+      sent.push('reply');
+      return 'settled';
+    },
+  });
+
+  test('stop cuts a burning fuse: the line leaves and nothing is sent, then or later', async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.inbox.add(sending(sent));
+    await settle();
+    await h.answer('yes');
+    const fuse = h.line();
+    expect(fuse?.kind).toBe('send');
+    h.inbox.stop();
+    await settle();
+    expect(h.line()).toBeNull();
+    // The window would have run out by now, and a page that says so changes nothing.
+    await h.advance(20_000);
+    h.fromPage({ type: 'answer', id: fuse!.id, act: 'done' });
+    await settle();
+    expect(sent).toEqual([]);
+    expect(h.logs.filter((line) => line.includes('failed'))).toEqual([]);
+  });
+
+  test('without the stop, the same fuse sends when its window has run out', async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.inbox.add(sending(sent));
+    await settle();
+    await h.answer('yes');
+    await h.answer('done');
+    expect(sent).toEqual(['reply']);
+  });
+
+  test('after stop nothing is taken, shown, opened or played', async () => {
+    const h = harness({ home: async (stage) => { await stage.say(['Home'], 1000); } });
+    h.inbox.stop();
+    h.inbox.add(item('late'));
+    await settle();
+    expect(h.line()).toBeNull();
+    expect(h.count()).toBe(0);
+    expect(h.inbox.has('late')).toBe(false);
+    await h.open();
+    expect(h.line()).toBeNull();
+    expect(h.inbox.present('more', async (stage) => { await stage.say(['More.'], 1000); })).toBe(false);
+    expect(h.inbox.own(() => h.inbox.present('own', async (stage) => { await stage.say(['Own.'], 1000); }))).toBe(false);
+  });
+});
+

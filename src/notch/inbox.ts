@@ -162,6 +162,8 @@ export class NotchInbox {
   private readonly now: () => number;
   /** What waits for the notch to be free (`after`). */
   private afterwards: { run: () => void; at: number }[] = [];
+  /** The notch is being taken away (`stop`): nothing is shown or played any more. */
+  private stopped = false;
 
   constructor(private readonly surface: NotchSurface, private readonly options: NotchInboxOptions = {}) {
     this.clock = options.clock ?? realNotchClock;
@@ -177,6 +179,7 @@ export class NotchInbox {
    * was on the notch, the new one takes its turn there.
    */
   add(item: NotchItem): void {
+    if (this.stopped) return;
     const at = this.entries.findIndex((entry) => entry.item.subject === item.subject || entry.item.id === item.id);
     let entry: Entry;
     let wasPlaying: Playing | null = null;
@@ -254,6 +257,21 @@ export class NotchInbox {
    */
   calmed(): void {
     if (this.free() && this.entries.some((entry) => entry.missed)) this.cameUp();
+  }
+
+  /**
+   * The brain is going down, or the notch could not be made whole. What is on
+   * the notch ends where it is, and its line leaves: a script in the middle of
+   * a wait fails there (./stage.ts), so a yes whose window is still running
+   * sends nothing. A fuse nobody saw burn out decides nothing. From here on
+   * nothing is taken, shown or played. What waited is not lost by this: it
+   * lives where it came from, and a brain that starts finds it again.
+   */
+  stop(): void {
+    if (this.stopped) return;
+    this.halt();
+    this.stopped = true;
+    this.afterwards = [];
   }
 
   /** What a tap on the resting notch does: for a line that offers to show what waits. */
@@ -382,7 +400,7 @@ export class NotchInbox {
    * call, a stop): only the line that belongs to the hold itself (`held`).
    */
   present(name: string, script: (stage: NotchStage) => Promise<void>, how: { held?: boolean } = {}): boolean {
-    if (this.playing || this.options.busy?.() || this.surface.current().line) return false;
+    if (this.stopped || this.playing || this.options.busy?.() || this.surface.current().line) return false;
     // Held: only the hold's own line, and, under a hold that lets the person's own things through, what they
     // themselves set off (`own`).
     if (this.holds.size > 0 && how.held !== true && !(this.owning > 0 && !this.hardHeld())) return false;
@@ -403,7 +421,7 @@ export class NotchInbox {
    */
   replay(id: string, reads: string, answers: readonly NotchSaid[]): boolean {
     const entry = this.entries.find((one) => one.item.id === id);
-    if (!entry || this.playing || this.options.busy?.() || this.surface.listening() === 0) return false;
+    if (this.stopped || !entry || this.playing || this.options.busy?.() || this.surface.listening() === 0) return false;
     // Under a hold that lets the person's own things through (a call that is not listened to), this is one of them.
     for (const reason of this.holds) if (!this.soft.has(reason)) return false;
     this.start(entry, { unasked: false }, null, { reads, answers });
@@ -454,6 +472,7 @@ export class NotchInbox {
   }
 
   private run(playing: Playing, script: (stage: NotchStage) => Promise<NotchItemEnd | 'gone'>): void {
+    if (this.stopped) return;
     this.playing = playing;
     this.pushCount();
     script(playing.stage).then(
@@ -563,7 +582,7 @@ export class NotchInbox {
   }
 
   private opened(): void {
-    if (this.options.busy?.()) return;
+    if (this.stopped || this.options.busy?.()) return;
     // A tap while the round's last word is still up is a tap on the resting notch: it does not have to be waited out.
     if (this.playing?.last) this.halt();
     if (this.playing) { this.playing.stage.wasOpened(); return; }

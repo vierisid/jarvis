@@ -995,3 +995,148 @@ describe('talking about the line that is up, put together', () => {
   });
 });
 
+describe('a notch that fails does not take the brain with it, and stop stops it (fix 02, step 0)', () => {
+  type Started = { fn: () => void; cleared: boolean; handle: unknown };
+
+  /** Every interval that is started while `run` runs: what it calls, and whether it was cleared since. None runs by the clock. */
+  function clocks<T>(run: () => T): { out: T | null; failed: Error | null; started: Started[] } {
+    const realSet = globalThis.setInterval;
+    const realClear = globalThis.clearInterval;
+    const started: Started[] = [];
+    globalThis.setInterval = ((fn: () => void) => {
+      const one: Started = { fn, cleared: false, handle: null };
+      one.handle = { unref() {} };
+      started.push(one);
+      return one.handle;
+    }) as unknown as typeof setInterval;
+    // Stays in place for the rest of the test file: a handle made above is only known here.
+    globalThis.clearInterval = ((handle: unknown) => {
+      const one = started.find((each) => each.handle === handle);
+      if (one) one.cleared = true; else realClear(handle as never);
+    }) as typeof clearInterval;
+    try {
+      return { out: run(), failed: null, started };
+    } catch (error) {
+      return { out: null, failed: error as Error, started };
+    } finally {
+      globalThis.setInterval = realSet;
+    }
+  }
+
+  const page = () => {
+    let onPage: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
+    const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
+    const fromPage = (message: unknown): void => onPage('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+    fromPage({ type: 'hello', v: 1 });
+    return { surface, fromPage };
+  };
+
+  const jobsDeps = () => ({
+    db: getDb(),
+    hands: { act: async () => ({ done: true }) },
+    watchPort: { onEvent() {} },
+    hold: () => {},
+    teach: {
+      recorder: { async start() { return { ok: true }; }, async stop() { return []; }, onStep() { return () => {}; } },
+      save: () => ({ ok: true, skill: 's', steps: 0, notes: [], apps: [] }),
+      describe: async () => '',
+      forget() {},
+      effect: () => ({ pays: false, deletes: false, missing: false }),
+      runSkill: async () => ({ end: { how: 'done' }, next: 0 }),
+    },
+  }) as never;
+
+  test('a clock of the notch that throws says so in the log and throws nothing: the brain is not ended by it', () => {
+    const { surface } = page();
+    const state = { broken: false };
+    const logs: string[] = [];
+    const boom = (what: string): never => { throw new Error(`${what} is broken`); };
+    // The database of the calls, which stops answering.
+    const db = getDb();
+    const callsDb = new Proxy(db, { get(target, key) {
+      if (state.broken) boom('the database');
+      const value = Reflect.get(target, key) as unknown;
+      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
+    } });
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      emergency: { getState: () => (state.broken ? boom('the pause') : 'normal'), pause() {}, resume() {}, subscribe() { return () => {}; } } as never,
+      asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      jobs: jobsDeps(),
+      questions: { pending: () => (state.broken ? boom('the questions') : []), get: () => null, answer: () => ({ status: 200 }) },
+      openFailures: () => (state.broken ? boom('the failures') : []),
+      onTaskEnded: () => (state.broken ? boom('the task manager') : false),
+      day: { db, around: { onEvent() {}, onSidecarDisconnected() {} } },
+      calls: { db: callsDb, port: { onEvent() {}, onSidecarDisconnected() {} }, listen: async () => ({ listening: false }), stt: () => null, think: async () => '' } as never,
+      lookMs: 3_600_000, log: (line) => logs.push(line),
+    }));
+    expect(made.failed).toBeNull();
+    live = made.out;
+    state.broken = true;
+    const thrown: string[] = [];
+    for (const one of made.started) {
+      try { one.fn(); } catch (error) { thrown.push((error as Error).message); }
+    }
+    state.broken = false;
+    expect(thrown).toEqual([]);
+    // Each one that had nothing around it says what failed.
+    for (const what of ['the clock of the shown jobs', 'the clock of the day', 'clearing old calls', 'asking to hear the tasks end']) {
+      expect(logs.filter((line) => line.startsWith(`[notch] ${what} failed: `))).toHaveLength(1);
+    }
+  });
+
+  test('stop clears every clock, takes the line off the notch, and nothing comes up after it', async () => {
+    const { surface, fromPage } = page();
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      jobs: jobsDeps(),
+      questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) },
+      onTaskEnded: () => false,
+      day: { db: getDb(), around: { onEvent() {}, onSidecarDisconnected() {} } },
+      lookMs: 3_600_000, log: () => {},
+    }));
+    expect(made.failed).toBeNull();
+    const real = made.out!;
+    live = real;
+    expect(made.started.length).toBeGreaterThanOrEqual(6);
+    // Home is up: a line is on the notch.
+    fromPage({ type: 'open' });
+    await settle();
+    expect(surface.current().line?.kind).toBe('ask');
+    real.stop();
+    await settle();
+    expect(made.started.filter((one) => !one.cleared)).toEqual([]);
+    expect(surface.current().line).toBeNull();
+    // A tap on a notch that was stopped opens nothing, and nothing new is taken.
+    fromPage({ type: 'open' });
+    await settle();
+    expect(surface.current().line).toBeNull();
+    expect(real.inbox.present('late', async (stage) => { await stage.say(['Late.'], 1000); })).toBe(false);
+  });
+
+  test('when a part cannot be made, the throw goes on and what was made before it is stopped', async () => {
+    const { surface, fromPage } = page();
+    const logs: string[] = [];
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      asks: { db: getDb(), turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null },
+      jobs: jobsDeps(),
+      questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) },
+      // The mail layer is made after the jobs, the asks and the questions, whose clocks are running by then.
+      mail: { get db(): never { throw new Error('no such table: notch_mail'); } } as never,
+      lookMs: 3_600_000, log: (line) => logs.push(line),
+    }));
+    expect(made.out).toBeNull();
+    expect(made.failed?.message).toBe('no such table: notch_mail');
+    expect(made.started.length).toBeGreaterThan(0);
+    expect(made.started.filter((one) => !one.cleared)).toEqual([]);
+    // A part that was never made is not a part that failed to stop.
+    expect(logs.filter((line) => line.includes('did not stop'))).toEqual([]);
+    // And the half of a notch that is left answers nothing.
+    fromPage({ type: 'open' });
+    await settle();
+    expect(surface.current().line).toBeNull();
+  });
+});
+

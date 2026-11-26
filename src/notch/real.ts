@@ -330,8 +330,33 @@ export interface NotchReal {
   stop(): void;
 }
 
+/**
+ * Puts the real things on the notch. When a part cannot be made, what was made
+ * before it is stopped again and the throw goes on to whoever asked: nothing
+ * is left looking at a window or a mailbox for a notch that is not there.
+ */
 export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): NotchReal {
+  const built: { stop: (() => void) | null } = { stop: null };
+  try {
+    return makeNotchReal(surface, deps, built);
+  } catch (error) {
+    built.stop?.();
+    throw error;
+  }
+}
+
+function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop: (() => void) | null }): NotchReal {
   const log = deps.log ?? ((line: string) => console.log(line));
+  // From here on there is something to stop, if the making fails further down.
+  built.stop = stop;
+  /**
+   * What a clock runs. A look that fails is said in the log and is tried again
+   * at the next one: a throw out of a timer is an uncaught exception, and that
+   * ends the brain.
+   */
+  const guarded = (what: string, run: () => void) => (): void => {
+    try { run(); } catch (error) { log(`[notch] ${what} failed: ${error instanceof Error ? error.message : String(error)}`); }
+  };
   // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
   let mail: NotchMailLayer | null = null;
   // Made after the inbox they play on; Today lists what they did.
@@ -458,7 +483,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     given.watch?.();
     if (!given.noClock) {
       const learned = teach;
-      const every = setInterval(() => learned.tick(), 30_000);
+      const every = setInterval(guarded('the clock of the shown jobs', () => learned.tick()), 30_000);
       every.unref?.();
       jobTimers.push(every);
     }
@@ -676,7 +701,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     ? attachNotchQuestions(inbox, { ...deps.questions, openDashboard: deps.openDashboard, log })
     : null;
   questions?.sync();
-  const questionTimer = questions ? setInterval(() => questions.sync(), NOTCH_QUESTION_LOOK_MS) : null;
+  const questionTimer = questions ? setInterval(guarded('looking for questions', () => questions.sync()), NOTCH_QUESTION_LOOK_MS) : null;
   questionTimer?.unref?.();
   if (deps.mail) {
     const emergency = deps.emergency;
@@ -732,7 +757,7 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       });
       calls = kept;
       kept.sweep();
-      if (!deps.calls.noClock) { callTimer = setInterval(() => kept.sweep(), 3_600_000); callTimer.unref?.(); }
+      if (!deps.calls.noClock) { callTimer = setInterval(guarded('clearing old calls', () => kept.sweep()), 3_600_000); callTimer.unref?.(); }
     }
     if (deps.day.around) {
       around = attachNotchAround(surface, inbox, deps.day.around, {
@@ -783,13 +808,13 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
       // for the quiet hours to end. Every five minutes: the calendar itself, so that a meeting made a
       // quarter of an hour ahead is still said ten minutes before.
       let ticks = 0;
-      const every = setInterval(() => {
+      const every = setInterval(guarded('the clock of the day', () => {
         ticks++;
         if (asleep()) return;
         meetings?.tick();
         if (ticks % 2 === 0) { theDay.tick(); inbox.calmed(); }
-        if (ticks % 10 === 2) void meetings?.look();
-      }, 30_000);
+        if (ticks % 10 === 2) void meetings?.look().catch((error) => log(`[notch] the calendar could not be looked at: ${error instanceof Error ? error.message : String(error)}`));
+      }), 30_000);
       every.unref?.();
       dayTimers.push(every);
     }
@@ -828,13 +853,15 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     paused: deps.emergency ? () => deps.emergency!.getState() !== 'normal' : undefined,
   });
   news.sync();
-  const failureTimer = setInterval(() => news.sync(), NOTCH_FAILURE_LOOK_MS);
+  const failureTimer = setInterval(guarded('looking for failures', () => news.sync()), NOTCH_FAILURE_LOOK_MS);
   failureTimer.unref?.();
   // The task manager is made later in the daemon's start: ask until it is there.
   let taskTries = 0;
-  const taskTimer = deps.onTaskEnded ? setInterval(() => {
-    if (deps.onTaskEnded!(news.taskEnded) || ++taskTries > 120) clearInterval(taskTimer!);
-  }, 500) : null;
+  const taskTimer = deps.onTaskEnded ? setInterval(guarded('asking to hear the tasks end', () => {
+    // Counted first: one that keeps failing is given up like one that is never there.
+    if (++taskTries > 120) clearInterval(taskTimer!);
+    if (deps.onTaskEnded!(news.taskEnded)) clearInterval(taskTimer!);
+  }), 500) : null;
   taskTimer?.unref?.();
   const recordFixtureFailure = deps.recordFixtureFailure;
   const fixtures = createNotchFixtures({
@@ -893,34 +920,55 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
     showing: () => surface.listening() > 0,
-    stop: () => {
-      clearInterval(timer); clearInterval(failureTimer);
-      if (taskTimer) clearInterval(taskTimer);
-      if (questionTimer) clearInterval(questionTimer);
-      stopPromises(); stopPause();
-      asks?.stop();
-      people?.stop();
-      dayOne?.stop();
-      lookAt?.stop();
-      drop?.stop();
-      where?.stop();
-      mail?.stop();
-      presence?.stop();
-      around?.stop();
-      jobs?.stop();
-      catcher?.stop();
-      teach?.stop();
-      put?.stop();
-      standing?.stop();
-      if (standingTimer) clearInterval(standingTimer);
-      if (callTimer) clearInterval(callTimer);
-      calls?.stop();
-      if (noticeTimer) clearInterval(noticeTimer);
-      notice?.stop();
-      agents?.stop();
-      if (agentsTimer) clearInterval(agentsTimer);
-      for (const timer of jobTimers) clearInterval(timer);
-      for (const timer of dayTimers) clearInterval(timer);
-    },
+    stop,
   };
+
+  /**
+   * Stops looking, and takes the notch from whatever has it. Each part by
+   * itself: one that fails to stop does not keep the others going, and one
+   * that was not made yet when the making failed has nothing to stop.
+   */
+  function stop(): void {
+    const steps: (() => void)[] = [
+      // The clocks first, so that nothing new is started while the rest is stopped.
+      () => clearInterval(timer), () => clearInterval(failureTimer),
+      () => { if (taskTimer) clearInterval(taskTimer); },
+      () => { if (questionTimer) clearInterval(questionTimer); },
+      () => { if (standingTimer) clearInterval(standingTimer); },
+      () => { if (callTimer) clearInterval(callTimer); },
+      () => { if (noticeTimer) clearInterval(noticeTimer); },
+      () => { if (agentsTimer) clearInterval(agentsTimer); },
+      () => { for (const one of jobTimers) clearInterval(one); },
+      () => { for (const one of dayTimers) clearInterval(one); },
+      // What is on the notch ends where it is: a yes whose window is still running sends nothing.
+      () => inbox.stop(),
+      () => stopPromises(), () => stopPause(),
+      () => asks?.stop(),
+      () => people?.stop(),
+      () => dayOne?.stop(),
+      () => lookAt?.stop(),
+      () => drop?.stop(),
+      () => where?.stop(),
+      () => mail?.stop(),
+      () => presence?.stop(),
+      () => around?.stop(),
+      () => jobs?.stop(),
+      () => catcher?.stop(),
+      () => teach?.stop(),
+      () => put?.stop(),
+      () => standing?.stop(),
+      () => calls?.stop(),
+      () => notice?.stop(),
+      () => agents?.stop(),
+    ];
+    for (const step of steps) {
+      try {
+        step();
+      } catch (error) {
+        // A part the making had not reached yet is not there to be stopped: that is no failure.
+        if (error instanceof ReferenceError) continue;
+        log(`[notch] a part of the notch did not stop: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
 }
