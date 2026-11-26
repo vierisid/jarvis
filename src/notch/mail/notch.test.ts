@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { attachNotchActions } from '../actions.ts';
 import { NotchInbox } from '../inbox.ts';
-import { NOTCH_FUSE_SEEN_MS, parseNotchToPage, type NotchAnswerAct, type NotchBlock, type NotchLine, type NotchPart, type NotchToPage } from '../protocol.ts';
+import { NOTCH_FUSE_SEEN_MS, notchRuled, parseNotchToPage, type NotchAnswerAct, type NotchBlock, type NotchLine, type NotchPart, type NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import { MAIL_WHY_DRAFT_THERE, type MailReplyPlan, type MailReplySession, type MailStep, type Mailbox } from './mailbox.ts';
 import { MAIL_FUSE_MS, MAIL_SLOT_FUSE_MS, MAIL_SLOT_PAPER_COLUMNS, MAIL_SLOT_PAPER_ROWS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailPaperRows, mailSlotBlocks, mailSlotRows, mailSteer, mailToneFacts } from './notch.ts';
@@ -78,7 +78,7 @@ function harness(rows: MailProposalRow[], options: {
   };
   const surface = new NotchSurface(port, () => {}, () => now);
   const fromPage = (message: unknown, from = 'pc'): void => onEvent(from, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const db = options.db ?? new Database(':memory:');
   const store = new MailStore(db);
@@ -724,7 +724,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
       expect(JSON.stringify(shown)).not.toContain('"word"');
       expect((shown as { blocks: NotchBlock[] }).blocks.every((block) => block.kind === 'paper')).toBe(true);
       // And it is a line the page can read: one it could not would be dropped there, and burn nothing.
-      expect(parseNotchToPage({ type: 'show', line: shown })).not.toBeNull();
+      expect(parseNotchToPage({ type: 'patch', seq: 1, line: notchRuled(shown as NotchLine) })).not.toBeNull();
       // It is in the thread as a draft and no further, for the whole of the fuse.
       expect(h.did).toEqual(['write']);
       await h.advance(MAIL_SLOT_FUSE_MS - 1);
@@ -911,7 +911,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     describe('with two desktops', () => {
       const two = async () => {
         const h = harness([offers()]);
-        await h.page('mac', { type: 'hello', v: 1 });
+        await h.page('mac', { type: 'hello', v: 2 });
         await h.arrive();
         await h.answer('pick', { option: 'Tuesday at 10:00' });
         return h;
@@ -920,7 +920,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
       test('both are shown the letter, from its start', async () => {
         const h = await two();
         const fuse = h.line()!.id;
-        const shown = h.told.filter((entry) => entry.message.type === 'show' && entry.message.line.id === fuse);
+        const shown = h.told.filter((entry) => entry.message.type === 'patch' && entry.message.line?.id === fuse);
         expect(shown.map((entry) => entry.to).sort()).toEqual(['mac', 'pc']);
         for (const entry of shown) expect(entry.message).toMatchObject({ line: { kind: 'send', ms: MAIL_SLOT_FUSE_MS, blocks: [{ kind: 'paper' }] } });
       });
@@ -985,11 +985,11 @@ describe('a reply that offers a time, with free times from the calendar', () => 
         const h = await picked();
         const fuse = h.line()!.id;
         await h.advance(3000);
-        await h.page('pc', { type: 'hello', v: 1 });
+        await h.page('pc', { type: 'hello', v: 2 });
         const line = stateTo(h, 'pc').line!;
         expect(line).toMatchObject({ id: fuse, kind: 'send', ms: MAIL_SLOT_FUSE_MS, left: 5000 });
         expect(paperOf(line)!.lines[1]).toEqual([{ em: 'Tuesday at 10:00' }, ' would suit me.']);
-        expect(parseNotchToPage({ type: 'state', line, count: 0 })).not.toBeNull();
+        expect(parseNotchToPage(stateTo(h, 'pc'))).not.toBeNull();
         // Nothing went for the hello, and the same fuse still decides.
         expect(h.did).toEqual(['write']);
         await h.answer('done');
@@ -999,7 +999,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
       test('with less left than anybody can read it in, the page does not vouch for it, and nothing is sent', async () => {
         const h = await picked();
         await h.advance(MAIL_SLOT_FUSE_MS - NOTCH_FUSE_SEEN_MS + 1);
-        await h.page('mac', { type: 'hello', v: 1 });
+        await h.page('mac', { type: 'hello', v: 2 });
         const line = stateTo(h, 'mac').line!;
         expect(line.kind === 'send' ? line.left : undefined).toBe(NOTCH_FUSE_SEEN_MS - 1);
         // Such a page says nothing when the time is up (ui/src/notch/surface/safety.test.ts). Nobody else does either.
@@ -1013,7 +1013,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
         const h = await picked();
         const fuse = h.line()!.id;
         await h.advance(MAIL_SLOT_FUSE_MS - 500);
-        await h.page('mac', { type: 'hello', v: 1 });
+        await h.page('mac', { type: 'hello', v: 2 });
         await h.page('mac', { type: 'answer', id: fuse, act: 'undo' });
         expect(h.did).toEqual(['write', 'discard']);
         expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
@@ -1229,7 +1229,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
       let written: () => void = () => {};
       const pick = await picked({ writeWhen: new Promise<void>((resolve) => { written = resolve; }) });
       expect(pick.line()).toMatchObject({ kind: 'work', asks: true });
-      expect(parseNotchToPage({ type: 'show', line: pick.line() })).toMatchObject({ line: { asks: true } });
+      expect(parseNotchToPage({ type: 'patch', seq: 1, line: notchRuled(pick.line()!) })).toMatchObject({ line: { asks: true, asking: true } });
       written();
 
       const plain = harness([row()], { writeWhen: new Promise<void>(() => {}) });

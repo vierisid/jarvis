@@ -363,7 +363,7 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
     endTag?.();
     if (!mouth && how === 'shut') return;
     mouth = false;
-    surface.act({ mouth: how });
+    if (how === 'gulp') surface.gulp(); else surface.setMouth('shut');
   };
   const forget = (): void => {
     held = [];
@@ -487,8 +487,8 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       // The page hears of a file only once it is over the notch itself: the
       // mouth opens, and is at once as wide as it gets.
       mouth = true;
-      surface.act({ mouth: 'open' });
-      surface.act({ mouth: 'over' });
+      surface.setMouth('open');
+      surface.setMouth('over');
       sayDrop();
       return;
     }

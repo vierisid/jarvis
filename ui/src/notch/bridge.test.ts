@@ -103,19 +103,32 @@ describe('a page that is told something it cannot read', () => {
     const { connectNotch, notchSend } = await import('./bridge.ts');
     const { createNotchSurface } = await import('./surface/index.ts');
     const { createTestClock } = await import('./surface/test-clock.ts');
+    const { scriptedBrain } = await import('./surface/test-brain.ts');
+    const brain = scriptedBrain();
     const clock = createTestClock();
     const root = document.createElement('div');
     document.body.append(root);
     const sent: { type: string; id?: string; act?: string }[] = [];
     const logs: string[] = [];
-    const host: Host = { __notch_send: (text) => { sent.push(JSON.parse(text)); }, __notch_log: (text) => { logs.push(text); } };
+    // A brain that is there says it has each answer, at once.
+    const host: Host = {
+      __notch_send: (text) => {
+        const message = JSON.parse(text) as { type: string; n?: number };
+        sent.push(message);
+        if (message.type === 'answer' && message.n !== undefined) host.__notch_receive?.({ type: 'ack', n: message.n, took: true });
+      },
+      __notch_log: (text) => { logs.push(text); },
+    };
     const surface = createNotchSurface(root, notchSend(host), { reducedMotion: true, clock });
     connectNotch(surface, host, { helloAgainMs: EVERY, clock });
     return {
       host, sent, logs, root, clock,
       hellos: () => sent.filter((m) => m.type === 'hello').length,
-      dropped: () => logs.filter((line) => line.includes('could not be read')),
-      tell: (message: unknown) => host.__notch_receive?.(message as never),
+      dropped: () => logs.filter((line) => line.includes('out of step')),
+      // What a test says in plain words, as the brain says it in version 2 (./surface/test-brain.ts).
+      tell: (message: unknown) => { for (const each of brain.messages(message)) host.__notch_receive?.(each as never); },
+      raw: (message: unknown) => host.__notch_receive?.(message as never),
+      brain,
       said: () => (root.querySelector('.say')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
       body: () => root.querySelector<HTMLElement>('.nin')?.dataset.body,
       end: () => { surface.destroy(); root.remove(); GlobalRegistrator.unregister(); },
@@ -127,7 +140,7 @@ describe('a page that is told something it cannot read', () => {
     try {
       expect(p.hellos()).toBe(1);
       p.tell(unreadable);
-      expect(p.dropped()).toEqual(['a message from the brain could not be read and was dropped: state sheet']);
+      expect(p.dropped()).toEqual(['out of step with the brain, which is asked for everything again: state sheet']);
       expect(p.body()).toBe('rest');
       // The state had come, so the hello was never said again, and the page drew nothing until it was loaded anew.
       p.clock.advance(EVERY);
@@ -156,7 +169,7 @@ describe('a page that is told something it cannot read', () => {
       expect(p.hellos()).toBe(2);
       expect(p.said()).toContain('Reply to Marco?');
       p.root.querySelector<HTMLElement>('.hint .key')?.click();
-      expect(p.sent.at(-1)).toEqual({ type: 'answer', id: 'good', act: 'yes' });
+      expect(p.sent.at(-1)).toMatchObject({ type: 'answer', id: 'good', act: 'yes' });
     } finally { p.end(); }
   });
 
@@ -202,7 +215,8 @@ describe('a page that is told something it cannot read', () => {
     try {
       p.tell(readable);
       p.clock.advance(EVERY * 3);
-      for (const message of [{ type: 'patch', seq: 1, line: null }, { type: 'effect', do: [] }, { type: 'face', mood: 'furious' }]) p.tell(message);
+      for (const message of [{ type: 'sparkle', much: true }, { type: 'show', line: { id: 'v1', kind: 'say', say: ['v1'], ms: 100 } }, { type: 'act', gesture: 'wink' }]) p.raw(message);
+      p.tell({ type: 'face', mood: 'furious' });
       p.clock.advance(EVERY * 3);
       expect(p.hellos()).toBe(1);
       expect(p.dropped()).toEqual([]);

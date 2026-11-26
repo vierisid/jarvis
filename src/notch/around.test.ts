@@ -37,7 +37,7 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; 
     },
   });
   const fromPage = (message: unknown): void => pageEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   let backOnline = 0;
   const logs: string[] = [];
   const around: ReturnType<typeof attachNotchAround> = attachNotchAround(surface, inbox, {
@@ -55,7 +55,7 @@ function harness(options: { meetingNow?: () => boolean; asleep?: () => boolean; 
     homes: (): number => homes,
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
     count: (): number => surface.current().count,
-    parks: (): number[] => pushed.flatMap((message) => (message.type === 'act' && message.park !== undefined ? [message.park] : [])),
+    parks: (): number[] => pushed.flatMap((message) => (message.type === 'patch' && message.park !== undefined ? [message.park] : [])),
     async tell(payload: Record<string, unknown>, id = 'pc'): Promise<void> { aroundEvent(id, { event_type: NOTCH_AROUND_EVENT, payload }); await settle(); },
     async leave(id = 'pc'): Promise<void> { gone(id); await settle(); },
     async answer(act: NotchAnswerAct, more: Record<string, unknown> = {}): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act, ...more }); await settle(); },
@@ -349,8 +349,9 @@ describe('pass 12: after a call', () => {
     await h.pass(2100);
     await h.tell({ call: false });
     await h.pass(60_000);
-    const acts = h.pushed.filter((m) => m.type === 'act');
-    expect(acts.some((m) => m.type === 'act' && m.park === 0 && m.gesture === 'wake')).toBe(true);
+    // The bumps are taken off the edge (kept by the brain, so told as a change to what the notch is), and it stretches once.
+    expect(h.parks().at(-1)).toBe(0);
+    expect(h.pushed.some((m) => m.type === 'effect' && m.gesture === 'wake')).toBe(true);
   });
 
   test('with its eyes closed it does not: waking would open them', async () => {
@@ -363,9 +364,8 @@ describe('pass 12: after a call', () => {
     h.surface.setFace('closed');
     await h.tell({ call: false });
     await h.pass(60_000);
-    const acts = h.pushed.filter((m) => m.type === 'act');
-    expect(acts.some((m) => m.type === 'act' && m.gesture === 'wake')).toBe(false);
-    expect(acts.some((m) => m.type === 'act' && m.park === 0)).toBe(true);
+    expect(h.pushed.some((m) => m.type === 'effect' && m.gesture === 'wake')).toBe(false);
+    expect(h.parks().at(-1)).toBe(0);
   });
 });
 

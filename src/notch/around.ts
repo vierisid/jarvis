@@ -118,7 +118,7 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
   const park = (): void => {
     if (!inCall) return;
     const many = Math.min(held(), 3);
-    if (many !== parked) { parked = many; surface.act({ park: many }); }
+    if (many !== parked) { parked = many; surface.setPark(many); }
     parking = clock.setTimeout(park, 2000);
   };
 
@@ -176,7 +176,8 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     log(`[notch] the call is over after ${minutes} min: ${many} held`);
     // What waited on the edge is pulled in, and it stretches awake. Not when
     // its eyes are closed or turned aside: waking would open them.
-    surface.act(surface.resting() === 'idle' || surface.resting() === 'focus' ? { park: 0, gesture: 'wake' } : { park: 0 });
+    surface.setPark(0);
+    if (surface.resting() === 'idle' || surface.resting() === 'focus') surface.act({ gesture: 'wake' });
     const release = (): void => inbox.release(HOLD);
     if (many === 0 || deps.asleep?.()) { release(); return; }
     // What was held is offered before anything speaks for itself: the hold is let go when this line is done.
@@ -294,7 +295,7 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
     stop: () => {
       stopped = true;
       for (const timer of [starting, ending, longest, parking, saying, goingOffline]) if (timer) clock.clearTimeout(timer);
-      if (inCall) { inCall = false; surface.act({ park: 0 }); if (holding) inbox.release(HOLD); holding = false; }
+      if (inCall) { inCall = false; surface.setPark(0); if (holding) inbox.release(HOLD); holding = false; }
     },
   };
 }

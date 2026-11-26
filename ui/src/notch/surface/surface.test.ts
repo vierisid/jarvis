@@ -1,13 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { NotchFromPage, NotchLine } from '../../../../src/notch/protocol.ts';
-import type { NotchSurface } from './index.ts';
+import { scripted, type ScriptedSurface as NotchSurface } from './test-brain.ts';
 
 // A page without a screen: there is no layout here, so sizes are not tested
 // (they are checked against the prototype in a real browser, by hand). What is
 // tested is the contract: what each kind of line draws, and what each thing a
 // person can do with it sends.
-let createNotchSurface: (typeof import('./index.ts'))['createNotchSurface'];
+let createNotchSurface: ReturnType<typeof scripted>;
 let partsText: (typeof import('./sentence.ts'))['partsText'];
 let NOTCH_GECKO_MS: number;
 let root: HTMLElement, surface: NotchSurface, sent: NotchFromPage[], focus: boolean[];
@@ -21,7 +21,8 @@ const show = (line: NotchLine): void => surface.receive({ type: 'show', line });
 
 beforeAll(async () => {
   GlobalRegistrator.register();
-  ({ createNotchSurface } = await import('./index.ts'));
+  // The page behind a brain that says what the tests say in version 2 of the messages (./test-brain.ts).
+  createNotchSurface = scripted((await import('./index.ts')).createNotchSurface);
   ({ partsText } = await import('./sentence.ts'));
   ({ NOTCH_GECKO_MS } = await import('./eyes.ts'));
 });
@@ -80,12 +81,14 @@ describe('an offer', () => {
     expect(body()).toBe('rest');
   });
 
-  test('left alone it folds after its time, and not before', async () => {
+  test('left alone it stays: when it folds is the brain\'s to say, and the page says no fold of its own', async () => {
     show({ id: 'o3', kind: 'offer', say: ['Reply?'], yes: 'show', fold: 60 });
-    await wait(20);
+    await wait(150);
     expect(sent).toEqual([]);
-    await wait(120);
-    expect(sent).toEqual([{ type: 'answer', id: 'o3', act: 'fold' }]);
+    expect(body()).toBe('line');
+    // The brain folds it: the page is told to rest, like any page that shows it.
+    surface.receive({ type: 'rest' });
+    expect(sent).toEqual([]);
     expect(body()).toBe('rest');
   });
 
@@ -1065,14 +1068,15 @@ describe('pass 12 on the page: day one, the map and a row that is gone', () => {
 
 // The hardening audit, 17 November 2026 (pass 13).
 describe('what the hardening audit found on the page', () => {
-  test('an offer that was clicked on still folds: only a field being typed in keeps it', async () => {
+  test('a click on the eyes is not a hand on the offer: the brain is not told one is there', async () => {
     show({ id: 'o', kind: 'offer', say: ['Reply to ', { em: 'Sam' }, '?'], yes: 'send', fold: 250 });
     // A click on the eyes leaves that button the focused element, in a window that is never the active one.
     $<HTMLButtonElement>('.eyes')!.focus();
     expect(document.activeElement).toBe($('.eyes'));
-    await wait(450);
-    expect(sent).toEqual([{ type: 'answer', id: 'o', act: 'fold' }]);
-    expect(body()).toBe('rest');
+    await wait(60);
+    // It used to count as a hand for good, and the offer never folded again.
+    expect(surface.wire.filter((message) => message.type === 'hand')).toEqual([]);
+    expect(sent).toEqual([]);
   });
 
   test('a line that cannot be drawn leaves the one before it on the notch, answerable as itself', async () => {

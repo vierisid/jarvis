@@ -62,7 +62,7 @@ function harness(given: Partial<World> = {}) {
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const settings = new NotchSettings(world.db);
   const did: string[] = [];
@@ -114,7 +114,7 @@ function harness(given: Partial<World> = {}) {
     now = until;
     await settle();
   };
-  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'effect').map(({ type: _type, seq: _seq, ...rest }) => rest);
   /** Goes through the steps before `step` the short way: yes to each, and nothing said. */
   const upTo = async (name: NotchDayOneStep): Promise<void> => { settings.set('dayone', { step: S[name], done: false }); day.cameUp(); await pass(NOTCH_DAY_ONE_AFTER_MS); };
   return { world, day, inbox, surface, settings, did, setups, checks, card, logs, line, said, reply, seen, pass, acts, upTo, fromPage, count: (): number => surface.current().count };

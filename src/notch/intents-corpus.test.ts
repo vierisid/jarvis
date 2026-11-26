@@ -241,7 +241,7 @@ async function world(contexts: ReadonlySet<Context>) {
   };
   const surface = new NotchSurface(port, quiet);
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const line = (): NotchLine | null => surface.current().line;
   let asks!: ReturnType<typeof attachNotchAsks>;
   const inbox = new NotchInbox(surface, { clock, log: quiet, home: (stage) => asks.home(stage) });

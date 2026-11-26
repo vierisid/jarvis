@@ -30,7 +30,7 @@ async function shownTwice(effect: { pays: boolean; deletes: boolean }) {
   const clock = { setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; }, clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); } };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const sent: Record<string, unknown>[] = [];
   const hands = { act: async (request: Record<string, unknown>) => { sent.push(request); return request.do === 'pitch' ? { done: true, known: true, dy: request.dy } : { done: true }; } };

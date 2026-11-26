@@ -266,7 +266,7 @@ function harness(options: { modelReady?: NotchLookDeps['modelReady']; talking?: 
     clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
   };
   const surface = new NotchSurface(port, () => {});
-  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 2 } } });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const asked: { text: string; files: NotchAskFile[] }[] = [];
   const logs: string[] = [];

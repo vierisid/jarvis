@@ -3914,24 +3914,70 @@ and the desktop app calls five functions the page defines:
 
 ## What the brain and the page say to each other
 
-Version 1, in full in `src/notch/protocol.ts`. One thing is on the notch at a
-time; a new `show` replaces it.
+Version 2 since 26 November 2026, in full in `src/notch/protocol.ts`. One
+thing is on the notch at a time; a new line replaces it.
 
 | From | Message | Meaning |
 |---|---|---|
-| page | `hello {v}` | The page is up. Answered with `state` |
-| brain | `state {line, count, born, face, where, eye, sound}` | Everything the notch should show, at once |
-| brain | `show {line}` | Put this on the notch |
-| brain | `rest` | Back to the eyes |
-| brain | `count {count}` | How many things wait |
-| brain | `face {mood}` | The face the notch has at rest until told otherwise: `closed` while it sees nothing (asleep, an app never to be watched, watching off), `away` while it looks away by itself. Kept by the brain, unlike a mood given with `act` |
-| brain | `where {app}` | The app in front, `{name, icon}`, for the icon beside the resting eyes; `null` takes it away. The icon is a PNG data URL. Kept by the brain |
-| brain | `update {id, ...}` | Change the line on the notch in place: steps done, a new sentence, words heard, a sheet's content |
-| brain | `act {...}` | A face, a movement of the eyes, the lip (with `aim` for where it reaches), the body (`nod`, `hops`, `duck`), a `kick`, the edge (`depart`, `bud`, `carry`, with `side`), a birth, the watching eye, the mouth, how many wait on the edge, sounds. Not remembered, but for the eye and the sounds, which the brain keeps |
-| page | `answer {id, act, ...}` | What the person did with the line `id` |
+| page | `hello {v, page}` | The page is up. `v` is its version, `page` names this loading of it. Answered with `state`, or with `refuse` |
+| brain | `state {v, brain, seq, line, count, born, face, where, eye, sound, park, mouth}` | Everything the notch is, at once. `brain` names this run of the brain |
+| brain | `patch {seq, line?, edit?, count?, face?, where?, eye?, sound?, park?, mouth?}` | A change to what the notch is: `line` puts a line on it in place of whatever is there, `line: null` is back to the eyes, `edit {id, ...}` changes the line that is up (steps done, a new sentence, words heard, a sheet's content, and `away` when that changes it). Only what is named changes |
+| brain | `effect {seq, ...}` | Something done once: a passing mood, a gesture, the lip (with `aim`), the body, a `kick`, the edge (with `side`), a birth, the gulp after a drop. Not remembered: a page that was not there never does it |
+| brain | `ack {n, took}` | The brain has the answer numbered `n`. `took: false`: it came for a line that is no longer there |
+| brain | `refuse {v}` | The brain takes nothing from this page: it speaks version `v`, or it does not know this page on this connection |
+| page | `answer {n, id, act, since, ...}` | What the person did with the line `id`, numbered, with how many ms after the line was drawn |
+| page | `hand {id, on}` | A hand is on the offer `id` (the pointer, a field being typed in, a word's choices open), or no longer |
+| page | `at {seq}` | The number of the last numbered message this page read |
 | page | `open` | A click on the resting notch, or yes with nothing on it |
 | page | `stop` | Esc twice: stop everything, and start nothing until told |
 | page | `drag {state}` | A file is over the notch (`over`), was taken away again (`left`), or was let go and did not reach the brain (`lost`). The file itself goes in one request to `/api/notch/drop`: its bytes as the body, `x-notch-file` (its name, percent-encoded), `x-notch-size` and `x-notch-count` as headers |
+| page | `signed-out` | The page's sign-in with the brain has ended: the brain opens it again |
+
+What changed from version 1, message by message:
+
+- `show {line}`, `rest`, `count`, `face`, `where` and `update` are all `patch`
+  now. `act` is split: what the notch is (the eye, the sounds, the bumps on
+  the edge, the mouth) is kept by the brain and goes as a `patch` and in
+  every `state`; what it does once goes as an `effect`. The bumps and the
+  mouth were movements before, and a desktop app started again in a call
+  had no bumps until the number changed.
+- `state`, `patch` and `effect` carry `seq`, one row of numbers for each
+  page. A copy (a number already read) is passed over. A gap means something
+  was lost: what came is still taken, and the page says hello for the whole.
+  A lost message that leaves no gap behind it (the last one) is found by
+  `at`, said every 5 s: the brain tells the whole again if it sent more.
+- `answer` carries `n` and `since`. The brain says `ack` to every numbered
+  answer and takes a number once, by desktop app and loading of the page,
+  remembering the last 128. The page says an answer again every 1 s until
+  it has its `ack`, 4 times in all, and keeps 16 at most. Then it gives up:
+  a line its answer had dimmed can be answered again (it was dimmed for
+  good), and it says hello. A second yes on that line is the same answer
+  with the same number, so it cannot count beside a first that was only
+  slow. A stage on the brain takes an answer's key once too, and keeps
+  nothing for a line whose wait is over: no second yes, no done after an
+  undo, no second done.
+- A line comes with its rules, written by the brain (`notchRules`): `after`
+  (what each answer does to it: `rest`, or `hold` it dimmed for the brain),
+  `away` (a press elsewhere is a `no`, or `none`), `asking` (it waits for
+  the person: the window does not hide behind a fullscreen video), `gate`
+  (`dead`, `esc` and `whole`, the ms the page counts from when it drew the
+  line), and for an offer `fold`. A line without them is wrong, and dropped.
+  The page keeps no such rule of its own.
+- The brain folds an offer that was left alone (9 s, 14 s for choices, or
+  its own `fold`; 0 stays), on its own clock from when a page first showed
+  it, and not while a page says a hand is on it (believed for 5 s, said
+  again every 2 s). It used to be the page: a fold that was lost left the
+  brain waiting on a line no page showed, and the desktop nobody sat at
+  folded the line under the other's hand. A `fold` a page still sends is
+  taken as before.
+- `hello` carries `page`. A page of another version is refused at its hello
+  and on anything else it says, and is not counted as listening: the brain
+  never takes a fuse's `done` from it. A page from version 2 on loads itself
+  again once (the brain serves it, so that brings the one that fits). If
+  the brain still speaks another version, the page rests: it draws nothing,
+  holds no Esc, says so in the log, and says hello every 5 min. A page of
+  version 1 cannot load itself again, so the brain opens it anew.
+- `hand`, `at`, `ack` and `refuse` are new.
 
 A line is one of seven kinds: `say` (a result that leaves by itself), `offer`
 (yes or no, or a row of choices), `sheet`, `ask` (a text field), `work`
@@ -3969,10 +4015,11 @@ A sheet is made of rows, a sheet of paper, notes, buttons, a file, and a
 was read. A map that is sent again with more in it keeps still what was
 already drawn. A row that is `gone` is struck through.
 
-After `no`, `fold`, and a `say` that finished, the page has gone to rest by
-itself. Another desktop app on the same brain is told `rest` then: it still
-showed the line, and nothing more would have been said about it. After any
-other answer the page keeps the line until the brain says what comes next.
+After an answer whose `after` is `rest` (a `no`, a `fold`, a `say` that
+finished) the page has gone to rest by itself. Another desktop app on the
+same brain is told to rest then: it still showed the line, and nothing more
+would have been said about it. After any other answer the page keeps the
+line until the brain says what comes next.
 
 The page reads every message whole before anything on the notch changes
 (`readNotchToPage`, the counterpart of the brain's `parseNotchFromPage`).
@@ -3988,7 +4035,7 @@ Three things can come of it:
   `type` it does not have, a face it cannot make) is passed over without a
   word: no log, no hello. A brain newer than the page says such things.
 - What only dresses a line or moves the notch (a mood, a way of arriving, a
-  movement of `act`) is left out when it is not known, and the rest stands.
+  movement of an `effect`) is left out when it is not known, and the rest stands.
 
 The page is out of step from a drop until a `state` is read whole. In that
 time it says hello again 20 times at the most, never closer together than
@@ -4006,8 +4053,7 @@ enough, had its end on screen and was not out of sight; the brain sends
 nothing on a `done` without it, which is what a page that knows nothing of
 `blocks` says. Only Esc is an undo: a click away from it answers nothing.
 A `work` line can say `asks`: it leads into such a letter, and the window
-is to be in sight for it as for a question. Both are additions a page of
-version 1 passes over, so the version stays 1.
+is to be in sight for it as for a question (`asking`, since version 2).
 
 A `say` and a `send` in a `state` carry `left`: how much of their `ms` is
 still to come, by the brain's clock. A page that comes up in the middle of a
@@ -4018,7 +4064,30 @@ counts the fuse as lost, and the yes behind it decides nothing. Esc is still
 an undo. A page that is told again the line it already shows (it said hello
 again) leaves it as it is: its time goes on, and what was answered stays
 answered. A page that draws its own line again (the keys of the machine
-changed) goes on by its own count.
+changed) goes on by its own count. A `state` from another run of the brain
+(`brain` changed) is another line whatever its name, and the page forgets
+what it was still sending to the run before.
+
+### The lease on Esc
+
+Since 26 November 2026 the page's claim on Esc is a lease. While the notch
+wants Esc the page says `__notch_esc(true)` again every 2 s
+(`NOTCH_ESC_RENEW_MS`), and `__notch_esc(false)` once when it stops. A claim
+not said again for 6 s (`NOTCH_ESC_LEASE_MS`, three sayings, so two lost or
+late ones do not cost Esc) need not be honoured. The page tells a desktop
+app that knows of leases the length once, by `__notch_esc_lease(ms)`; none
+does yet (step 5 of docs/notch/fixes/10-sidecar-platform.md), and the call
+is left out where it is not there.
+
+What guards Esc today is the desktop app's pulse (`sidecar/notch_pulse.go`):
+a page that has answered once and wants Esc is asked every second, and one
+that is silent for 5 s holds no Esc. Every renewal is also a sign to the
+pulse, so a page that renews is never taken for gone. The lease is the
+longer of the two on purpose: on a page whose answering is proven the pulse
+lets go first, and the lease is for a page the pulse does not watch (one
+that never answered within 30 s). A page whose timers are throttled more
+than threefold (a window the system has put to sleep) can lose Esc for a
+moment under a lease; only a real web view can show whether that happens.
 
 ## How the edge is drawn
 

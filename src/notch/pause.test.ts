@@ -56,13 +56,13 @@ function harness(options: { start?: 'paused' | 'killed' } = {}) {
   });
   executor.start();
   cleanup.push(() => { real.stop(); executor.stop(); });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const line = (): NotchLine | null => surface.current().line;
   return {
     controller, executor, real, approvals, pushed, log, line, fromPage,
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
     count: (): number => surface.current().count,
-    faces: (): string[] => pushed.flatMap((m) => (m.type === 'face' ? [m.mood] : m.type === 'state' && m.face ? [m.face] : [])),
+    faces: (): string[] => pushed.flatMap((m) => ((m.type === 'patch' || m.type === 'state') && m.face ? [m.face] : [])),
     async stop(): Promise<void> { fromPage({ type: 'stop' }); await settle(); },
     async open(): Promise<void> { fromPage({ type: 'open' }); await settle(); },
     async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
@@ -186,7 +186,7 @@ describe('the pause, whoever made it', () => {
 describe('pass 12: the stop is seen as well as said', () => {
   test('it shakes for the stop and zips its lip, and stretches awake when it is woken', async () => {
     const h = harness();
-    const acts = (): Record<string, unknown>[] => h.pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+    const acts = (): Record<string, unknown>[] => h.pushed.filter((m) => m.type === 'effect').map(({ type: _type, seq: _seq, ...rest }) => rest);
     await h.stop();
     expect(acts()).toEqual([{ gesture: 'shake', lip: 'zip' }]);
     await h.answer('done');
@@ -238,7 +238,7 @@ describe('"pause", typed or said', () => {
       log: () => {},
     });
     cleanup.push(() => real.stop());
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const line = (): NotchLine | null => surface.current().line;
     const wait = async (): Promise<void> => { for (let round = 0; round < 4; round++) { await settle(); await new Promise((resolve) => setTimeout(resolve, 2)); } };
     return {

@@ -8,7 +8,7 @@
  * call. Opened in a plain browser none of them is there, so
  * every call is guarded and the page simply shows nothing.
  */
-import { NOTCH_PROTOCOL_VERSION } from '../../../src/notch/protocol.ts';
+import { NOTCH_ESC_LEASE_MS, NOTCH_ESC_RENEW_MS, NOTCH_PROTOCOL_VERSION } from '../../../src/notch/protocol.ts';
 import type { NotchFromPage, NotchToPage } from '../../../src/notch/protocol.ts';
 import { realNotchPageClock, type NotchPageClock } from './surface/dom.ts';
 import type { NotchSurface } from './surface/index.ts';
@@ -21,6 +21,13 @@ interface NotchWindow {
   __notch_send?: (text: string) => unknown;
   __notch_log?: (text: string) => unknown;
   __notch_esc?: (want: boolean) => unknown;
+  /**
+   * Not in any desktop app yet (docs/notch/README.md, "The lease on Esc"):
+   * one that has it is told here that this page says its claim on Esc again
+   * every NOTCH_ESC_RENEW_MS, so that it may let a claim lapse that was not
+   * said again for this many ms.
+   */
+  __notch_esc_lease?: (ms: number) => unknown;
   __notch_asking?: (asking: boolean) => unknown;
   __notch_keys?: () => unknown;
   __notch_housing?: () => unknown;
@@ -137,6 +144,36 @@ export function connectHousing(surface: Pick<NotchSurface, 'setHousing'>, host: 
 
 /** How many times in one episode a message that could not be read is written to the desktop app's log. A brain that is wrong is wrong often. */
 export const NOTCH_DROPPED_LOGGED = 5;
+/**
+ * How often a page that rests because the brain speaks another version says
+ * hello all the same: the brain may have been changed for one that fits.
+ */
+export const NOTCH_HELLO_RESTING_MS = 300_000;
+/** Where the page keeps, across one loading of itself again, that it has done so for a brain of another version. */
+export const NOTCH_RELOADED_KEY = 'jarvis-notch-reloaded';
+
+/** What `connectNotch` needs to load the page again once, and no more than once, for the same mismatch. */
+export interface NotchReloader {
+  /** What was kept, or null. May throw: then nothing can be kept, and the page is not loaded again. */
+  get(): string | null;
+  set(value: string): void;
+  clear(): void;
+  reload(): void;
+}
+
+const browserReloader: NotchReloader = {
+  get: () => window.sessionStorage.getItem(NOTCH_RELOADED_KEY),
+  set: (value) => window.sessionStorage.setItem(NOTCH_RELOADED_KEY, value),
+  clear: () => window.sessionStorage.removeItem(NOTCH_RELOADED_KEY),
+  reload: () => window.location.reload(),
+};
+
+/** A name for this loading of the page: the brain tells the answers of one loading from those of the next by it. */
+export function notchPageName(): string {
+  const bytes = new Uint8Array(8);
+  try { crypto.getRandomValues(bytes); } catch { for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256); }
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 /**
  * Wires a surface to the desktop app, then says hello to the brain.
@@ -151,15 +188,31 @@ export const NOTCH_DROPPED_LOGGED = 5;
  * still told every change, and a new episode begins only after a `state` that
  * could be read.
  *
- * `clock` and `helloAgainMs` are for the tests.
+ * A brain that speaks another version of the messages is not limped along
+ * with. The page loads itself again, once: the brain serves the page, so
+ * that brings the page that fits a brain which was updated under it. If the
+ * brain still speaks another version after that (the page is the newer one,
+ * reaching a brain that is still being updated), the page rests: it draws
+ * nothing, holds no Esc, says so in the log, and says hello only every
+ * NOTCH_HELLO_RESTING_MS until a `state` of its own version comes.
+ *
+ * The page's claim on Esc is a lease. It is said again every
+ * NOTCH_ESC_RENEW_MS for as long as the notch wants Esc, and given up once
+ * when it does not: a page that stops (it hangs, its timers stop) says
+ * nothing more, and the desktop app stops believing a page that gives no
+ * sign (its pulse, sidecar/notch_pulse.go).
+ *
+ * `clock`, `helloAgainMs` and `reloader` are for the tests.
  */
 export function connectNotch(
   surface: NotchSurface,
   host: NotchWindow = window as unknown as NotchWindow,
-  options: { helloAgainMs?: number; clock?: NotchPageClock } = {},
+  options: { helloAgainMs?: number; clock?: NotchPageClock; reloader?: NotchReloader } = {},
 ): void {
   const helloEvery = options.helloAgainMs ?? NOTCH_HELLO_AGAIN_MS;
   const clock = options.clock ?? realNotchPageClock;
+  const reloader = options.reloader ?? browserReloader;
+  const page = notchPageName();
   let sent: Polygons | null = null;
   let sentAt = 0;
   let trailing: ReturnType<typeof setTimeout> | null = null;
@@ -194,21 +247,48 @@ export function connectNotch(
   let waiting: number | null = null;
   const hello = (): void => {
     helloAt = clock.now();
-    notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
+    notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION, page });
   };
+  /** The brain speaks another version, and loading the page again did not change that. */
+  let resting = false;
   // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
   // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
   // a state has come.
   const keepAsking = (): void => {
-    if (waiting !== null || stated || tries >= NOTCH_HELLO_TRIES) return;
+    if (waiting !== null || stated || resting || tries >= NOTCH_HELLO_TRIES) return;
     waiting = clock.after(helloEvery, () => {
       waiting = null;
-      if (stated || tries >= NOTCH_HELLO_TRIES) return;
+      if (stated || resting || tries >= NOTCH_HELLO_TRIES) return;
       tries++;
       hello();
       keepAsking();
     });
   };
+  const restAsking = (): void => {
+    clock.after(NOTCH_HELLO_RESTING_MS, () => {
+      if (!resting) return;
+      hello();
+      restAsking();
+    });
+  };
+  surface.onVersion((v) => {
+    if (resting) return;
+    const which = `page ${NOTCH_PROTOCOL_VERSION}, brain ${v}`;
+    let before: string | null = which;
+    let kept = false;
+    // What cannot be kept cannot be told from the first time: then the page is not loaded again at all,
+    // or it would be loaded again for ever.
+    try { before = reloader.get(); reloader.set(which); kept = true; } catch { kept = false; }
+    if (kept && before !== which) {
+      quietly(() => host.__notch_log?.(`the brain speaks version ${v} of the messages and this page version ${NOTCH_PROTOCOL_VERSION}: the page loads itself again, once`));
+      try { reloader.reload(); return; } catch { /* it cannot: it rests, below */ }
+    }
+    resting = true;
+    if (waiting !== null) { clock.cancel(waiting); waiting = null; }
+    surface.retire();
+    quietly(() => host.__notch_log?.(`the brain speaks version ${v} of the messages and this page version ${NOTCH_PROTOCOL_VERSION}${kept ? ', also after the page was loaded again' : ', and the page cannot note that it loaded itself again'}: the notch rests and shows nothing until the brain speaks version ${NOTCH_PROTOCOL_VERSION}`));
+    restAsking();
+  });
   // Something the brain said could not be read, and was dropped. What the notch shows may no longer be
   // what the brain believes it shows, so the brain is asked for the whole of it again. (A line that could
   // not be drawn, told to a page that came up, used to leave that page drawing nothing and hearing nothing
@@ -216,7 +296,8 @@ export function connectNotch(
   let droppedNow = false;
   surface.onDropped((what) => {
     droppedNow = true;
-    if (logged++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`a message from the brain could not be read and was dropped: ${what}`));
+    if (resting) return;
+    if (logged++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`out of step with the brain, which is asked for everything again: ${what}`));
     stated = false;
     // At once, unless it was said a moment ago: a brain that answers with the same thing is not asked in a loop.
     if (tries < NOTCH_HELLO_TRIES && clock.now() - helloAt >= helloEvery) { tries++; hello(); }
@@ -225,18 +306,36 @@ export function connectNotch(
   host.__notch_receive = (message) => {
     droppedNow = false;
     surface.receive(message);
-    if (droppedNow || (message as { type?: unknown } | null)?.type !== 'state') return;
+    const state = message as { type?: unknown; v?: unknown } | null;
+    if (droppedNow || state?.type !== 'state' || state.v !== NOTCH_PROTOCOL_VERSION) return;
     // Read whole: the page is in step again, and the episode is over.
     stated = true;
     tries = 0;
     logged = 0;
+    // And the brain speaks this page's version: the next mismatch is a new one.
+    resting = false;
+    try { reloader.clear(); } catch { /* nothing was kept */ }
   };
   host.__notch_cursor = (x, y, down) => surface.pointer(x, y, !!down);
   // The keys: what they said, which they are on this machine, and whether Esc
   // would do anything here right now (only then is it taken from the app).
   host.__notch_key = (name) => surface.key(String(name));
   host.__notch_pairs = (pairs) => surface.setPairs(pairs);
-  surface.onWantEsc((want) => quietly(() => host.__notch_esc?.(want)));
+  // The claim is a lease: said again for as long as it stands, and given up once. A second argument is
+  // never passed: the desktop app refuses a call with one more argument than it knows, and Esc would be lost.
+  let escAgain: number | null = null;
+  const renewEsc = (): void => {
+    escAgain = clock.after(NOTCH_ESC_RENEW_MS, () => {
+      quietly(() => host.__notch_esc?.(true));
+      renewEsc();
+    });
+  };
+  quietly(() => host.__notch_esc_lease?.(NOTCH_ESC_LEASE_MS));
+  surface.onWantEsc((want) => {
+    if (escAgain !== null) { clock.cancel(escAgain); escAgain = null; }
+    quietly(() => host.__notch_esc?.(want));
+    if (want) renewEsc();
+  });
   // Whether a question is waiting: the window does not hide behind a
   // fullscreen video while one is.
   surface.onAsking((asking) => quietly(() => host.__notch_asking?.(asking)));

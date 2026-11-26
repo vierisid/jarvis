@@ -73,7 +73,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
   const surface = new NotchSurface(port, (line) => logs.push(line));
   const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line) });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  if (options.page !== false) fromPage({ type: 'hello', v: 1 });
+  if (options.page !== false) fromPage({ type: 'hello', v: 2 });
   const opened: (string | null)[] = [];
   // What is written down of a yes given here (./actions.ts), with the same audit trail the product writes to.
   const actions = attachNotchActions(getDb(), { audit, log: (line) => logs.push(line) });
@@ -461,7 +461,7 @@ describe('the count and the round', () => {
     await h.answer('no');
     await h.answer('no');
     // One key each, with no line in between and no list at the end: nothing is left to list, and the round says so.
-    expect(h.pushed().slice(before).filter((m) => m.type === 'show').map((m) => (m.type === 'show' ? m.line.kind : ''))).toEqual(['offer', 'offer', 'say']);
+    expect(h.pushed().slice(before).flatMap((m) => (m.type === 'patch' && m.line ? [m.line.kind] : []))).toEqual(['offer', 'offer', 'say']);
     expect(h.said()).toBe('That is everything.');
     expect(h.count()).toBe(0);
     for (const req of [first, second, payment]) expect(h.approvals.getRequest(req.id)!.status).toBe('denied');

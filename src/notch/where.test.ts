@@ -31,7 +31,7 @@ function harness(options: { watching?: boolean; openEyes?: 'works' | 'desktop of
   let where: ReturnType<typeof attachNotchWhere>;
   const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), home: (stage) => where.see(stage) });
   const fromPage = (message: unknown): void => pageEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   let asleep = false;
   let never: string[] = [];
   let watching = options.watching ?? true;
@@ -64,7 +64,11 @@ function harness(options: { watching?: boolean; openEyes?: 'works' | 'desktop of
   return {
     where, surface, pushed, rpcs, logs, line, rowText,
     said: () => text(line()),
-    last: <T extends NotchToPage['type']>(type: T) => [...pushed].reverse().find((m) => m.type === type) as Extract<NotchToPage, { type: T }> | undefined,
+    // The last change of the app in front, or of the face, as a page was told it.
+    last: (kind: 'where' | 'face') => {
+      const told = [...pushed].reverse().find((m) => m.type === 'patch' && (kind === 'where' ? 'where' in m : m.face !== undefined)) as Extract<NotchToPage, { type: 'patch' }> | undefined;
+      return told ? { app: told.where, mood: told.face } : undefined;
+    },
     tell(payload: Record<string, unknown>, icon = false, id = 'pc') {
       whereEvent(id, { event_type: NOTCH_WHERE_EVENT, payload, ...(icon ? { binary: { type: 'inline', mime_type: 'image/png', data: PNG } } : {}) });
     },
@@ -150,7 +154,7 @@ describe('the resting notch shows where you are, and whether it is looking', () 
     await h.answer('done');
     h.tell(notepad);
     await settle();
-    expect(h.pushed.some((message) => message.type === 'act' && message.gesture === 'blink')).toBe(true);
+    expect(h.pushed.some((message) => message.type === 'effect' && message.gesture === 'blink')).toBe(true);
     await h.advance(600);
     expect(h.said()).toBe('I am back. I saw nothing in there.');
     await h.answer('done');
@@ -194,11 +198,11 @@ describe('the resting notch shows where you are, and whether it is looking', () 
   test('asleep: no app is shown, and the closed eyes are left to the pause', () => {
     const h = harness();
     h.tell(notepad, true);
-    const faces = h.pushed.filter((m) => m.type === 'face').length;
+    const faces = h.pushed.filter((m) => m.type === 'patch' && m.face !== undefined).length;
     h.sleep(true);
     h.where.refresh();
     expect(h.last('where')?.app).toBeNull();
-    expect(h.pushed.filter((m) => m.type === 'face').length).toBe(faces);
+    expect(h.pushed.filter((m) => m.type === 'patch' && m.face !== undefined).length).toBe(faces);
     h.sleep(false);
     h.where.refresh();
     expect(h.last('where')?.app?.name).toBe('Notepad');

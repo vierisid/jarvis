@@ -39,7 +39,7 @@ function assembled() {
   const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   let fromApp: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
   /** Every turn the notch started: its words, how its id is written, who wrote the words, and what came with it. */
   const turns: { text: string; requestId: string; who: string | null; real: boolean; files: string[] }[] = [];

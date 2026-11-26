@@ -86,7 +86,16 @@ the shared seams.
    the keyboard is asked what is down and only what differs is put right,
    so a hold that was not needed ends nobody's talking.
 4. Host controller: one `notchHost` owning loaded, hidden, asking, focus.
-5. Esc lease on the sidecar side (the page side is point 7).
+5. Esc lease on the sidecar side (the page side is point 7). The page half
+   landed with protocol v2 (26 November 2026): the page renews
+   `__notch_esc(true)` every 2 s while it wants Esc, says `false` once, and
+   calls `__notch_esc_lease(6000)` once if the desktop app has it. What is
+   left here: bind `__notch_esc_lease(ms)` and let a claim lapse when no
+   `__notch_esc` came for that long. No message or argument changes: the
+   binding of `__notch_esc` keeps its one bool (a second argument would be
+   refused). 6 s is three renewals, longer than the pulse's 5 s on purpose,
+   so the pulse still lets go first on a proven page and the lease covers
+   the page the pulse gave up on.
 6. Element interface, then the act platform, verb by verb.
 7. Mac input thread with listen-only taps.
 8. One session object per connection with real stops for where and around.

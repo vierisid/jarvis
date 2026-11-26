@@ -47,7 +47,7 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive'; /**
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  if (options.page !== false) fromPage({ type: 'hello', v: 1 });
+  if (options.page !== false) fromPage({ type: 'hello', v: 2 });
   const approvals = new ApprovalManager();
   const real: NotchReal = attachNotchReal(surface, {
     approvalManager: approvals,
@@ -74,7 +74,7 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive'; /**
     async fire(id: string): Promise<void> { await (executor as unknown as Internals).fireExecution(id); await settle(); },
     async answer(act: NotchAnswerAct): Promise<void> { fromPage({ type: 'answer', id: line()!.id, act }); await settle(); },
     async open(): Promise<void> { fromPage({ type: 'open' }); await settle(); },
-    async hello(): Promise<void> { fromPage({ type: 'hello', v: 1 }); await settle(); },
+    async hello(): Promise<void> { fromPage({ type: 'hello', v: 2 }); await settle(); },
     async advance(ms: number): Promise<void> {
       now += ms;
       for (const timer of [...timers].filter((t) => t.at <= now)) {

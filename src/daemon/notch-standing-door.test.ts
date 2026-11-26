@@ -90,7 +90,7 @@ function setup() {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({ pushed: true }), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
   const surface = new NotchSurface(port, () => {});
-  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 2 } } });
   let asks!: ReturnType<typeof attachNotchAsks>;
   const inbox = new NotchInbox(surface, { log: () => {}, home: (stage) => asks.home(stage) });
   asks = attachNotchAsks(inbox, { ledger: new NotchLedger(getDb()), turns: deps.turns, modelReady: () => true, log: () => {} });

@@ -189,7 +189,8 @@ const NOTCH_INSTALLED_CARD = 'notch:installed';
 import { notchJobDeps } from "./notch-jobs.ts";
 import { notchAgentDeps, notchAgentRung } from "./notch-agents.ts";
 import type { NotchReal } from "../notch/real.ts";
-import { NotchSurface } from "../notch/surface.ts";
+import { NotchSurface, realNotchTimers } from "../notch/surface.ts";
+import { NOTCH_PAGE_RELOADS_SINCE } from "../notch/protocol.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { appFound, downloadsFolder, saveDownload, saveThroughApp } from "../peers/downloads.ts";
 import { PeerLink } from "../peers/link.ts";
@@ -1254,10 +1255,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // what the brain stands on: if it cannot be made, the brain starts
       // without it and the dashboard says so (./notch-start.ts).
       notchSurface = startNotchPart('the notch', () => {
-        const surface = new NotchSurface(sidecarManager);
+        // With the real timers: the brain folds an offer that was left alone (the page no longer does).
+        const surface = new NotchSurface(sidecarManager, undefined, undefined, realNotchTimers);
         // A page whose sign-in has ended is opened again, signed in anew.
         const notchReopen = createNotchReopen(sidecarManager, { pageUrl: `${pebblePanelOrigin}${NOTCH_PAGE_PATH}` });
         surface.onSignedOut((sidecarId) => { void notchReopen(sidecarId); });
+        // A page that speaks another version of the messages is refused. One from version 2 on loads itself
+        // again. An older one cannot (it was left up across an update of the brain): it is opened again here.
+        surface.onRefused((sidecarId, v) => { if (v < NOTCH_PAGE_RELOADS_SINCE) void notchReopen(sidecarId, `a page speaks version ${v} of the messages`); });
         // And a notch whose window went away by itself is put back.
         sidecarManager.onEvent((sidecarId, event) => {
           if (event.event_type !== 'panel.closed') return;

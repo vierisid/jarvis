@@ -36,7 +36,7 @@ function harness() {
   const surface = new NotchSurface(port, () => {});
   const inbox = new NotchInbox(surface, { log: (line) => logs.push(line) });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const db = new Database(':memory:');
   // What is written down of an answer given from the notch (./actions.ts).
   const actions = attachNotchActions(db, { log: () => {} });

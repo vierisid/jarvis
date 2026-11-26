@@ -109,7 +109,7 @@ function side(server: FakeServer, id: string, handle: string, more: { account?: 
   const surface = new NotchSurface(port, () => {});
   const inbox = new NotchInbox(surface, { log: (line) => logs.push(line) });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const engine = new FakeEngine(server, id, handle, more.account);
   // In these tests the person answers at once. The rule about a yes that comes too soon has its own tests (peers/link.test.ts).
   const link = new PeerLink({ readMs: 0, log: (line) => logs.push(line) });

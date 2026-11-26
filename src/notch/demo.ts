@@ -233,11 +233,14 @@ const MOMENTS: Record<string, Moment> = {
     // that is parked, for as long as the call lasts.
     s.surface.act({ mood: 'focus' });
     await s.wait(1600);
-    s.surface.act({ park: 1, mood: 'focus' });
+    s.surface.setPark(1);
+    s.surface.act({ mood: 'focus' });
     await s.wait(2400);
-    s.surface.act({ park: 2, mood: 'focus' });
+    s.surface.setPark(2);
+    s.surface.act({ mood: 'focus' });
     await s.wait(2600);
-    s.surface.act({ park: 0, gesture: 'wake' });
+    s.surface.setPark(0);
+    s.surface.act({ gesture: 'wake' });
     await s.wait(1900);
     const first = await s.offer(['Call ended. ', em('3 actions'), ' came out of it. Follow-up drafted.'], 'show');
     if (first.act === 'yes') {
@@ -386,11 +389,11 @@ const MOMENTS: Record<string, Moment> = {
 
   /** A file is handed over: the mouth, the gulp, a question about it, the answer. */
   async drop(s) {
-    s.surface.act({ mouth: 'open' });
+    s.surface.setMouth('open');
     await s.wait(1500);
-    s.surface.act({ mouth: 'over' });
+    s.surface.setMouth('over');
     await s.wait(1100);
-    s.surface.act({ mouth: 'gulp' });
+    s.surface.gulp();
     await s.say(['Got ', em('Call with Anna.m4a'), '.'], 900, { mood: 'happy' });
     const id = s.id();
     const asks = ['List the action points', 'Summarise it', 'Who said what'];
@@ -423,12 +426,12 @@ const MOMENTS: Record<string, Moment> = {
 
   /** The watching eye, then sleep and waking. */
   async eye(s) {
-    s.surface.act({ eye: true });
+    s.surface.setEye(true);
     await s.say(['Eye on ', em('invoice 114'), '. I will tell you when ', em('it is paid'), ', even if it is covered.'], 4000, { mood: 'look', mark: 'check' });
     await s.wait(2600);
     s.surface.act({ gesture: 'pop' });
     const thanks = await s.offer([em('Acme'), ' paid invoice 114: ', em('$1,200.00'), '. Draft a thank-you?'], 'draft', { mood: 'happy' });
-    s.surface.act({ eye: false });
+    s.surface.setEye(false);
     if (thanks.act === 'yes') await s.say(['Drafted. It is in your Gmail drafts.'], 2800, happy);
     await s.wait(700);
     await s.say(['Going to sleep. I see nothing until you wake me.'], 2600, { mood: 'sleepy' });
@@ -537,7 +540,10 @@ export function createNotchDemo(surface: NotchSurface, options: NotchDemoOptions
       stage = mine;
       playing = name;
       // A clean start: nothing left over from the moment before.
-      surface.act({ park: 0, eye: false, mouth: 'shut', mood: 'idle' });
+      surface.setPark(0);
+      surface.setEye(false);
+      surface.setMouth('shut');
+      surface.act({ mood: 'idle' });
       surface.setCount(0);
       surface.rest();
       moment(mine).then(
@@ -558,7 +564,9 @@ export function createNotchDemo(surface: NotchSurface, options: NotchDemoOptions
     },
     stop() {
       end();
-      surface.act({ park: 0, eye: false, mouth: 'shut' });
+      surface.setPark(0);
+      surface.setEye(false);
+      surface.setMouth('shut');
       surface.rest();
       options.onEnd?.();
     },

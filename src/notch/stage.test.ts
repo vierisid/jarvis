@@ -200,3 +200,27 @@ describe('how the last answer was given', () => {
     expect(stage.answeredHow()).toBe('key');
   });
 });
+
+// Point 7, step 4 (protocol v2), 26 November 2026: an answer the brain was handed twice is one answer.
+describe('an answer a stage hears twice', () => {
+  test('one handed on twice with the same key is kept once: a later wait on that line does not take the copy as a second yes', async () => {
+    const h = stageOf();
+    const yes = { type: 'answer', id: 't-1', act: 'yes', n: 1, key: 'pc\npage\n1' } as const;
+    // Nobody waits yet: both are kept for whoever does, but the second is the first again.
+    h.stage.heard(yes);
+    h.stage.heard({ ...yes });
+    expect(await state(h.stage.answer('t-1', ['yes']))).toBe('resolved');
+    expect(await state(h.stage.answer('t-1', ['yes']))).toBe('pending');
+    // Another answer, another key: it is one.
+    h.stage.heard({ ...yes, n: 2, key: 'pc\npage\n2' });
+    h.stage.stop();
+  });
+
+  test('two answers with no key (a page that numbers none) are still two, as before', async () => {
+    const h = stageOf();
+    h.stage.heard({ type: 'answer', id: 't-1', act: 'yes' });
+    h.stage.heard({ type: 'answer', id: 't-1', act: 'yes' });
+    expect(await state(h.stage.answer('t-1', ['yes']))).toBe('resolved');
+    expect(await state(h.stage.answer('t-1', ['yes']))).toBe('resolved');
+  });
+});

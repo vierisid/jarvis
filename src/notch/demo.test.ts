@@ -42,9 +42,9 @@ function harness(options: { real?: boolean; onEnd?: () => void } = {}) {
   const { clock, advance } = fakeClock();
   const demo = createNotchDemo(surface, { clock, log: (line) => logs.push(line), ...options });
   const say = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  say({ type: 'hello', v: 1 });
+  say({ type: 'hello', v: 2 });
   pushed.length = 0;
-  const shown = (): NotchLine[] => pushed.flatMap((m) => (m.type === 'show' ? [m.line] : []));
+  const shown = (): NotchLine[] => pushed.flatMap((m) => (m.type === 'patch' && m.line ? [m.line] : []));
   return { demo, surface, pushed, logs, say, advance, shown };
 }
 
@@ -118,7 +118,7 @@ describe('the demo plays through the real path', () => {
     const work = h.shown().at(-1)!;
     expect(work.kind === 'work' && [work.steps, work.done]).toEqual([9, 0]);
     for (let i = 0; i < 3; i++) { h.advance(520); await settle(); }
-    const updates = h.pushed.flatMap((m) => (m.type === 'update' && m.id === work.id ? [m.done] : []));
+    const updates = h.pushed.flatMap((m) => (m.type === 'patch' && m.edit?.id === work.id ? [m.edit.done] : []));
     expect(updates).toEqual([1, 2, 3]);
     h.say({ type: 'answer', id: work.id, act: 'stop' });
     await settle();
@@ -143,7 +143,7 @@ describe('the demo plays through the real path', () => {
     h.say({ type: 'answer', id: sheet.id, act: 'word', word: 'day', value: 'Monday' });
     h.say({ type: 'answer', id: sheet.id, act: 'button', button: 'pay', row: 'pay' });
     await settle();
-    const update = h.pushed.findLast((m) => m.type === 'update' && m.id === sheet.id);
+    const update = h.pushed.findLast((m) => m.type === 'patch' && m.edit?.id === sheet.id);
     expect(JSON.stringify(update)).toContain('on Monday. You get the receipt.');
     expect(h.surface.current().count).toBe(1);
     // Still the same sheet: nothing new was shown.
@@ -228,7 +228,7 @@ describe('the demo plays through the real path', () => {
     h.demo.stop();
     await settle();
     const count = h.pushed.length;
-    expect(h.pushed.at(-1)).toEqual({ type: 'rest' });
+    expect(h.pushed.at(-1)).toMatchObject({ type: 'patch', line: null });
     h.advance(60_000);
     await settle();
     expect(h.pushed.length).toBe(count);

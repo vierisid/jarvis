@@ -524,7 +524,7 @@ function notch(rows: string[], options: { paused?: () => boolean; db?: Database 
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const w = world(rows, { gated: true });
   const running: boolean[] = [];

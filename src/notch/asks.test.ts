@@ -97,7 +97,7 @@ function harness(options: { deps?: Partial<NotchAsksDeps>; db?: Database; page?:
     ...options.deps,
   });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  if (options.page !== false) fromPage({ type: 'hello', v: 1 });
+  if (options.page !== false) fromPage({ type: 'hello', v: 2 });
   const line = (): NotchLine | null => surface.current().line;
   const text = (parts: NotchLine['say'] | undefined): string =>
     (parts ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join('');
@@ -294,7 +294,7 @@ describe('a name that may have been misheard is read back before anything runs',
     expect(part(h).word).toMatchObject({ options: ['Anna Rossi'], free: true });
     expect(h.door.texts()).toEqual([]);
     // It shrugs.
-    expect(h.pushed.some((message) => message.type === 'act' && message.gesture === 'shrug')).toBe(true);
+    expect(h.pushed.some((message) => message.type === 'effect' && message.gesture === 'shrug')).toBe(true);
     // And no name is in a log.
     for (const entry of h.logs) { expect(entry).not.toContain('Anna'); expect(entry).not.toContain('Ana'); }
   });
@@ -881,7 +881,7 @@ describe('with nobody looking, and after a restart', () => {
     // The brain stops here. A new one starts on the same data.
     const after = harness({ db, page: false });
     after.asks.resume();
-    after.fromPage({ type: 'hello', v: 1 });
+    after.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(after.line()).toMatchObject({ kind: 'sheet' });
     expect(after.said()).toBe('You asked: explain it');
@@ -890,7 +890,7 @@ describe('with nobody looking, and after a restart', () => {
     // And it does not come back a second time.
     const third = harness({ db, page: false });
     third.asks.resume();
-    third.fromPage({ type: 'hello', v: 1 });
+    third.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(third.line()).toBeNull();
   });
@@ -904,7 +904,7 @@ describe('with nobody looking, and after a restart', () => {
     await settle();
     const after = harness({ db, page: false });
     after.asks.resume();
-    after.fromPage({ type: 'hello', v: 1 });
+    after.fromPage({ type: 'hello', v: 2 });
     await settle();
     const rows = after.ledger.recent(10);
     expect(rows.map((entry) => entry.state)).toEqual(['dismissed', 'failed']);
@@ -922,7 +922,7 @@ describe('with nobody looking, and after a restart', () => {
     after.door.say(`notch-${id}`, 'Here it is.');
     after.door.end(`notch-${id}`);
     after.asks.resume();
-    after.fromPage({ type: 'hello', v: 1 });
+    after.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(after.said()).toBe('Here it is.');
   });
@@ -1166,7 +1166,7 @@ describe('first batch of the edge-case audit', () => {
     await before.speak('t1', 'send Leo the numbers');
     const after = harness({ db, page: false });
     after.asks.resume();
-    after.fromPage({ type: 'hello', v: 1 });
+    after.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(after.said()).toBe('I restarted before I started on: send Leo the numbers. Say it again.');
     expect(after.door.texts()).toEqual([]);
@@ -2074,7 +2074,7 @@ describe('a bare yes to what a turn with no word of the owner\'s asked back (aut
     await askedBack(before, shown(before));
     const after = harness({ db, page: false });
     after.asks.resume();
-    after.fromPage({ type: 'hello', v: 1 });
+    after.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(after.line()).toMatchObject({ kind: 'ask' });
     await after.answer('ask', { text: 'yes' });

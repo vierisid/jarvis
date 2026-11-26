@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { NOTCH_FUSE_SEEN_MS } from '../../../../src/notch/protocol.ts';
 import type { NotchFromPage, NotchLine } from '../../../../src/notch/protocol.ts';
-import type { NotchSurface } from './index.ts';
+import { scripted, type ScriptedSurface as NotchSurface } from './test-brain.ts';
 import { createTestClock, type NotchTestClock } from './test-clock.ts';
 
 // Point 7 of the notch review, 26 November 2026: the three small things that
@@ -11,7 +11,7 @@ import { createTestClock, type NotchTestClock } from './test-clock.ts';
 // nor forget that it was answered. See docs/notch/fixes/07-page-renderer.md.
 //
 // Time here is the test's own (./test-clock.ts): it moves only when told to.
-let createNotchSurface: (typeof import('./index.ts'))['createNotchSurface'];
+let createNotchSurface: ReturnType<typeof scripted>;
 let root: HTMLElement, surface: NotchSurface, sent: NotchFromPage[], dropped: string[], clock: NotchTestClock;
 
 const $ = <T extends Element = HTMLElement>(selector: string): T | null => root.querySelector<T>(selector);
@@ -85,7 +85,8 @@ const unreadable = { id: 'bad', kind: 'sheet', say: ['Approve?'], yes: 'approve'
 
 beforeAll(async () => {
   GlobalRegistrator.register();
-  ({ createNotchSurface } = await import('./index.ts'));
+  // The page behind a brain that says what the tests say in version 2 of the messages (./test-brain.ts).
+  createNotchSurface = scripted((await import('./index.ts')).createNotchSurface);
 });
 afterAll(() => GlobalRegistrator.unregister());
 beforeEach(() => {
@@ -130,19 +131,26 @@ describe('a message the page cannot read', () => {
       null, 42, {}, { type: 7 },
       { type: 'show', line: { id: 'x', kind: 'sheet', say: ['T'], blocks: [{ kind: 'unknown' }] } },
       { type: 'update', id: 'o', say: [{ nope: 1 }] },
-      { type: 'face' },
+      { type: 'count' },
     ];
     for (const message of junk) surface.receive(message as never);
-    expect(dropped).toEqual(['not a message', 'not a message', 'not a message', 'not a message', 'show sheet', 'update', 'face']);
+    // Each of the last three was the next in the row, and is counted as read: the one after it is no gap.
+    expect(dropped).toEqual(['not a message', 'not a message', 'not a message', 'not a message', 'patch sheet', 'patch', 'patch']);
     expect(said()).toContain('Reply?');
     $<HTMLElement>('.hint .key')!.click();
     expect(acts()).toEqual(['o:yes']);
+    surface.receive({ type: 'rest' });
+    expect(dropped.length).toBe(7);
+    expect(body()).toBe('rest');
   });
 
   test('one that is well formed and of a kind the page has never heard of is passed over without a word', () => {
     show({ id: 'o', kind: 'offer', say: ['Reply?'], yes: 'show', fold: 0 });
-    // What a newer brain may say to this page.
-    for (const message of [{ type: 'patch', seq: 4, line: null }, { type: 'effect', do: [] }, { type: 'face', mood: 'furious' }]) surface.receive(message as never);
+    // What a newer brain may say to this page, and what a brain of version 1 said.
+    for (const message of [{ type: 'sparkle', much: true }, { type: 'glow' }, { type: 'show', line: { id: 'x', kind: 'say', say: ['v1'], ms: 100 } },
+      { type: 'rest' }, { type: 'act', gesture: 'shake' }]) surface.raw(message);
+    // And a face this page cannot make, among what it can read.
+    surface.receive({ type: 'face', mood: 'furious' });
     expect(dropped).toEqual([]);
     expect(said()).toContain('Reply?');
     expect($('.nin')?.dataset.mood).not.toBe('furious');
@@ -216,12 +224,15 @@ describe('a line that is well formed and still cannot be drawn', () => {
     expect(field.value).toBe('half a sent');
   });
 
-  test('in place of an offer, the offer still folds', () => {
+  test('in place of an offer, the offer stays to be answered: when it folds is the brain\'s to say, and no failed draw can stop that', () => {
     show({ id: 'o', kind: 'offer', say: ['Reply?'], yes: 'show', fold: 2000 });
     withNoFields(() => show(undrawable));
     expect(said()).toContain('Reply?');
     clock.advance(10000);
-    expect(acts()).toEqual(['o:fold']);
+    // The page folds nothing itself. It used to, and a draw that failed stopped it for good.
+    expect(acts()).toEqual([]);
+    expect(said()).toContain('Reply?');
+    surface.receive({ type: 'rest' });
     expect(body()).toBe('rest');
   });
 });
@@ -593,7 +604,7 @@ describe('a letter under its fuse', () => {
 
   test('a letter the page cannot read is no fuse at all: nothing is shown, nothing burns, nothing is said to run out', () => {
     show({ ...letter, blocks: [{ kind: 'scroll', lines: [] }] } as unknown as NotchLine);
-    expect(dropped).toEqual(['show send']);
+    expect(dropped).toEqual(['patch send']);
     expect(body()).toBe('rest');
     clock.advance(20000);
     expect(acts().filter((act) => act.startsWith('slot:'))).toEqual([]);

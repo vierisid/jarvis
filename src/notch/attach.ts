@@ -99,14 +99,14 @@ export function createNotchReopen(port: Pick<NotchSidecarPort, 'dispatchRPC'>, o
     return false;
   };
 
-  const reopen = (async (sidecarId: string) => {
+  const reopen = (async (sidecarId: string, why = 'a page\'s sign-in has ended') => {
     const before = last.get(sidecarId);
     if (before !== undefined && now() - before < NOTCH_REOPEN_APART_MS) return false;
     if (opening.has(sidecarId)) return false;
     last.set(sidecarId, now());
     opening.add(sidecarId);
     try {
-      log('[notch] a page\'s sign-in has ended: it is opened again');
+      log(`[notch] ${why}: it is opened again`);
       try { await port.dispatchRPC(sidecarId, 'notch.close', {}); } catch { /* it was not up */ }
       return await open(sidecarId, false);
     } finally {
@@ -147,8 +147,8 @@ export const NOTCH_BACK_WITHIN_MS = 10 * 60_000;
 export const NOTCH_PANEL_ID = 'notch';
 
 export interface NotchReopen {
-  /** A page whose sign-in has ended: closed and opened anew. */
-  (sidecarId: string): Promise<boolean>;
+  /** A page whose sign-in has ended, or (with `why`) one that must be loaded again for another reason: closed and opened anew. */
+  (sidecarId: string, why?: string): Promise<boolean>;
   /**
    * The notch's window went away and the brain had not asked for that: the
    * person pressed Alt+F4 while the notch had the keyboard (they meant the

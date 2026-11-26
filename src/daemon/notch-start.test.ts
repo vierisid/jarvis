@@ -138,7 +138,7 @@ describe('where the daemon makes the notch', () => {
   test('both places are made as parts that may fail, and the one that runs is held for the way down', () => {
     // The surface, and the real things on it: each made once, and only inside startNotchPart.
     expect(source.split('new NotchSurface(').length - 1).toBe(1);
-    expect(source).toContain("notchSurface = startNotchPart('the notch', () => {\n        const surface = new NotchSurface(sidecarManager);");
+    expect(source).toContain("notchSurface = startNotchPart('the notch', () => {\n        // With the real timers: the brain folds an offer that was left alone (the page no longer does).\n        const surface = new NotchSurface(sidecarManager, undefined, undefined, realNotchTimers);");
     expect(source.split('attachNotchReal(').length - 1).toBe(1);
     expect(source).toContain("notchReal = startNotchPart('the notch', () => attachNotchReal(notchPage, {");
     expect(source).toContain('holdNotch(notchReal);');

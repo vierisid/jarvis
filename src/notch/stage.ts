@@ -37,6 +37,9 @@ export type NotchLineExtras = Partial<Pick<NotchLine, 'mood' | 'mark' | 'who' | 
 /** How long past its time a line is waited for before the script goes on without the page's word. */
 const LATE = 1500;
 
+/** How many answers, and how many finished lines, a stage remembers so as not to take one twice. */
+export const NOTCH_STAGE_KEYS_MAX = 200;
+
 /** The apps whose things come from the left of the notch. The rest come from the right. */
 const FROM_LEFT: ReadonlySet<string> = new Set(['desk', 'mail', 'sheets', 'pay', 'cal']);
 
@@ -135,14 +138,42 @@ export class NotchStage {
     for (const waiter of [...this.openWaiters]) waiter.fail();
   }
 
-  /** Takes an answer from the page. `from` is the desktop app it came from. */
+  /**
+   * Takes an answer from the page. `from` is the desktop app it came from.
+   *
+   * An answer is taken once. The surface already takes each numbered answer
+   * of a page once (./surface.ts); the same is held here by the answer's
+   * `key`, so that whatever hands an answer on twice cannot have it kept
+   * (`unheard`) and given to a later wait on the same line as a second yes.
+   * And nothing is kept for a line whose wait is over for good (`closed`): a
+   * fuse that was taken back hears no "it ran out" afterwards, from this
+   * desktop or another, and one that ran out hears it once.
+   */
   heard(answer: NotchAnswer, from?: string): void {
+    if (answer.key !== undefined) {
+      if (this.taken.has(answer.key)) return;
+      this.taken.add(answer.key);
+      if (this.taken.size > NOTCH_STAGE_KEYS_MAX) this.taken.delete(this.taken.values().next().value as string);
+    }
+    if (this.closed.has(answer.id)) return;
     if (from !== undefined) this.lastFrom = from;
     for (const waiter of [...this.waiters]) {
       if (waiter.take(answer)) return;
     }
     this.unheard.push(answer);
     if (this.unheard.length > 50) this.unheard.shift();
+  }
+
+  /** The keys of the answers this stage has had, the newest NOTCH_STAGE_KEYS_MAX of them. */
+  private readonly taken = new Set<string>();
+  /** The lines whose wait is over for good: a result that left, a fuse that was decided. */
+  private readonly closed = new Set<string>();
+
+  /** The wait on the line `id` is over for good: nothing more is heard about it, and nothing kept. */
+  private close(id: string): void {
+    this.closed.add(id);
+    if (this.closed.size > NOTCH_STAGE_KEYS_MAX) this.closed.delete(this.closed.values().next().value as string);
+    for (let at = this.unheard.length - 1; at >= 0; at--) if (this.unheard[at]!.id === id) this.unheard.splice(at, 1);
   }
 
   wasOpened(): void {
@@ -252,7 +283,11 @@ export class NotchStage {
   async say(parts: NotchPart[], ms: number, extras: NotchLineExtras = {}): Promise<void> {
     const id = this.id();
     this.put({ id, kind: 'say', say: parts, ms, ...extras });
-    await Promise.race([this.answer(id, ['done', 'yes']), this.wait(ms + LATE)]);
+    try {
+      await Promise.race([this.answer(id, ['done', 'yes']), this.wait(ms + LATE)]);
+    } finally {
+      this.close(id);
+    }
   }
 
   /** An offer. Comes back with what the person did with it. */
@@ -273,8 +308,12 @@ export class NotchStage {
   async send(parts: NotchPart[], ms: number, extras: NotchLineExtras = {}): Promise<boolean> {
     const id = this.id();
     this.put({ id, kind: 'send', say: parts, ms, ...extras });
-    const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
-    return answer?.act !== 'undo';
+    try {
+      const answer = await Promise.race([this.answer(id, ['done', 'undo']), this.wait(ms + LATE)]);
+      return answer?.act !== 'undo';
+    } finally {
+      this.close(id);
+    }
   }
 
   /**
@@ -292,6 +331,7 @@ export class NotchStage {
       return answer ? (answer.act === 'undo' ? 'undo' : 'done') : 'lost';
     } finally {
       this.fuses--;
+      this.close(id);
     }
   }
 
@@ -328,6 +368,7 @@ export class NotchStage {
       }
     } finally {
       this.fuses--;
+      this.close(id);
     }
   }
 

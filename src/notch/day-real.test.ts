@@ -48,7 +48,7 @@ function harness(start = at(10)) {
   const surface = new NotchSurface(port, () => {});
   const send = (event_type: string, payload: unknown): void => { for (const listener of listeners) listener('pc', { event_type, payload }); };
   const fromPage = (message: unknown): void => send(NOTCH_MESSAGE_EVENT, { message });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const real: NotchReal = attachNotchReal(surface, {
     approvalManager: new ApprovalManager(),
     approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),

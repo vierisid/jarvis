@@ -76,7 +76,7 @@ function harness(options: { result?: NotchActResult | null | 'lost'; paused?: ()
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const sent: Record<string, unknown>[] = [];
   const hands: NotchJobHands = {

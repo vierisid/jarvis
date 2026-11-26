@@ -20,7 +20,7 @@ function harness(open: NotchOpenFailure[] | (() => NotchOpenFailure[]) = [], mor
   const surface = new NotchSurface(port, () => {});
   const inbox = new NotchInbox(surface, { log: (line) => logs.push(line) });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const failures = Array.isArray(open) ? [...open] : null;
   const news = attachNotchNews(inbox, { openFailures: () => (failures ?? (open as () => NotchOpenFailure[])()), log: (line) => logs.push(line), ...more });
   const line = (): NotchLine | null => surface.current().line;

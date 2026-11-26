@@ -88,7 +88,7 @@ Six steps, each shipping alone.
 - A dropped message makes the page ask again, and each hello has an effect in
   the brain (things that were missed may speak). Hence the limits in step 1.
 
-## Left for step 4, and why
+## Left for step 4, and why (the first two are done in step 4)
 
 - A lost answer on one desktop still leaves the line dimmed for ever. The
   page cannot tell a lost yes from a brain that is slow to act on it. To
@@ -98,6 +98,39 @@ Six steps, each shipping alone.
 - The brain does not know when a page was not on screen (a reload is not a
   disconnect), so it cannot leave that time out of `left`. The 2 s floor in
   the page covers it instead.
+
+## What step 4 proved wrong in the design, or left out
+
+- Retry numbers: 1 s apart, 4 sends (not 1.5 s and 3 resends), 16 kept on
+  the page, 128 numbers remembered per desktop app and loading of the page.
+  A copy is told the same `ack` again; a number older than all kept counts
+  as taken.
+- A lost message with nothing after it leaves no gap. The page says `at
+  {seq}` every 5 s, and on a late answer; the brain sends the whole if it
+  sent more. That is what finds a lost rest and a lost fold.
+- A no and a fold end every line (`after` has them on all kinds), as the
+  brain always took them; the design's table had them on offers only.
+- `refuse` also answers a page of this version that the brain does not
+  know on this connection (the brain was started again): it says hello.
+- Not built: the `shown` message and a fuse clock started by it, `held`
+  mirrored to the other desktop, the "did not go out" line for a lost
+  fuse. The fuse keeps `ms + 1500` from when it was put, with `left` and
+  `NOTCH_FUSE_SEEN_MS` from step 2. `since` that fails the gate is logged,
+  not refused (owner decision 2 still open).
+- `NotchSurface.act` stays as the name for an `effect`; park, mouth, eye
+  and sounds have setters and cannot travel as one.
+
+## Esc lease (step 4, page side)
+
+Renew every 2 s (`NOTCH_ESC_RENEW_MS`), lease 6 s (`NOTCH_ESC_LEASE_MS`).
+Three renewals per lease, so two lost or late ones (timers in a window that
+is not the active one) do not cost Esc. Longer than the pulse's 5 s on
+purpose: on a proven page the pulse lets go first, and every renewal is a
+sign to the pulse, so a page that renews is never taken for gone. The
+desktop app does not enforce the lease yet: the page calls
+`__notch_esc_lease(6000)` only where it exists, and that is step 5 of
+point 10. No Go file was changed: the desktop app carries the v2 messages
+as opaque JSON under the same 64 KB limit.
 
 ## Only a real webview can show
 
@@ -129,6 +162,6 @@ Open, none of them needed for steps 1 to 3:
 - Step 2: done in "notch: a fuse or a result drawn again goes on from where it was"
 - Step 3: done in "notch: an answer that ends the line takes it off the other desktop too"
 - Review of steps 1 to 3: done in "notch: review of point 7: a fuse nobody could read is not vouched for, an answered line stays answered, and the hello has a real cap"
-- Step 4 (protocol v2): pending
+- Step 4 (protocol v2): done in "notch: protocol v2: what the notch is apart from what it does once, numbered, answers acknowledged and taken once, a fold the brain owns, and a page of another version refused"
 - Step 5 (reducer): pending
 - Step 6 (typed values): pending

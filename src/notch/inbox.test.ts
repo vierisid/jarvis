@@ -31,7 +31,7 @@ function harness(options: { page?: boolean; busy?: () => boolean; home?: (stage:
   const surface = new NotchSurface(port, (line) => logs.push(line));
   const inbox = new NotchInbox(surface, { clock, log: (line) => logs.push(line), busy: options.busy, home: options.home, maySpeak: options.maySpeak, elsewhere: options.elsewhere });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  if (options.page !== false) fromPage({ type: 'hello', v: 1 });
+  if (options.page !== false) fromPage({ type: 'hello', v: 2 });
   const line = (): NotchLine | null => surface.current().line;
   return {
     surface, inbox, pushed, logs, line, fromPage,
@@ -300,7 +300,7 @@ describe('a round', () => {
     await h.open();
     const before = h.pushed.length;
     await h.answer('yes');
-    expect(h.pushed.slice(before).map((m) => m.type)).not.toContain('rest');
+    expect(h.pushed.slice(before).filter((m) => m.type === 'patch' && m.line === null)).toEqual([]);
   });
 
   test('an item that is no longer true leaves the count without a word', async () => {
@@ -371,7 +371,7 @@ describe('giving way', () => {
     await settle();
     await h.open();
     expect(a.shows).toEqual([]);
-    expect(h.pushed.filter((m) => m.type === 'count')).toEqual([]);
+    expect(h.pushed.filter((m) => m.type === 'patch' && m.count !== undefined)).toEqual([]);
     busy = false;
     h.inbox.refresh();
     expect(h.count()).toBe(1);
@@ -448,7 +448,7 @@ describe('what cannot wait, and what arrived while nobody could be told', () => 
     const a = item('a'), b = item('b', 'clock', { urgent: true }), c = item('c');
     for (const each of [a, b, c]) h.inbox.add(each);
     await settle();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(h.said()).toBe('b?');
     expect(h.count()).toBe(2);
@@ -457,7 +457,7 @@ describe('what cannot wait, and what arrived while nobody could be told', () => 
     expect(h.line()).toBeNull();
     expect(a.shows).toEqual([]);
     // And a second hello does not bring them up either.
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(2);
@@ -615,7 +615,7 @@ describe('speaking up only when it may', () => {
     let still = false;
     const h = harness({ page: false, maySpeak: () => still });
     h.inbox.add(item('mail', 'person'));
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     await settle();
     expect(h.line()).toBeNull();
     still = true;
@@ -687,7 +687,7 @@ describe('what the hardening audit found', () => {
     const port: NotchSurfacePort = { dispatchRPC(_s, _m, params) { pushed.push((params as { message: NotchToPage }).message); return Promise.resolve({}); }, onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
     const surface = new NotchSurface(port, () => {});
     const inbox = new NotchInbox(surface, { clock: { setTimeout: (fn, ms) => { const t = { fn, at: now + ms }; timers.push(t); return t; }, clearTimeout: () => {} }, log: () => {}, now: () => now });
-    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 2 } } });
     const did: string[] = [];
     let finish: () => void = () => {};
     inbox.present('long', async () => { await new Promise<void>((done) => { finish = done; }); });
@@ -725,7 +725,7 @@ describe('what the hardening audit found', () => {
     h.inbox.add({ ...item('promise'), check: () => false });
     h.inbox.add(item('approval'));
     h.inbox.add(item('news'));
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     await settle();
     // The first was gone: the second has its say.
     expect(h.said()).toBe('approval?');

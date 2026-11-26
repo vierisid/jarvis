@@ -57,7 +57,7 @@ function harness() {
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const delivered: string[] = [];
   const opened: (string | null)[] = [];
   const real = attachNotchReal(surface, {
@@ -139,7 +139,7 @@ describe('the approval fixture, from the command to Today', () => {
     const open: { key: string; headline: string }[] = [];
     let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} }, () => {});
-    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+    onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 2 } } });
     const real = attachNotchReal(surface, {
       approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       openFailures: () => open,
@@ -323,7 +323,7 @@ describe('doing it in view, put together (pass 10)', () => {
     let onWatch: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
     const fromPage = (message: unknown): void => onPage('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const sent: Record<string, unknown>[] = [];
     const calls: string[] = [];
     const shown: RawInteraction[] = [];
@@ -447,7 +447,7 @@ describe('words the notch acts on itself, typed into Home as a person types them
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(),
       approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
@@ -488,7 +488,7 @@ describe('a call that is listened to, put together', () => {
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const timers: { fn: () => void; at: number }[] = [];
     let now = 0;
     const clock = {
@@ -551,7 +551,7 @@ describe('a call that is listened to, put together', () => {
     expect(said()).toBe('Listening. I hold everything else until you are done.');
     await answer('done');
     // The eye is lit while it listens.
-    expect(pushed.some((message) => message.type === 'act' && message.eye === true)).toBe(true);
+    expect(pushed.some((message) => message.type === 'patch' && message.eye === true)).toBe(true);
     for (const source of ['mic', 'far', 'mic']) {
       call('pc', { event_type: 'notch.call', payload: { id: asked[0]!.id, phase: 'piece', source, seq: 1, at: Date.now(), ms: 8000, voiced_ms: 7000, rate: 16_000 }, binary: { type: 'inline', data: Buffer.alloc(16_000 * 2 * 8, 1).toString('base64') } });
       await wait();
@@ -562,7 +562,7 @@ describe('a call that is listened to, put together', () => {
     expect(asked.at(-1)).toMatchObject({ on: false });
     // There is no way to the mailbox here: the follow-up is drafted all the same, to be read on the sheet.
     expect(said()).toBe('Call ended. 2 actions came out of it. Follow-up drafted.');
-    expect(pushed.filter((message) => message.type === 'act' && message.eye !== undefined).at(-1)).toMatchObject({ eye: false });
+    expect(pushed.filter((message) => message.type === 'patch' && message.eye !== undefined).at(-1)).toMatchObject({ eye: false });
     await answer('yes');
     expect(said()).toBe('After the call with Sam');
     await answer('no');
@@ -593,7 +593,7 @@ describe("other people's Jarvises, put together", () => {
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const server = new FakeServer();
     const engine = new FakeEngine(server, 'Sam0000000000000000001', 'sam');
     const leo = new FakeEngine(server, 'Leo0000000000000000002', 'leo');
@@ -700,7 +700,7 @@ function assembledNotch(think: () => string) {
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     let whereSays: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const state = { now: new Date(2026, 10, 18, 10, 0).getTime(), looks: 0, paused: false };
     const timers: { fn: () => void; at: number }[] = [];
@@ -786,7 +786,7 @@ describe('a call that was not listened to leaves the notch to its owner, put tog
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const timers: { fn: () => void; at: number }[] = [];
     let now = 0;
     const clock = {
@@ -1030,7 +1030,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     let onPage: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
     const fromPage = (message: unknown): void => onPage('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     return { surface, fromPage };
   };
 
@@ -1211,7 +1211,7 @@ describe('an instruction that ends with an approval unanswered', () => {
     const port: NotchSurfacePort = { dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onEvent = listener; }, onSidecarDisconnected() {} };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const listeners = new Set<(event: unknown) => void>();
     const turns: { conversationId: string; turnId: string; requestId: string }[] = [];
     const closedAs: string[] = [];

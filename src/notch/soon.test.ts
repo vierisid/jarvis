@@ -23,7 +23,7 @@ function harness(events: () => MailCalendarEvent[] | null, options: { maySpeak?:
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { log: () => {}, maySpeak: options.maySpeak });
   let now = NOW;
   const asked: [number, number][] = [];

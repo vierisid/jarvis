@@ -31,7 +31,7 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   /** The workflows of the product, as far as an agent needs them. */
   const flows = new Map<string, { job: string; enabled: boolean; runs: { id: string; end: 'ok' | 'bad' | 'open'; at: number }[]; madeAt?: number; ready?: boolean; missing?: string }>();
@@ -101,7 +101,7 @@ function harness(options: { build?: (sentence: string) => Built | Promise<Built>
   /** A yes at rest: the first thing that waits is opened. */
   const opens = async (): Promise<void> => { fromPage({ type: 'open' }); await settle(); };
   /** What the notch was asked to do with its face and body, in order. */
-  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'effect').map(({ type: _type, seq: _seq, ...rest }) => rest);
   return { agents, inbox, did, logs, flows, line, said, pass, speak, reply, ran, makes, opens, assistantBuilds, acts, actions, db, advance: (ms: number) => { now += ms; }, now: (): number => now };
 }
 

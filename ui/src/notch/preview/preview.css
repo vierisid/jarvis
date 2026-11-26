@@ -18,3 +18,5 @@ body { display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
 #log li { padding: 3px 0; border-top: 1px solid #eef1f4; overflow-wrap: anywhere; }
 #log li.in { color: #0b5cad; }
 #log li.out { color: #9a3d00; }
+#log li.lost { text-decoration: line-through; opacity: .6; }
+.panel input[type="number"] { width: 5em; font: inherit; }

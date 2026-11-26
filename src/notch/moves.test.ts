@@ -34,8 +34,8 @@ function harness() {
     for (const timer of [...timers]) if (timer.at <= now) { const at = timers.indexOf(timer); if (at >= 0) timers.splice(at, 1); timer.fn(); }
     await settle();
   };
-  const shows = (): NotchLine[] => pushed.filter((m): m is Extract<NotchToPage, { type: 'show' }> => m.type === 'show').map((m) => m.line);
-  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+  const shows = (): NotchLine[] => pushed.flatMap((m) => (m.type === 'patch' && m.line ? [m.line] : []));
+  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'effect').map(({ type: _type, seq: _seq, ...rest }) => rest);
   return { surface, clock, pushed, fromPage, pass, shows, acts };
 }
 
@@ -53,7 +53,7 @@ describe('a line that Jarvis brings by itself comes in along the edge', () => {
 
   test('the first line of a script that started by itself arrives; every line after it is just there', async () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     const stage = new NotchStage(h.surface, h.clock, 'mail', { prefix: 'item', unasked: true });
     stage.put({ id: stage.id(), kind: 'offer', say: ['Reply to Sam?'], yes: 'show', src: 'mail' });
     stage.put({ id: stage.id(), kind: 'say', say: ['Sent.'], ms: 2000, src: 'mail' });
@@ -65,7 +65,7 @@ describe('a line that Jarvis brings by itself comes in along the edge', () => {
 
   test('a line that was asked for does not arrive, whatever way it would come by itself', () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     const asked = new NotchStage(h.surface, h.clock, 'round', { prefix: 'item' });
     void asked.say(['3 mails while you were away.'], 4000, { comes: 'pair' });
     const line = h.shows()[0]!;
@@ -76,7 +76,7 @@ describe('a line that Jarvis brings by itself comes in along the edge', () => {
 
   test('the way a line says it comes is the way it comes when nobody asked', () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     const stage = new NotchStage(h.surface, h.clock, 'back', { prefix: 'item', unasked: true });
     void stage.say(['3 mails while you were away.'], 4000, { comes: 'pair' });
     const line = h.shows()[0]!;
@@ -100,10 +100,10 @@ describe('every start is a different birth', () => {
     const h = harness();
     const asked: number[] = [];
     h.surface.setBirths(() => { asked.push(asked.length); return asked.length === 1 ? 'gather' : ('nonsense' as 'run'); });
-    h.fromPage({ type: 'hello', v: 1 }, 'pc');
-    h.fromPage({ type: 'hello', v: 1 }, 'laptop');
+    h.fromPage({ type: 'hello', v: 2 }, 'pc');
+    h.fromPage({ type: 'hello', v: 2 }, 'laptop');
     // A page that comes back is not born again.
-    h.fromPage({ type: 'hello', v: 1 }, 'pc');
+    h.fromPage({ type: 'hello', v: 2 }, 'pc');
     const born = h.pushed.filter((m): m is Extract<NotchToPage, { type: 'state' }> => m.type === 'state').map((m) => m.born);
     expect(born).toEqual(['gather', 'run', undefined]);
     expect(asked.length).toBe(2);
@@ -113,14 +113,14 @@ describe('every start is a different birth', () => {
 describe('its small sounds are the person\'s choice, and are kept', () => {
   test('a change is told at once, and a page that comes up later is told with everything else', () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     h.surface.setSound(true);
     h.surface.setSound(true);
-    expect(h.acts()).toEqual([{ sound: true }]);
-    h.fromPage({ type: 'hello', v: 1 }, 'laptop');
+    expect(h.pushed.flatMap((m) => (m.type === 'patch' && m.sound !== undefined ? [{ sound: m.sound }] : []))).toEqual([{ sound: true }]);
+    h.fromPage({ type: 'hello', v: 2 }, 'laptop');
     expect(h.pushed.at(-1)).toMatchObject({ type: 'state', sound: true });
     h.surface.setSound(false);
-    h.fromPage({ type: 'hello', v: 1 }, 'third');
+    h.fromPage({ type: 'hello', v: 2 }, 'third');
     expect('sound' in (h.pushed.at(-1) as object)).toBe(false);
   });
 });
@@ -128,7 +128,7 @@ describe('its small sounds are the person\'s choice, and are kept', () => {
 describe('yes at rest', () => {
   test('when it starts a round the yes is seen: a nod', async () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     const inbox = new NotchInbox(h.surface, { clock: h.clock, log: () => {} });
     inbox.add({ id: 'a', subject: 'a', class: 'rest', title: () => ['One thing.'], play: async (stage) => { await stage.offer(['One thing.'], 'ok'); return 'settled'; } });
     await settle();
@@ -142,7 +142,7 @@ describe('yes at rest', () => {
 
   test('with nothing waiting there is nothing to nod at', async () => {
     const h = harness();
-    h.fromPage({ type: 'hello', v: 1 });
+    h.fromPage({ type: 'hello', v: 2 });
     new NotchInbox(h.surface, { clock: h.clock, log: () => {} });
     h.fromPage({ type: 'open' });
     await settle();

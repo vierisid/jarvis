@@ -32,7 +32,7 @@ function harness(browser: MailBrowser | null, think: (text: string) => string) {
     onSidecarDisconnected() {},
   };
   const surface = new NotchSurface(port, () => {});
-  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 1 } } });
+  onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message: { type: 'hello', v: 2 } } });
   const inbox = new NotchInbox(surface, { log: () => {} });
   const logs: string[] = [];
   const thought: string[] = [];

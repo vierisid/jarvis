@@ -95,7 +95,7 @@ function everything(given: Given = {}) {
   let onPage: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent(listener) { onPage = listener; }, onSidecarDisconnected() {} }, () => {});
   const fromPage = (message: unknown, sidecarId = 'pc'): void => onPage(sidecarId, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   // The notch's own clock runs only when a test winds it (`pass`): a line stays until it is answered.
   const timers: { fn: () => void; at: number }[] = [];
   let ticks = 0;
@@ -525,7 +525,7 @@ describe('a page comes up', () => {
     const dayOne = w.real.dayOne!;
     const dayOneCameUp = dayOne.cameUp.bind(dayOne);
     dayOne.cameUp = () => { heard.push('day one'); dayOneCameUp(); };
-    w.fromPage({ type: 'hello', v: 1 }, 'laptop');
+    w.fromPage({ type: 'hello', v: 2 }, 'laptop');
     expect(heard).toEqual(['inbox', 'day one']);
   });
 });

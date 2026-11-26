@@ -34,7 +34,7 @@ function stand() {
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => toSurface('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const line = (): NotchLine | null => surface.current().line;
   const blocks = (): NotchBlock[] => { const l = line(); return l && (l.kind === 'sheet' || l.kind === 'ask') ? l.blocks : []; };
@@ -54,7 +54,7 @@ function stand() {
     now = until;
     await settle();
   };
-  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'act').map(({ type: _type, ...rest }) => rest);
+  const acts = (): Record<string, unknown>[] => pushed.filter((m) => m.type === 'effect').map(({ type: _type, seq: _seq, ...rest }) => rest);
   return { surface, inbox, pushed, line, blocks, rows, reply, pass, acts, said: (): string => text(line()?.say), fromPage };
 }
 
@@ -288,7 +288,7 @@ describe('settings', () => {
     expect(h.p.sound()).toBe(true);
     expect(h.settings.get('sound', false)).toBe(true);
     expect(rowText(h.rows()[2]!)).toBe('Sounds: My small sounds are on.');
-    expect(h.acts()).toContainEqual({ sound: true });
+    expect(h.pushed.some((m) => m.type === 'patch' && m.sound === true)).toBe(true);
     await h.reply('word', { word: 'sound', value: 'off' });
     expect(h.p.sound()).toBe(false);
   });

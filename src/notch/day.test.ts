@@ -24,7 +24,7 @@ function harness(options: { done?: number; waiting?: number; mailNew?: number; a
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   let homes = 0;
   const inbox = new NotchInbox(surface, { log: () => {}, home: async (stage) => { homes++; await stage.say(['Home.'], 1000); } });
   const state = {

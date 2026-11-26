@@ -158,9 +158,9 @@ export const NOTCH_MOVES: readonly NotchMove[] = [
     play: async (stage) => {
       stage.surface.rest();
       await stage.wait(260);
-      for (const many of [1, 2, 3]) { stage.surface.act({ park: many }); await stage.wait(540); }
+      for (const many of [1, 2, 3]) { stage.surface.setPark(many); await stage.wait(540); }
       await stage.wait(2200);
-      stage.surface.act({ park: 0 });
+      stage.surface.setPark(0);
       await stage.wait(900);
     },
   },

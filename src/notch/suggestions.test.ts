@@ -18,7 +18,7 @@ function harness() {
   const surface = new NotchSurface(port, () => {});
   const inbox = new NotchInbox(surface, { log: () => {} });
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const line = (): NotchLine | null => surface.current().line;
   return {
     suggestions: attachNotchSuggestions(inbox), inbox, line,

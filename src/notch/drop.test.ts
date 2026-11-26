@@ -101,7 +101,7 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
   };
   const surface = new NotchSurface(port, () => {});
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-  fromPage({ type: 'hello', v: 1 });
+  fromPage({ type: 'hello', v: 2 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
   const asked: { text: string; files: NotchAskFile[]; said?: boolean }[] = [];
   const told: string[] = [];
@@ -132,7 +132,12 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
     notes: (): string[] => blocks().flatMap((block) => (block.kind === 'note' ? [text(block.say)] : [])),
     said: (): string => text(line()?.say),
     /** What the mouth was told to do, in order. */
-    mouth: (): string[] => pushed.flatMap((message) => (message.type === 'act' && message.mouth ? [message.mouth] : [])),
+    mouth: (): string[] => pushed.reduce<string[]>((said, message) => {
+      if (message.type === 'patch' && message.mouth) said.push(message.mouth);
+      // A gulp is the mouth shut and then the gulp: one word here, as it was one message before.
+      if (message.type === 'effect' && message.gulp) { if (said.at(-1) === 'shut') said.pop(); said.push('gulp'); }
+      return said;
+    }, []),
     /** "Got it" has had its moment: the page says so, and the question about the file comes up. */
     async got(): Promise<void> {
       await settle();
@@ -505,7 +510,7 @@ describe('pass 12: day one hears of a file that was taken', () => {
     };
     const surface = new NotchSurface(port, () => {});
     const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
-    fromPage({ type: 'hello', v: 1 });
+    fromPage({ type: 'hello', v: 2 });
     const inbox = new NotchInbox(surface, { clock, log: () => {} });
     const settings = new NotchSettings(new Database(':memory:'));
     const { NOTCH_DAY_ONE_ORDER } = await import('./dayone.ts');
