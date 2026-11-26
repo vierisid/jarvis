@@ -885,8 +885,9 @@ jobs:
 
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
-  # first compile happens on a release runner. Build + vet only — the UI
-  # can't run on a headless runner and the logic tests are covered on linux.
+  # first compile happens on a release runner. The UI can't run on a headless
+  # runner, but the root package's tests can and do: the darwin-tagged ones
+  # run nowhere else, and the shared ones meet the darwin halves only here.
   sidecar-build-darwin:
     needs: changes
     # macOS minutes bill at 10x — skip on docs/TypeScript-only changes.
@@ -899,7 +900,7 @@ jobs:
           persist-credentials: false
       # Go from sidecar/go.mod, its caches restored by exact key only (#1047).
       - uses: ./.github/actions/go-setup
-      - name: Build + vet (darwin, cgo)
+      - name: Build + vet + test (darwin, cgo)
         working-directory: sidecar
         env:
           CGO_ENABLED: "1"
@@ -908,6 +909,17 @@ jobs:
           # vet first, on the host arch: unlike `go build` it also type-checks
           # the darwin _test.go files and runs the analyzers.
           go vet ./...
+          # Then the root package's tests, on the host arch. Until the notch
+          # this job compiled them and ran none, so a darwin-only test (the
+          # notch's "nothing that holds a lock waits for the main thread") was
+          # never once run, and no shared test ever met the darwin half of a
+          # platform call. A test binary has no main thread serving its queue:
+          # a test that waits for the main thread hangs here, which is the
+          # point, and the timeout turns that into a failure with every
+          # goroutine's stack instead of a job that runs to its limit.
+          # The Chromium-driving tests stay on linux, where they are retried
+          # (same shape as CHROMIUM_TESTS in sidecar-build).
+          go test -count=1 -timeout 10m -skip '^TestBrowser.*Integration$' .
           # Both architectures, at the SAME deployment target the release uses.
           # That target is what makes APIs newer SDKs mark obsoleted fail here
           # rather than during a release (e.g. CGWindowListCreateImage, gone in
