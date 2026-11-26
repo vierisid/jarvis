@@ -2180,6 +2180,21 @@ describe('what is written down of a reply (the list of what the notch did)', () 
     expect(entries(h)[0]).toMatchObject({ kind: 'mail_slot', outcome: 'done', what: 'Offer of Tuesday at 10:00 to Leo: Deck for Thursday?', seen: 'letter', how: 'pick', fuseMs: MAIL_SLOT_FUSE_MS });
   });
 
+  test('Esc on the letter writes nothing, and the time picked after it is the one entry', async () => {
+    const h = harness([offers()]);
+    await h.arrive();
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    await h.answer('undo');
+    expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+    await h.answer('done');
+    expect(entries(h)).toEqual([]);
+    await h.answer('pick', { option: 'Tuesday at 10:00' });
+    await h.answer('done');
+    expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+    expect(entries(h)).toHaveLength(1);
+    expect(entries(h)[0]).toMatchObject({ kind: 'mail_slot', outcome: 'done', seen: 'letter', how: 'pick' });
+  });
+
   test('a letter the page did not vouch for does not go, and nothing is written', async () => {
     const h = harness([offers()]);
     await h.arrive();
