@@ -4,9 +4,12 @@ package main
 
 // Look at this, where is, and Jarvis's own pointers, on the Mac.
 //
-// NOT YET RUN. Written on a machine that cannot build for macOS; GitHub's Mac
-// job compiles it and nothing more. It is to be tried by hand in pass 14 with
-// everything else on the Mac.
+// Written on a machine that cannot build for macOS. It has run on a real Mac
+// once: on 19 November 2026, in the sixth run written down in
+// docs/notch/README.md, the watch on the pointer went in and the ink and the
+// pointers were drawn (upside down then: jarvis_look_local). Never tried by a
+// person since: where-is with the pointers, a click that is waited for, the
+// hands of a job, and that none of it can freeze the app (home, below).
 //
 // It does what notch_look_windows.go does, with the Mac's own means:
 //
@@ -43,12 +46,15 @@ extern int goNotchLookMouse(int kind, int x, int y);
 static CFMachPortRef jarvis_look_tap = NULL;
 static CFRunLoopSourceRef jarvis_look_tap_source = NULL;
 static int jarvis_look_tap_wanted = 0;
+// Held off because the main thread, which serves the tap, stands still
+// (jarvis_look_tap_hold). While it is, the tap is not switched on.
+static int jarvis_look_tap_held = 0;
 
 // kind: 1 the left button went down, 2 it came up, 3 the pointer moved, 4 it
 // moved with the button held, 5 the right button came up.
 static CGEventRef jarvis_look_tap_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *info) {
 	if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
-		if (jarvis_look_tap != NULL && jarvis_look_tap_wanted) CGEventTapEnable(jarvis_look_tap, true);
+		if (jarvis_look_tap != NULL && jarvis_look_tap_wanted && !jarvis_look_tap_held) CGEventTapEnable(jarvis_look_tap, true);
 		return event;
 	}
 	// A press a program made is not the person's: Jarvis itself presses in other apps.
@@ -87,8 +93,17 @@ static int jarvis_look_tap_set(int on) {
 		CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
 		CFRunLoopWakeUp(CFRunLoopGetMain());
 	}
-	CGEventTapEnable(jarvis_look_tap, on ? true : false);
+	CGEventTapEnable(jarvis_look_tap, (on && !jarvis_look_tap_held) ? true : false);
 	return 1;
+}
+
+// Holds the watch on the pointer off, or lets it go again: off whatever is
+// wanted, and back to what is wanted. It only tells the system, so it is safe
+// from any thread, and it is not called on the main thread.
+static void jarvis_look_tap_hold(int hold) {
+	jarvis_look_tap_held = hold;
+	CFMachPortRef tap = jarvis_look_tap;
+	if (tap != NULL) CGEventTapEnable(tap, (!hold && jarvis_look_tap_wanted) ? true : false);
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +597,12 @@ func notchLookMouseSeen(kind, x, y int) bool {
 	return false
 }
 
+// notchLookTapHold holds the watch on the pointer off while the main thread
+// stands still, and lets it go when it runs again (platformNotchInputStalled).
+func notchLookTapHold(hold bool) {
+	C.jarvis_look_tap_hold(boolToCInt(hold))
+}
+
 func (m *lookMac) Watch() {
 	on := m.look.Wants()
 	if C.jarvis_look_tap_set(boolToCInt(on)) == 0 && on {
@@ -722,9 +743,16 @@ func (m *lookMac) InkEnd(stay time.Duration) {
 // home is where the pointers live: at the notch, top centre of the first
 // display. Under a camera housing the notch hangs below it, and a pointer that
 // came out of the housing itself would come out of nothing.
+//
+// It is called with this file's lock held, and mostly with the look's as
+// well, and the main thread takes both inside the taps (a move of the pointer,
+// a click, Shift going down). So nothing here may wait for the main thread:
+// asked of the system here, the housing was a wait for the main thread, and a
+// ring that ended while the pointer moved froze the app for good. The housing
+// is read as it was last kept (notchHousingKept), which waits for nobody.
 func (m *lookMac) home() lookPoint {
 	first, _ := macScreenAt(lookPoint{0, 0})
-	_, housing := notchHousing(platformNotchHousing())
+	_, housing := notchHousingKept()
 	return lookPoint{first.X + first.W/2, first.Y + housing + 20}
 }
 

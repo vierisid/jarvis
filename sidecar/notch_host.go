@@ -260,8 +260,14 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	// change later (another display becomes the main one) arrives by
 	// window.__notch_cam.
 	bind("__notch_housing", func() []int {
-		w, h := notchHousing(platformNotchHousing())
+		w, h := notchHousingLook()
 		return []int{w, h}
+	})
+	// __notch_alive(): the page answering the pulse (notch_pulse.go). A page
+	// that has answered and then stops is not taken to hold Esc any more.
+	pulse := newNotchPulse(time.Now())
+	bind("__notch_alive", func() {
+		pulse.Page(time.Now())
 	})
 	notch.attachPage(inPage)
 	notch.watchKeys()
@@ -279,7 +285,7 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 		lastX, lastY, lastDown, sent := 0, 0, false, false
 		// The housing is asked for by the page when it starts. From here it is
 		// looked at again every two seconds, and said only when it changed.
-		camW, camH := notchHousing(platformNotchHousing())
+		camW, camH := notchHousingLook()
 		ticks := 0
 		for {
 			select {
@@ -288,7 +294,7 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			case <-ticker.C:
 			}
 			if ticks++; ticks%notchHousingEvery == 0 {
-				if w, h := notchHousing(platformNotchHousing()); w != camW || h != camH {
+				if w, h := notchHousingLook(); w != camW || h != camH {
 					camW, camH = w, h
 					log.Printf("[notch] the camera housing is now %dx%d points", w, h)
 					inPage(notchHousingScript(w, h))
@@ -302,12 +308,31 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			inPage(notchCursorScript(x, y, down))
 		}
 	}()
+	// The pulse has a goroutine of its own, and nothing on it waits for the
+	// window's thread: the one above does (the pointer's place is asked of
+	// that thread on a Mac), so it stands still exactly when the pulse has
+	// something to say.
+	pulsed := make(chan struct{})
+	go func() {
+		defer close(pulsed)
+		notchPulseRun(pulse, quit, func(run func()) {
+			wv.Dispatch(func() {
+				if stopped.Load() {
+					return
+				}
+				run()
+			})
+		}, func() { wv.Eval(notchAliveScript) }, notchPulseTell)
+	}()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			stopped.Store(true)
-			notch.detachPage()
 			close(quit)
+			// The pulse first, and it ends at once: after this nothing says
+			// "not answering" about a page that is gone.
+			<-pulsed
+			notch.detachPage()
 			<-finished
 			platformNotchTearDown(handle)
 		})
@@ -333,6 +358,30 @@ func notchHousing(w, h int) (int, int) {
 		return 0, 0
 	}
 	return w, h
+}
+
+// The housing as it was last read, kept so that it can be had without asking
+// anybody: width in the upper half, height in the lower. On a Mac the reading
+// itself is done on the main thread and waited for, and a wait for the main
+// thread is what nothing that holds a lock may do: the main thread may be
+// waiting for that very lock (the taps on the keyboard and on the pointer run
+// there). The look's pointers want the housing while they hold two.
+var notchHousingSeen atomic.Uint64
+
+// notchHousingLook reads the housing from the system and keeps it. It may
+// wait for the window's thread: it is for the page's own calls and for the
+// goroutine that looks every two seconds, which hold nothing.
+func notchHousingLook() (int, int) {
+	w, h := notchHousing(platformNotchHousing())
+	notchHousingSeen.Store(uint64(w)<<32 | uint64(h))
+	return w, h
+}
+
+// notchHousingKept is the housing as it was last read, at most two seconds
+// old while the notch is up. It never waits, and takes no lock.
+func notchHousingKept() (int, int) {
+	seen := notchHousingSeen.Load()
+	return int(seen >> 32), int(seen & 0xffffffff)
 }
 
 // notchHousingScript tells the page the housing changed.

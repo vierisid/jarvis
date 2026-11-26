@@ -135,6 +135,14 @@ static int jarvis_watch_tap_start(void) {
 	return 1;
 }
 
+// Holds the tap off, or lets it go again, while the main thread, which serves
+// it, stands still. It only tells the system, so it is safe from any thread,
+// and it is not called on the main thread.
+static void jarvis_watch_tap_hold(int hold) {
+	CFMachPortRef tap = jarvis_watch_tap;
+	if (tap != NULL) CGEventTapEnable(tap, hold ? false : true);
+}
+
 static void jarvis_watch_tap_stop(void) {
 	CFMachPortRef tap = jarvis_watch_tap;
 	CFRunLoopSourceRef source = jarvis_watch_tap_source;
@@ -233,6 +241,18 @@ func macHooksWanted() error {
 	}
 	macHookIn = true
 	return nil
+}
+
+// notchWatchTapHold holds the tap off while the main thread stands still, and
+// lets it go when it runs again (platformNotchInputStalled). The lock is the
+// one the tap is put in and taken out under, and nothing that holds it waits
+// for the main thread.
+func notchWatchTapHold(hold bool) {
+	macHookMu.Lock()
+	defer macHookMu.Unlock()
+	if macHookIn {
+		C.jarvis_watch_tap_hold(boolToCInt(hold))
+	}
 }
 
 func macStartRecording() error {

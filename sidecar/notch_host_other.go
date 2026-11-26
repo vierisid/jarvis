@@ -45,6 +45,10 @@ func platformNotchHousing() (int, int) { return 0, 0 }
 // come back from.
 func platformNotchAsking(handle unsafe.Pointer, asking bool) {}
 
+// Nothing here watches the keyboard or the pointer on the window's thread, so
+// there is nothing to hold off while that thread stands still (notch_pulse.go).
+func platformNotchInputStalled(stalled bool) {}
+
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	if take {
 		return platformFocusWindow(handle) == nil

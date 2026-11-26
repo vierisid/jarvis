@@ -138,6 +138,12 @@ func platformNotchTearDown(handle unsafe.Pointer) {
 // No display here has a camera housing the system tells of.
 func platformNotchHousing() (int, int) { return 0, 0 }
 
+// The hooks on the keyboard and the pointer have threads of their own here,
+// so they go on answering while the window's thread stands still, and there
+// is nothing to hold off (notch_pulse.go). That Esc is no longer kept then is
+// the service's doing (NotchService.setStalled).
+func platformNotchInputStalled(stalled bool) {}
+
 // platformNotchReveal is called once the page has loaded. The window is shown
 // without taking the keyboard, unless the fullscreen rule is hiding it.
 func platformNotchReveal(handle unsafe.Pointer) {

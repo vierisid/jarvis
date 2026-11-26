@@ -3183,8 +3183,9 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
 - Today (the list under Home's text field) holds approved actions and kept
   promises only. Work that needed no
   approval is in the audit trail by tool name, with no sentence to show.
-- The keys were tried by hand on one Windows 11 machine. The macOS tap has
-  never run.
+- The keys were tried by hand on one Windows 11 machine. The macOS tap went
+  in and watched the keys once, on a real Mac on 19 November 2026 (the sixth
+  run, below). What it does with Esc there has not been tried by hand.
 - The existing Ctrl + Shift + Space hotkey is untouched and still does what
   it did.
 - What the prototype drew outside the black shape is not there: the soft

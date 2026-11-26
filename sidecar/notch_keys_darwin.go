@@ -4,8 +4,13 @@ package main
 
 // The notch's keys on macOS: an event tap.
 //
-// NOT YET RUN. Written alongside the Windows hook on a machine that cannot
-// build for macOS; it is compiled in CI and nothing more.
+// Written alongside the Windows hook on a machine that cannot build for
+// macOS. It has run on a real Mac once: on 19 November 2026, in the sixth run
+// written down in docs/notch/README.md, the tap went in and the keys were
+// watched with it. What it does with Esc has never been tried by a person:
+// kept from the app in front while the notch has something on, let through
+// while the notch is out of sight (NotchService.setHidden) or its page has
+// stopped answering (notch_pulse.go). Nor has jarvis_notch_tap_hold.
 //
 // A tap, because the keys are pairs of modifiers held and let go, and because
 // Esc has to be kept from the app in front while the notch has something on.
@@ -163,6 +168,15 @@ static void jarvis_notch_permissions(int* ax, int* listen, int* post, int* scree
     *screen = CGPreflightScreenCaptureAccess() ? 1 : 0;
 }
 
+// Holds the tap off, or lets it go again. For the one case where the main
+// thread, which serves the tap, stands still: a tap that is not served keeps
+// every key on the machine waiting. It only tells the system, so it is safe
+// from any thread, and it is not called on the main thread.
+static void jarvis_notch_tap_hold(int hold) {
+    CFMachPortRef tap = jarvis_notch_tap;
+    if (tap != NULL) CGEventTapEnable(tap, hold ? false : true);
+}
+
 static void jarvis_notch_tap_stop(void) {
     CFMachPortRef tap = jarvis_notch_tap;
     CFRunLoopSourceRef source = jarvis_notch_tap_source;
@@ -196,6 +210,11 @@ import (
 // The keyboard the tap feeds. One notch per process, so one of these.
 var notchTapKeyboard atomic.Pointer[notchKeyboard]
 
+// notchTapMu is held while the tap is put in, taken out, or held off, so that
+// it is not taken out from under a goroutine that is holding it off. The tap
+// itself never takes it, and nothing that holds it waits for the main thread.
+var notchTapMu sync.Mutex
+
 // notchTapSeen is what the tap's callback hands to Go. It reports whether to
 // keep the key from the app in front.
 func notchTapSeen(kind, mods int) bool {
@@ -218,6 +237,21 @@ func notchTapSeen(kind, mods int) bool {
 		kb.reset()
 	}
 	return false
+}
+
+// notchKeysTapHold holds the keyboard tap off while the main thread stands
+// still, and lets it go when it runs again (platformNotchInputStalled). Keys
+// came and went unseen meanwhile, so none is taken as still down afterwards.
+func notchKeysTapHold(hold bool) {
+	notchTapMu.Lock()
+	C.jarvis_notch_tap_hold(boolToCInt(hold))
+	notchTapMu.Unlock()
+	if hold {
+		return
+	}
+	if kb := notchTapKeyboard.Load(); kb != nil {
+		kb.reset()
+	}
 }
 
 // platformNotchKeysAvailable says how the keys can be watched here: with the
@@ -354,11 +388,16 @@ func platformNotchKeysStart(kb *notchKeyboard) (stop func(), err error) {
 	notchAskForPermissions()
 	if setupAXTrusted() {
 		notchTapKeyboard.Store(kb)
-		if C.jarvis_notch_tap_start() != 0 {
+		notchTapMu.Lock()
+		in := C.jarvis_notch_tap_start() != 0
+		notchTapMu.Unlock()
+		if in {
 			var once sync.Once
 			return func() {
 				once.Do(func() {
+					notchTapMu.Lock()
 					C.jarvis_notch_tap_stop()
+					notchTapMu.Unlock()
 					notchTapKeyboard.CompareAndSwap(kb, nil)
 				})
 			}, nil

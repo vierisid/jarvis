@@ -66,9 +66,12 @@ type NotchService struct {
 	// Whether the page says Esc would do something on the notch, and whether
 	// the window is out of sight (behind a fullscreen video). Esc is taken
 	// from the app in front only when the first holds and the second does
-	// not (wantEsc, setHidden).
+	// not (wantEsc, setHidden). Nor is it taken while the page that said so
+	// has stopped answering (setStalled, notch_pulse.go): what a page said
+	// before it hung is not something Esc can be kept from every app for.
 	escWanted bool
 	hidden    bool
+	stalled   bool
 }
 
 // notch is the process-wide service. It is safe before any connection exists:
@@ -207,7 +210,7 @@ func (n *NotchService) watchKeys() {
 	}
 	n.mu.Lock()
 	n.keys = kb
-	want := n.escWanted && !n.hidden
+	want := n.takesEsc()
 	n.mu.Unlock()
 	kb.wantEsc(want)
 }
@@ -217,8 +220,9 @@ func (n *NotchService) watchKeys() {
 func (n *NotchService) detachPage() {
 	n.mu.Lock()
 	n.toPage = nil
-	// What the page wanted and where its window was go with it.
-	n.escWanted, n.hidden = false, false
+	// What the page wanted, where its window was and whether it answered go
+	// with it.
+	n.escWanted, n.hidden, n.stalled = false, false, false
 	n.mu.Unlock()
 	n.stopKeys()
 }
@@ -279,7 +283,7 @@ func (n *NotchService) KeyPairs() notchKeyPairs {
 func (n *NotchService) wantEsc(want bool) {
 	n.mu.Lock()
 	n.escWanted = want
-	kb, take := n.keys, want && !n.hidden
+	kb, take := n.keys, n.takesEsc()
 	n.mu.Unlock()
 	if kb != nil {
 		kb.wantEsc(take)
@@ -293,12 +297,73 @@ func (n *NotchService) wantEsc(want bool) {
 func (n *NotchService) setHidden(hidden bool) {
 	n.mu.Lock()
 	n.hidden = hidden
-	kb, take := n.keys, n.escWanted && !hidden
+	kb, take := n.keys, n.takesEsc()
 	n.mu.Unlock()
 	if kb != nil {
 		kb.wantEsc(take)
 	}
 }
+
+// setStalled is the pulse saying whether the page has stopped answering, or
+// the thread its window runs on has stopped running (notch_pulse.go). Until
+// it answers again Esc is the app's: the page cannot say that it no longer
+// wants it.
+func (n *NotchService) setStalled(stalled bool) {
+	n.mu.Lock()
+	n.stalled = stalled
+	kb, take := n.keys, n.takesEsc()
+	n.mu.Unlock()
+	if kb != nil {
+		kb.wantEsc(take)
+	}
+}
+
+// takesEsc is whether Esc is kept from the app in front right now: the page
+// says it would do something, the window can be seen, and the page is there
+// to hear it. With the lock held.
+func (n *NotchService) takesEsc() bool {
+	return n.escWanted && !n.hidden && !n.stalled
+}
+
+// notchHideRelay carries "the window is out of sight" from the thread that
+// shows and hides the window to the service, without that thread waiting for
+// anything. On a Mac that thread is the main thread, and the main thread
+// takes no lock it could be kept waiting on: it puts the word down here and
+// goes on. A goroutine picks up the last word put down and tells the service.
+// Only the last word counts, so two changes close together cannot arrive the
+// wrong way round.
+type notchHideRelay struct {
+	hidden atomic.Bool
+	wake   chan struct{}
+	once   sync.Once
+	tell   func(hidden bool)
+}
+
+func newNotchHideRelay(tell func(hidden bool)) *notchHideRelay {
+	return &notchHideRelay{wake: make(chan struct{}, 1), tell: tell}
+}
+
+// Report puts the word down. It never waits.
+func (r *notchHideRelay) Report(hidden bool) {
+	r.hidden.Store(hidden)
+	r.once.Do(func() {
+		go func() {
+			for range r.wake {
+				r.tell(r.hidden.Load())
+			}
+		}()
+	})
+	select {
+	case r.wake <- struct{}{}:
+	default:
+		// A word is already waiting to be picked up, and it is read when it
+		// is picked up: this one is the one that will be read.
+	}
+}
+
+// notchHidden is how a window that hides by itself, on a thread that must
+// not wait, says so (the Mac's: notch_host_darwin.go).
+var notchHidden = newNotchHideRelay(func(hidden bool) { notch.setHidden(hidden) })
 
 func (n *NotchService) isHidden() bool {
 	n.mu.Lock()

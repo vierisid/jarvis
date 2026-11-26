@@ -41,6 +41,10 @@ package main
 #include <libproc.h>
 #import <objc/runtime.h>
 
+// Told whenever the window goes out of sight or comes back (notch.go,
+// notchHidden). It puts the word down and comes back at once.
+extern void goNotchHidden(int hidden);
+
 // One notch per process.
 static NSWindow* jarvis_notch_win = nil;
 static NSBezierPath* jarvis_notch_path = nil; // window points, origin top-left, y down
@@ -275,6 +279,8 @@ static void jarvis_notch_tick(BOOL checkFullscreen) {
     BOOL hide = front > 0 && jarvis_notch_app_keeps_display_awake(front);
     if (hide == jarvis_notch_hidden) return;
     jarvis_notch_hidden = hide;
+    // Out of sight, it takes no Esc and no yes (NotchService.setHidden).
+    goNotchHidden(hide ? 1 : 0);
     if (hide) {
         [win orderOut:nil];
     } else if (jarvis_notch_loaded) {
@@ -290,6 +296,7 @@ static void jarvis_notch_set_up(void* nswindow_ptr, int w, int h) {
         jarvis_notch_path = nil;
         jarvis_notch_loaded = NO;
         jarvis_notch_hidden = NO;
+        goNotchHidden(0);
         jarvis_notch_previous_app = nil;
 
         [win setReleasedWhenClosed:NO];
@@ -335,6 +342,9 @@ static void jarvis_notch_tear_down(void) {
         jarvis_notch_win = nil;
         jarvis_notch_path = nil;
         jarvis_notch_previous_app = nil;
+        // No window is not a hidden window.
+        jarvis_notch_hidden = NO;
+        goNotchHidden(0);
     });
 }
 
@@ -343,6 +353,8 @@ static void jarvis_notch_reveal(void* nswindow_ptr) {
     NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
     jarvis_notch_on_main(^{
         jarvis_notch_loaded = YES;
+        // A page loaded while the window is out of sight is told so anew.
+        goNotchHidden(jarvis_notch_hidden ? 1 : 0);
         if (!jarvis_notch_hidden) [win orderFrontRegardless];
     });
 }
@@ -444,6 +456,9 @@ static int jarvis_notch_focus(void* nswindow_ptr, int take) {
     NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
     __block int has = 0;
     dispatch_block_t work = ^{
+        // A window nobody can see does not take the keyboard from the film,
+        // and making it key would bring it back over the film.
+        if (take && jarvis_notch_hidden) return;
         if (take) {
             NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
             if (front != nil && front.processIdentifier != [[NSProcessInfo processInfo] processIdentifier]) {
@@ -482,7 +497,9 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	var dw, dh, top, left, right C.int
 	C.jarvis_notch_display(&dw, &dh, &top, &left, &right)
 	log.Printf("[notch] display %dx%d points, %d of its top taken, %d free to the left of that and %d to the right", int(dw), int(dh), int(top), int(left), int(right))
-	if w, h := platformNotchHousing(); w > 0 && h > 0 {
+	// Read here and kept (notchHousingLook), so that the look's pointers know
+	// it before the page has asked for it.
+	if w, h := notchHousingLook(); w > 0 && h > 0 {
 		log.Printf("[notch] this display has a camera housing, %dx%d points: the notch is drawn round it", w, h)
 	} else {
 		log.Printf("[notch] this display has no camera housing")
@@ -495,6 +512,11 @@ func platformNotchTearDown(handle unsafe.Pointer) {
 
 // platformNotchHousing is the camera housing of the display the notch is on,
 // in the page's own pixels (points): how wide, how tall. Both 0 without one.
+//
+// It asks the main thread and waits for the answer, so it is never called
+// with a lock held: the main thread may be waiting for that lock, inside a
+// tap, and then neither ever moves again. Whoever holds a lock reads
+// notchHousingKept instead (notch_host.go).
 func platformNotchHousing() (int, int) {
 	var w, h C.int
 	C.jarvis_notch_housing(&w, &h)
@@ -563,6 +585,17 @@ func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts
 // yet hear this: a question asked during a fullscreen video waits there until
 // the video ends. Written down in docs/notch/README.md as a limit.
 func platformNotchAsking(handle unsafe.Pointer, asking bool) {}
+
+// platformNotchInputStalled holds the taps off while the main thread stands
+// still, and lets them go when it runs again (notch_pulse.go). All three taps
+// are served by the main thread, and a tap that is not served keeps every key
+// and every click on the machine waiting until the system gives up on it.
+// Called from the pulse's goroutine: nothing here waits for the main thread.
+func platformNotchInputStalled(stalled bool) {
+	notchKeysTapHold(stalled)
+	notchLookTapHold(stalled)
+	notchWatchTapHold(stalled)
+}
 
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	if handle == nil {
