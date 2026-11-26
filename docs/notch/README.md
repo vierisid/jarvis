@@ -719,7 +719,8 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     line led to, the reply is turned down and does not come back (21). A
     reply that offers a time has one pick in the place of the two yeses,
     and since 26 November 2026 its letter is on paper too, for as long as
-    its fuse burns (199): no letter goes that was not on the notch first. A
+    its fuse burns (199). It goes only when a page says it drew that
+    letter and had its end on screen: without that word nothing is sent. A
     draft the owner opened themselves, from the list or from Home's row, is
     closed by Esc and kept, and the key says so: the sheet's `no` word is
     "back" or "close" there. Found on the owner's first evening with it (15
@@ -770,7 +771,9 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     word is enough, and whether what did not go stays in the drafts. And a
     notch that is taken between Send and the second look at the thread
     still writes down that the mail may have gone. It had forgotten it,
-    and kept the browser tab to itself until the brain was started again.
+    and kept the browser tab to itself until the brain was started again:
+    a wait for time on a stage that had ended never came back
+    (`NotchStage.wait`, which now fails as every other wait does).
 63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a reply
     speaks up by itself the mailbox is asked whether it is still an answer to
@@ -2639,20 +2642,50 @@ Friday at 10:00 to Anna."
     the letter is seen. Nothing on that paper can be changed or pressed,
     and a click somewhere else is not an undo: the owner goes on working
     while it burns.
-    A fuse nobody saw burn out sends nothing (22). The page does not say
-    it burnt out when the end of the letter was never on screen, and then
-    the line says that nothing went. A letter of more than
+    That it was seen has to be said, and is not taken from silence. When
+    the fuse runs out the page says so, and says `seen` with it only when
+    it drew the letter, showed it from the start or for at least
+    `NOTCH_FUSE_SEEN_MS`, had its end on screen, and did not know itself
+    out of sight at any moment of it (`NotchStage.letter`). A page that
+    was loaded before the brain was updated draws no letter and says only
+    that the fuse ran out: on that word nothing is sent. It had sent the
+    letter. One desktop that does not vouch does not end it for another
+    that does, or for an Esc there. With no such word by the end, the
+    draft is taken out of Gmail, the line says "Not sent: the letter could
+    not be shown whole", and the letter is opened as a draft to read, so
+    that the next pick does not end the same way. When no page said
+    anything it says that the notch went away. A fuse nobody saw burn out
+    sends nothing (22).
+    The notch is in sight for it: the line that puts a pick in the thread
+    and the letter itself count as a question to the window, so that on
+    Windows it is not hidden behind a fullscreen video while the fuse
+    burns with Esc not taken. On a Mac the window that hides for a video
+    does not come back for a question yet (point 10): there the letter
+    goes only if the page knows it is shown.
+    A letter that with its line of who it goes to takes more than
     `MAIL_SLOT_PAPER_ROWS` rows is not read in eight seconds and may not
     fit the paper: the pick opens it as a draft, with the time in it, and
-    it waits for its own yes (61). Whoever wants to read a letter before
-    picking finds it in Home's row, where the time is a word with the free
-    times as its choices. It is called sent as any reply is (62), and one
-    that may have gone is looked for before a second yes sends anything.
-    The mail the model reads is read without what its sender hid from the
-    eye (`unseen` in `page/threads.js`: an element that says of itself
-    that it is not shown, has no size, or is see-through). That is a first
-    fence and not the wall: white words on white, and what a style sheet
-    hides, are still read.
+    it waits for its own yes (61). Esc on a draft that came up this way
+    closes it and keeps the reply, and the key says "close": the owner
+    picked a time and did not ask for a draft to turn down. "Not needed"
+    under it is the no. That a pick was taken back is kept of the reply
+    for as long as it waits and the brain runs: Esc is then "not now" on
+    whichever line offers that reply, the plain one too when its times
+    have passed. Whoever wants to read a letter before picking finds it in
+    Home's row, where the time is a word with the free times as its
+    choices. It is called sent as any reply is (62), and one that may have
+    gone is looked for before a second yes sends anything. A draft found
+    in the thread with the reply's own words is said to be this reply,
+    left from an earlier try (a brain that stopped while the fuse burnt):
+    it is not touched.
+    The mail the model reads is read without some of what its sender hid
+    from the eye (`cut` and `standing` in `page/threads.js`). Only the
+    inline style of the element itself is looked at: not drawn, see-through
+    or given no room cuts everything in it; no size of letters, or not
+    visible, leaves out the words that stand there and still reads what
+    is inside and given a size or shown again, as mail layouts do. It is a
+    first fence and no more: white on white, a class and a style sheet
+    are not seen by it.
 200. **The calendar is asked again at the pick.** A reply can wait for
     hours. Before the letter is written into the thread the hours round
     the picked time are read again, for at most `MAIL_SLOT_ASK_MS`. A time
@@ -2671,9 +2704,10 @@ What is not done, or not proven:
   well, in every language, is not known.
 - **The letter under its fuse has not been seen on a real notch.** The page
   draws it in tests that have no layout. Whether twelve rows are read in
-  eight seconds, whether they fit the paper on a small screen or under a
-  camera housing, and how the fuse looks round a sheet, are the owner's to
-  see.
+  eight seconds, whether they fit the paper on a short screen or under a
+  camera housing, how the fuse looks round a sheet, how right-to-left
+  text sits, and what a window hidden in the middle of the fuse does to
+  the page's timers, are the owner's to see.
 - **The working day is fixed**: 9:00 to 18:00, Monday to Friday, half an
   hour. There is no setting for it, and a meeting's own length is not read
   from the mail.
@@ -3556,9 +3590,14 @@ will drop.
 A `send` can carry `blocks`: what is going out, on paper under the sentence
 for as long as the fuse burns (the letter of a picked time, rule 199). They
 are read as strictly as a sheet's: a `send` whose blocks cannot be read is
-dropped whole, and nothing burns. The page says such a fuse ran out only
-when the end of what it shows has been on screen. Only Esc is an undo: a
-click away from it answers nothing.
+dropped whole, and nothing burns. When such a fuse runs out the page's
+`done` carries `seen: true` only if it drew the letter, showed it for long
+enough, had its end on screen and was not out of sight; the brain sends
+nothing on a `done` without it, which is what a page that knows nothing of
+`blocks` says. Only Esc is an undo: a click away from it answers nothing.
+A `work` line can say `asks`: it leads into such a letter, and the window
+is to be in sight for it as for a question. Both are additions a page of
+version 1 passes over, so the version stays 1.
 
 A `say` and a `send` in a `state` carry `left`: how much of their `ms` is
 still to come, by the brain's clock. A page that comes up in the middle of a

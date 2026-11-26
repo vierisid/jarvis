@@ -121,7 +121,11 @@ Still open: whether a silent follow-up is also said the next morning
 4. done in "notch: a fuse can carry the letter that goes out, on paper while it burns, and vouches only for one seen to its end",
    "notch: a picked time shows its letter under an 8 s fuse before it goes, and Esc brings the times back"
    and "notch: text a sender hid from the eye is not read to the model that drafts the reply"
-   (README 199 rewritten, 61 and 62 added to)
+   (README 199 rewritten, 61 and 62 added to).
+   After review: "notch: a wait for time fails when its stage ends, as every other wait does",
+   "notch: a draft already in a thread that holds the reply's own words is told apart, and since is pinned before the press",
+   "notch: a letter goes only on a page's word that it was seen, the notch stays in sight for it, and a pick taken back is remembered of the reply"
+   and "notch: words with no size or not visible are left out where they stand, and what is inside them and shown again is read"
 5. done in "notch: a chase burns a fuse, shows its follow-up, asks when handed back, and asks again after a restart"
    and the second commit named under 1
 6. done in "notch: an approval closed because its instruction ended is not audited as the owner's no"
@@ -159,16 +163,29 @@ Steps 1, 2 and 5 were tightened after a second review in
 - Step 3: a wait on the stage never comes back once the stage has ended.
   Between the two looks after Send that kept the tab's turn for good (no
   mail was read until a restart), never let the thread go, and forgot that
-  Send had been pressed. Put right for this send only. `NotchStage.wait`
-  itself still does not fail when its stage ends, against its own comment:
-  not this point's to change, and worth a look.
+  Send had been pressed. Put right at the source after review:
+  `NotchStage.wait` fails when its stage ends. Every script that waits for
+  time runs under the inbox or the demo, and both catch that failure.
 - Step 3: for a nudge, "since" is now the moment before the press, as its
   comment always said. It had been the moment before the write.
 - Step 4: the design cut `aria-hidden` text too. Such text is on the
   screen, so the owner sees it: it is still read.
 - Step 4: "fits the paper" cannot be known in the brain. It is counted
-  (12 rows of 48 columns, `MAIL_SLOT_PAPER_ROWS`), and the page has the
-  last word: it does not vouch for a letter whose end was never on screen.
+  (12 rows of 48 columns with the line of who it goes to,
+  `MAIL_SLOT_PAPER_ROWS`), and the page has the last word.
+- Step 4, first cut: a page saying the fuse ran out was the proof. A page
+  left loaded across a brain update draws no letter and says the same
+  word, and the letter went unseen. The proof is positive now: `seen`
+  beside `done`, and nothing is sent without it.
+- Step 4, first cut: the notch hid behind a fullscreen video on Windows
+  while the letter burnt, with Esc not taken. The letter and the line
+  before it are a question to the window now.
+- Step 4, first cut: font-size 0 or "not visible" on an element cut all
+  that was in it. Mail layouts set font-size 0 on a cell and a size on
+  what is inside: such a mail read as empty. Only the words standing
+  there are left out now.
+- Step 4, first cut: that a pick was taken back was known to one line
+  only. It is kept of the reply.
 - Step 4: a click away from a sheet is an Esc. For a letter under its fuse
   that would have taken the pick back at the owner's next click in their
   own app. A click away from a fuse answers nothing.
@@ -193,12 +210,24 @@ Steps 1, 2 and 5 were tightened after a second review in
   for the app in front takes the pick back.
 - A brain that stops in the middle of the fuse leaves the draft in the
   thread. Nothing is sent. The brain that comes up asks the question
-  again, and a pick answers "there is a draft already" until the owner
-  removes that draft: nothing knows any more that it was the notch's.
-- Hidden text: only what an element says of itself is cut (not shown, no
-  size, see-through, no room and cut off). White on white, and anything a
-  style sheet or a class hides, is still read by the model. The owner
-  seeing the letter is the wall.
+  again, and a pick says that this reply is already in the thread as a
+  draft, until the owner sends or removes it. It is not cleaned up.
+- Hidden text: only the inline style of the element itself is looked at.
+  White on white, and anything a style sheet or a class hides, is still
+  read by the model. The owner seeing the letter is the wall.
+- A Mac: the notch that hides for a fullscreen video does not come back
+  for a question (`platformNotchAsking` does nothing there). Whether the
+  page then knows it is hidden is not known. If it does, it does not
+  vouch and nothing is sent. If it does not, the letter burns unseen and
+  goes. Point 10's host controller owns this.
+- Windows: a hidden notch still reads "visible" to its page
+  (`sidecar/panels_reveal.go`), so the page cannot tell. The fix there is
+  that the window is not hidden for the letter. The sidecar looks every
+  so often: a video that goes fullscreen in the middle of the fuse can
+  hide the notch for that long.
+- A page left loaded across a brain update shows the bare line and no
+  letter. Nothing is sent, and the letter is opened as a draft.
+- That a pick was taken back is forgotten with the brain.
 - A reply that may have gone is remembered only while the brain runs.
   After a restart the second yes is guarded by the thread's last word
   alone, as it was before.
@@ -228,7 +257,13 @@ Only a real Gmail session can settle:
 - The letter under its fuse on a real notch: that twelve rows fit the
   paper without scrolling (also under a camera housing), that the fuse
   draws round a sheet, that the lit time reads as lit, and that the owner
-  can read it in eight seconds.
+  can read it in eight seconds. Also on a short screen, and with
+  right-to-left text.
+- The notch hidden over a fullscreen video in the middle of a fuse, on
+  both systems: whether it comes back, what the page's timers do while
+  its window is hidden, and whether `document.visibilityState` says so.
+- A page that survives a brain update: that it shows the bare line, that
+  nothing goes, and that the draft opens.
 - Whether the page Gmail makes for printing keeps a mail's own `style`
   and `hidden` attributes as they were sent. If Gmail rewrites them, the
   cut of hidden text finds nothing, or Gmail has already cut it.
