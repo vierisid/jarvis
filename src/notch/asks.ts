@@ -22,6 +22,7 @@
  */
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { mintStanding, type TurnStanding } from '../authority/standing.ts';
+import { turnOutsideRead } from '../authority/owner-word.ts';
 import { OWNER_ACTS, questionAsked, readActs, wordsCover, type OwnerAct } from '../authority/words-cover.ts';
 import { isBareAffirmation } from '../agents/realtime-taint.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
@@ -349,7 +350,11 @@ export interface NotchAskHow {
  * of the owner's it has none either, and after one with their word it covers what the question asked and what
  * those words covered, and no more.
  */
-interface NotchAnswered { unsaid: boolean; question: string; words: string; covers: readonly OwnerAct[] }
+interface NotchAnswered {
+  unsaid: boolean; question: string; words: string; covers: readonly OwnerAct[];
+  /** What the turn that asked had read from outside, which the yes carries; empty for a clean one. Null: not known, taken as read. */
+  held: readonly string[] | null;
+}
 
 interface Live {
   id: string;
@@ -360,6 +365,8 @@ interface Live {
   unsaid?: boolean;
   /** The owner's words this ran on and the kinds of act they asked for, as its standing has them: what a yes to its question goes on. */
   stood?: { words: string; covers: readonly OwnerAct[] };
+  /** What it held from its start as a yes to a turn that had read outside content (null: not known); none otherwise. */
+  startedWith?: readonly string[] | null;
   /** When it was made: the typing was sent, or the talk keys went down. */
   at: number;
   phase: NotchAskState;
@@ -827,15 +834,17 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
         ask.unsaid = ask.source === 'shown' || (agrees && ask.answers?.unsaid === true);
         // What the words asked for goes with the standing (the owner's decision of 26 November 2026). A yes to
         // what a turn with the owner's word asked back covers what that question asked and what those words
-        // covered. Anything else covers what it says itself. No fixed intent's sentence becomes a turn today
+        // covered, and carries outside content only when the turn that asked held some. Anything else covers
+        // what it says itself. No fixed intent's sentence becomes a turn today
         // (the notch does those itself), so `intent` is empty here; THE SEAM for the classifier's reading of
         // a sentence the fixed words missed is `read`, in authority/words-cover.ts.
         const said = agrees && ask.answers
-          ? { words: `${ask.answers.words} ${ask.answers.question}`.trim(), covers: OWNER_ACTS.filter((act) => ask.answers!.covers.includes(act) || readActs(ask.answers!.question, 'question').includes(act)), answers: true }
+          ? { words: `${ask.answers.words} ${ask.answers.question}`.trim(), covers: OWNER_ACTS.filter((act) => ask.answers!.covers.includes(act) || readActs(ask.answers!.question, 'question').includes(act)), answers: ask.answers.held === null || ask.answers.held.length > 0, held: ask.answers.held ?? [] }
           : { words: text, covers: wordsCover({ words: text, intent: ask.routed?.intent?.act ?? null }) };
         // (A standing with no word of the owner's keeps no words and covers nothing, whatever it is handed.)
         const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source, said);
         if (standing && standing.origin !== 'shown') ask.stood = { words: standing.words, covers: standing.covers };
+        ask.startedWith = standing?.answers ? (standing.held.length ? standing.held : null) : [];
         // What the sentence asks for, when it was read: it goes with the turn (./intents.ts, `NotchAsksFor`).
         const asksFor = ask.got?.asksFor ?? null;
         await turns.submit({ ...ref, text, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}), ...(asksFor ? { asksFor } : {}) });
@@ -1419,8 +1428,21 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
    */
   const unsaid = (ask: Live): boolean => ask.source === 'shown' || ask.source === 'offered' || ask.unsaid === true;
 
+  /**
+   * What this instruction's turn read from outside: what its tool loops read, kept by the turn's id
+   * (authority/owner-word.ts), and what it held from its start. Null when either is not known.
+   */
+  const heldBy = (ask: Live): readonly string[] | null => {
+    const read = ask.turn ? turnOutsideRead(ask.turn.turnId) : null;
+    if (read === null || ask.startedWith === null || ask.startedWith === undefined) return null;
+    return [...new Set([...ask.startedWith, ...read])];
+  };
+
   /** What a reply to this instruction's question answers. */
-  const answered = (ask: Live): NotchAnswered => ({ unsaid: unsaid(ask), question: questionAsked(ask.answer ?? ''), words: ask.stood?.words ?? '', covers: ask.stood?.covers ?? [] });
+  const answered = (ask: Live): NotchAnswered => ({
+    unsaid: unsaid(ask), question: questionAsked(ask.answer ?? ''), words: ask.stood?.words ?? '', covers: ask.stood?.covers ?? [],
+    held: heldBy(ask),
+  });
 
   function typed(text: string, files?: NotchAskFile[], source: 'typed' | 'shown' = 'typed', answers?: NotchAnswered, reply = false): string {
     endWalks();

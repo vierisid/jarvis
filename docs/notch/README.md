@@ -275,10 +275,13 @@ What holds for all of them:
     turn he typed or spoke asked back it is his word (`answers`), and it
     covers what the question asked ("Shall I run it?" is a command; the last
     sentence of the answer is the question) and what his words before it
-    covered, and no more; and because he did not write the question, that
-    turn counts as having read outside content from its first step, so the
-    boundary of 44 is on. "Yes, send it to Anna" has words of its own and is
-    judged by them, as any sentence is.
+    covered, and no more. It carries what the turn that asked had read: when
+    that turn held outside content, the yes counts as holding the same from
+    its first step (`answers`; the question may have come from that
+    content), so the boundary of 44 is on; after a turn that read nothing
+    the yes is a clean turn, as a typed one is. Not knowing what the asking
+    turn read (after a restart) is taken as read. "Yes, send it to Anna" has
+    words of its own and is judged by them, as any sentence is.
     What the words of a turn covered is kept in memory only: to an answer
     brought back after a restart, a yes covers what its question asks and
     nothing from before it.
@@ -360,7 +363,8 @@ What holds for all of them:
     about what he said. Once such a turn has read something he did not write
     (a page, a dropped file, a window, an app that was opened, a mail or a
     message somebody sent, memory he did not enter, a question of the
-    assistant's that he only said yes to), four kinds of act are asked about
+    assistant's that he only said yes to, when the turn that asked it had
+    read any of these), four kinds of act are asked about
     again in that turn, and only when his own sentence did not ask for that
     kind: **a send, a command, an install, a change of settings**. They are
     the acts that reach out or run code. Everything else is as before, also
@@ -414,11 +418,20 @@ What holds for all of them:
     recipient, and there the kind alone decides
     (`RECIPIENTS_MUST_BE_NAMED`). And a raw click where the machine cannot
     look by its making (screen awareness off, a Mac or Linux desktop app, no
-    machine: `notchPressReads` answers `blind`) goes ahead in a turn that
-    has read nothing and is asked about in one that has, with its own
-    reason: what it lands on cannot be read, and what was read may have
-    chosen it. On such a machine a raw click after an app was opened is
-    asked about; typed text, keys and a click on a named element are not.
+    machine: `notchPressReads` answers `blind`) goes ahead as a step of the
+    turn, also after an app the turn opened was read: opening an app must
+    not bring questions (13 November). It is asked about, with its own
+    reason, only once the turn holds outside content of another kind (a
+    page, a dropped or received file, a mail or a message somebody sent, a
+    peer's words, memory he did not enter, a helper's report, a window the
+    turn did not open): what it lands on cannot be read, and what was read
+    may have chosen it. The line is drawn by the tool the content came
+    through (`onlyTheOpenedApp`): the turn opened an app, and all else it
+    read came through the desktop's own tools. The turn keeps no more than
+    that, so once it has opened an app every window it reads is taken as
+    that app's; with no app opened, a window it read is one it did not
+    open. Typed text, keys and a click on a named element are never held
+    for this.
     A helper agent is held to the same: what it has read itself and what
     the turn above it has read both count (`withOutsideContent`), and where
     nobody says what was read it is taken as read. It cannot hold a

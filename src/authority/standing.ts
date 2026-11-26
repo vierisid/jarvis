@@ -56,12 +56,13 @@
  * send, a command, an install, a change of settings), read from the sentence
  * alone where the turn is made (words-cover.ts). They matter once the turn
  * has read something the owner did not write. A bare yes to what a turn with
- * the owner's word asked back is `answers`: the question it agrees to was not
- * written by the owner, so the turn counts as having read outside content
- * from its first step (owner-word.ts reads it here; the turn is not marked
- * for the ordinary guard, which the owner's word sets aside anyway, and it
- * runs the same way a typed turn does). It covers what the question asked
- * and what the words before it covered.
+ * the owner's word asked back covers what the question asked and what the
+ * words before it covered. When the turn that asked had itself read outside
+ * content, the yes is `answers`: what it agrees to may have come from that
+ * content, so its turn counts as having read some from its first step
+ * (owner-word.ts reads it here; the turn is not marked for the ordinary
+ * guard, which the owner's word sets aside anyway). A yes to what a turn
+ * that had read nothing asked back starts as any typed turn does.
  */
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
 import { notchEnabled } from '../notch/switch.ts';
@@ -76,8 +77,14 @@ export interface TurnStanding {
   readonly words: string;
   /** The kinds of act those words asked for. Always none for a shown turn. */
   readonly covers: readonly OwnerAct[];
-  /** The words are only a yes to a question the assistant asked back: that question is outside content, so the turn has read some from its start. */
+  /** The words are only a yes to what a turn that had read outside content asked back: this turn counts as having read some from its start. */
   readonly answers: boolean;
+  /**
+   * For such a yes, what the turn that asked had read (its taint marks), so
+   * that this turn holds the same kinds of content. Empty with `answers`:
+   * what it read is not known, which is taken as anything.
+   */
+  readonly held: readonly string[];
 }
 
 /** What the notch says of the words when it makes a standing. Left out: the words cover nothing. */
@@ -85,6 +92,8 @@ export interface StandingWords {
   words?: string;
   covers?: Iterable<OwnerAct>;
   answers?: boolean;
+  /** What the turn the yes answers had read. Any mark here makes it `answers`. */
+  held?: Iterable<string>;
 }
 
 /**
@@ -111,11 +120,13 @@ export function mintStanding(origin: StandingOrigin, said: StandingWords = {}): 
   // A question the code wrote is nobody's word: it has no words and covers nothing, whatever is handed in.
   const owners = origin !== 'shown';
   const covers = owners ? OWNER_ACTS.filter((act) => [...(said.covers ?? [])].includes(act)) : [];
+  const held = owners ? [...new Set([...(said.held ?? [])].filter((mark): mark is string => typeof mark === 'string'))] : [];
   const standing: TurnStanding = Object.freeze({
     origin,
     words: owners && typeof said.words === 'string' ? said.words : '',
     covers: Object.freeze(covers),
-    answers: owners && said.answers === true,
+    answers: owners && (said.answers === true || held.length > 0),
+    held: Object.freeze(held),
   });
   minted.add(standing);
   return standing;

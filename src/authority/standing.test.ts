@@ -16,7 +16,7 @@ beforeEach(() => { before = process.env[NOTCH_SWITCH]; process.env[NOTCH_SWITCH]
 afterEach(() => { if (before === undefined) delete process.env[NOTCH_SWITCH]; else process.env[NOTCH_SWITCH] = before; });
 
 /** A standing as it is made when nothing is said of its words: they cover nothing. */
-const of = (origin: TurnStanding['origin']): TurnStanding => ({ origin, words: '', covers: [], answers: false });
+const of = (origin: TurnStanding['origin']): TurnStanding => ({ origin, words: '', covers: [], answers: false, held: [] });
 
 const bare = (requestId = 'notch-typed-1', controller = new AbortController()): BriefExecutionContext =>
   ({ conversationId: 'c', turnId: 'notch-1', requestId, signal: controller.signal, progress: () => {} });
@@ -35,7 +35,11 @@ describe('a standing is made in one place and tied to one turn', () => {
 
   test('it says what the owner\'s words were and which kinds of act they asked for, and cannot be changed afterwards', () => {
     const standing = mintStanding('typed', { words: 'send Anna the file', covers: ['send', 'send', 'bogus' as never], answers: true });
-    expect(standing).toEqual({ origin: 'typed', words: 'send Anna the file', covers: ['send'], answers: true });
+    expect(standing).toEqual({ origin: 'typed', words: 'send Anna the file', covers: ['send'], answers: true, held: [] });
+    expect(Object.isFrozen(standing.held)).toBe(true);
+    // What the turn it answers read makes it a yes that holds that, once each; nothing read and nothing said: a clean yes.
+    expect(mintStanding('typed', { held: ['chat attachment', 'chat attachment', 'desktop_launch_app'] })).toMatchObject({ answers: true, held: ['chat attachment', 'desktop_launch_app'] });
+    expect(mintStanding('typed', { held: [], answers: false })).toMatchObject({ answers: false, held: [] });
     expect(Object.isFrozen(standing)).toBe(true);
     expect(Object.isFrozen(standing.covers)).toBe(true);
     expect(() => { (standing.covers as string[]).push('command'); }).toThrow();
@@ -46,7 +50,7 @@ describe('a standing is made in one place and tied to one turn', () => {
   });
 
   test('a question the notch wrote has no words and covers nothing, whatever it is handed', () => {
-    expect(mintStanding('shown', { words: 'send it', covers: ['send', 'command', 'install', 'settings'], answers: true })).toEqual(of('shown'));
+    expect(mintStanding('shown', { words: 'send it', covers: ['send', 'command', 'install', 'settings'], answers: true, held: ['browser_snapshot'] })).toEqual(of('shown'));
   });
 
   test('the way a turn\'s ids are written gives it nothing', () => {

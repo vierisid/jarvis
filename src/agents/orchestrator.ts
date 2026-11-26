@@ -16,7 +16,7 @@ import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFail
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { appOpenNeedsNoApproval } from '../authority/app-open.ts';
-import { OWNER_WORD_REASON, ownerWord, ownerWordAsks, withOutsideContent } from '../authority/owner-word.ts';
+import { OWNER_WORD_REASON, noteTurnLoop, ownerWord, ownerWordAsks, withOutsideContent } from '../authority/owner-word.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RealtimeTaint } from './realtime-taint.ts';
 import type { TurnTaintLink } from './turn-taint-carry.ts';
@@ -31,6 +31,10 @@ import { memoryTaintSource } from '../vault/memory-use-context.ts';
 function noteMemoryTaint(taint: Set<string> | undefined): void {
   const source = taint ? memoryTaintSource() : null;
   if (source) taint!.add(source);
+  // Every loop of a turn passes here with its set: kept so that a bare yes
+  // to what the turn asked back knows whether it had read outside content
+  // (authority/owner-word.ts). Only for a turn the owner started on the notch.
+  if (taint) noteTurnLoop(taint, (mark) => !mark.startsWith('declined-intent:'));
 }
 
 /**

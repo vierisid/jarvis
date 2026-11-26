@@ -128,11 +128,26 @@ command key with backspace in a text field on the desktop.
   C3 makes that case ask only in a turn that has read outside content, once
   `ownerWord` knows the turn's taint (`notchPressReads` needs a fourth
   answer for it then).
-- 2026-11-26, taken while building C3, for the owner to confirm: a send to
-  somebody his words do not name is asked about (one constant,
-  `RECIPIENTS_MUST_BE_NAMED`); a bare yes holds the question it answers as
-  outside content; on a machine that cannot say what a click lands on, a
-  raw click after an app was opened is asked about.
+- 2026-11-26, after C3 (the coordinator, against the owner's 13 November
+  rule): on a machine that cannot say what a click lands on, a raw click
+  is asked about only after outside content of another kind than an app
+  the turn opened and its windows (`onlyTheOpenedApp`); and a bare yes
+  holds outside content only when the turn that asked held some.
+- For the owner to confirm, taken while building C3:
+  - recipients fail closed: a send to somebody his words do not name is
+    asked about (one constant, `RECIPIENTS_MUST_BE_NAMED`);
+  - the unasked act is asked about also when `authority.taint_gating` is
+    off (or does not govern that category): the boundary is the owner's
+    word, not the ordinary guard;
+  - the turn note for the model (`NOTCH_TURN_NOTE`, pinned by hash) does
+    not mention the new questions; it still says "do not call
+    request_approval" for sends, commands and installs he asked for, and
+    the questions for what he did not ask for come from the gate alone;
+  - where the line for a blind click falls: once the turn has opened an
+    app, every window it reads (and any picture of the screen) is taken as
+    that app's, since the turn keeps only which tools it read through;
+    with no app opened, a window read is one it did not open. A send made
+    by a raw click on such a machine after a dropped file is asked about.
 - Open: a code-written question as a guarded turn or a tool-less read; a
   fuse line for a send he asked for; an offer starting as tainted.
 
@@ -174,10 +189,11 @@ command key with backspace in a text field on the desktop.
   that arrives mid-turn counts from the next call. The interim bare-yes
   rule is replaced: a bare yes to an owner's-word turn covers what the
   question asked and what the words before it covered, and holds the
-  question as outside content; to a turn with no owner's word (shown, an
-  offer that was taken) it stays a shown turn, which is stronger than the
+  question as outside content (narrowed in the follow-up below); to a
+  turn with no owner's word (shown, an offer that was taken) it stays a shown turn, which is stronger than the
   boundary. The offer case fell out of the same rule. A blind click
-  (`notchPressReads` answers `blind`) asks only after outside content.
+  (`notchPressReads` answers `blind`) asks only after outside content
+  (narrowed in the follow-up below).
   Design claims that did not hold: nothing is "resumed after a restart";
   the product has no send tool with a recipient field (sends are clicks,
   commands and skills), so the recipient rule guards tools that may come;
@@ -188,7 +204,8 @@ command key with backspace in a text field on the desktop.
   (`authority/words-cover.ts`). No fixed intent's sentence becomes a turn
   today, so the intent table's `act` is read through `actsOfIntent` only by
   the seam; sentences are read by the deterministic reader until point 3's
-  classifier passes its act as `read`. The fuse line for a send he asked
+  classifier passes its acts as `read` (a set: "install vite and email Anna
+  the log" asks for two). The fuse line for a send he asked
   for (open decision) is not built.
 - C5 delete reader and click check: done in "notch: a delete by its path,
   behind a wrapper or by the command key is read, and a click is not pressed
@@ -201,3 +218,9 @@ command key with backspace in a text field on the desktop.
   look".
 - C6 README 40, 41, 44 and the header of `owner-word.ts`: done in the same
   commit, dated 26 November 2026.
+- Follow-up to C3 (blind click and bare yes, above; `read` is a set of
+  acts): done in "notch: opening an app brings no question at a blind
+  click, and a yes to a turn that read nothing is a clean turn". What a
+  turn read is kept by its id, in memory, for the last 300 turns
+  (`turnOutsideRead`); not known (a restart, an older turn) is taken as
+  read.

@@ -15,11 +15,13 @@
  *      An intent whose act is `answer` is a yes to a line that was up, and
  *      covers what that line was about, which the caller hands in (`line`);
  *   2. a reading of the sentence by the notch's own classifier
- *      (notch/intent-read.ts, point 3 of the review): the act it returns for
- *      a sentence the fixed words missed. THE SEAM: that classifier is not on
- *      this branch yet, so nobody passes `read` today. When it is, its answer
- *      takes the place of the reader below, and the reader stays as what is
- *      used when the classifier could not answer in time;
+ *      (notch/intent-read.ts, point 3 of the review): the acts it returns for
+ *      a sentence the fixed words missed, as a set, since a sentence can ask
+ *      for two ("install vite and email Anna the log"). THE SEAM: that
+ *      classifier is not on this branch yet, so nobody passes `read` today.
+ *      When it is, its answer takes the place of the reader below, and the
+ *      reader stays as what is used when the classifier could not answer in
+ *      time;
  *   3. the reader below, which is deliberately small: verb families in
  *      English and Italian, matched on the sentence with no model.
  *
@@ -221,17 +223,21 @@ export interface WordsSaid {
   /** For an intent that answers a line: what that line was about. */
   line?: readonly OwnerAct[];
   /**
-   * THE SEAM (see the top of this file): the act the notch's classifier
-   * read for a sentence that no fixed intent took ('none': it asks for none
-   * of the four). Undefined or null: it was not asked or did not answer, and
-   * the reader decides.
+   * THE SEAM (see the top of this file): the acts the notch's classifier
+   * read for a sentence that no fixed intent took. A set: every act the
+   * sentence asks for. Empty, or only 'none': it asks for none of the four.
+   * Undefined or null: it was not asked or did not answer, and the reader
+   * decides.
    */
-  read?: NotchIntentAct | null;
+  read?: readonly NotchIntentAct[] | null;
 }
 
 /** The acts some words asked for. The one function the notch asks when it makes a turn. */
 export function wordsCover(said: WordsSaid): OwnerAct[] {
   if (said.intent) return actsOfIntent(said.intent, said.line);
-  if (said.read !== undefined && said.read !== null) return actsOfIntent(said.read, said.line);
+  if (said.read !== undefined && said.read !== null) {
+    const read = said.read.flatMap((act) => actsOfIntent(act, said.line));
+    return OWNER_ACTS.filter((act) => read.includes(act));
+  }
   return readActs(said.words);
 }

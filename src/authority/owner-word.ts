@@ -31,7 +31,8 @@
  * Decided by the owner on 26 November 2026. "Saying it is the approval" is
  * about what they said. Once the turn has read something they did not write
  * (a page, a file, a window, a mail, a colleague's message, memory they did
- * not enter, the assistant's own question that they only said yes to), text
+ * not enter, a question of the assistant's they only said yes to, when the
+ * turn that asked it had read any of these), text
  * in it can ask for things they never asked for. From then on, in that turn,
  * four kinds of act are asked about again, and only when their own sentence
  * did not ask for that kind of act:
@@ -71,9 +72,19 @@
  *     covers whoever wrote the thing. Where the call names no recipient (a
  *     click on Send), the kind alone decides;
  *   - a raw click where the machine cannot look by its making (screen
- *     awareness off, a Mac or Linux desktop app, no machine) goes ahead in a
- *     turn that has read nothing, and is asked about in one that has: what
- *     it lands on cannot be read, and what was read may have chosen it.
+ *     awareness off, a Mac or Linux desktop app, no machine) goes ahead as a
+ *     step of the turn, also after an app was opened and its windows were
+ *     read: opening an app must not bring questions. It is asked about once
+ *     the turn holds outside content of another kind than what opening an
+ *     app and reading its own windows gave: a page, a dropped or received
+ *     file, a mail or a message somebody sent, a peer's words, memory the
+ *     owner did not enter, a helper's report, or a window the turn did not
+ *     open (it read windows and opened no app). What it lands on cannot be
+ *     read, and what was read may have chosen it. The line is drawn by the
+ *     tool the content came through (`onlyTheOpenedApp`), which is all the
+ *     turn keeps of it: once the turn has opened an app, every window it
+ *     reads is taken as that app's, and a picture of the screen as a picture
+ *     of it.
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
@@ -92,6 +103,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ActionCategory } from '../roles/authority.ts';
+import { currentBriefTurn } from '../brief/chat-context.ts';
 import { ownersTurn, plainAppOpen } from './app-open.ts';
 import type { OwnerAct } from './words-cover.ts';
 
@@ -384,6 +396,69 @@ export function outsideContentHeld(): string[] | null {
 }
 
 /**
+ * What each turn the owner started with words of their own has read, by the
+ * turn's id: the live sets of its tool loops, kept after the turn so that a
+ * bare yes to the question it asked back can be told whether that turn held
+ * outside content (notch/asks.ts). Memory only, and the last few hundred.
+ */
+const loopsOfTurn = new Map<string, { marks: ReadonlySet<string>; counts: (mark: string) => boolean }[]>();
+const TURNS_REMEMBERED = 300;
+
+/** Says that `marks` is the set of a tool loop of the turn running now. For the main agent's loops. */
+export function noteTurnLoop(marks: ReadonlySet<string>, counts: (mark: string) => boolean = () => true): void {
+  if (!ownersTurn()) return;
+  const id = currentBriefTurn()?.turnId;
+  if (!id) return;
+  const loops = loopsOfTurn.get(id) ?? [];
+  if (loops.some((loop) => loop.marks === marks)) return;
+  loops.push({ marks, counts });
+  loopsOfTurn.delete(id);
+  loopsOfTurn.set(id, loops);
+  while (loopsOfTurn.size > TURNS_REMEMBERED) loopsOfTurn.delete(loopsOfTurn.keys().next().value as string);
+}
+
+/**
+ * What that turn read from outside: the marks of its loops that count, once
+ * each. Empty: it read nothing. Null: nothing is known of it (never run here,
+ * or long ago), which is not "nothing".
+ */
+export function turnOutsideRead(turnId: string): string[] | null {
+  const loops = loopsOfTurn.get(turnId);
+  if (!loops) return null;
+  const read = new Set<string>();
+  for (const loop of loops) for (const mark of loop.marks) if (loop.counts(mark)) read.add(mark);
+  return [...read];
+}
+
+/**
+ * The tools through which an app the turn opened, and its own windows, are
+ * read: opening it, listing and focusing windows, reading what is in one,
+ * finding an element, a click's own answer, a picture of the screen. Every
+ * other mark is content of another kind: a page (the browser's tools), a
+ * dropped or received file ('chat attachment'), a mail or a message somebody
+ * sent (their tools, a forward, a guest's thread), a peer's words, memory
+ * the owner did not enter, a helper's report ('delegate_task'), a shown
+ * request, and any tool added later until it is named here.
+ */
+const APP_OWN_READS: ReadonlySet<string> = new Set([
+  'desktop_launch_app', 'desktop_list_windows', 'desktop_focus_window', 'desktop_snapshot', 'desktop_find_element',
+  'desktop_click', 'desktop_screenshot', 'capture_screen',
+]);
+
+/**
+ * Whether everything a turn read is what opening an app gave: the turn opened
+ * one (`desktop_launch_app` is among its marks), and all else it read came
+ * through the desktop's own tools. The turn keeps which tools it read
+ * through, not which window: once it has opened an app, a window it reads is
+ * taken as that app's. Without an app opened, a window that was read is one
+ * the turn did not open, and counts as content of another kind.
+ */
+export function onlyTheOpenedApp(read: Iterable<string>): boolean {
+  const marks = [...read];
+  return marks.includes('desktop_launch_app') && marks.every((mark) => APP_OWN_READS.has(mark));
+}
+
+/**
  * Asks the machine what a raw click would land on, and answers with what that
  * reads as (the categories a click on that name means), or nothing. The
  * daemon sets it; without it nothing can look.
@@ -392,8 +467,9 @@ export function outsideContentHeld(): string[] | null {
  *
  *   - a list (often empty): it looked;
  *   - `'blind'`: it cannot look by its making (screen awareness off, a
- *     desktop app that cannot say, no machine). The click goes ahead in a
- *     turn that has read nothing, and is asked about in one that has;
+ *     desktop app that cannot say, no machine). The click goes ahead, and is
+ *     asked about only in a turn that holds outside content of another kind
+ *     than an app it opened (`onlyTheOpenedApp`);
  *   - null: it tried to look and was told nothing;
  *   - a throw: the asking failed (no answer in time, a desktop app too old to
  *     know the question).
@@ -426,6 +502,12 @@ export interface OwnerTurn {
   covers: readonly OwnerAct[];
   /** The words themselves, for who a send may go to. */
   words: string;
+  /**
+   * Whether some of what it read is of another kind than an app it opened
+   * and that app's windows (`onlyTheOpenedApp`): what a click nobody can
+   * look at is asked about for. Left out: as `outside`.
+   */
+  beyond?: boolean;
 }
 
 /**
@@ -439,8 +521,13 @@ export function currentOwnerTurn(own?: ReadonlySet<string>): OwnerTurn | null {
   const standing = ownersTurn();
   if (!standing) return null;
   const above = outsideContentHeld();
-  const outside = standing.answers || (own !== undefined && own.size > 0) || (above === null ? own === undefined : above.length > 0);
-  return { outside, covers: standing.covers, words: standing.words };
+  const unknown = above === null && own === undefined;
+  // What the turn that asked had read counts as read here from the first step (a bare yes to its question).
+  const read = [...new Set([...(own ?? []), ...(above ?? []), ...standing.held])];
+  const outside = standing.answers || unknown || read.length > 0;
+  // A yes whose asking turn is not known: as a turn that read anything.
+  const beyond = unknown || (standing.answers && standing.held.length === 0) || (read.length > 0 && !onlyTheOpenedApp(read));
+  return { outside, covers: standing.covers, words: standing.words, beyond };
 }
 
 /**
@@ -458,8 +545,8 @@ export function currentOwnerTurn(own?: ReadonlySet<string>): OwnerTurn | null {
  *     asked twice. It is asked about like `ask`, with its own reason: a click
  *     is not pressed blind, since "Delete" and "Buy now" are found by reading
  *     what is there.
- *   - `blind`: it is a raw click where nothing can look, in a turn that has
- *     read outside content.
+ *   - `blind`: it is a raw click where nothing can look, in a turn that
+ *     holds outside content of another kind than an app it opened.
  *   - `unasked-send`, `unasked-command`, `unasked-install`,
  *     `unasked-settings`: the turn has read outside content, the call is that
  *     kind of act, and the owner's words did not ask for one.
@@ -505,7 +592,7 @@ export async function ownerWord(
     }
     if (looked === null) return 'unseen';
     if (looked === 'blind') {
-      if (now.outside) return 'blind';
+      if (now.beyond ?? now.outside) return 'blind';
     } else {
       if (looked.some((category) => STILL_ASKED.has(category))) return 'ask';
       // What is at the place is part of what the click does: a click on "Send" is a send.

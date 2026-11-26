@@ -290,8 +290,11 @@ describe('the three things that can say what some words asked for', () => {
 
   test('the seam: the classifier\'s reading takes the place of the reader, and the reader decides when it has none', () => {
     expect(wordsCover({ words: 'update Chrome' })).toEqual([]);
-    expect(wordsCover({ words: 'update Chrome', read: 'install' })).toEqual(['install']);
-    expect(wordsCover({ words: 'do not under any circumstances send this', read: 'none' })).toEqual([]);
+    expect(wordsCover({ words: 'update Chrome', read: ['install'] })).toEqual(['install']);
+    // A sentence can ask for two kinds of act: the reading is a set, said in the fixed order, once each.
+    expect(wordsCover({ words: 'install vite and email Anna the log', read: ['install', 'send', 'install'] })).toEqual(['send', 'install']);
+    expect(wordsCover({ words: 'do not under any circumstances send this', read: ['none'] })).toEqual([]);
+    expect(wordsCover({ words: 'do not under any circumstances send this', read: [] })).toEqual([]);
     expect(wordsCover({ words: 'send Anna the file', read: undefined })).toEqual(['send']);
     expect(wordsCover({ words: 'send Anna the file', read: null })).toEqual(['send']);
   });
