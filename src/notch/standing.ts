@@ -1095,8 +1095,9 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
   if (stuckBefore.length) log(`[notch] ${stuckBefore.length} stuck chase(s) ask again after a restart`);
 
   const intents: NotchIntent[] = [{
-    // An eye only ever tells the owner: nothing goes out and nothing acts by itself, so it is kept with nothing asked.
-    id: 'standing.eye', feature: 'standing', says: 'keep an eye on mail from one person, and say when they reply', band: 'command', act: 'none', first: 'acts',
+    // An eye is kept at once, with nothing asked, as it always was: nothing goes out and nothing acts by itself.
+    id: 'standing.eye', feature: 'standing', says: 'keep an eye on mail from one person, and say when they reply', band: 'command', act: 'create', first: 'acts',
+    alone: 'an eye only ever tells the owner, it is said as it is kept, and it is taken back from its row in Home',
     examples: ['tell me when Sam replies', 'let me know if Anna writes back'],
     match(text) {
       if (stopped) return null;
@@ -1105,7 +1106,7 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     },
   }, {
     // A chase writes to somebody by itself until it has the answer: it is shown as a line that takes a yes.
-    id: 'standing.chase', feature: 'standing', says: 'chase one person for an answer until it is there', band: 'command', act: 'create', first: 'line',
+    id: 'standing.chase', feature: 'standing', says: 'chase one person for an answer until it is there', band: 'command', act: 'create', first: 'yes',
     examples: ["get Sam's answer on the contract by Friday", 'chase Leo until he answers'],
     match(text) {
       if (stopped) return null;

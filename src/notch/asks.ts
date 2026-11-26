@@ -32,6 +32,7 @@ import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 import { whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
 import type { NotchIntent, NotchIntentHit } from './intents.ts';
+import { runItRequest } from './teach.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
 export const NOTCH_HEARD_MS = 900;
@@ -305,6 +306,16 @@ export interface NotchAsks {
   /** Looks up what is running in the turn store, and concludes what has ended there. */
   reconcile(): void;
   stop(): void;
+}
+
+/**
+ * Whether these words only say "go on" and name nothing to do: "continue", "run it", "do the rest", "finish
+ * it", "carry on", "keep going", "take over", "do it", "go ahead", and the same in Italian. As a reply to a
+ * question they agree to what was proposed, as a bare yes does.
+ */
+export function notchBareGoAhead(text: string): boolean {
+  if (runItRequest(text) !== null) return true;
+  return /^(?:(?:ok(?:ay)?|yes|yeah|yep|sure|please|s[i\u00ec]|va bene)[,\s]+)*(?:go ahead|please do|go for it|proceed|fallo|fallo pure|continua|vai avanti|procedi|fai pure|vai)(?:[,\s]+(?:please|now|then|thanks|per favore|pure))*[\s.!]*$/i.test(text.trim());
 }
 
 /** What the notch does itself with some words, and the intent of the one table that took them, when it is known. */
@@ -772,7 +783,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       try {
         // Who wrote the words goes with the turn, made here and nowhere else
         // (authority/standing.ts). An offer that was taken has none, as before.
-        ask.unsaid = ask.source === 'shown' || (ask.answersUnsaid === true && isBareAffirmation(ask.meant ?? ask.heard));
+        // "Continue", "run it", "go ahead" say no more than a yes does: to what a turn with no word of the
+        // owner's proposed, they are not his word either. (Before a reply was always the answer, the notch
+        // took most of these words for itself and they never came here.)
+        ask.unsaid = ask.source === 'shown' || (ask.answersUnsaid === true && (isBareAffirmation(ask.meant ?? ask.heard) || notchBareGoAhead(ask.meant ?? ask.heard)));
         const standing = ask.source === 'offered' ? null : mintStanding(ask.unsaid || ask.source === 'shown' ? 'shown' : ask.source);
         await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}) });
         // Kept with the turn now: not held here as well.

@@ -3220,6 +3220,15 @@ describe('a time that is free for two people', () => {
     // (the review of 26 November 2026: "put a meeting with Sam on my calendar for Friday" began one).
     for (const said of ['put a meeting with Leo on my calendar for Friday', 'add the call with Leo to my calendar', 'Jarvis, block an hour with Leo in my calendar tomorrow',
       'can you put a 30 minutes sync with Leo on the calendar', 'note the meeting with Leo in my diary']) expect([said, routes(said)]).toEqual([said, null]);
+    // And the model is not asked what it makes of such a sentence: one of its answers is a comparing of calendars.
+    const reads = await joined({ reads: true });
+    reads.sam.readState.says = '{"kind":"time","to":[1],"minutes":30}';
+    expect(reads.sam.people.read('put a meeting with Leo on my calendar for Friday')).toBeNull();
+    expect(reads.sam.people.read('add the call with Leo to my calendar')).toBeNull();
+    expect(reads.sam.readState.asked).toEqual([]);
+    // The same model is asked about a sentence that is no such entry, so the test would see it if it were.
+    expect(reads.sam.people.read('can you sort out when Leo and I should talk about my calendar')).not.toBeNull();
+    expect(reads.sam.readState.asked).toHaveLength(1);
     // Looking for a time is still that, wherever the calendar is named.
     for (const said of ['find a time with Leo in my calendar', 'look at my calendar and find a slot with Leo']) expect([said, routes(said)]).toEqual([said, 'Find a time with Leo: 30 minutes']);
     expect(peerTimeMinutes('a quick call')).toBe(30);

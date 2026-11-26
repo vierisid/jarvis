@@ -36,6 +36,7 @@
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { routeByIntents, type NotchIntent } from './intents.ts';
+import { runItBegins } from './teach.ts';
 
 /** One answer to a line, as the page would have sent it, without the line's id. */
 export interface NotchSaid {
@@ -352,27 +353,48 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));
   let up: { item: string; line: NotchLine; at: number } | null = null;
+  /** What was said, as answers to the line the keys were pressed over. Null when it is not about that line. */
+  const about = (text: string, how?: { source: string; at: number }): { was: NonNullable<typeof up>; answers: NotchSaid[] } | null => {
+    const was = up;
+    // Meant only by what was said with the keys that took the line off: not by what is typed, and not by the next thing said.
+    if (!was || !how || how.source !== 'spoken' || Math.abs(how.at - was.at) > NOTCH_SAID_KEYS_MS) return null;
+    const answers = saidAbout(was.line, text);
+    return answers ? { was, answers } : null;
+  };
+  const hit = (found: { was: NonNullable<typeof up>; answers: NotchSaid[] }): { did: string; run(): void } => ({
+    did: did(found.answers),
+    run: () => {
+      if (up === found.was) up = null;
+      // Which line and what kind of answer, never what was said.
+      if (deps.inbox.replay(found.was.item, notchLineReads(found.was.line), found.answers)) log(`[notch] a line was answered by voice (${found.answers[0]?.act ?? 'as it was'})`);
+      else log('[notch] a line was answered by voice, and could not be brought back: it waits where it was');
+    },
+  });
+  /** A plain yes: one of the fixed ways of saying it, and not the word on the line's own key. */
+  const plainYes = (text: string, answers: readonly NotchSaid[]): boolean => answers.length === 1 && answers[0]!.act === 'yes' && YES.has(saidWords(text).join(' '));
+  // What an answer sets off is the line's own: the line was shown, and this is its answer.
   const intents: NotchIntent[] = [{
-    // What the yes sets off is the line's own: the line was shown, and this is its answer.
-    id: 'said.answer', feature: 'saidLine', says: 'what is said over a line that is up answers that line: its yes, its no, or a new value for one of its lit words', band: 'up', act: 'none', first: 'acts',
-    examples: ['yes do it', 'not now', 'make it Friday at ten'],
     // "Do it" over an offer is the yes to it, also when a job was once shown that "do it" could mean (rule 206).
+    // This is the one thing said over a line that stands before a command.
+    id: 'said.yes', feature: 'said', says: 'a plain yes said over a line that takes one ("do it", "go ahead") is the yes to that line', band: 'up', act: 'answer', first: 'acts',
+    examples: ['yes do it', 'go ahead', 'do it'],
     over: ['teach.run'],
     match(text, how) {
-      const was = up;
-      // Meant only by what was said with the keys that took the line off: not by what is typed, and not by the next thing said.
-      if (!was || !how || how.source !== 'spoken' || Math.abs(how.at - was.at) > NOTCH_SAID_KEYS_MS) return null;
-      const answers = saidAbout(was.line, text);
-      if (!answers) return null;
-      return {
-        did: did(answers),
-        run: () => {
-          if (up === was) up = null;
-          // Which line and what kind of answer, never what was said.
-          if (deps.inbox.replay(was.item, notchLineReads(was.line), answers)) log(`[notch] a line was answered by voice (${answers[0]?.act ?? 'as it was'})`);
-          else log('[notch] a line was answered by voice, and could not be brought back: it waits where it was');
-        },
-      };
+      const found = about(text, how);
+      return found && plainYes(text, found.answers) ? hit(found) : null;
+    },
+  }, {
+    // Asked after everything that has words of its own: "undo", "watch me", "tell Anna" and "continue" keep
+    // their meaning also when a choice on the line reads the same.
+    id: 'said.answer', feature: 'said', says: 'what is said over a line that is up answers that line: its no, the word on its key, one of its choices, or a new value for one of its lit words', band: 'said', act: 'answer', first: 'acts',
+    examples: ['not now', 'make it Friday at ten', 'the second one'],
+    match(text, how) {
+      const found = about(text, how);
+      if (!found || plainYes(text, found.answers)) return null;
+      // A new value for a word is never read out of a sentence that begins as the words for a job: "do 3
+      // more" is not three o'clock, and "do it at 5" is not "make it 5".
+      const changes = found.answers.length === 0 || found.answers[0]!.act === 'word';
+      return changes && runItBegins(text) ? null : hit(found);
     },
   }];
   return {

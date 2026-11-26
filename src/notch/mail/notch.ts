@@ -915,7 +915,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
 
   const intents: NotchIntent[] = [{
     // The reply is written with that time and shown under its fuse, which can be taken back.
-    id: 'mail.slot', feature: 'mail', says: 'a time said over the line of free times picks it for the reply', band: 'up', act: 'send', first: 'line',
+    id: 'mail.slot', feature: 'mail', says: 'a time said over the line of free times picks it for the reply', band: 'up', act: 'send', first: 'fuse',
     examples: ['Friday at ten works'],
     match: slot,
   }, {

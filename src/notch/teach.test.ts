@@ -8,7 +8,7 @@ import type { WatchWin } from './rounds.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 import {
-  NOTCH_PLACED_TEXT_MAX, NOTCH_SCHEDULE_LATE_MS, advanceRounds, attachNotchTeach, keysSaid, nextScheduled, parseSchedule, runItRequest, teachDoneWord, teachPlaced,
+  NOTCH_PLACED_TEXT_MAX, NOTCH_SCHEDULE_LATE_MS, NOTCH_TEACH_FRESH_MS, advanceRounds, attachNotchTeach, keysSaid, nextScheduled, parseSchedule, runItRequest, teachDoneWord, teachPlaced,
   teachShapes, teachStepSaid, undoRequest, watchMeRequest, type NotchSaved, type NotchSkillEffect,
 } from './teach.ts';
 import { findRounds } from './rounds.ts';
@@ -63,14 +63,21 @@ describe('what is said to start, to end and to run a showing', () => {
       'continue with the draft to Sam', 'carry on with the summary', 'finish it by Friday', 'run the same report as last week',
       'repeat that please, I did not hear', 'go on, tell me more', 'do it yourself', 'run it past Anna first', 'do the rest tomorrow',
       'finish the rest of the report', 'do the same for Leo', 'keep going until Friday', 'take over the meeting', 'do some more research',
+      // The second review: each of these says something that is not a count of the job.
+      'do the same for the other file', 'do it on the other file', 'do the other thing', 'do it for me', 'do it with me', 'continue with the rest',
+      'do it at 5', 'do the same thing again', 'continue with the next five', 'go on with the rest', 'do it on a row', 'run it on the files',
+      'do it for all the files', 'do it for the team', 'do it on Monday', 'do it once and for all', 'run it on', 'do it for',
       // A word that every object has is not a number.
       'do it constructor', 'run it toString',
     ]) expect([said, runItRequest(said)]).toEqual([said, null]);
     for (const [said, count] of [
       ['do it', null], ['Do it.', null], ['do it again please', null], ['ok, run it now', null], ['run it once more', 1], ['do that 3 more times', 3],
-      ['do it for the next 4 rows please', 4], ['run it on all the rows', null], ['do the same for the other 12', 12], ['do the same thing again', null],
-      ['continue with the next five', 5], ['go on with the rest', null], ['keep going', null], ['take it from here', null], ['finish the rest', null],
+      ['do it for the next 4 rows please', 4], ['run it on all the rows', null], ['do the same for the other 12', 12], ['do the same again', null],
+      ['continue for the next five', 5], ['go on for 3 more rows', 3], ['keep going', null], ['take it from here', null], ['finish the rest', null],
       ['do some more', null], ['do twenty more', 20], ['repeat that', null], ['finisci il resto per favore', null],
+      // A please or a thanks after any of them, and it is still the job.
+      ['continue please', null], ['do it thanks', null], ['keep going, please', null], ['take over now', null], ['do the rest, thank you', null],
+      ['run it on all of them', null], ['do the next 12 lines', 12],
     ] as const) expect([said, runItRequest(said)]).toEqual([said, { count }]);
   });
 
@@ -388,12 +395,18 @@ describe('a job to do again at a time of the week', () => {
     await h.pass(4000);
     expect(await h.say('Run it')).toBe('Did the job again.');
     await settle();
-    // Asked for by words alone, some time after: it asks before it does (owner decision 5).
+    // Shown a moment ago: it is done with nothing asked.
+    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+    // The same words when three minutes have gone by: it asks before it does (owner decision 5).
+    await h.pass(8000);
+    h.advance(NOTCH_TEACH_FRESH_MS);
+    expect(await h.say('Run it')).toBe('Did the job again.');
+    await settle();
     expect(h.said()).toBe('Do renames the file and saves it again?');
-    expect(h.ran).toEqual([]);
+    expect(h.ran).toHaveLength(1);
     await h.reply('yes');
     await settle();
-    expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
+    expect(h.ran).toHaveLength(2);
   });
 
   test('a job that stopped half way goes on from the step it stopped at', async () => {
@@ -403,8 +416,6 @@ describe('a job to do again at a time of the week', () => {
     await h.pass(4000);
     h.setRunEnd({ end: { how: 'failed', why: 'I could not find the next thing to click on the screen.' }, next: 1 });
     await h.say('run it');
-    await settle();
-    await h.reply('yes');
     await settle();
     expect(h.said()).toBe('I stopped at 1 of 2. I could not find the next thing to click on the screen. What now?');
     h.setRunEnd({ end: { how: 'done' }, next: 2 });
@@ -541,14 +552,12 @@ describe('a shown job is done again where it was done', () => {
   }
 
   test('"run it" does the steps at their places, and not through the product\'s own replay', async () => {
-    const h = harness({ byPlace: true, front: { app: 'TextEdit', win: FILE } });
+    const h = harness({ byPlace: true });
     await shown(h);
     await h.say('run it');
     await settle();
     expect(h.ran).toEqual([]);
     expect(h.sent).toEqual([
-      // Asked first which window is in front: that touches nothing. It is the job's, so nothing is asked of the person.
-      { do: 'front' },
       { do: 'find', app: 'TextEdit', win: FILE, front: true },
       { do: 'click', win: FILE, x: 40, y: 12, hand: 0 },
       { do: 'keys', win: FILE, keys: 'cmd,s' },
@@ -561,7 +570,7 @@ describe('a shown job is done again where it was done', () => {
   // browser stopped at "0 of 12. I could not find the next thing to click".
   // A field on a page has no name to be found by. Where it was typed is known.
   test('on Windows too, when the window is there as it was: words typed into a page, and Enter', async () => {
-    const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
+    const h = harness({ byPlace: false });
     await h.say('Watch me');
     await h.does({ action: 'set_value', ref: ref(''), value: '12', ts: 1, app: 'chrome', win: SHEET });
     await h.does({ action: 'press_keys', value: 'enter', ts: 2, app: 'chrome', win: SHEET });
@@ -576,8 +585,7 @@ describe('a shown job is done again where it was done', () => {
     // Not through the replay that looks for each thing by its name.
     expect(h.ran).toEqual([]);
     expect(h.sent).toEqual([
-      // Asked first which window is in front, and then whether the job's is there: neither touches anything.
-      { do: 'front' },
+      // Asked first whether the window is there: that touches nothing.
       { do: 'find', app: 'chrome', win: SHEET },
       // Then for real, and brought forward: what is typed goes to whichever window is in front.
       { do: 'find', app: 'chrome', win: SHEET, front: true },
@@ -595,10 +603,6 @@ describe('a shown job is done again where it was done', () => {
     await shown(h);
     await h.say('run it');
     await settle();
-    // A window that is gone is not in front: it asks first.
-    expect(h.said()).toBe('Do renames the file and saves it again?');
-    await h.reply('yes');
-    await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
     expect(h.sent.some((request) => request.do === 'click' || request.do === 'keys')).toBe(false);
   });
@@ -612,11 +616,6 @@ describe('a shown job is done again where it was done', () => {
     await h.reply('no');
     await h.pass(4000);
     await h.say('run it');
-    await settle();
-    // It has no window to be in front: it asks first, and nothing was asked of the machine to find that out.
-    expect(h.said()).toBe('Do renames the file and saves it again?');
-    expect(h.sent.filter((request) => request.do === 'front')).toEqual([]);
-    await h.reply('yes');
     await settle();
     expect(h.ran).toEqual([{ skill: 'shown-notepad', from: 0 }]);
     // Nothing is pressed by place: the pointer only goes home when the job is over.
@@ -640,10 +639,54 @@ describe('a shown job is done again where it was done', () => {
   // job's window is in front. Otherwise it shows a line and waits for the yes.
   describe('asked for by words alone, some time after it was shown', () => {
     const acted = (h: ReturnType<typeof harness>): Record<string, unknown>[] => h.sent.filter((request) => !['front', 'find', 'pitch'].includes(request.do as string));
+    /** More than the three minutes a job counts as only just shown. */
+    const LATER = NOTCH_TEACH_FRESH_MS + 1000;
+    /** Shown, and then left for a while. */
+    const shownEarlier = async (h: ReturnType<typeof harness>): Promise<void> => { await shown(h); h.advance(LATER); };
+
+    test('for three minutes after it was shown it is done at once, as it always was; one moment later it asks', async () => {
+      const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
+      await shown(h);
+      h.advance(NOTCH_TEACH_FRESH_MS - 4000 - 1000);
+      await h.say('do it again');
+      await settle();
+      expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
+      // Nothing was asked of the machine to find out: it was only just shown.
+      expect(h.sent.filter((request) => request.do === 'front')).toEqual([]);
+      await h.pass(8000);
+      h.advance(2000);
+      await h.say('do it again');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      expect(acted(h)).toHaveLength(3);
+    });
+
+    test('another window of the same program at the same size is not its window: it asks', async () => {
+      // Two browser windows, both as large as the screen: the job was shown in one, and the other is in front.
+      for (const win of [{ id: '0x99', pid: FILE.pid, w: FILE.w, h: FILE.h }, { id: FILE.id, pid: 4321, w: FILE.w, h: FILE.h }]) {
+        const h = harness({ byPlace: false, front: { app: 'TextEdit', win } });
+        await shownEarlier(h);
+        await h.say('do it again');
+        await settle();
+        expect([win.id, h.said()]).toEqual([win.id, 'Do renames the file and saves it again?']);
+        expect(acted(h)).toEqual([]);
+      }
+    });
+
+    test('its window gone, and one that looks like it in front: it asks, and does not take the lookalike for it', async () => {
+      const h = harness({ byPlace: false, window: 'gone', front: { app: 'TextEdit', win: { id: '0x99', pid: 4321, w: FILE.w, h: FILE.h } } });
+      await shownEarlier(h);
+      await h.say('run it');
+      await settle();
+      expect(h.said()).toBe('Do renames the file and saves it again?');
+      expect([acted(h), h.ran]).toEqual([[], []]);
+      // Nothing was looked for before the yes.
+      expect(h.sent.filter((request) => request.do === 'find')).toEqual([]);
+    });
 
     test('with another window in front it asks, does nothing until the yes, and nothing at all on a no', async () => {
       const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
-      await shown(h);
+      await shownEarlier(h);
       expect(await h.say('do it again')).toBe('Did the job again.');
       await settle();
       expect(h.said()).toBe('Do renames the file and saves it again?');
@@ -667,46 +710,17 @@ describe('a shown job is done again where it was done', () => {
 
     test('with its own window in front it is done at once, and nothing is asked', async () => {
       const h = harness({ byPlace: false, front: { app: 'TextEdit', win: FILE } });
-      await shown(h);
+      await shownEarlier(h);
       await h.say('do it again');
       await settle();
       expect(acted(h).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
       expect(h.said()).toBe('Done. 2 steps.');
     });
 
-    test('its program started again since is its window when it has the size it had, and not when it has another', async () => {
-      const again = harness({ byPlace: false, front: { app: 'textedit', win: { id: '0x99', pid: 4321, w: FILE.w + 2, h: FILE.h - 2 } } });
-      await shown(again);
-      await again.say('run it');
-      await settle();
-      expect(acted(again).map((request) => request.do)).toEqual(['click', 'keys', 'home']);
-
-      for (const win of [{ id: '0x99', pid: 4321, w: FILE.w + 3, h: FILE.h }, { id: '0x99', pid: 4321, w: FILE.w, h: FILE.h - 3 }]) {
-        const other = harness({ byPlace: false, front: { app: 'TextEdit', win } });
-        await shown(other);
-        await other.say('run it');
-        await settle();
-        expect(other.said()).toBe('Do renames the file and saves it again?');
-        expect(acted(other)).toEqual([]);
-      }
-      // Another program whose window happens to have that size is not it.
-      const same = harness({ byPlace: false, front: { app: 'Notes', win: { ...FILE, id: '0x77', pid: 9 } } });
-      await shown(same);
-      await same.say('run it');
-      await settle();
-      expect(same.said()).toBe('Do renames the file and saves it again?');
-      // And the same window's number on another process is not it either.
-      const reused = harness({ byPlace: false, front: { app: 'Notes', win: { id: FILE.id, pid: 9, w: 300, h: 200 } } });
-      await shown(reused);
-      await reused.say('run it');
-      await settle();
-      expect(reused.said()).toBe('Do renames the file and saves it again?');
-    });
-
     test('when the machine cannot say which window is in front, it asks', async () => {
       for (const front of [undefined, 'lost', 'off'] as const) {
         const h = harness({ byPlace: false, front });
-        await shown(h);
+        await shownEarlier(h);
         await h.say('do it');
         await settle();
         expect([front, h.said()]).toEqual([front, 'Do renames the file and saves it again?']);
@@ -716,7 +730,7 @@ describe('a shown job is done again where it was done', () => {
 
     test('where a job is only ever done by place (a Mac), it still asks when its window is not in front', async () => {
       const h = harness({ byPlace: true, front: { app: 'Safari', win: SHEET } });
-      await shown(h);
+      await shownEarlier(h);
       await h.say('run it');
       await settle();
       expect(h.said()).toBe('Do renames the file and saves it again?');
@@ -730,7 +744,7 @@ describe('a shown job is done again where it was done', () => {
     test('everything stopped between the question and the yes: the yes does nothing', async () => {
       let paused = false;
       const h = harness({ byPlace: false, paused: () => paused });
-      await shown(h);
+      await shownEarlier(h);
       await h.say('run it');
       await settle();
       expect(h.said()).toBe('Do renames the file and saves it again?');
@@ -744,7 +758,7 @@ describe('a shown job is done again where it was done', () => {
     test('a job that deletes is asked about once, not twice, wherever its window is', async () => {
       for (const front of [{ app: 'TextEdit', win: FILE }, { app: 'chrome', win: SHEET }]) {
         const h = harness({ byPlace: false, front, effect: { deletes: true } });
-        await shown(h);
+        await shownEarlier(h);
         await h.say('run it');
         await settle();
         expect(h.said()).toBe('That job deletes something. Do it?');
@@ -756,7 +770,7 @@ describe('a shown job is done again where it was done', () => {
 
     test('pressed on its own row, it is done as before: the press is the asking', async () => {
       const h = harness({ byPlace: false, front: { app: 'chrome', win: SHEET } });
-      await shown(h);
+      await shownEarlier(h);
       await h.pass(7000);
       h.inbox.present('home', (stage) => h.teach.open(stage));
       await settle();

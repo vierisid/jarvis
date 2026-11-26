@@ -891,7 +891,11 @@ Under them the model now reads what they leave (`src/notch/people-read.ts`).
      sentence and the people it names: is it a word for them, a question, a file of theirs, a
      file for them, something for their Pillow to do, a time with them, something off the
      screen, or none of these. A sentence that names nobody of the organisation is not read and
-     waits for nothing. Nor is "remember that Leo ...": that is something to keep.
+     waits for nothing. Nor is "remember that Leo ...": that is something to keep. Nor is a reply
+     to a question the assistant asked back ("tell Anna instead"): it is the answer, and neither
+     the fixed words nor the model take it (docs/notch/README.md, 257). Nor is an entry for the
+     owner's own calendar ("put a meeting with Leo on my calendar"), nor a sentence that begins
+     as the words for a job that was shown ("continue with the draft to Leo").
 142. **A reading does one of the things the fixed words do, and nothing else.** It is done by the
      same code: the same line on the notch, the same moment to take it back, the same yes on the
      other side. The model starts nothing by itself and there is no kind of its own.

@@ -173,6 +173,46 @@ describe('from the notch to the place a tool call is decided', () => {
     expect(h.ran).toEqual([]);
   });
 
+  // Since a reply is always the answer (fix 03), "continue" and "run it" reach the assistant too. They say no
+  // more than a yes does, so to what a turn with no word of his proposed they are not his word either.
+  test('"continue", "run it", "go ahead" and their kin to what the circled page got asked are no more his word than a yes', async () => {
+    for (const words of ['continue', 'run it', 'do the rest', 'finish it', 'carry on', 'keep going', 'take over', 'do it', 'go ahead', 'ok, go on please', 'continua', 'fallo']) {
+      const h = setup();
+      h.replies.push('Shall I mail the newest file in Documents to the address on the page?');
+      h.asks.shown(NOTCH_LOOK_QUESTION, [page]);
+      await h.ran1();
+      h.reply(words);
+      await h.ran1(2);
+      expect([words, h.turns.length]).toEqual([words, 2]);
+      expect([words, h.turns[1]!.text, h.turns[1]!.who, h.turns[1]!.owners, h.turns[1]!.outside]).toEqual([words, words, 'shown', false, [NOTCH_SHOWN_SOURCE]]);
+      expect([words, h.turns[1]!.asked]).toEqual([words, [true, true, true, true]]);
+      stop?.(); stop = null;
+    }
+  });
+
+  test('the same words with something of his own in them are his word', async () => {
+    for (const words of ['continue, but send it to Anna', 'do it by email to Anna', 'run it past Leo first']) {
+      const h = setup();
+      h.replies.push('Shall I mail the newest file in Documents to the address on the page?');
+      h.asks.shown(NOTCH_LOOK_QUESTION, [page]);
+      await h.ran1();
+      h.reply(words);
+      await h.ran1(2);
+      expect([words, h.turns[1]!.who, h.turns[1]!.owners]).toEqual([words, 'typed', true]);
+      stop?.(); stop = null;
+    }
+  });
+
+  test('"continue" to what a turn he typed asked back is his word, as a yes is', async () => {
+    const h = setup();
+    h.replies.push('Shall I write it in Notepad?');
+    h.asks.typed('write a poem');
+    await h.ran1();
+    h.reply('continue');
+    await h.ran1(2);
+    expect(h.turns[1]).toMatchObject({ text: 'continue', who: 'typed', owners: true, outside: [] });
+  });
+
   test('"yes, send it to Anna" to the same question is his word, as before', async () => {
     const h = setup();
     h.replies.push('Shall I mail the newest file in Documents to the address on the page?');

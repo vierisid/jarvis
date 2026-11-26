@@ -59,7 +59,7 @@ import { attachNotchPrefs } from './prefs.ts';
 import type { NotchLine, NotchWord } from './protocol.ts';
 import { attachNotchPut } from './put.ts';
 import { NOTCH_INTENT_ACTS_GUARDED, NOTCH_INTENT_BANDS, matchingIntents, type NotchIntent } from './intents.ts';
-import { notchIntents, notchSide, type NotchSideRouters } from './real.ts';
+import { notchIntents, notchRead, notchSide, type NotchSideRouters } from './real.ts';
 import { attachNotchSaid, saidWhen, saidWords } from './said.ts';
 import { NotchSettings } from './settings.ts';
 import { attachNotchStanding } from './standing.ts';
@@ -86,6 +86,8 @@ const CONTEXTS = {
   job: 'a job was taught once, some time ago (nothing of it is fresh, and its window is not in front)',
   front: 'with job: the window the job was shown in is the one in front now',
   fresh: 'a job was shown a moment ago, the same thing done twice: where to go on from is fresh',
+  shown: 'a job was shown a moment ago, once (no "job" with it: this is the only one)',
+  choice: 'a line of choices is up: "Stopped at row 4. What now?" with Undo it, Watch me, Tell Anna, Continue, Pause',
   held: 'a thing that was circled is held',
   draft: 'a draft of a mail reply is open on the notch',
   line: 'an offer is up on the notch ("Every day at 9:00, send me the news." with the key "make agent")',
@@ -308,7 +310,7 @@ async function world(contexts: ReadonlySet<Context>) {
   // The parts are handed to the product's resolver as they are, and the resolver says which intent took the
   // words: the row names the part that intent is of. What it would do is not done. A taught job done again is
   // the exception (see above).
-  const routers: NotchSideRouters = { pause: notchPauseWords(emergency, quiet), dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine };
+  const routers: NotchSideRouters = { pause: notchPauseWords(emergency, quiet), dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine };
   const side = (text: string, how?: NotchAskHow): NotchSided | null => {
     // Every intent that matches, asked before the resolver: nothing is run in between, so it sees the same state.
     seen.matched.push({ text, ids: matchingIntents(notchIntents(routers), text, how).map((one) => one.id) });
@@ -337,7 +339,7 @@ async function world(contexts: ReadonlySet<Context>) {
     paused: () => emergency.state !== 'normal',
     side,
     read: (text) => {
-      const reading = people?.read(text) ?? null;
+      const reading = notchRead({ teach, people }, text);
       if (!reading) return null;
       return reading.then((hit) => (hit ? { did: hit.did, run: quiet } : null));
     },
@@ -357,7 +359,8 @@ async function world(contexts: ReadonlySet<Context>) {
     const placed: PlacedStep[] | null = contexts.has('front')
       ? [{ kind: 'click', app: 'notepad', win: JOB_WINDOW, x: 40, y: 12 }, { kind: 'keys', app: 'notepad', win: JOB_WINDOW, keys: 'ctrl,s' }]
       : null;
-    new NotchLearnedStore(db).add('shown-notepad', 'saves the file', 3, placed);
+    // Some time ago: an hour.
+    new NotchLearnedStore(db, () => Date.now() - 3_600_000).add('shown-notepad', 'saves the file', 3, placed);
   }
   if (contexts.has('fresh')) {
     // Shown the way a person shows it: "watch me", the same row copied twice, "done". What it then offers
@@ -392,6 +395,40 @@ async function world(contexts: ReadonlySet<Context>) {
     fromPage({ type: 'answer', id: line()!.id, act: 'yes' });
     await settle();
     if (line()?.kind !== 'sheet') throw new Error(`the corpus could not open a draft: ${line()?.kind}`);
+  }
+  if (contexts.has('shown')) {
+    // Shown once, a moment ago: "watch me", two steps, "done", and the schedule it then offers is declined.
+    const at = Date.now() - 2000;
+    recorded = [
+      { action: 'click', ref: { role: 'Button', name: 'File', path: [], ordinal: 0, sig: 'File' }, ts: at, app: 'notepad' },
+      { action: 'press_keys', value: 'ctrl,s', ts: at + 1, app: 'notepad' },
+    ] as RawInteraction[];
+    teach.route('watch me')!.run();
+    await settle();
+    if (line()?.kind !== 'offer') throw new Error(`the corpus could not begin a showing: ${line()?.kind}`);
+    fromPage({ type: 'answer', id: line()!.id, act: 'yes' });
+    for (let round = 0; round < 6; round++) { await settle(); await new Promise((resolve) => setTimeout(resolve, 0)); }
+    if (!JSON.stringify(line()?.say ?? '').includes('Do it every')) throw new Error(`the corpus could not show a job once: ${JSON.stringify(line()?.say)}`);
+    fromPage({ type: 'answer', id: line()!.id, act: 'no' });
+    await settle();
+    // "Kept. Say run it when you want it done." is read and leaves.
+    for (let round = 0; round < 6 && line(); round++) { if (line()!.kind === 'say') fromPage({ type: 'answer', id: line()!.id, act: 'done' }); await advance(4000); }
+    if (line()) throw new Error(`the corpus could not clear the notch after a showing: ${line()?.kind}`);
+    seen.hands = 0;
+  }
+  if (contexts.has('choice')) {
+    inbox.add({
+      id: 'choice', subject: 'choice', class: 'person', speaks: true, urgent: true, asked: true,
+      title: () => ['Stopped at row 4. What now?'],
+      play: async (stage) => {
+        const id = stage.id();
+        stage.put({ id, kind: 'offer', say: ['Stopped at row 4. What now?'], options: ['Undo it', 'Watch me', 'Tell Anna', 'Continue', 'Pause'], mood: 'careful', fold: 0 });
+        await stage.answer(id, ['pick', 'no']);
+        return 'settled';
+      },
+    });
+    await settle();
+    if (!JSON.stringify(line() ?? '').includes('Undo it')) throw new Error(`the corpus could not put a line of choices up: ${JSON.stringify(line())}`);
   }
   if (contexts.has('line')) {
     agents.route('every day at 9 send me the news')!.run();
@@ -549,15 +586,19 @@ const ROWS: Record<string, [number, number]> = {
   '@ route': [128, 19],
   '@ route job': [37, 4],
   '@ route job front': [6, 0],
+  '@ route shown': [3, 0],
+  '@ route shown spoken': [2, 0],
   '@ route fresh': [4, 0],
   '@ route job reply': [20, 0],
   '@ route job front reply': [2, 0],
   '@ route job reply spoken': [4, 0],
-  '@ route reply': [11, 0],
+  '@ route reply': [14, 0],
   '@ route held': [8, 0],
   '@ route draft spoken': [12, 0],
-  '@ route line spoken': [10, 0],
-  '@ route line job spoken': [4, 0],
+  '@ route line spoken': [13, 0],
+  '@ route line job spoken': [6, 0],
+  '@ route choice spoken': [8, 0],
+  '@ route choice job spoken': [2, 0],
   '@ route dayone spoken': [5, 0],
   '@ route spoken': [6, 0],
   '@ route job spoken': [1, 0],
@@ -572,7 +613,7 @@ const ROWS: Record<string, [number, number]> = {
   '@ when page-day': [4, 2],
   '@ when page-free': [2, 1],
 };
-const TOTALS = { routing: 274, routingWrong: 27, times: 80, timesWrong: 22 };
+const TOTALS = { routing: 297, routingWrong: 27, times: 80, timesWrong: 22 };
 
 const read = corpus();
 /** For every routing row, the intents that matched its sentence when it was decided, the one that took it first. */
@@ -660,41 +701,42 @@ describe('the table of intents, as the parts hand it over', () => {
     'dayone.answer': 'up none acts',
     'dayone.start': 'open none acts',
     'dayone.around': 'open none acts',
-    'mail.slot': 'up send line',
+    'mail.slot': 'up send fuse',
     'mail.steer': 'up none acts',
     'put.answer': 'up screen acts',
     'put.here': 'command screen acts',
-    'teach.done': 'up none acts',
-    'teach.watch': 'command create line',
+    'teach.done': 'up create acts',
+    'teach.watch': 'command create yes',
     'teach.undo': 'command screen acts',
     'teach.run': 'command screen acts',
+    'said.yes': 'up answer acts',
     'people.org': 'open none acts',
-    'people.job': 'command send line',
-    'people.agent': 'command send line',
-    'people.show': 'command send line',
-    'people.rule': 'command settings line',
-    'people.time': 'command send line',
-    'people.give': 'command send line',
-    'people.request': 'command send line',
-    'people.file': 'command send line',
-    'people.say': 'command send line',
-    'standing.eye': 'command none acts',
-    'standing.chase': 'command create line',
+    'people.job': 'command send fuse',
+    'people.agent': 'command send fuse',
+    'people.show': 'command send fuse',
+    'people.rule': 'command settings yes',
+    'people.time': 'command send fuse',
+    'people.give': 'command send yes',
+    'people.request': 'command send fuse',
+    'people.file': 'command send fuse',
+    'people.say': 'command send fuse',
+    'standing.eye': 'command create acts',
+    'standing.chase': 'command create yes',
     'agents.list': 'open none acts',
-    'agents.make': 'command create line',
+    'agents.make': 'command create yes',
     'memory.open': 'open none acts',
     'calls.open': 'open none acts',
     'prefs.settings': 'open none acts',
     'prefs.connections': 'open none acts',
     'moves.open': 'open none acts',
     'cando.open': 'open none acts',
-    'said.answer': 'up none acts',
+    'said.answer': 'said answer acts',
   };
   /**
    * Intents that answer what is up on the notch: their examples are the rows of the sections that put it up. And
    * a job that changes hands, which needs a chase under way that no state here has (./people.test.ts has those).
    */
-  const ELSEWHERE = new Set(['dayone.answer', 'mail.slot', 'mail.steer', 'put.answer', 'teach.done', 'said.answer', 'people.job']);
+  const ELSEWHERE = new Set(['dayone.answer', 'mail.slot', 'mail.steer', 'put.answer', 'teach.done', 'said.yes', 'said.answer', 'people.job']);
 
   test('every intent is in it once, and says where it stands, what kind of act it is and whether it acts at once', async () => {
     const made = await world(new Set(['job', 'held']));
@@ -713,9 +755,13 @@ describe('the table of intents, as the parts hand it over', () => {
     try {
       const guarded = made.table().filter((one) => NOTCH_INTENT_ACTS_GUARDED.includes(one.act));
       expect(guarded.length).toBeGreaterThan(10);
-      for (const one of guarded) expect([one.id, one.first === 'line' || (one.live ?? '').length > 10]).toEqual([one.id, true]);
+      for (const one of guarded) expect([one.id, one.first !== 'acts' || (one.live ?? '').length > 10 || (one.alone ?? '').length > 10]).toEqual([one.id, true]);
       // And the other way: a live context is named only by what acts at once.
       for (const one of made.table()) if (one.live !== undefined) expect([one.id, one.first]).toEqual([one.id, 'acts']);
+      // One intent is let off the rule, and says why: an eye is kept at once, as it always was.
+      expect(made.table().filter((one) => one.alone !== undefined).map((one) => one.id)).toEqual(['standing.eye']);
+      // An answer to a line is never "nothing": whoever reads the act has to ask what the line was about.
+      expect(made.table().filter((one) => one.feature === 'said').map((one) => one.act)).toEqual(['answer', 'answer']);
     } finally { made.stop(); }
   });
 
@@ -768,10 +814,13 @@ describe('the table of intents, as the parts hand it over', () => {
       const table = made.table();
       const bands = table.map((one) => one.band);
       expect(bands).toEqual([...bands].sort((a, b) => NOTCH_INTENT_BANDS.indexOf(a) - NOTCH_INTENT_BANDS.indexOf(b)));
-      expect(table.filter((one) => one.inReply).map((one) => one.id)).toEqual(['pause.all']);
       expect(table.filter((one) => one.band === 'control').map((one) => one.id)).toEqual(['pause.all']);
       // What is up stands before every command: the yes to an offer before the job that "do it" could mean.
-      expect(table.findIndex((one) => one.id === 'said.answer')).toBeLessThan(table.findIndex((one) => one.id === 'teach.run'));
+      expect(table.findIndex((one) => one.id === 'said.yes')).toBeLessThan(table.findIndex((one) => one.id === 'teach.run'));
+      // And only that: everything else said over a line is asked last, after every command and everything that opens.
+      expect(table.at(-1)?.id).toBe('said.answer');
+      expect(table.filter((one) => one.band === 'said').map((one) => one.id)).toEqual(['said.answer']);
+      expect(table.filter((one) => one.inReply).map((one) => one.id)).toEqual(['pause.all', 'teach.undo']);
     } finally { made.stop(); }
   });
 

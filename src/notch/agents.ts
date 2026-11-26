@@ -156,9 +156,14 @@ export function agentSentence(text: string): AgentSentence | null {
     // what happens to a person, and is not asking for anything to be made.
     if (!made && /^(?:i|i'm|i've|we|we're|you|he|she|they|it|it's|there|my|our|his|her|their|the|this|that|these|those|someone|somebody|people|everyone)\b/i.test(job)) return null;
     // "Daily" and "weekly" are also what a thing is called. "Daily standup notes should go to the team" says
-    // what should happen to the daily notes, and asks for nothing to be made: begun with one of those two
-    // words and said with "should", it is a statement.
-    if (!made && /^(?:daily|weekly)\b/i.test(rest) && /\b(?:should|must|ought to|shall)\b/i.test(job)) return null;
+    // what should happen to the daily notes, and asks for nothing to be made.
+    // Only when "should" is what the sentence says of the thing ("standup notes should go"), a name of one to
+    // three words and then the modal. "Daily check what must be paid" and "daily send Sam what he should know"
+    // begin with something to do, and are asked for.
+    if (!made && /^(?:daily|weekly)\b/i.test(rest)) {
+      const before = /^((?:\S+ ){1,3})(?:should|must|ought to|shall)\b/i.exec(job)?.[1]?.trim().split(' ') ?? null;
+      if (before && !before.some((word) => /^(?:what|that|which|who|whom|whose|if|whether|how|when|where|why|and|or|to|he|she|they|we|you|i|it|me|him|her|them|us)$/i.test(word.replace(/[,;:]+$/, '')) || /[,;:]$/.test(word))) return null;
+    }
     return job.split(' ').filter(Boolean).length >= 2 ? { when: schedule.when, job } : null;
   }
   // "Every 5 minutes", "every invoice": not a schedule the notch can say, and not asked for as an agent.
@@ -771,7 +776,7 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     },
   }, {
     // The sentence is read back as a line, with its schedule lit, and only "make agent" makes it.
-    id: 'agents.make', feature: 'agents', says: 'make an agent from a sentence that says when and what', band: 'command', act: 'create', first: 'line',
+    id: 'agents.make', feature: 'agents', says: 'make an agent from a sentence that says when and what', band: 'command', act: 'create', first: 'yes',
     examples: ['every Monday send Sam the numbers', 'can you make an agent that replies to new leads'],
     never: ['daily standup notes should go to the team', 'every evening I go for a run', 'remind me every day at 8 to take my pills'],
     match(text) {

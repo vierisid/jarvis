@@ -8,7 +8,7 @@
 # What is done with a sentence, as the test writes it:
 #   <part>: <what the ledger says>     an intent of the one table took it (intents.ts). It is named by the part
 #                                      that handed the intent over (pause, dayOne, mail, put, teach, people,
-#                                      standing, agents, memory, calls, prefs, moves, canDo, saidLine)
+#                                      standing, agents, memory, calls, prefs, moves, canDo, said)
 #   teach: ... (acts at once)          a shown job was done again: the hands were set to work with nothing asked
 #   teach: ... (a line first)          a shown job was asked for, and "Do <the job> again?" came up for a yes
 #   turn                               none took it: it goes to the assistant as an instruction
@@ -23,6 +23,9 @@
 #   job      a job was taught once, some time ago (nothing of it is fresh, and its window is not in front)
 #   front    with job: the window the job was shown in is the one in front now
 #   fresh    a job was shown a moment ago, the same thing done twice: where to go on from is fresh (3 minutes)
+#   shown    a job was shown a moment ago, once (3 minutes). The only job there is.
+#   choice   a line of choices is up: "Stopped at row 4. What now?" with Undo it, Watch me, Tell Anna, Continue,
+#            Pause
 #   held     a thing that was circled is held
 #   draft    a draft of a mail reply is open on the notch
 #   line     an offer is up on the notch: "Every day at 9:00, send me the news." with the key "make agent"
@@ -79,10 +82,10 @@ pause the music => turn
 ok => turn
 no not now => turn
 put it here => turn
-# Not a comparing of calendars any more: Sam is named, so the model that reads words about people is asked (here
-# it says "for nobody"), and the assistant makes the entry.
-put a meeting with Sam on my calendar for Friday => read+turn
-add the call with Leo to my calendar => read+turn
+# Not a comparing of calendars any more, and the model that reads words about people is not asked what it makes
+# of it either (one of its answers is a comparing of calendars): the assistant makes the entry.
+put a meeting with Sam on my calendar for Friday => turn
+add the call with Leo to my calendar => turn
 paste => turn
 # schedules
 every weekday at 9 send me the news => agents: Make an agent from a sentence.  ## wrong: agents, read back as Monday to Friday at 9:00
@@ -199,7 +202,7 @@ continue => teach: Did the job again. (a line first)
 go on => teach: Did the job again. (a line first)
 keep going => teach: Did the job again. (a line first)
 carry on with the summary => turn
-continue with the draft to Sam => read+turn
+continue with the draft to Sam => turn
 go on, tell me more => turn
 finish it => teach: Did the job again. (a line first)
 finish it by Friday => turn
@@ -234,6 +237,16 @@ run it => teach: Did the job again. (acts at once)
 do it by email => turn
 repeat that please, I did not hear => turn
 
+# A job that was shown once, a moment ago: for three minutes "run it" does it at once, as it always did.
+@ route shown
+run it => teach: Did the job again. (acts at once)
+do it again => teach: Did the job again. (acts at once)
+do it by email => turn
+
+@ route shown spoken
+do it again => teach: Did the job again. (acts at once)
+run it => teach: Did the job again. (acts at once)
+
 # A job that was shown a moment ago, twice over: "do the rest" goes on from where the showing ended, at once.
 @ route fresh
 do it => teach: Did the job again. (acts at once)
@@ -261,10 +274,11 @@ yes send it => turn
 send it => turn
 no not now => turn
 ok => turn
-# These three were not marked: the design gave the rule (a reply skips every intent that is not open in a reply)
-# and did not say which intents are. Now only a control word is. "undo" and "settings" may be the answer to what
-# was asked ("which one, settings or profile?"), and "tell Anna instead" is the answer, not a word to Anna.
-undo => turn
+# "settings" and "tell Anna instead" were not marked: the design gave the rule (a reply skips every intent that
+# is not open in a reply) and did not say which intents are. Now "pause" and "undo" are, and nothing else.
+# "settings" may be the answer to what was asked ("which one, settings or profile?"), and "tell Anna instead" is
+# the answer, not a word to Anna. The owner is to confirm this list.
+undo => teach: Took back my last paste.
 done => turn
 settings => turn
 tell Anna instead => turn
@@ -291,6 +305,9 @@ send it => turn
 no not now => turn
 # Was "prefs: Show the settings." and not marked: see above.
 settings => turn
+undo => teach: Took back my last paste.
+watch me => turn
+paste => turn
 # A reply is not read for who is named, is not kept as a memory and is not answered by pointing: the model that
 # reads words about people is not asked, and nothing of the window is read.
 tell Anna I'm late => turn
@@ -307,7 +324,7 @@ put it here => put: Put what you showed me where you pointed.
 paste => put: Put what you showed me where you pointed.
 mettilo qui => put: Put what you showed me where you pointed.
 put it here as a table => put: Put what you showed me where you pointed.
-put a meeting with Sam on my calendar for Friday => read+turn
+put a meeting with Sam on my calendar for Friday => turn
 put the kettle on => turn
 send this to Leo => people: Show Leo what was circled.
 do it => turn
@@ -342,25 +359,52 @@ look around => mail: Write the reply again, as told.
 # An offer is up ("Every day at 9:00, send me the news." / make agent), and the talk keys are held over it.
 # ---------------------------------------------------------------------------------------------------------------
 @ route line spoken
-yes do it => saidLine: Said yes to the line that was up.
-do it => saidLine: Said yes to the line that was up.
-go ahead => saidLine: Said yes to the line that was up.
-make agent => saidLine: Said yes to the line that was up.
-not now => saidLine: Said no to the line that was up.
-make it Friday at ten => saidLine: Changed the line that was up: Friday at 10:00.
+yes do it => said: Said yes to the line that was up.
+do it => said: Said yes to the line that was up.
+go ahead => said: Said yes to the line that was up.
+make agent => said: Said yes to the line that was up.
+not now => said: Said no to the line that was up.
+make it Friday at ten => said: Changed the line that was up: Friday at 10:00.
 # Not marked, not decided: a bare "yes" answers no line (rule 206), and today it goes to the assistant as a turn.
 yes => turn
 open the Friday report => turn
 settings => prefs: Show the settings.
 pause => pause: Stopped everything.
+# A new time for the offer is never read out of words that begin as the words for a job: "do 3 more" is not three
+# o'clock. With no job to mean they are an instruction. (They used to change the schedule to 15:00 and 17:00.)
+do 3 more => turn
+do it at 5 => turn
+make it 5 => said: Changed the line that was up: day at 17:00.
 
 # The same offer, and a job was taught once: "do it" is the yes to the offer, because what is up stands before a
 # command (README rule 206). Words that only the job can mean are still the job.
 @ route line job spoken
-do it => saidLine: Said yes to the line that was up.
-yes do it => saidLine: Said yes to the line that was up.
-go ahead => saidLine: Said yes to the line that was up.
+do it => said: Said yes to the line that was up.
+yes do it => said: Said yes to the line that was up.
+go ahead => said: Said yes to the line that was up.
 do the rest => teach: Did the job again. (a line first)
+do 3 more => teach: Did the job again. (a line first)
+# It used to run the job. It is not the job (a word that is not about it) and it is not a new time for the offer.
+do it at 5 => turn
+
+# ---------------------------------------------------------------------------------------------------------------
+# A line of choices is up, and some of its choices read like words the notch has of its own. Those words keep
+# their own meaning: what is said over a line is asked last, after every command. Only a plain yes stands before.
+# ---------------------------------------------------------------------------------------------------------------
+@ route choice spoken
+undo => teach: Took back my last paste.
+undo it => teach: Took back my last paste.
+watch me => teach: Began watching what you show me.
+tell Anna => people: Tell Anna something.
+pause => pause: Stopped everything.
+# Nothing else has these words here, so they pick the choice.
+continue => said: Picked "Continue" on the line that was up.
+the second one => said: Picked "Watch me" on the line that was up.
+settings => prefs: Show the settings.
+
+@ route choice job spoken
+continue => teach: Did the job again. (a line first)
+undo it => teach: Took back my last paste.
 
 # ---------------------------------------------------------------------------------------------------------------
 # Day one waits to hear the person: whatever is said is its answer. Meant.

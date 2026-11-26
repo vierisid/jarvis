@@ -18,19 +18,22 @@
  * from (docs/notch/fixes/01-owner-word.md, step C4). It names the strongest
  * thing the intent can lead to, not what it does on a quiet day:
  *
- *   none      Shows, opens or notes something on the notch itself, or
- *             answers a line of the notch. Nothing leaves this machine,
- *             nothing in another window changes, and nothing is left that
- *             will act by itself later. Opening the settings sheet is here
- *             (opening is not changing), and so is an eye on somebody's
- *             mail: it only ever tells the owner.
+ *   none      Shows, opens or notes something on the notch itself. Nothing
+ *             leaves this machine, nothing in another window changes, and
+ *             nothing is left standing. Opening the settings sheet is here
+ *             (opening is not changing).
+ *   answer    Answers a line that is up on the notch: its yes, its no, a
+ *             choice, a new value for one of its words. What that does is
+ *             the line's own, and is not known from the words: whoever
+ *             reads this field has to ask what the line was about. A yes
+ *             to "make agent" creates, a yes to a mail's line sends.
  *   screen    Works in the owner's own windows: the pointer, clicks, keys,
  *             a paste, or taking a paste back.
  *   send      Something goes to another person or another machine: a word,
  *             a question, a file, an agent, a job, a mail, the free times of
  *             a calendar.
- *   create    Makes a standing thing that acts by itself later: an agent, a
- *             chase, a job that was shown.
+ *   create    Makes a standing thing: an agent, a chase, a job that was
+ *             shown, an eye that is kept on somebody's mail.
  *   command   Runs a program or a shell command. No fixed word does this
  *             today. It is here so that a reading of a sentence (the next
  *             step) and the owner's-word check have one closed set.
@@ -45,14 +48,17 @@
  * ## Whether it acts at once (`first`)
  *
  *   'acts'    its run does the thing with nothing asked.
- *   'line'    its run shows a line first: an offer that takes a yes, or a
- *             fuse that can be taken back.
+ *   'yes'     its run shows a line that waits for a yes: nothing happens
+ *             without one.
+ *   'fuse'    its run shows a line under a fuse: it can be taken back while
+ *             the fuse burns, and goes by itself when it has burnt.
  *
  * The rule, held by a test over the table: an intent whose act is screen,
- * send or create shows a line first, unless it names the live context that
- * its words are about (`live`): the thing that is held, the job that was
- * just shown, the paste that was just made. Words alone never set the hands
- * to work.
+ * send or create shows a line first ('yes' or 'fuse'), unless it names the
+ * live context that its words are about (`live`): the thing that is held,
+ * the job that was just shown, the paste that was just made. Words alone
+ * never set the hands to work. One intent is let off, and says why
+ * (`alone`): an eye is kept at once, as it always was.
  *
  * ## Order (`band`, `over`)
  *
@@ -65,11 +71,16 @@
  *                that takes a yes, a showing that waits for "done"
  *   3. command   something to do
  *   4. open      something of the notch's own to open
+ *   5. said      what was said over a line that was up, when it is none of
+ *                the above: a no, a choice, a new value for a word
  *
  * Inside a band the order is the order the parts are handed over in, and
- * inside a part the order of its list. So "do it" said over an offer is the
- * yes to that offer, also when a job was once shown that "do it" could mean
- * (docs/notch/README.md, rule 206).
+ * inside a part the order of its list. A plain yes said over an offer
+ * ("do it", "go ahead") stands with what is up, so it is the yes to that
+ * offer, also when a job was once shown that "do it" could mean
+ * (docs/notch/README.md, rule 206). Everything else that is said over a
+ * line is asked last: "undo", "watch me" and "tell Anna" keep their own
+ * meaning also when a choice on the line happens to read the same.
  *
  * When a sentence can be matched by two intents, the one that takes it says
  * so: `over` names the intents it is taken from. A test over the corpus
@@ -88,12 +99,12 @@
  * When the assistant has asked something back and the person answers, what
  * they say is the answer: it goes to the assistant, and no intent takes it.
  * "Do it", said to "Shall I send it?", is not the job that was shown. Only
- * an intent marked `inReply` is still asked, and that is the control band:
- * "pause" pauses whatever is on the notch.
+ * an intent marked `inReply` is still asked: "pause", which pauses whatever
+ * is on the notch, and "undo", which takes back the notch's last paste.
  */
 
 /** What kind of act an intent is. See the top of this file. */
-export type NotchIntentAct = 'none' | 'screen' | 'send' | 'create' | 'command' | 'install' | 'settings';
+export type NotchIntentAct = 'none' | 'answer' | 'screen' | 'send' | 'create' | 'command' | 'install' | 'settings';
 
 /** The acts that need a line first, or a live context that the words are about. */
 export const NOTCH_INTENT_ACTS_GUARDED: readonly NotchIntentAct[] = ['screen', 'send', 'create', 'command', 'install'];
@@ -104,11 +115,12 @@ export const NOTCH_INTENT_ACTS_GUARDED: readonly NotchIntentAct[] = ['screen', '
  *   up        an answer to what is up on the notch now, or was a moment ago
  *   command   something to do
  *   open      something of the notch's own to open
+ *   said      what was said over a line that was up, and is none of the above
  */
-export type NotchIntentBand = 'control' | 'up' | 'command' | 'open';
+export type NotchIntentBand = 'control' | 'up' | 'command' | 'open' | 'said';
 
 /** The bands, in the order they are asked in. */
-export const NOTCH_INTENT_BANDS: readonly NotchIntentBand[] = ['control', 'up', 'command', 'open'];
+export const NOTCH_INTENT_BANDS: readonly NotchIntentBand[] = ['control', 'up', 'command', 'open', 'said'];
 
 /**
  * How some words came: typed or spoken, and when the typing was sent or the talk keys went down. `reply`: they
@@ -128,9 +140,11 @@ export interface NotchIntent {
   says: string;
   band: NotchIntentBand;
   act: NotchIntentAct;
-  first: 'acts' | 'line';
+  first: 'acts' | 'yes' | 'fuse';
   /** The live context its words are about, when it acts at once on the screen, sends or creates. */
   live?: string;
+  /** Why it may act at once with no line and no live context. Only where that is how it always was. */
+  alone?: string;
   /** Sentences that are this intent, when the state it needs holds. */
   examples: readonly string[];
   /** Sentences that look like it and are not: its fast path must not take them. */
@@ -140,7 +154,7 @@ export interface NotchIntent {
    * what it answers is up (day one waiting to hear the person, a draft that is open).
    */
   over?: readonly string[] | 'any';
-  /** Still asked when the words are the reply to a question the assistant asked back. Only a control word is. */
+  /** Still asked when the words are the reply to a question the assistant asked back: the control word, and the take-back. */
   inReply?: boolean;
   /** The fast path: the part's own fixed words. Null when the sentence is not this intent now. */
   match(text: string, how?: NotchIntentHow): NotchIntentHit | null;

@@ -67,37 +67,42 @@ const NUMBERS: Record<string, number> = {
   a: 1, an: 1, another: 1, once: 1, twice: 2,
 };
 
-/** What a sentence that asks for the job begins with. What comes after it is read by `RUN_TAIL`. */
+/** What a sentence that asks for the job begins with. What may come after it is `RUN_TAIL`. */
 const RUN_HEADS = [
   /^(?:run|do|repeat|redo) (?:it|that|this|the same|them)\b/,
   /^(?:do|finish|run) the (?:rest|others?|remaining|next)\b/,
   /^(?:finish|continue) (?:it|them|that)\b/,
   /^(?:take it from here|take over|keep going|go on|continue|carry on)\b/,
   /^(?:fai|finisci) (?:il resto|gli altri|le altre)\b/,
-  /^(?:do|run)\b/,
 ];
+/** "Do 3 more", "run another more": the job with nothing but a count. */
+const RUN_MORE = /^(?:do|run)(?= (?:\S+ )?more\b)/;
+
+/** A count as it is said: digits, or a word for a number. Not "a" and "an", which are in too many sentences. */
+const RUN_NUM = `(?:\\d{1,3}|${Object.keys(NUMBERS).filter((word) => word !== 'a' && word !== 'an').join('|')})`;
+const RUN_UNIT = '(?:rows?|lines?|cells?|columns?|items?|entries|entry|records?|ones?|times?)';
+const RUN_COUNT = `(?:(?:the |these |those )?(?:next |other |remaining )?${RUN_NUM}(?: more)?(?: ${RUN_UNIT})?|(?:some |a few )?more(?: ${RUN_UNIT})?)`;
+const RUN_SPAN = `(?:(?:on|for) (?:all(?: of them| (?:the |these |those )?${RUN_UNIT})?|(?:the |these |those )?(?:next |other |remaining )?${RUN_NUM}(?: more)?(?: ${RUN_UNIT})?))`;
 
 /**
- * The words that may come after "do it": how many, of what, and from where.
- * Nothing else. "Do it by email", "finish it by Friday" and "continue with
- * the draft to Sam" each have a word that is not about the job, and are an
- * instruction like any other.
+ * What may come after "do it": how many, of what, again, and a please. Nothing else. "Do it by email", "do it
+ * for me", "do the same for the other file", "finish it by Friday" and "continue with the draft to Sam" each
+ * say something that is not about the job, and are an instruction like any other.
  */
-const RUN_TAIL = new Set([
-  'again', 'once', 'more', 'time', 'times', 'now', 'please', 'too', 'then', 'thanks',
-  'on', 'for', 'with', 'from', 'here', 'me', 'of', 'the', 'these', 'those', 'all', 'some', 'few', 'couple',
-  'next', 'other', 'others', 'remaining', 'rest', 'following', 'same', 'thing',
-  'row', 'rows', 'line', 'lines', 'cell', 'cells', 'column', 'columns', 'file', 'files', 'item', 'items', 'entry', 'entries',
-  'record', 'records', 'one', 'ones', 'them',
-  'per', 'favore', 'ancora', 'adesso',
-]);
+const RUN_TAIL = new RegExp(`^(?: ${RUN_COUNT})?(?: ${RUN_SPAN})?(?: (?:again|once more|one more time))?(?:,? (?:please|now|thanks|thank you|per favore))*$`);
 
-/** Whether every word after the words that ask for the job is about the job: a count, what is counted, where from. */
-function runTailRead(rest: string): boolean {
-  const head = RUN_HEADS.map((one) => one.exec(rest)).find((found) => found !== null);
-  if (!head) return false;
-  return rest.slice(head[0].length).split(/[\s-]+/).filter(Boolean)
-    .every((word) => RUN_TAIL.has(word) || Object.hasOwn(NUMBERS, word) || /^\d{1,3}$/.test(word));
+/** What is left of a sentence when the words before it ("ok", "Jarvis,") are taken off. */
+const runRest = (text: string): string => text.trim().toLowerCase().replace(/[.!?]+$/, '').replace(/\s+/g, ' ').replace(new RegExp(`^${LEAD}`, 'i'), '');
+
+/**
+ * Whether a sentence begins with the words that ask for the job, whatever follows them: "do it at 5",
+ * "continue with the draft to Sam", "do 3 more". Such a sentence is the job when nothing else is in it
+ * (`runItRequest`), and otherwise an instruction. It is never a new value for a word of the line that is up
+ * (./said.ts), and with a job that was shown it is not read for whom it names (./real.ts, `notchRead`).
+ */
+export function runItBegins(text: string): boolean {
+  const rest = runRest(text);
+  return RUN_HEADS.some((head) => head.test(rest)) || RUN_MORE.test(rest);
 }
 
 /**
@@ -112,23 +117,16 @@ function runTailRead(rest: string): boolean {
  * about the job, makes the sentence an instruction like any other.
  */
 export function runItRequest(text: string): { count: number | null } | null {
-  const said = text.trim().toLowerCase().replace(/[.!?]+$/, '');
-  if (!said || said.split(/\s+/).length > 12) return null;
-  const lead = new RegExp(`^${LEAD}`, 'i');
-  const rest = said.replace(lead, '');
-  const fits = /^(?:run|do|repeat|redo) (?:it|that|this|the same|them)\b/.test(rest)
-    || /^(?:do|finish|run) the (?:rest|others?|remaining|next)\b/.test(rest)
-    || /^(?:do|run) (?:(?:another|\d{1,3}|[a-z]+) )?more$/.test(rest)
-    || /^(?:finish|continue) (?:it|them|that)\b/.test(rest)
-    || /^(?:take it from here|take over|keep going|go on|continue|carry on)(?: (?:for|with|on) .*)?$/.test(rest)
-    || /^(?:fai|finisci) (?:il resto|gli altri|le altre)\b/.test(rest);
-  if (!fits || !runTailRead(rest)) return null;
+  const rest = runRest(text);
+  if (!rest || rest.split(' ').length > 12) return null;
+  const head = [...RUN_HEADS, RUN_MORE].map((one) => one.exec(rest)).find((found) => found !== null);
+  if (!head || !RUN_TAIL.test(rest.slice(head[0].length))) return null;
   const digits = /\b(\d{1,3})\b/.exec(rest);
   if (digits) return { count: Math.max(1, Number(digits[1])) };
   for (const part of rest.split(/[\s-]+/)) {
     // "a" and "an" count only before "more" or "time": "do it on a row" is not a count worth guessing.
     if ((part === 'a' || part === 'an') && !/\b(?:a|an) (?:more|time|few)\b/.test(rest)) continue;
-    if (part in NUMBERS) return { count: NUMBERS[part]! };
+    if (Object.hasOwn(NUMBERS, part)) return { count: NUMBERS[part]! };
   }
   return { count: null };
 }
@@ -400,6 +398,12 @@ export interface NotchTeach {
   route(text: string): { did: string; run(): void } | null;
   /** Its words, as intents of the one table (./intents.ts). `route` is the first of them that takes a sentence. */
   intents(): readonly NotchIntent[];
+  /**
+   * Whether these words begin as the words for a job, and there is a job they could mean: "continue with the
+   * draft to Sam". They are then the job (when nothing else is in them) or an instruction, and never a
+   * sentence that is read for whom it names.
+   */
+  begins(text: string): boolean;
   /** Home's row about the jobs it was shown, when there are any, and the sheet it opens. */
   row(): NotchBlock | null;
   open(stage: NotchStage): Promise<void>;
@@ -518,8 +522,10 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
   }
 
   /**
-   * Whether the window a job was shown in is the one in front now: the same program, at the size it had. Asking
-   * touches nothing. No window in front, one of Jarvis's own, or a machine that cannot say: not in front.
+   * Whether the window a job was shown in is the one in front now: that very window, by its number and its
+   * program's. Another window of the same program is not it, also at the same size (two browser windows, both
+   * as large as the screen), and neither is the program started again. Asking touches nothing. No window in
+   * front, one of Jarvis's own, or a machine that cannot say: not in front.
    */
   async function windowInFront(placed: PlacedStep[] | null): Promise<boolean> {
     const first = placed?.find((step): step is Exclude<PlacedStep, { kind: 'secret' }> => step.kind !== 'secret');
@@ -527,16 +533,16 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     try {
       const front = await deps.hands.act({ do: 'front' });
       if (front?.done !== true || !front.win) return false;
-      if (front.win.id === first.win.id && front.win.pid === first.win.pid) return true;
-      return (front.app ?? '').toLowerCase() === first.app.toLowerCase() && Math.abs(front.win.w - first.win.w) <= 2 && Math.abs(front.win.h - first.win.h) <= 2;
+      return front.win.id === first.win.id && front.win.pid === first.win.pid;
     } catch {
       return false;
     }
   }
 
   /**
-   * Does a saved job once. `said`: it was asked for by words alone ("do it again"), with nothing of it fresh.
-   * Then it is done at once only when its window is the one in front, and otherwise it is asked about first:
+   * Does a saved job once. `said`: it was asked for by words alone ("do it again"). Shown in the last three
+   * minutes it is done at once, as ever: the person has only just shown it. Later it is done at once only when
+   * its window is the one in front, and otherwise it is asked about first:
    * words that could have meant something else never set the hands to work in a window that is not there to
    * be seen (the owner, 26 November 2026). Asked for on its own row, or at its time and answered with a yes,
    * it is done as before.
@@ -565,7 +571,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       })();
     };
     if (!effect.deletes) {
-      if (!said) { begin(); return; }
+      if (!said || now() - learned.createdAt < NOTCH_TEACH_FRESH_MS) { begin(); return; }
       void (async () => {
         if (await windowInFront(learned.placed)) { begin(); return; }
         if (stopped) return;
@@ -583,7 +589,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
             return 'settled';
           },
         });
-      })();
+      })().catch((error) => { log(`[notch] a shown job could not be asked about: ${error instanceof Error ? error.message : String(error)}`); });
       return;
     }
     // A job that deletes is asked about either way, and that question is the line: it is not asked twice.
@@ -812,7 +818,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     }
     const [last] = store.all();
     if (!last) { tell(['I have not been shown a job yet. Say "watch me" and do it once.'], 'confused', 4600); return; }
-    // Nothing of it is fresh: by words alone it is done at once only where its window is in front.
+    // By words alone: at once when it was only just shown or its window is in front, and asked about otherwise.
     startSkill(last, true);
   }
 
@@ -849,7 +855,9 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
   }
 
   const intents: NotchIntent[] = [{
-    id: 'teach.done', feature: 'teach', says: 'the showing is over', band: 'up', act: 'none', first: 'acts',
+    // It ends the showing, and what was shown is then kept as a job.
+    id: 'teach.done', feature: 'teach', says: 'the showing is over', band: 'up', act: 'create', first: 'acts',
+    live: 'the showing that is under way, with its line up',
     examples: ['done', "that's it"],
     match(text) {
       if (stopped || !session || !teachDoneWord(text)) return null;
@@ -858,8 +866,9 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     },
   }, {
     // What is shown is kept only on "done", said or pressed on the line that is up all the while: Esc throws it away.
-    id: 'teach.watch', feature: 'teach', says: 'watch a job being shown, to learn it', band: 'command', act: 'create', first: 'line',
+    id: 'teach.watch', feature: 'teach', says: 'watch a job being shown, to learn it', band: 'command', act: 'create', first: 'yes',
     examples: ['watch me', 'let me show you'],
+    over: ['said.answer'],
     match(text) {
       if (stopped) return null;
       return watchMeRequest(text) ? { did: 'Began watching what you show me.', run: watch } : null;
@@ -868,16 +877,21 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     id: 'teach.undo', feature: 'teach', says: 'take back the last thing the notch pasted', band: 'command', act: 'screen', first: 'acts',
     live: 'the last paste the notch made itself: with none, nothing is touched',
     examples: ['undo', 'undo that', 'take it back'],
+    // Taking back is still the notch's own when the words answer a question the assistant asked.
+    inReply: true,
+    over: ['said.answer'],
     match(text) {
       if (stopped || !undoRequest(text)) return null;
       return { did: 'Took back my last paste.', run: () => { if (!deps.jobs.undoLast()) tell(['Nothing of mine to undo.'], 'look', 2800); } };
     },
   }, {
     id: 'teach.run', feature: 'teach', says: 'do the job that was shown again, or go on with it', band: 'command', act: 'screen', first: 'acts',
-    live: 'a job shown or begun by hand in the last three minutes, or the window of the last shown job in front: with neither, it asks first',
+    live: 'a job shown or begun by hand in the last three minutes, or the very window of the last shown job in front: with neither, it asks first',
     examples: ['run it on nine rows', 'do it again', 'do the rest'],
     never: ['do it by email', 'do that tomorrow morning instead', 'continue with the draft to Sam', 'finish it by Friday', 'run the same report as last week',
-      'repeat that please, I did not hear', 'do this for all the files in downloads', 'do them one at a time please', 'carry on with the summary'],
+      'repeat that please, I did not hear', 'do this for all the files in downloads', 'do them one at a time please', 'carry on with the summary',
+      'do the same for the other file', 'do it on the other file', 'do the other thing', 'do it for me', 'do it with me', 'continue with the rest', 'do it at 5'],
+    over: ['said.answer'],
     match(text) {
       if (stopped) return null;
       const run = runItRequest(text);
@@ -892,6 +906,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     watching: () => session !== null,
     route: (text) => routeByIntents(intents, text),
     intents: () => intents,
+    begins: (text) => !stopped && runItBegins(text) && (fresh !== null || store.all().length > 0 || !!deps.catcher?.()?.last()),
     row() {
       const n = store.all().length;
       return n === 0 ? null : { kind: 'row', id: 'learned', say: [em(n === 1 ? '1 job' : `${n} jobs`), ' you showed me.'], go: true };

@@ -279,3 +279,38 @@ describe('the line the talk keys were pressed over', () => {
   });
 });
 
+// The second review of fix 03: an answer over a line stood before every command, so "undo" picked a choice that
+// read "Undo it" and "do 3 more" became three o'clock on an offer.
+describe('what is said over a line, as intents of the one table', () => {
+  function over(line: NotchLine) {
+    const replayed: unknown[] = [];
+    const said = attachNotchSaid({ inbox: { showing: () => 'thing', replay: (_id, _reads, answers) => { replayed.push(answers); return true; } }, line: () => line, now: () => 1000, log: () => {} });
+    said.keys();
+    const [yes, answer] = said.intents();
+    const how = { source: 'spoken' as const, at: 1000 };
+    return { yes: (text: string) => yes!.match(text, how)?.did ?? null, answer: (text: string) => answer!.match(text, how)?.did ?? null, intents: said.intents(), replayed };
+  }
+  const sched: NotchLine = { id: 'l', kind: 'offer', say: ['Every ', { word: { name: 'when', value: 'day at 9:00', options: ['day at 9:00'], read: 'sched' } }, ', send me the news.'], yes: 'make agent' };
+
+  test('a plain yes is one intent, which stands with what is up; everything else is another, which is asked last', () => {
+    const h = over(sched);
+    expect(h.intents.map((one) => [one.id, one.band, one.act])).toEqual([['said.yes', 'up', 'answer'], ['said.answer', 'said', 'answer']]);
+    for (const words of ['do it', 'yes do it', 'go ahead', 'ok do it', 'please do']) expect([words, h.yes(words), h.answer(words)]).toEqual([words, 'Said yes to the line that was up.', null]);
+    // The word on the line's own key is a yes too, and is asked last: another part may have that very word.
+    expect([h.yes('make agent'), h.answer('make agent')]).toEqual([null, 'Said yes to the line that was up.']);
+    expect([h.yes('not now'), h.answer('not now')]).toEqual([null, 'Said no to the line that was up.']);
+    expect([h.yes('make it Friday at ten'), h.answer('make it Friday at ten')]).toEqual([null, 'Changed the line that was up: Friday at 10:00.']);
+  });
+
+  test('a new time is never read out of words that begin as the words for a job', () => {
+    const h = over(sched);
+    for (const words of ['do 3 more', 'do it at 5', 'run it at 6', 'continue at 4', 'do the rest at 5', 'finish it by 5']) expect([words, h.yes(words), h.answer(words)]).toEqual([words, null, null]);
+    for (const [words, value] of [['make it 5', 'day at 17:00'], ['at 5', 'day at 17:00'], ['do Friday at ten', 'Friday at 10:00']] as const) expect([words, h.answer(words)]).toEqual([words, `Changed the line that was up: ${value}.`]);
+  });
+
+  test('a choice that reads like the words for a job can still be picked by them: only a new value is held back', () => {
+    const h = over({ id: 'l', kind: 'offer', say: ['Stopped at row 4. What now?'], options: ['Go on', 'Undo it', 'Leave it'] });
+    expect(h.answer('go on')).toBe('Picked "Go on" on the line that was up.');
+    expect(h.yes('go on')).toBeNull();
+  });
+});

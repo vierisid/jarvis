@@ -75,9 +75,24 @@ the general turn.
   control word, whether open intents and commands rank above an open mail draft ("pause" does, since C3), what
   the classifier may see of the screen beyond the app's name, what a sentence that could not be read in time
   may do.
-- For the owner to confirm (taken in C3 as the task put it): in a reply to the assistant's question only
-  "pause" is still the notch's own. "Settings" and "undo" typed there go to the assistant as the answer. One
-  flag on an intent (`inReply`) changes it.
+## Owner to confirm
+
+Each of these is how it is built now, and one line to change.
+
+- In a reply to a question the assistant asked back, only "pause" and "undo" are still the notch's own. That
+  holds after any one-line answer that ends in "?". So "watch me", "paste", "where is ...", "settings" and
+  "tell Anna instead" typed or said there go to the assistant as the answer (`inReply` on an intent).
+- With a mail draft open, "day one", "look around" and "show me around" are what the reply is to say, as
+  "settings" already was. They used to start day one, only because day one stood first in the old order.
+- "Repeat that" with a job that was shown some time ago asks "Do <the job> again?", as every way of asking for
+  the job does. Whether it should mean the assistant's last answer is not settled.
+- "Block an hour with Leo in my calendar" (put, add, block, note ... on my calendar) no longer finds a time
+  with Leo: it goes to the assistant as an entry to make.
+- Over an offer with no job ever shown, "do 3 more" and "do it at 5" used to change the offer's time (15:00,
+  17:00). They are now an instruction. "Make it 5" still changes it.
+- An eye ("tell me when Sam replies") is kept at once with nothing asked, as it always was. It is the one
+  intent that creates something with no line first and no live context (`alone` says why).
+
 
 ## What C1 found that the design had wrong or did not have
 
@@ -93,10 +108,11 @@ the general turn.
 
 ## What C2 and C3 found that the design had wrong
 
-- An eye ("tell me when Sam replies") has no line of its own: it is kept at once and then said. It only ever
-  tells the owner, so the table calls its act "none" and it is not held to the line-first rule.
-- "Find" says whether a job's window is there, not whether it is in front. Decision 5 uses the act `front`,
-  which both desktop apps had and the brain never called.
+- An eye ("tell me when Sam replies") has no line of its own: it is kept at once and then said. The table
+  calls it "create" and lets it off the line-first rule by name.
+- "Find" says whether a job's window is there, not whether it is in front, and it takes another window of the
+  same program and size for it. Decision 5 uses the act `front`, which both desktop apps had and the brain
+  never called, and takes only the very window.
 - The design's must-not-match list was for the classifier. On the fast path a sentence that an intent takes
   never reaches a classifier, so the fast path itself had to stop taking them: the words for the job are now
   the whole sentence, and two narrow guards cover the calendar entry and the "daily ... should" statement.
@@ -117,18 +133,20 @@ the general turn.
   in that commit: the corpus stayed as it was but for the "asked twice" pins, now "once". Day one got no
   `noted` hook: its note is made in the one intent that is asked about every sentence.
 - C3 precedence, reply rule, control words: done in "notch: a reply is the answer, a shown job asks before it
-  is done again, and pause is a word". Bands (control, up, command, open), `over` held by a test over the
-  corpus, `never` held by a test, the reply rule (only "pause" is open in a reply; the reading of names, the
-  memory and the pointing are skipped too), decision 5 with the states "front" and "fresh" in the corpus, the
-  words for the job as the whole sentence, the calendar entry, the "daily ... should" statement, "pause" and
-  "pausa". 41 routing rows and 1 time value lost their mark; 27 and 22 are still marked (C4: 20 routing; C5:
-  5 routing, 13 times; C6: 9 times; C4 with C5: 2 routing; see the corpus).
-  Not marked and changed, each with its reason beside the row: "repeat that" with a job (a line first, as every
-  way of asking for the job); "undo", "settings" (twice) and "tell Anna instead" as a reply (the answer); and
-  with a draft open "day one" and "look around" are now what the reply is to say, as "settings" already was
-  (decision 9 settles all three).
-  Every intent has `act` (none, screen, send, create, command, install, settings) for point 1 to read. Nothing
-  reads it yet.
+  is done again, and pause is a word" and, after review, "notch: what is said over a line keeps to its own
+  place, a job just shown is still done at once, and only its very window counts as in front". Bands (control,
+  up, command, open, said), `over` and `never` held by tests over the corpus, the reply rule, decision 5 with
+  the states "front", "fresh" and "shown", the words for the job as the whole sentence, the calendar entry, the
+  "daily ... should" statement, "pause" and "pausa". 41 routing rows and 1 time value lost their mark; 27 and
+  22 are still marked (C4: 20 routing; C5: 5 routing, 13 times; C6: 9 times; C4 with C5: 2 routing).
+  What the review changed: an answer over a line stands before a command only as a plain yes ("do it"), and
+  everything else said over a line is asked last, as before the fix; a job shown or saved in the last three
+  minutes is done at once, as before; "in front" is the very window, never a lookalike; "undo" stays the
+  notch's own in a reply; "continue", "run it" and their kin are no more the owner's word than a bare yes
+  when they answer a turn that had none; the model that reads names is not asked about the calendar entry
+  or, with a job shown, about a sentence that begins as the job's words.
+  Every intent has `act` (none, answer, screen, send, create, command, install, settings) and `first` (acts,
+  yes, fuse) for point 1 to read. Nothing reads them yet.
 - C4 classifier: pending.
 - C5 one When: pending.
 - C6 page sends raw text: pending.

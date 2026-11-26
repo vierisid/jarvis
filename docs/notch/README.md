@@ -2733,10 +2733,10 @@ took spoken words. The owner asked for the prototype's way on 18 November
 How it goes. The talk keys take the notch for the listening, so the line
 they were pressed over leaves it. When the keys go down the line that is up
 is remembered (`src/notch/said.ts`, `keys`). When the words arrive they are
-tried as an answer to that line before any command and before anything that
-only opens ("watch me", "do it", "settings"): what is up stands before a
-command (256). A draft that is open and day one waiting to hear the person
-are asked before it. If they are one, the thing whose
+tried as an answer to that line, after everything that has words of its own
+("settings", "watch me", "undo", "remember that"). One thing stands before
+a command: a plain yes ("do it", "go ahead"), which is the yes to the line
+also when a job was shown that "do it" could mean (256). If they are one, the thing whose
 line it was is brought back to the notch (`NotchInbox.replay`), and when
 its script shows that line again the line has its answer at once: the pick
 is made, the word is changed, the yes is given. If they are not, they are
@@ -3261,63 +3261,83 @@ other.
     instruction (`routed`), and where its line is drawn, whether a name in
     it is read back and what is run all go by it. It used to be asked two
     times for one sentence, and day one notes "asked" as it is asked.
-256. **The order is declared, not where a part happens to stand.** Four
+256. **The order is declared, not where a part happens to stand.** Five
     bands, asked in this order: a control word ("pause"); an answer to what
     is up on the notch, or was a moment ago (day one waiting to hear the
-    person, a draft that is open, a line that takes a yes, a showing that
-    waits for "done"); a command; something of the notch's own to open
-    (settings, memory, the agents, day one). Inside a band the parts keep
-    the order `notchIntents` lists them in. So "do it" said over an offer is
-    the yes to that offer (206), also when a job was once shown that "do it"
-    could mean. When two intents can match one sentence, the one that takes
-    it names the other (`over`), and a test holds that no sentence of the
-    corpus is matched twice without it.
+    person, a draft that is open, "put it here?", a showing that waits for
+    "done", and a plain yes to a line that takes one); a command; something
+    of the notch's own to open (settings, memory, the agents, day one); and
+    last, whatever else was said over a line that was up (its no, the word
+    on its key, a choice, a new value for a lit word). Inside a band the
+    parts keep the order `notchIntents` lists them in. So "do it" said over
+    an offer is the yes to that offer (206), also when a job was once shown
+    that "do it" could mean: that is the one thing said over a line that
+    stands before a command. "Undo", "watch me", "tell Anna" and "continue"
+    keep their own meaning also when a choice on the line reads the same,
+    and a new time for an offer is never read out of words that begin as
+    the words for a job ("do 3 more" is not three o'clock). When two intents
+    can match one sentence, the one that takes it names the other (`over`),
+    and a test holds that no sentence of the corpus is matched twice
+    without it.
 257. **A reply to a question the assistant asked back is the answer.** Typed
     into the question's own line, or said or typed while it is up, it goes
-    to the assistant that asked. No intent takes it but the control word,
+    to the assistant that asked. No intent takes it but "pause" and "undo",
     it is not read for who is named, it is not kept as a memory and it is
     not answered by pointing. "Do it" is not the job that was shown, "tell
     Anna instead" is not a word to Anna, and "settings" may be the answer to
     "which one, settings or profile?". An answer that asks nothing does not
     make what comes next a reply, and neither does a question that was
-    closed with Esc.
+    closed with Esc. Words that only say "go on" ("continue", "run it", "do
+    the rest", "go ahead") are, to what a turn with no word of the owner's
+    proposed, no more his word than a bare yes is (`notchBareGoAhead`,
+    authority/standing.ts).
 258. **Words alone never set the hands to work in a window that is not
     there to be seen.** An intent that acts on the screen, sends or creates
-    shows a line first (an offer that takes a yes, a fuse that can be taken
-    back), unless it names the live context its words are about: the thing
-    that is held, the job shown in the last three minutes, the paste that
-    was just made. A test over the table holds it. For a job that was shown
-    some time ago the owner decided it on 26 November 2026: "do it again"
-    does it at once only when the job's window is the one in front (the same
-    program at the size it had, asked with `notch.act` `front`, which
-    touches nothing). Otherwise the notch asks "Do <the job> again?" and
-    waits for the yes. A job that deletes is asked about once, not twice.
-    Run from its own row in Home, or at its time and on a yes, it is done as
-    before: the press is the asking.
+    shows a line first (one that waits for a yes, or one under a fuse that
+    can be taken back), unless it names the live context its words are
+    about: the thing that is held, the job that was just shown, the paste
+    that was just made. A test over the table holds it; an eye on somebody's
+    mail is the one intent let off, and says why. For a job that was shown
+    the owner decided it on 26 November 2026. For three minutes after it was
+    shown or saved, "run it" and "do it again" do it at once, as they always
+    did. Later they do it at once only when the job's own window is the one
+    in front: that very window, by its number and its program's (asked with
+    `notch.act` `front`, which touches nothing). Another window of the same
+    program is not it, also at the same size, and neither is the program
+    started again. Otherwise the notch asks "Do <the job> again?" and waits
+    for the yes. A job that deletes is asked about once, not twice. Run from
+    its own row in Home, or at its time and on a yes, it is done as before:
+    the press is the asking.
 259. **The words for the job are the whole sentence.** After "do it", "run
-    it", "continue", "do the rest" may come only how many, of what and from
-    where: "again", "on nine rows", "for the next 4", "please"
-    (`runItRequest`, `RUN_TAIL`). One word that is not about the job, or a
-    comma and more, and the sentence is an instruction: "do it by email",
-    "continue with the draft to Sam", "repeat that please, I did not hear".
-    Each intent lists such sentences (`never`), and a test holds that its
-    fast path does not take them. Two more of the kind: "put a meeting with
-    Sam on my calendar" is an entry for the owner's calendar and starts no
-    comparing with Sam's machine, and "daily standup notes should go to the
-    team" says what should happen and asks for no agent.
+    it", "continue", "do the rest" may come only how many, of what, "again"
+    and a please: "on nine rows", "for the next 4", "3 more times", "again,
+    thanks" (`runItRequest`, `RUN_TAIL`). Anything else and the sentence is
+    an instruction: "do it by email", "do it for me", "do the same for the
+    other file", "continue with the draft to Sam", "repeat that please, I
+    did not hear". With a job that was shown, such a sentence is not read
+    for whom it names either (`notchRead`). Each intent lists such sentences
+    (`never`), and a test holds that its fast path does not take them. Two
+    more of the kind: "put a meeting with Sam on my calendar" is an entry
+    for the owner's calendar, starts no comparing with Sam's machine and is
+    not put to the model that could read it as one; and "daily standup notes
+    should go to the team" says what should happen and asks for no agent,
+    while "daily send Sam what he should know" still does.
 260. **"Pause" is a word, as Esc twice is a key.** Said or typed, alone in
     the sentence, in English or Italian ("pause", "pause everything",
     "pausa"), it stops everything through the product's own pause
     (`pauseWord`, `src/notch/pause.ts`). It needs no model, it stands before
-    a draft that is open and before what day one waits to hear, and it is
-    the one word that is still the notch's own in a reply. "Pause the music"
-    is an instruction. "Stop" is not a control word: that is not decided.
-261. **Every intent says what kind of act it is.** None, screen, send,
-    create, command, install or settings (`act`, described at the top of
-    `intents.ts`). It is what the owner's words cover when they fit the
-    intent, and the check of whether the owner asked for a thing is to read
-    it from there (docs/notch/fixes/01-owner-word.md). An instruction that no
-    intent took covers nothing by this table.
+    a draft that is open and before what day one waits to hear, and with
+    "undo" it is still the notch's own in a reply. "Pause the music" is an
+    instruction. "Stop" is not a control word: that is not decided.
+261. **Every intent says what kind of act it is.** None, answer, screen,
+    send, create, command, install or settings (`act`, described at the top
+    of `intents.ts`), and whether it acts at once, waits for a yes or goes
+    under a fuse (`first`). It is what the owner's words cover when they fit
+    the intent, and the check of whether the owner asked for a thing is to
+    read it from there (docs/notch/fixes/01-owner-word.md). An answer to a
+    line is "answer": what it sets off is the line's, and whoever reads the
+    field has to ask what the line was about. An instruction that no intent
+    took covers nothing by this table.
 
 What is not done, or not proven:
 
@@ -3325,9 +3345,9 @@ What is not done, or not proven:
   "impostazioni", "tienimi d'occhio la risposta di Sam" go to the assistant.
   The reading of a sentence the fixed words miss is the next step.
 - **The reading of words that name somebody is still its own call**
-  (`src/notch/people-read.ts`). The fast path no longer takes "put a meeting
-  with Sam on my calendar", and that model is then asked what it means: it
-  has not been given the sentences an intent must never take.
+  (`src/notch/people-read.ts`). It is kept from the calendar entry and from
+  a sentence that begins as the words for a shown job, one by one: it has
+  not been given the sentences an intent must never take.
 - **Whether a draft that is open should give way to "settings" and "undo"
   is not decided.** It takes whatever is said that is no question, and
   since the bands that includes "day one" and "look around", which used to

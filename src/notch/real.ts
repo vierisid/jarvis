@@ -15,7 +15,7 @@ import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
 import { attachNotchAsks } from './asks.ts';
 import type { NotchAskFile, NotchAskHow, NotchAsks, NotchAsksDeps } from './asks.ts';
-import { notchIntentTable, resolveIntent, type NotchIntent, type NotchIntentSource, type NotchRouted } from './intents.ts';
+import { notchIntentTable, resolveIntent, type NotchIntent, type NotchIntentHit, type NotchIntentSource, type NotchRouted } from './intents.ts';
 import { NotchLedger } from './ledger.ts';
 import { attachNotchLook, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
 import { attachNotchTalk } from './talk.ts';
@@ -344,18 +344,19 @@ export interface NotchReal {
 export interface NotchSideRouters {
   dayOne: NotchIntentSource | null; mail: NotchIntentSource | null; put: NotchIntentSource | null; teach: NotchIntentSource | null;
   people: NotchIntentSource | null; standing: NotchIntentSource | null; agents: NotchIntentSource | null; memory: NotchIntentSource | null;
-  calls: NotchIntentSource | null; prefs: NotchIntentSource | null; moves: NotchIntentSource; canDo: NotchIntentSource; saidLine: NotchIntentSource;
+  calls: NotchIntentSource | null; prefs: NotchIntentSource | null; moves: NotchIntentSource; canDo: NotchIntentSource; said: NotchIntentSource;
   /** The control word: "pause" (./pause.ts). Null when the product's pause was not given. */
   pause: NotchIntentSource | null;
 }
 
 /**
  * The one table of intents (./intents.ts), from the lists the parts hand over. The table orders them by band
- * (a control word, an answer to what is up, a command, something to open); inside a band this is the order.
+ * (a control word, an answer to what is up, a command, something to open, what was said over a line); inside
+ * a band this is the order.
  */
 export function notchIntents(routers: NotchSideRouters): NotchIntent[] {
-  const { pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine } = routers;
-  return notchIntentTable([pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine].map((part) => part?.intents()));
+  const { pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said } = routers;
+  return notchIntentTable([pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said].map((part) => part?.intents()));
 }
 
 /**
@@ -365,6 +366,20 @@ export function notchIntents(routers: NotchSideRouters): NotchIntent[] {
  */
 export function notchSide(routers: NotchSideRouters, text: string, how?: NotchAskHow): NotchRouted | null {
   return resolveIntent(notchIntents(routers), text, how);
+}
+
+/**
+ * Words that name somebody of the organisation and that no intent took: what the model makes of them
+ * (./people-read.ts), or null when it is not asked. It is not asked about a sentence that begins as the words
+ * for a job that was shown ("continue with the draft to Sam"): that sentence is for the assistant, and a
+ * reading of it could send a word to Sam. The notch calls this, and so does the corpus.
+ */
+export function notchRead(
+  parts: { teach: { begins(text: string): boolean } | null; people: { read(text: string): Promise<NotchIntentHit | null> | null } | null },
+  text: string,
+): Promise<NotchIntentHit | null> | null {
+  if (parts.teach?.begins(text)) return null;
+  return parts.people?.read(text) ?? null;
 }
 
 /**
@@ -593,21 +608,18 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       remember: deps.asks.remember,
       understand: deps.asks.understand,
       point: deps.asks.point,
-      // "Watch me", "done", "run it on nine rows", "undo that": the notch does these itself (pass 10).
-      // And "put it here as a table", with a thing held.
-      // "Tell me when Sam replies", "get Sam's answer by Friday": an eye, a chase (pass 11).
-      // "Every Monday send Sam the numbers": an agent. An eye and a chase are asked before it,
-      // because "tell me when" and "get Sam's answer" are theirs.
-      // First of all: with a draft of a reply open, what is said is what that reply is to say.
-      // Last, what only opens something of the notch's own: its memory, its settings, its connections, how it moves (pass 12).
-      // Before all of them: while day one waits to hear the person, whatever they say is its answer.
-      // Before an eye and a chase: "tell Leo ..." is a word to Leo when Leo's Jarvis is one this one talks to (./people.ts).
+      // Words the notch does itself: "watch me", "run it on nine rows", "tell Leo ...", "tell me when Sam
+      // replies", "every Monday send Sam the numbers", "settings", "pause". Each part hands its words over as
+      // intents, and the one table says which of them takes a sentence and in what order (./intents.ts: a
+      // control word, an answer to what is up, a command, something to open, what was said over a line).
+      // Inside a band the order is the order of this list: a word to Leo before an eye and a chase, and those
+      // before an agent, because "tell me when" and "get Sam's answer" are theirs.
       // The parts are read when something is said, not now: several of them are made further down.
-      side: (text, how) => notchSide({ pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, saidLine }, text, how),
+      side: (text, how) => notchSide({ pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine }, text, how),
       // After all of them: words that name somebody of the organisation and are none of the fixed ones are
       // read by the model (./people-read.ts). Only what `side` left: while day one waits to hear the person,
       // whatever they say is its answer and never gets here.
-      read: (text) => people?.read(text) ?? null,
+      read: (text) => notchRead({ teach, people }, text),
       keys: () => saidLine.keys(),
       // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
       people: () => mail?.store.people() ?? [],

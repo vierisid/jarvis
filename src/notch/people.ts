@@ -1501,7 +1501,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   function timed(text: string): { person: PeerPerson; minutes: number } | null {
     const said = text.trim().replace(/\s+/g, ' ').replace(/[.!?]+$/, '');
     if (/^(?:(?:please|ok|okay|hey|jarvis|pillow)[,\s]+)*(?:tell|ask|message|ping|send|give|share|forward)\b/i.test(said)) return null;
-    if (/^(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you)[,\s]+)*(?:put|add|enter|write|note|log|mark|block|pencil)\b.*\b(?:on|to|in|into)\s+(?:my|the|our)\s+(?:calendar|agenda|diary)\b/i.test(said)) return null;
+    if (calendarEntry(said)) return null;
     const people = others().slice().sort((a, b) => b.name.length - a.name.length);
     for (const one of people) {
       const first = one.name.split(' ')[0]!;
@@ -1604,10 +1604,14 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     });
   }
 
+  /** "Put a meeting with Sam on my calendar", "add the call with Leo to my calendar": something to write down here. */
+  const calendarEntry = (text: string): boolean =>
+    /^(?:(?:please|ok|okay|hey|jarvis|pillow|can you|could you)[,\s]+)*(?:put|add|enter|write|note|log|mark|block|pencil)\b.*\b(?:on|to|in|into)\s+(?:my|the|our)\s+(?:calendar|agenda|diary)\b/i.test(text.trim().replace(/\s+/g, ' '));
+
   type Hit = { did: string; run(): void };
   /** One of the things this part does, as an intent of the one table. Every send here is shown under a fuse that can be taken back. */
   const sends = (id: string, says: string, examples: string[], match: (text: string) => Hit | null, over?: string[]): NotchIntent =>
-    ({ id: `people.${id}`, feature: 'people', says, band: 'command', act: 'send', first: 'line', examples, match, ...(over ? { over } : {}) });
+    ({ id: `people.${id}`, feature: 'people', says, band: 'command', act: 'send', first: 'fuse', examples, match, ...(over ? { over } : {}) });
   const intents: NotchIntent[] = [{
     id: 'people.org', feature: 'people', says: 'open the organisation', band: 'open', act: 'none', first: 'acts',
     examples: ['my organisation', 'invite someone'],
@@ -1637,7 +1641,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
   {
     // The rule for one person, said: "let Leo have answers without asking", "ask me every time for Leo".
     // The engine asks about the change, and that question is the line.
-    id: 'people.rule', feature: 'people', says: 'change what one person may have without my being asked', band: 'command', act: 'settings', first: 'line',
+    id: 'people.rule', feature: 'people', says: 'change what one person may have without my being asked', band: 'command', act: 'settings', first: 'yes',
     examples: ['let Leo have answers without asking', 'ask me every time for Leo'],
     match(text) {
       const rule = ruled(text);
@@ -1657,7 +1661,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     never: ['put a meeting with Sam on my calendar for Friday', 'add the call with Leo to my calendar'],
   },
   // A file of the owner's own that is to go to somebody: found here, and offered as a dropped one is.
-  sends('give', 'send somebody a file of mine', ['send Leo the deck'], (text) => {
+  { ...sends('give', 'send somebody a file of mine', ['send Leo the deck'], (text) => {
     const mine = files ? handed(text) : null;
     if (!mine) return null;
     const file = peerPlain(mine.file, PEER_FILE_WHAT_MAX);
@@ -1665,7 +1669,8 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const names = mine.people.map((one) => one.name);
     const to = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]!;
     return file ? { did: `Send ${to} a file of mine: ${file}`, run: () => files!.give(mine.people, file) } : null;
-  }),
+  // The file is found and offered, as one that was dropped is: it goes on a yes.
+  }), first: 'yes' },
   // What is asked of their Jarvis, or of their laptop, is a request: not a word to the person.
   sends('request', "ask somebody's Jarvis for something, or for a file of theirs", ["get me the budget from Leo's laptop"], (text) => {
     const wanted = requested(text);
@@ -1685,7 +1690,7 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     return file ? { did: `Ask ${theirs.person.name}'s ${NOTCH_NAME} for a file: ${file}`, run: () => files!.want(theirs.person, file) } : null;
   // "Ask Leo for the deck" also reads as a question for Leo: a file that is named is asked for as a file.
   }, ['people.say']),
-  sends('say', 'tell somebody something, or ask them something', ["tell Anna I'm late", 'ask Leo if he is coming'], (text) => said(text)),
+  sends('say', 'tell somebody something, or ask them something', ["tell Anna I'm late", 'ask Leo if he is coming'], (text) => said(text), ['said.answer']),
   ];
   const route = (text: string): Hit | null => routeByIntents(intents, text);
 
@@ -1791,6 +1796,9 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
    */
   function read(text: string): Promise<{ did: string; run(): void } | null> | null {
     if (!deps.think) return null;
+    // An entry for the owner's own calendar is not a time to find with somebody: the model is not asked what
+    // it makes of it, because one of its answers is a comparing of calendars.
+    if (calendarEntry(text)) return null;
     const all = others();
     if (all.length === 0 || peopleNamed(text, all).length === 0) return null;
     return reading(text).then((got) => (got ? act(got) : null));

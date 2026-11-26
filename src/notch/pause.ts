@@ -62,7 +62,7 @@ export function notchPauseWords(controller: Pick<NotchPauseDeps['controller'], '
     examples: ['pause', 'pausa'],
     never: ['pause the music', 'pause for a second and think about it', 'stop'],
     // While its context is up, a draft or day one takes whatever is said: this word is taken from them.
-    over: ['dayone.answer', 'mail.steer'],
+    over: ['dayone.answer', 'mail.steer', 'said.answer'],
     inReply: true,
     match(text) {
       if (!pauseWord(text) || controller.getState() !== 'normal') return null;
