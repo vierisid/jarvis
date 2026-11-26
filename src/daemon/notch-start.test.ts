@@ -21,7 +21,10 @@ describe('a part of the notch that cannot be made', () => {
       say: NOTCH_FAILED_NOTICE, undo: () => { undone++; }, notice: (message) => told.push(message), log: (line) => logs.push(line),
     });
     expect(made).toBeNull();
-    expect(logs).toEqual(['[notch] the notch could not be started, and the brain goes on without it: no such table: notch_settings']);
+    // One entry: why, and then where, so that the failed start can be found.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.split('\n')[0]).toBe('[notch] the notch could not be started, and the brain goes on without it: no such table: notch_settings');
+    expect(logs[0]!.split('\n').slice(1).join('\n')).toContain('notch-start.test.ts');
     expect(undone).toBe(1);
     expect(told).toEqual([NOTCH_FAILED_NOTICE]);
   });
@@ -40,7 +43,7 @@ describe('a part of the notch that cannot be made', () => {
       say: NOTCH_FAILED_NOTICE, undo: () => { throw new Error('second'); }, notice: () => { throw new Error('third'); }, log: (line) => logs.push(line),
     });
     expect(made).toBeNull();
-    expect(logs.map((line) => line.split(': ').pop())).toEqual(['first', 'second', 'third']);
+    expect(logs.map((line) => line.split('\n')[0]!.split(': ').pop())).toEqual(['first', 'second', 'third']);
   });
 });
 
@@ -78,15 +81,16 @@ describe('the notch on the brain\'s way down', () => {
   test('the one that runs is stopped once, and a stop that throws goes no further', () => {
     let stops = 0;
     holdNotch({ stop() { stops++; } });
-    stopNotch();
-    stopNotch();
+    // It says whether there was a notch to stop: what kept its cancel windows on that notch is stopped with it.
+    expect(stopNotch()).toBe(true);
+    expect(stopNotch()).toBe(false);
     expect(stops).toBe(1);
     const logs: string[] = [];
     holdNotch({ stop() { throw new Error('a part is stuck'); } });
-    expect(() => stopNotch((line) => logs.push(line))).not.toThrow();
-    expect(logs).toEqual(['[notch] the notch did not stop cleanly: a part is stuck']);
-    // With none running there is nothing to do.
-    expect(() => stopNotch()).not.toThrow();
+    expect(stopNotch((line) => logs.push(line))).toBe(true);
+    expect(logs.map((line) => line.split('\n')[0])).toEqual(['[notch] the notch did not stop cleanly: a part is stuck']);
+    // With none running there is nothing to do, and nothing else is to be stopped early.
+    expect(stopNotch()).toBe(false);
   });
 
   const ROOT = mkdtempSync(join(tmpdir(), 'jarvis-notch-start-'));
@@ -140,7 +144,9 @@ describe('where the daemon makes the notch', () => {
     expect(source).toContain('holdNotch(notchReal);');
     // And the way down stops it before it waits for anything.
     const down = source.slice(source.indexOf('async function handleShutdown('));
-    expect(down.indexOf('stopNotch();')).toBeGreaterThan(0);
-    expect(down.indexOf('stopNotch();')).toBeLessThan(down.indexOf('await '));
+    // With it goes the clock that would keep a promise whose window was on the notch; without a notch, nothing moves.
+    const stops = 'if (stopNotch()) commitmentExecutor?.stop();';
+    expect(down.indexOf(stops)).toBeGreaterThan(0);
+    expect(down.indexOf(stops)).toBeLessThan(down.indexOf('await '));
   });
 });

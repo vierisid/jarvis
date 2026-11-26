@@ -345,6 +345,9 @@ export function attachNotchReal(surface: NotchSurface, deps: NotchRealDeps): Not
   }
 }
 
+/** How often a clock of the notch that keeps failing says so in the log. */
+export const NOTCH_TICK_FAILURE_SAID_MS = 60_000;
+
 function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop: (() => void) | null }): NotchReal {
   const log = deps.log ?? ((line: string) => console.log(line));
   // From here on there is something to stop, if the making fails further down.
@@ -354,9 +357,28 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
    * at the next one: a throw out of a timer is an uncaught exception, and that
    * ends the brain.
    */
-  const guarded = (what: string, run: () => void) => (): void => {
-    try { run(); } catch (error) { log(`[notch] ${what} failed: ${error instanceof Error ? error.message : String(error)}`); }
+  const guarded = (what: string, run: () => void): (() => void) => {
+    // One that fails at every look is not said at every look: the first time, with where it failed, and then
+    // once a minute with how often it failed in between.
+    let saidAt: number | null = null;
+    let unsaid = 0;
+    return () => {
+      try {
+        run();
+      } catch (error) {
+        const at = Date.now();
+        if (saidAt !== null && at - saidAt < NOTCH_TICK_FAILURE_SAID_MS) { unsaid++; return; }
+        const why = error instanceof Error ? error.message : String(error);
+        const where = saidAt === null && error instanceof Error && error.stack ? `\n${error.stack}` : '';
+        log(`[notch] ${what} failed${unsaid > 0 ? ` (and ${unsaid} more ${unsaid === 1 ? 'time' : 'times'} since that was last said)` : ''}: ${why}${where}`);
+        saidAt = at;
+        unsaid = 0;
+      }
+    };
   };
+  // Whether the notch was made whole, and whether it was stopped since. Up here, where `stop` can always read them.
+  let whole = false;
+  let stopped = false;
   // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
   let mail: NotchMailLayer | null = null;
   // Made after the inbox they play on; Today lists what they did.
@@ -916,10 +938,12 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     surface.onHello(() => made.cameUp());
   }
 
+  whole = true;
   return {
     inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
-    showing: () => surface.listening() > 0,
+    // A notch that was stopped tells the person nothing: what it would have said goes where it went before there was a notch.
+    showing: () => !stopped && surface.listening() > 0,
     stop,
   };
 
@@ -929,6 +953,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
    * that was not made yet when the making failed has nothing to stop.
    */
   function stop(): void {
+    stopped = true;
     const steps: (() => void)[] = [
       // The clocks first, so that nothing new is started while the rest is stopped.
       () => clearInterval(timer), () => clearInterval(failureTimer),
@@ -965,8 +990,9 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       try {
         step();
       } catch (error) {
-        // A part the making had not reached yet is not there to be stopped: that is no failure.
-        if (error instanceof ReferenceError) continue;
+        // A part the making had not reached yet is not there to be stopped: that is no failure. On a notch
+        // that was made whole every part is there, and the same error is a part that failed to stop.
+        if (!whole && error instanceof ReferenceError) continue;
         log(`[notch] a part of the notch did not stop: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

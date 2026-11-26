@@ -530,7 +530,11 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   briefOpportunityActivation = null;
   // The notch first, before the turns are waited for: from here on it looks at no window and reads no mail,
   // and a yes whose window was still running on it sends nothing (docs/notch/README.md, rule 22).
-  stopNotch();
+  // A promise about to be kept shows its window on the notch, and is kept by the executor's own clock when
+  // the window has run out (src/notch/promises.ts). With the notch stopped nobody can see that window or take
+  // the promise back, so the clock is stopped with it: the promise stays open for the next brain to
+  // announce. Without a notch the executor is stopped where it always was, further down.
+  if (stopNotch()) commitmentExecutor?.stop();
   // Told to leave, so that it closes its line to the server in order. It would end with the brain anyway.
   // An organisation's server that runs here goes down with it, and comes back with the next brain.
   peerSetup?.stop();

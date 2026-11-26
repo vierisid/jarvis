@@ -3,7 +3,7 @@
  * approval, the notch finds it, a yes runs it once through the product's own
  * decision function, and Today lists it.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { runCommandTool } from '../actions/tools/builtin.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { ApprovalManager } from '../authority/approval.ts';
@@ -19,7 +19,7 @@ import { NOTCH_PLAIN_LINE_COLUMNS, notchApprovalSentence, notchApprovalWay } fro
 import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
 import { NotchLedger } from './ledger.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
-import { attachNotchReal, type NotchReal } from './real.ts';
+import { NOTCH_TICK_FAILURE_SAID_MS, attachNotchReal, type NotchReal } from './real.ts';
 import { PeerLink } from '../peers/link.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -997,11 +997,13 @@ describe('talking about the line that is up, put together', () => {
 
 describe('a notch that fails does not take the brain with it, and stop stops it (fix 02, step 0)', () => {
   type Started = { fn: () => void; cleared: boolean; handle: unknown };
+  const realClear = globalThis.clearInterval;
+  // The notch of a test is stopped while its made-up clocks can still be cleared, and then the real one is put back.
+  afterEach(() => { live?.stop(); live = null; globalThis.clearInterval = realClear; setSystemTime(); });
 
   /** Every interval that is started while `run` runs: what it calls, and whether it was cleared since. None runs by the clock. */
   function clocks<T>(run: () => T): { out: T | null; failed: Error | null; started: Started[] } {
     const realSet = globalThis.setInterval;
-    const realClear = globalThis.clearInterval;
     const started: Started[] = [];
     globalThis.setInterval = ((fn: () => void) => {
       const one: Started = { fn, cleared: false, handle: null };
@@ -1009,7 +1011,7 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
       started.push(one);
       return one.handle;
     }) as unknown as typeof setInterval;
-    // Stays in place for the rest of the test file: a handle made above is only known here.
+    // Stays in place until the test is over (the afterEach above): a handle made here is only known here.
     globalThis.clearInterval = ((handle: unknown) => {
       const one = started.find((each) => each.handle === handle);
       if (one) one.cleared = true; else realClear(handle as never);
@@ -1083,6 +1085,62 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     for (const what of ['the clock of the shown jobs', 'the clock of the day', 'clearing old calls', 'asking to hear the tasks end']) {
       expect(logs.filter((line) => line.startsWith(`[notch] ${what} failed: `))).toHaveLength(1);
     }
+    // The first time, with where it failed.
+    expect(logs.find((line) => line.startsWith('[notch] asking to hear the tasks end failed: the task manager is broken\n'))).toContain('real.test.ts');
+  });
+
+  test('a clock that fails at every look says so the first time, and then once a minute with how often', () => {
+    const { surface } = page();
+    const logs: string[] = [];
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      onTaskEnded: () => { throw new Error('the task manager is broken'); },
+      lookMs: 3_600_000, log: (line) => logs.push(line),
+    }));
+    live = made.out;
+    const said = (): string[] => logs.filter((line) => line.includes('asking to hear the tasks end failed')).map((line) => line.split('\n')[0]!);
+    const start = Date.now();
+    setSystemTime(new Date(start));
+    for (let look = 0; look < 5; look++) for (const one of made.started) one.fn();
+    expect(said()).toEqual(['[notch] asking to hear the tasks end failed: the task manager is broken']);
+    setSystemTime(new Date(start + NOTCH_TICK_FAILURE_SAID_MS));
+    for (const one of made.started) one.fn();
+    expect(said()).toEqual([
+      '[notch] asking to hear the tasks end failed: the task manager is broken',
+      '[notch] asking to hear the tasks end failed (and 4 more times since that was last said): the task manager is broken',
+    ]);
+    // Where it failed is said the first time only.
+    expect(logs.filter((line) => line.includes('real.test.ts'))).toHaveLength(1);
+  });
+
+  test('a notch that was stopped no longer says it tells the person: what waits is toasted again', () => {
+    const { surface } = page();
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      lookMs: 3_600_000, log: () => {},
+    }));
+    const real = made.out!;
+    live = real;
+    expect(real.showing()).toBe(true);
+    real.stop();
+    expect(surface.listening()).toBe(1);
+    expect(real.showing()).toBe(false);
+  });
+
+  test('on a notch that was made whole, a part that fails to stop is said, whatever the error is', () => {
+    const { surface } = page();
+    const logs: string[] = [];
+    const made = clocks(() => attachNotchReal(surface, {
+      approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }),
+      promises: {
+        executor: { subscribe: () => () => { throw new ReferenceError('gone is not defined'); }, cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {} },
+        create: () => ({ id: 'p', when_due: null }), kept: () => [],
+      },
+      lookMs: 3_600_000, log: (line) => logs.push(line),
+    }));
+    expect(made.failed).toBeNull();
+    made.out!.stop();
+    expect(logs).toEqual(['[notch] a part of the notch did not stop: gone is not defined']);
   });
 
   test('stop clears every clock, takes the line off the notch, and nothing comes up after it', async () => {

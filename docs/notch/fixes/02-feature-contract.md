@@ -86,16 +86,26 @@ What step 0 does:
   opens) plus the live broadcast for one that is open. Said once while unread.
 - `attachNotchReal` stops what it had made when a later part throws, then
   rethrows. No clock is left running for a notch that is not there.
-- The six bare clocks run through one guard that logs and goes on.
+- The six bare clocks run through one guard that logs and goes on: the first
+  failure with its stack, then at most once a minute with a count.
 - `NotchInbox.stop()`: what is on the notch ends where it is and its line
   leaves; nothing is taken, shown or played after it. A fuse that is burning
   fails its wait, so nothing is sent (README rule 22).
-- `handleShutdown` calls `stopNotch()` before it waits for anything.
+- `handleShutdown` calls `stopNotch()` before it waits for anything. When
+  there was a notch, the commitment executor is stopped with it: a promise
+  whose cancel window was on the notch is not kept by the executor's own
+  clock after nobody can see the window. A stopped notch says `showing()` is
+  false, so approvals are toasted again while the turns drain.
 
 Known limits of step 0, left for later steps:
 
 - A notch that failed to start still has its window: the page shows resting
   eyes that answer nothing. Taking the window away needs `attach.ts`.
+- After a failed start the person has neither notch nor pebble: the desktop
+  app is still told `notch: true` and its pebble is closed, because those
+  gates read the switch, not whether the notch was made.
+- The daemon's wiring is pinned by a test that reads the source of
+  `index.ts`. It is replaced by a real test when the wiring moves (step 7).
 - `talk`, the approvals' timeouts, the hello listener of day one and the
   listeners on the surface port are still not removed by stop. With the inbox
   stopped none of them can put anything on the notch.
@@ -103,8 +113,10 @@ Known limits of step 0, left for later steps:
   `jobs.ts`) were not looked at for bare throws.
 - A step already handed to the mailbox is not interrupted: stop means no new
   work.
-- Stop tells a part that was never made from one that failed to stop by the
-  language's own "not yet declared" error. The registry of step 2 replaces it.
+- After a failed making, stop tells a part that was never made from one that
+  failed to stop by the language's own "not yet declared" error. On a notch
+  that was made whole every error is logged. The registry of step 2 replaces
+  this.
 
 ## Owner decisions
 
@@ -116,8 +128,10 @@ Known limits of step 0, left for later steps:
 ## Status
 
 - Step 0: done in "notch: a clock that throws is logged, and stop ends what is
-  on the notch" and "daemon: a notch that cannot start leaves the brain up,
-  and shutdown stops the notch"
+  on the notch", "daemon: a notch that cannot start leaves the brain up, and
+  shutdown stops the notch" and "notch: review of step 0: a stopped notch
+  tells nothing, promises are not kept past it, failures are logged with
+  their place and not flooded"
 - Step 1: pending
 - Step 2: pending
 - Step 3: pending

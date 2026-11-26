@@ -40,11 +40,17 @@ export function startNotchPart<T>(what: string, make: () => T, deps: NotchPartDe
   try {
     return make();
   } catch (error) {
-    log(`[notch] ${what} could not be started, and the brain goes on without it: ${describe(error)}`);
+    // With where it failed: a table that could not be made is found by that, not by its message.
+    log(`[notch] ${what} could not be started, and the brain goes on without it: ${describe(error)}${where(error)}`);
     try { deps.undo?.(); } catch (undoError) { log(`[notch] what was set for ${what} could not be put back: ${describe(undoError)}`); }
     try { (deps.notice ?? notchDashboardNotice)(deps.say); } catch (noticeError) { log(`[notch] the dashboard could not be told: ${describe(noticeError)}`); }
     return null;
   }
+}
+
+/** Where an error was thrown, on lines of its own after the message. Empty when it does not say. */
+function where(error: unknown): string {
+  try { return error instanceof Error && error.stack ? `\n${error.stack}` : ''; } catch { return ''; }
 }
 
 function describe(error: unknown): string {
@@ -75,15 +81,19 @@ export function holdNotch(notch: { stop(): void } | null): void {
 /**
  * Stops the notch that is running, once: it looks at nothing and reads nothing
  * from here on, and a yes whose window was still running sends nothing. Never
- * throws: the rest of the way down does not depend on it.
+ * throws: the rest of the way down does not depend on it. True when there was
+ * a notch to stop: then what showed its cancel window on that notch (a promise
+ * about to be kept) has lost the window, and whoever keeps such things by a
+ * clock of their own has to be stopped with it.
  */
-export function stopNotch(log: (line: string) => void = (line) => console.warn(line)): void {
+export function stopNotch(log: (line: string) => void = (line) => console.warn(line)): boolean {
   const notch = running;
   running = null;
-  if (!notch) return;
+  if (!notch) return false;
   try {
     notch.stop();
   } catch (error) {
-    log(`[notch] the notch did not stop cleanly: ${describe(error)}`);
+    log(`[notch] the notch did not stop cleanly: ${describe(error)}${where(error)}`);
   }
+  return true;
 }
