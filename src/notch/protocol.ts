@@ -42,8 +42,21 @@ export const NOTCH_ANSWERS_KEPT = 128;
 /** How often a page says again that a hand is on the line, and for how long the brain believes it was told so. */
 export const NOTCH_HAND_AGAIN_MS = 2000;
 export const NOTCH_HAND_HOLDS_MS = 5000;
-/** How often a page that is up says which message it last read, so that the brain can tell one that fell behind (a lost rest leaves no gap to see). */
+/**
+ * How often a page says which message it last read, so that the brain can
+ * tell one that fell behind (a lost rest or fold leaves no gap to see): this
+ * often while a line is up, and NOTCH_AT_RESTING_MS at rest, which is what
+ * finds a brain that was started again under a resting page, and a lost line.
+ */
 export const NOTCH_AT_EVERY_MS = 5000;
+export const NOTCH_AT_RESTING_MS = 60_000;
+/**
+ * For how long after the brain folded an offer an answer the person gave it
+ * while it was up is still taken in place of the fold: one that was on its
+ * way, or lost once and sent again (NOTCH_ANSWER_AGAIN_MS). The script that
+ * waits on the offer hears the fold this much later.
+ */
+export const NOTCH_FOLD_GRACE_MS = 1500;
 /**
  * The page's claim on Esc is a lease: it says `__notch_esc(true)` again this
  * often for as long as it wants Esc, and `false` once when it stops. A claim
@@ -185,6 +198,14 @@ interface NotchLineBase {
   /** It waits for the person: the window is not to hide behind a fullscreen video while it is up. */
   asking?: boolean;
   gate?: NotchGate;
+  /**
+   * The brain has taken an answer that holds this line (a yes, a pick, a
+   * `done` or an undo on a fuse): a page that is told it draws it answered,
+   * dimmed, and takes nothing more on it. A fuse that is held burns nothing
+   * and offers no undo: it was decided. Written by the brain as it tells the
+   * line, like the rules.
+   */
+  held?: boolean;
 }
 
 /** What an answer does to its line. */
@@ -588,6 +609,13 @@ export type NotchFromPage =
     seen?: boolean;
     /** How many ms after the page drew the line the answer was given. */
     since?: number;
+    /**
+     * The run of the brain whose line this answers, as its `state` named it.
+     * The brain takes no answer meant for another run: line names repeat from
+     * one run to the next. The page always says it; one without it is taken
+     * as it comes.
+     */
+    brain?: string;
   }
   /**
    * A hand is on the line `id`, or no longer: the pointer is on the notch, a
@@ -666,6 +694,10 @@ export function parseNotchFromPage(raw: unknown): NotchFromPage | null {
   if (m.since !== undefined) {
     if (!whole(m.since, 0)) return null;
     answer.since = m.since;
+  }
+  if (m.brain !== undefined) {
+    if (typeof m.brain !== 'string' || !NAME.test(m.brain)) return null;
+    answer.brain = m.brain;
   }
   for (const key of ['option', 'button', 'row', 'word', 'value'] as const) {
     if (m[key] === undefined) continue;
@@ -885,6 +917,8 @@ function readRules(line: NotchLine, raw: Raw): void {
   const gate = isRaw(raw.gate) ? raw.gate : unread();
   line.gate = { dead: atLeastZero(gate.dead), esc: atLeastZero(gate.esc) };
   if (!absent(gate.whole)) line.gate.whole = atLeastZero(gate.whole);
+  if (raw.held === true) line.held = true;
+  else if (!absent(raw.held) && raw.held !== false) unread();
 }
 const atLeastZero = (value: unknown): number => (isNumber(value) && value >= 0 ? value : unread());
 

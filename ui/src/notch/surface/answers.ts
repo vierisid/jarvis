@@ -21,10 +21,12 @@ export type NotchPageAnswer = Extract<NotchFromPage, { type: 'answer' }>;
 export interface NotchAnswers {
   /**
    * Says an answer and keeps it until the brain has it. With `once` it is
-   * the answer that settles its line (a yes, a pick, an undo): said a second
-   * time for the same line it is the same answer with the same number, not a
-   * new one, so that a line which came back to be answered (its answer was
-   * given up) cannot be answered twice by a first try that was only slow.
+   * the answer that settles its line (a yes, a pick, an undo): the very same
+   * answer said a second time for the same line (the same act, choice, text)
+   * has the same number, not a new one, so that a line which came back to be
+   * answered (its answer was given up) cannot be answered twice by a first
+   * try that was only slow. A different one (another choice) is a new answer:
+   * the brain takes the first that reached it, and tells the page so.
    */
   say(answer: Omit<NotchPageAnswer, 'n'>, once?: boolean): void;
   /** The brain has the answer numbered `n`. */
@@ -54,7 +56,11 @@ export function createNotchAnswers(options: {
   const waiting = new Map<number, Waiting>();
   /** The number each settling answer of a line was given, by line and by what was answered. */
   const given = new Map<string, number>();
-  const which = (answer: { id: string; act: string }): string => `${answer.id}\n${answer.act}`;
+  /** The whole of an answer but for when it was given and to which run of the brain. */
+  const which = (answer: Omit<NotchPageAnswer, 'n'>): string => {
+    const { since: _since, brain: _brain, ...rest } = answer;
+    return JSON.stringify(Object.entries(rest).sort(([a], [b]) => (a < b ? -1 : 1)));
+  };
 
   const giveUp = (n: number): void => {
     const entry = waiting.get(n);

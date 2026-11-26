@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchAnswer, NotchSurfacePort, NotchTimers } from './surface.ts';
 import {
-  NOTCH_ANSWERS_KEPT, NOTCH_FOLD_CHOICES_MS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_AGAIN_MS, NOTCH_HAND_HOLDS_MS,
+  NOTCH_ANSWERS_KEPT, NOTCH_FOLD_CHOICES_MS, NOTCH_FOLD_GRACE_MS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_AGAIN_MS, NOTCH_HAND_HOLDS_MS,
   NOTCH_PROTOCOL_VERSION, notchRuled, parseNotchToPage,
 } from './protocol.ts';
 import type { NotchLine, NotchToPage } from './protocol.ts';
@@ -704,14 +704,18 @@ describe('the brain folds an offer that was left alone', () => {
     return { h, got };
   };
 
-  test('after its time, not before: the line is gone, every page is told, and whoever waits hears a fold from nobody', () => {
+  test('after its time, not before: the line is gone, every page is told, and whoever waits hears a fold from nobody, a moment later', () => {
     const { h, got } = shown(offer, ['pc', 'laptop']);
     h.advance(NOTCH_FOLD_MS - 1);
     expect(got).toEqual([]);
     expect(h.pushed).toEqual([]);
     h.advance(1);
-    expect(got).toEqual([[{ type: 'answer', id: 'l1', act: 'fold' }, undefined]]);
     expect(h.surface.current().line).toBeNull();
+    // An answer given in its last moment may still be on its way: the fold is heard a moment later.
+    h.advance(NOTCH_FOLD_GRACE_MS - 1);
+    expect(got).toEqual([]);
+    h.advance(1);
+    expect(got).toEqual([[{ type: 'answer', id: 'l1', act: 'fold' }, undefined]]);
     expect(h.bare()).toEqual([{ type: 'patch', line: null }, { type: 'patch', line: null }]);
     expect(h.pushed.map((p) => p.to).sort()).toEqual(['laptop', 'pc']);
     expect(h.waiting()).toBe(0);
@@ -728,8 +732,10 @@ describe('the brain folds an offer that was left alone', () => {
     choices.h.advance(NOTCH_FOLD_CHOICES_MS - 1);
     expect(choices.got).toEqual([]);
     choices.h.advance(1);
+    choices.h.advance(NOTCH_FOLD_GRACE_MS);
     expect(choices.got.length).toBe(1);
     const own = shown({ ...offer, fold: 3000 });
+    own.h.advance(NOTCH_FOLD_GRACE_MS);
     own.h.advance(3000);
     expect(own.got.length).toBe(1);
     const stays = shown({ ...offer, fold: 0 });
@@ -757,6 +763,7 @@ describe('the brain folds an offer that was left alone', () => {
     h.advance(NOTCH_HAND_HOLDS_MS - 1);
     expect(got).toEqual([]);
     h.advance(NOTCH_FOLD_HELD_MS + 1);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map(([answer]) => answer.act)).toEqual(['fold']);
   });
 
@@ -771,6 +778,7 @@ describe('the brain folds an offer that was left alone', () => {
     // The desktop with the hand on it goes away: its hand goes with it.
     h.gone('pc');
     h.advance(NOTCH_FOLD_HELD_MS);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map(([answer]) => answer.act)).toEqual(['fold']);
     expect(h.pushed.map((p) => p.to)).toEqual(['laptop']);
   });
@@ -782,6 +790,7 @@ describe('the brain folds an offer that was left alone', () => {
     h.advance(NOTCH_FOLD_MS - 1);
     expect(got.map(([answer]) => answer.act)).toEqual(['word']);
     h.advance(1);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map(([answer]) => answer.act)).toEqual(['word', 'fold']);
   });
 
@@ -812,6 +821,7 @@ describe('the brain folds an offer that was left alone', () => {
     const { h, got } = shown({ id: 'e1', kind: 'offer', keys: 'esc', say: ['Try it.'], fold: 8000 });
     h.say('pc', { type: 'answer', n: 1, id: 'e1', act: 'yes' });
     h.advance(8000);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map(([answer]) => answer.act)).toEqual(['yes', 'fold']);
   });
 
@@ -834,6 +844,7 @@ describe('the brain folds an offer that was left alone', () => {
     h.advance(NOTCH_FOLD_MS - 1);
     expect(got).toEqual([]);
     h.advance(1);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map((answer) => answer.act)).toEqual(['fold']);
   });
 
@@ -843,6 +854,7 @@ describe('the brain folds an offer that was left alone', () => {
     h.hello('laptop');
     h.hello('pc');
     h.advance(1000);
+    h.advance(NOTCH_FOLD_GRACE_MS);
     expect(got.map(([answer]) => answer.act)).toEqual(['fold']);
   });
 
@@ -998,16 +1010,22 @@ describe('two desktop apps on one brain', () => {
     expect(types(h, 'pc')).toEqual(['line']);
   });
 
-  test('a yes on one leaves it dimmed there until the brain says what next; a no on the other then takes it off the first too', () => {
+  test('a yes on one leaves it dimmed there until the brain says what next; a no on the other after it is late, and that page is shown the line answered', () => {
     const h = two();
     h.surface.show(offer);
     h.pushed.length = 0;
+    const got: string[] = [];
+    h.surface.onAnswer((answer) => got.push(answer.act));
     h.say('pc', { type: 'answer', id: 'l1', act: 'yes' });
     // After a yes the line stays, here and on both pages.
     expect(h.pushed).toEqual([]);
-    h.say('laptop', { type: 'answer', id: 'l1', act: 'no' });
-    expect(h.surface.current().line).toBeNull();
-    expect(h.pushed.map((p) => [p.to, bare(p.message)])).toEqual([['pc', { type: 'patch', line: null }]]);
+    // The first answer that holds the line stands: the no is not taken, and takes nothing off.
+    h.say('laptop', { type: 'answer', n: 1, id: 'l1', act: 'no' });
+    expect(got).toEqual(['yes']);
+    expect(h.surface.current().line?.id).toBe('l1');
+    expect(h.pushed.map((p) => [p.to, p.message.type])).toEqual([['laptop', 'ack'], ['laptop', 'patch']]);
+    expect(h.pushed[0]!.message).toMatchObject({ type: 'ack', n: 1, took: false });
+    expect(h.pushed[1]!.message).toMatchObject({ type: 'patch', line: { id: 'l1', held: true } });
   });
 
   test('an answer that ends nothing, or is about a line that is gone, is told to nobody', () => {
@@ -1108,6 +1126,7 @@ describe('a script that waits on the surface', () => {
     for (let i = 0; i < 4; i++) h.say('pc', { type: 'answer', n: 1, id, act: 'yes' });
     expect((await first).act).toBe('yes');
     // The script shows the same sheet changed, and waits for another yes: the copies are not it.
+    stage.put({ id, kind: 'sheet', say: ['Send this instead?'], blocks: [], yes: 'send' });
     let again = false;
     void stage.answer(id, ['yes']).then(() => { again = true; }, () => {});
     await settle();
@@ -1182,7 +1201,7 @@ describe('a script that waits on the surface', () => {
   test('an offer the brain folds ends the script\'s wait as a fold a page said used to', async () => {
     const { h, stage } = play();
     const asked = stage.offer(['Reply?'], 'show');
-    h.advance(NOTCH_FOLD_MS);
+    h.advance(NOTCH_FOLD_MS + NOTCH_FOLD_GRACE_MS);
     expect((await asked).act).toBe('fold');
     stage.stop();
   });

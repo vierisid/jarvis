@@ -251,14 +251,34 @@ export function connectNotch(
   };
   /** The brain speaks another version, and loading the page again did not change that. */
   let resting = false;
+  /** The brain said it does not know this page, and has not told it the whole since. */
+  let unknown = false;
+  /** What the surface wants with Esc, and what was last told the desktop app. */
+  let wantsEsc = false, claimed = false;
+  let escAgain: number | null = null;
+  const renewEsc = (): void => {
+    escAgain = clock.after(NOTCH_ESC_RENEW_MS, () => {
+      quietly(() => host.__notch_esc?.(true));
+      renewEsc();
+    });
+  };
+  function escNow(): void {
+    const givenUp = !stated && tries >= NOTCH_HELLO_TRIES;
+    const claim = wantsEsc && !unknown && !givenUp && !resting;
+    if (claim === claimed) return;
+    claimed = claim;
+    if (escAgain !== null) { clock.cancel(escAgain); escAgain = null; }
+    quietly(() => host.__notch_esc?.(claim));
+    if (claim) renewEsc();
+  }
   // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
   // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
   // a state has come.
   const keepAsking = (): void => {
-    if (waiting !== null || stated || resting || tries >= NOTCH_HELLO_TRIES) return;
+    if (waiting !== null || stated || resting || tries >= NOTCH_HELLO_TRIES) { escNow(); return; }
     waiting = clock.after(helloEvery, () => {
       waiting = null;
-      if (stated || resting || tries >= NOTCH_HELLO_TRIES) return;
+      if (stated || resting || tries >= NOTCH_HELLO_TRIES) { escNow(); return; }
       tries++;
       hello();
       keepAsking();
@@ -294,11 +314,15 @@ export function connectNotch(
   // not be drawn, told to a page that came up, used to leave that page drawing nothing and hearing nothing
   // until the desktop app was started again: the state had come, so the hello was never said a second time.)
   let droppedNow = false;
-  surface.onDropped((what) => {
+  surface.onDropped((what, refused) => {
     droppedNow = true;
     if (resting) return;
     if (logged++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`out of step with the brain, which is asked for everything again: ${what}`));
     stated = false;
+    // The brain said it does not know this page: a brain is there, so the hello is worth saying again
+    // however often it was said while none was (the tries are counted afresh), and until it knows the page
+    // nothing the page holds is the brain's, so Esc is not kept from the app in front for it.
+    if (refused) { tries = 0; unknown = true; escNow(); }
     // At once, unless it was said a moment ago: a brain that answers with the same thing is not asked in a loop.
     if (tries < NOTCH_HELLO_TRIES && clock.now() - helloAt >= helloEvery) { tries++; hello(); }
     keepAsking();
@@ -312,6 +336,8 @@ export function connectNotch(
     stated = true;
     tries = 0;
     logged = 0;
+    unknown = false;
+    escNow();
     // And the brain speaks this page's version: the next mismatch is a new one.
     resting = false;
     try { reloader.clear(); } catch { /* nothing was kept */ }
@@ -323,19 +349,13 @@ export function connectNotch(
   host.__notch_pairs = (pairs) => surface.setPairs(pairs);
   // The claim is a lease: said again for as long as it stands, and given up once. A second argument is
   // never passed: the desktop app refuses a call with one more argument than it knows, and Esc would be lost.
-  let escAgain: number | null = null;
-  const renewEsc = (): void => {
-    escAgain = clock.after(NOTCH_ESC_RENEW_MS, () => {
-      quietly(() => host.__notch_esc?.(true));
-      renewEsc();
-    });
-  };
+  //
+  // And it is not claimed by a page the brain has given up on, or that the brain does not know (it said so,
+  // and the page has not been told the whole since): what the page shows then may be nobody's, and an Esc
+  // kept for it is an Esc taken from the app in front, for as long as the page is up. A page that is only
+  // out of step for a moment (a message lost) keeps it: Esc is what takes a fuse back.
   quietly(() => host.__notch_esc_lease?.(NOTCH_ESC_LEASE_MS));
-  surface.onWantEsc((want) => {
-    if (escAgain !== null) { clock.cancel(escAgain); escAgain = null; }
-    quietly(() => host.__notch_esc?.(want));
-    if (want) renewEsc();
-  });
+  surface.onWantEsc((want) => { wantsEsc = want; escNow(); });
   // Whether a question is waiting: the window does not hide behind a
   // fullscreen video while one is.
   surface.onAsking((asking) => quietly(() => host.__notch_asking?.(asking)));

@@ -9,7 +9,7 @@
  */
 import { NOTCH_NAME } from '../../../../src/notch/name.ts';
 import {
-  NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_AT_EVERY_MS, NOTCH_FUSE_SEEN_MS, NOTCH_HAND_AGAIN_MS, NOTCH_MOODS, NOTCH_PROTOCOL_VERSION, notchWhereApp,
+  NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_AT_EVERY_MS, NOTCH_AT_RESTING_MS, NOTCH_FUSE_SEEN_MS, NOTCH_HAND_AGAIN_MS, NOTCH_MOODS, NOTCH_PROTOCOL_VERSION, notchWhereApp,
   readNotchToPage,
 } from '../../../../src/notch/protocol.ts';
 import type {
@@ -77,7 +77,7 @@ export interface NotchSurface {
    * of it. Not told of a message that is well formed and of a kind this page
    * does not know.
    */
-  onDropped(listener: (what: string) => void): void;
+  onDropped(listener: (what: string, refused?: boolean) => void): void;
   /**
    * Told when the brain speaks another version of the messages than this
    * page (`v` is the brain's): by a `state` of that version, or by its
@@ -261,8 +261,8 @@ export function createNotchSurface(
 
   const later = (ms: number, fn: () => void): number => { const mine = tok; return timers.after(ms, () => { if (mine === tok) fn(); }); };
   /** Said to listeners when the page is out of step with the brain: it is to be asked for the whole again. */
-  const dropListeners = new Set<(what: string) => void>();
-  const outOfStep = (what: string): void => { for (const listener of dropListeners) listener(what); };
+  const dropListeners = new Set<(what: string, refused?: boolean) => void>();
+  const outOfStep = (what: string, refused = false): void => { for (const listener of dropListeners) listener(what, refused); };
   /** How long ago the line that is up was drawn, in whole ms. */
   const sinceShown = (): number => Math.max(0, Math.round(clock.now() - shownAt));
 
@@ -275,7 +275,9 @@ export function createNotchSurface(
     // notch shows: it may have gone on without this page.
     lost: (given) => {
       if (!alive) return;
-      if (cur && cur.done && cur.id === given.id && line?.after?.[given.act] === 'hold') reopen();
+      // Not a fuse that this page said ran out: whether or not the brain had it, it is not to be taken back
+      // now, and the undo it would show again is for something that may have gone. The brain says what it holds.
+      if (cur && cur.done && cur.id === given.id && line?.after?.[given.act] === 'hold' && given.act !== 'done') reopen();
       outOfStep(`no word that the brain has the ${given.act}`);
     },
     // It came for a line the brain no longer shows: this page is behind. It says how far it has read, and
@@ -288,7 +290,8 @@ export function createNotchSurface(
    * own rule.
    */
   const answer = (act: NotchAnswerAct, more: Partial<NotchPageAnswer> = {}): void => {
-    if (cur) answers.say({ type: 'answer', id: cur.id, act, since: sinceShown(), ...more }, line?.after?.[act] === 'hold');
+    // Stamped with the run of the brain whose line it is: names repeat from one run to the next.
+    if (cur) answers.say({ type: 'answer', id: cur.id, act, since: sinceShown(), ...more, ...(brain ? { brain } : {}) }, line?.after?.[act] === 'hold');
   };
   /** Answered: it stays as it is, dimmed, until the brain says what comes next. */
   const settle = (): void => {
@@ -302,6 +305,19 @@ export function createNotchSurface(
     cur.done = false;
     nin.classList.remove('answered');
     syncEsc();
+  };
+  /**
+   * A line the brain holds answered is answered here: dimmed, taking nothing
+   * more. A fuse on it burns no further and offers no undo: it was decided.
+   */
+  const heldNow = (l: NotchLine): void => {
+    if (!l.held || !cur || cur.id !== l.id || cur.done) return;
+    if (l.kind === 'send') {
+      wrap.classList.remove('fusing');
+      due = null;
+      hintEl.replaceChildren();
+    }
+    settle();
   };
   /** What the answer `act` does to the line, as the brain wrote it into the line: it goes, it is held, or it stays as it is. */
   const ended = (act: NotchAnswerAct): void => {
@@ -346,13 +362,19 @@ export function createNotchSurface(
 
   // How far this page has read, said every so often for as long as it is up: the last thing the brain said
   // may be the one that was lost, and no gap shows until the next comes.
-  let beat = 0;
+  // Often while a line is up (what ends it may be what was lost), and seldom at rest (a brain that was
+  // started again under the page, a line that never came): not every few seconds all night.
+  let beat = 0, beatAt = 0;
   function startBeat(): void {
     if (beat) return;
-    beat = timers.after(NOTCH_AT_EVERY_MS, () => {
+    beat = timers.after(Math.min(NOTCH_AT_EVERY_MS, NOTCH_AT_RESTING_MS), () => {
       beat = 0;
       if (!alive || !born) return;
-      send({ type: 'at', seq });
+      const now = clock.now();
+      if (cur || now - beatAt >= NOTCH_AT_RESTING_MS) {
+        beatAt = now;
+        send({ type: 'at', seq });
+      }
       startBeat();
     });
   }
@@ -646,7 +668,7 @@ export function createNotchSurface(
     // already made it void).
     const before = { line, cur, due, tok, live: tok === shownTok };
     // Drawn anew, an answer to it is a new answer (./answers.ts).
-    try { showLine(l, instant); answers.fresh(); } catch (error) {
+    try { showLine(l, instant); answers.fresh(); heldNow(l); } catch (error) {
       console.error('[notch] a line could not be drawn', error);
       line = before.line;
       cur = before.cur;
@@ -827,11 +849,12 @@ export function createNotchSurface(
           if (!same) unseenLetter = outOfSight() ? l.id : '';
           const paper = blocksOf(going);
           paper.classList.add('going');
-          show({ body: 'sheet', say: l.say, sheet: paper, stag: !same, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
+          show({ body: 'sheet', say: l.say, sheet: paper, stag: !same, ...(l.held ? {} : { hint: { cap: 'esc', act: 'undo' } }), ...common, mood: l.mood ?? 'write' }, instant);
         } else {
-          show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
+          show({ body: 'line', say: l.say, ...(l.held ? {} : { hint: { cap: 'esc', act: 'undo' } }), ...common, mood: l.mood ?? 'write' }, instant);
         }
-        if (!seen || me.undone) return;
+        // Held by the brain: decided, so nothing burns and nothing can be taken back.
+        if (!seen || me.undone || l.held) return;
         due = { id: l.id, at: clock.now() + left };
         shape.burn(total, left);
         later(left, () => {
@@ -843,6 +866,8 @@ export function createNotchSurface(
             // that word the brain sends nothing, and says so.
             const vouch = (sheetSeen || sheetAtEnd()) && unseenLetter !== l.id && !outOfSight();
             if (vouch) edge.depart(leftOf(l.src));
+            // It ran out: there is nothing left to take back, and no undo is shown for it.
+            hintEl.replaceChildren();
             answer('done', vouch ? { seen: true } : {});
             ended('done');
             return;
@@ -850,6 +875,7 @@ export function createNotchSurface(
           // It leaves along the edge, toward where it is going: to the side
           // its app is on, and to the right when it goes to a person.
           edge.depart(leftOf(l.src));
+          hintEl.replaceChildren();
           answer('done');
           ended('done');
         });
@@ -1098,7 +1124,7 @@ export function createNotchSurface(
           // The brain takes nothing from this page. In another version: see above. In this one, it only
           // does not know the page (it started again, or the connection did): it is told hello.
           if (message.v !== NOTCH_PROTOCOL_VERSION) for (const listener of versionListeners) listener(message.v);
-          else outOfStep('the brain does not know this page');
+          else outOfStep('the brain does not know this page', true);
           return;
         case 'state': {
           // The same run of the brain, and a number this page has read: a copy that came twice, or late.
@@ -1123,12 +1149,14 @@ export function createNotchSurface(
             // The line this page already shows, told again (the page said hello again): it stays as it is.
             // Drawn again it forgot that it was answered: an Esc on a fuse was followed by "it ran out", a
             // yes could be given twice, and a field being typed in was emptied. And a line that could not
-            // be read takes nothing off the notch either.
+            // be read takes nothing off the notch either. Only, if the brain holds it answered (another
+            // desktop answered it, or this page's own answer was had after all), it is answered here too.
+            if (message.line?.held) heldNow(message.line);
           } else if (message.line) {
             edge.appear();
             // A line that cannot be drawn must not leave the page unborn: it then drew nothing and heard
             // nothing more until it was loaded again. It rests, and can be shown the next thing.
-            try { showLine(message.line, true); answers.fresh(); } catch (error) {
+            try { showLine(message.line, true); answers.fresh(); heldNow(message.line); } catch (error) {
               console.error('[notch] a line could not be drawn', error);
               try { rest(true); } catch { /* nothing more can be done here */ }
             }

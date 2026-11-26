@@ -10,7 +10,7 @@
  * the page's answers what the brain does: it says `ack` to each, at once.
  *
  * What the test is handed of what the page said is the answer as the person
- * gave it: without its number and its timing, and without the page's own
+ * gave it: without its number, its timing and the run of the brain it answers, and without the page's own
  * reports (`at`, `hand`). All of it, as it went out, is in `wire`.
  *
  * A test of the messages themselves says them as they are, with `raw`, and
@@ -106,7 +106,7 @@ export function scripted(
       wire.push(message);
       if (message.type === 'at' || message.type === 'hand') return;
       if (message.type !== 'answer') { send(message); return; }
-      const { n, since: _since, ...said } = message;
+      const { n, since: _since, brain: _brain, ...said } = message;
       send(said);
       if (page.acks && n !== undefined) real.receive({ type: 'ack', n, took: true });
     }, options);

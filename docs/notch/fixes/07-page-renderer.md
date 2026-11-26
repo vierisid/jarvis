@@ -106,8 +106,41 @@ Six steps, each shipping alone.
   A copy is told the same `ack` again; a number older than all kept counts
   as taken.
 - A lost message with nothing after it leaves no gap. The page says `at
-  {seq}` every 5 s, and on a late answer; the brain sends the whole if it
-  sent more. That is what finds a lost rest and a lost fold.
+  {seq}` every 5 s while a line is up, once a minute at rest, and on a late
+  answer; the brain sends the whole if it sent more. That finds a lost rest
+  and a lost fold within 5 s, and a lost line or a brain started again
+  under a resting page within a minute (a resting page used to say it every
+  5 s all night).
+- Review of step 4 (27 November 2026), what it changed:
+  - The first answer that holds a line stands (`held`). A second one that
+    would settle it (another choice, another desktop's no after a yes, an
+    undo after the fuse was done) is acknowledged as late, and that page is
+    told the line as the brain holds it. A line in a `state` or `patch`
+    says `held: true`: the page draws it answered, and a fuse on it burns
+    nothing and shows no undo. A letter's `done` that does not vouch holds
+    nothing (another page may still vouch).
+  - A page never reopens a fuse it said ran out, ack or no ack, and clears
+    its undo hint when the fuse runs out.
+  - The page's `once` numbers key on the whole answer: a different pick or
+    text is a new answer, and loses to the first if the first arrives.
+  - Every answer carries `brain`, the run named by its `state`. The brain
+    refuses any other (line names repeat across runs); an answer without it
+    is taken as before. The page drops what it was still sending to the
+    run before.
+  - Fold grace (`NOTCH_FOLD_GRACE_MS`, 1.5 s): at the fold every page rests
+    at once, but the fold is heard 1.5 s later; a settling answer given
+    while the offer was up (`since` < its fold) that arrives meanwhile is
+    taken instead, and the offer comes back to every page, answered.
+    Showing or resting anything ends the grace at once.
+  - A page refused for its version pauses an offer's time, as no page does.
+  - An unnumbered answer from a page that never said hello on this
+    connection is version 1 (left up across an update): the brain opens it
+    anew, once per connection, at most once a minute (`createNotchReopen`).
+  - Bridge: a `refuse` of this version proves a brain is there, so the
+    hello tries start again (still 3 s apart). Esc is not claimed while the
+    brain says it does not know the page, or once the page gave up asking.
+    A page only out of step for a moment keeps Esc: Esc is what takes a
+    fuse back.
 - A no and a fold end every line (`after` has them on all kinds), as the
   brain always took them; the design's table had them on offers only.
 - `refuse` also answers a page of this version that the brain does not
@@ -133,6 +166,16 @@ point 10. No Go file was changed: the desktop app carries the v2 messages
 as opaque JSON under the same 64 KB limit.
 
 ## Only a real webview can show
+
+(The reviewer's own list did not reach me; this is mine.)
+- Whether `__notch_esc(true)` every 2 s holds in a background window: a
+  timer throttled past 6 s would let a future sidecar lease lapse.
+- Whether `sessionStorage` survives `location.reload()` in WebView2 and
+  WKWebView: without it a page refused for its version rests at once and
+  never loads itself again.
+- Whether `:hover` and `pointerenter` reach a page in a window that is never
+  active (the hand report also uses `__notch_cursor`).
+- Whether a 1.5 s fold grace is long enough on a slow remote brain.
 
 - The fuse resumes through a negative `animation-delay` (`--fuse-from`), also
   under `.notch-still`. The tests check the value, not the painted fuse.
@@ -163,5 +206,6 @@ Open, none of them needed for steps 1 to 3:
 - Step 3: done in "notch: an answer that ends the line takes it off the other desktop too"
 - Review of steps 1 to 3: done in "notch: review of point 7: a fuse nobody could read is not vouched for, an answered line stays answered, and the hello has a real cap"
 - Step 4 (protocol v2): done in "notch: protocol v2: what the notch is apart from what it does once, numbered, answers acknowledged and taken once, a fold the brain owns, and a page of another version refused"
+- Review of step 4: done in "notch: review of protocol v2: a decided fuse offers no undo, the first answer that holds a line stands, answers name their run of the brain, a late yes beats the fold, and a page nobody knows keeps no Esc"
 - Step 5 (reducer): pending
 - Step 6 (typed values): pending

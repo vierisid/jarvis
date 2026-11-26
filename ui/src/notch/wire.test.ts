@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import {
   NOTCH_ANSWER_AGAIN_MS, NOTCH_ANSWER_SENDS, NOTCH_ANSWERS_WAITING_MAX, NOTCH_AT_EVERY_MS, NOTCH_ESC_LEASE_MS, NOTCH_ESC_RENEW_MS,
-  NOTCH_FOLD_MS, NOTCH_PROTOCOL_VERSION,
+  NOTCH_FOLD_GRACE_MS, NOTCH_FOLD_MS, NOTCH_PROTOCOL_VERSION,
 } from '../../../src/notch/protocol.ts';
 import type { NotchFromPage, NotchLine, NotchToPage } from '../../../src/notch/protocol.ts';
 import type { NotchAnswer, NotchSurface as Brain, NotchSurfacePort } from '../../../src/notch/surface.ts';
@@ -364,7 +364,7 @@ describe('the brain and the page over a pipe that loses, copies and reorders', (
     const pc = w.desk('pc');
     w.brain.show(offer());
     pc.down.fate = (m) => (m.type === 'patch' ? 'lose' : 'carry');
-    w.clock.advance(NOTCH_FOLD_MS);
+    w.clock.advance(NOTCH_FOLD_MS + NOTCH_FOLD_GRACE_MS);
     expect(answers(w, 'fold')).toHaveLength(1);
     expect(w.brain.current().line).toBeNull();
     pc.down.fate = () => 'carry';
@@ -374,16 +374,18 @@ describe('the brain and the page over a pipe that loses, copies and reorders', (
 });
 
 describe('two desktops', () => {
-  test('each is acknowledged its own answers, and a no on one takes the line off the other', () => {
+  test('each is acknowledged its own answers, the first that holds a line stands, and a no on one takes the line off the other', () => {
     const w = make();
     const pc = w.desk('pc'), mac = w.desk('mac');
     w.brain.show({ id: 'w1', kind: 'work', say: ['Working'], steps: 3, done: 0 });
     w.clock.advance(400);
     pc.key('esc');
     mac.key('esc');
-    expect(answers(w, 'stop').map((a) => a.key?.split('\n')[0])).toEqual(['pc', 'mac']);
-    expect(pc.told.filter(ofType('ack'))).toHaveLength(1);
-    expect(mac.told.filter(ofType('ack'))).toHaveLength(1);
+    // Both asked it to stop: the first is taken, the second is told it came late.
+    expect(answers(w, 'stop').map((a) => a.key?.split('\n')[0])).toEqual(['pc']);
+    expect(pc.told.filter(ofType('ack'))).toEqual([{ type: 'ack', n: 1, took: true }]);
+    expect(mac.told.filter(ofType('ack'))).toEqual([{ type: 'ack', n: 1, took: false }]);
+    expect(mac.answered()).toBe(true);
     w.brain.show(offer());
     w.clock.advance(400);
     mac.key('esc');
@@ -555,5 +557,250 @@ describe('bounded memory', () => {
     expect(sentAnswers(pc, 'button').length - said).toBe(NOTCH_ANSWERS_WAITING_MAX);
     w.clock.advance(NOTCH_ANSWER_AGAIN_MS * NOTCH_ANSWER_SENDS * 2);
     expect(sentAnswers(pc, 'button').length).toBe(said + NOTCH_ANSWERS_WAITING_MAX * (NOTCH_ANSWER_SENDS - 1));
+  });
+});
+
+// The review of step 4, 27 November 2026: what a hostile pipe still got through.
+const inOrder = (p: Pipe): void => { const held = p.held.splice(0); for (const deliver of held) deliver(); };
+
+describe('what the review of step 4 found', () => {
+  test('a fuse the page said ran out is never offered for undo again, even when no ack comes, nor after the page is loaded again', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show({ id: 'f1', kind: 'send', say: ['Sending'], ms: 4000 });
+    // Nothing comes back: no ack, and no state that would say the brain holds it.
+    pc.down.fate = (m) => (m.type === 'ack' || m.type === 'state' ? 'lose' : 'carry');
+    w.clock.advance(4000);
+    expect(answers(w).map((a) => a.act)).toEqual(['done']);
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * NOTCH_ANSWER_SENDS + 10);
+    // Given up on, it stays answered: no undo is shown, and Esc takes nothing back.
+    expect(pc.answered()).toBe(true);
+    expect(pc.root.querySelector('.hint')?.textContent ?? '').not.toContain('undo');
+    pc.down.fate = () => 'carry';
+    pc.key('esc');
+    expect(sentAnswers(pc, 'undo')).toEqual([]);
+    // Loaded again, it is told the fuse as the brain holds it: answered, burning nothing, with no undo.
+    pc.reload();
+    const state = pc.told.filter(ofType('state')).at(-1) as Extract<NotchToPage, { type: 'state' }>;
+    expect(state.line).toMatchObject({ id: 'f1', held: true });
+    expect(pc.answered()).toBe(true);
+    expect(pc.root.querySelector('.hint')?.textContent ?? '').not.toContain('undo');
+    pc.key('esc');
+    w.clock.advance(10_000);
+    expect(sentAnswers(pc, 'undo')).toEqual([]);
+    expect(answers(w).map((a) => a.act)).toEqual(['done']);
+  });
+
+  test('a page that is up while the brain is away for long says hello again once a brain refuses it, and claims no Esc meanwhile', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(offer('o1', { fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(800);
+    expect(pc.esc.at(-1)).toBe(true);
+    pc.up.fate = () => 'lose';
+    pc.down.fate = () => 'lose';
+    pc.key('yes');
+    w.clock.advance(90_000);
+    // Every hello was spent on nobody: the page gave up, and holds no Esc for a line nobody may hold.
+    expect(pc.esc.at(-1)).toBe(false);
+    const renewals = pc.esc.length;
+    w.clock.advance(30_000);
+    expect(pc.esc.length).toBe(renewals);
+    w.restart();
+    pc.disconnect();
+    pc.up.fate = () => 'carry';
+    pc.down.fate = () => 'carry';
+    w.brain.show(offer('n1', { say: ['New run line'], fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(NOTCH_AT_EVERY_MS + 3000);
+    expect(w.brain.listening()).toBe(1);
+    expect(pc.text()).toContain('New run line');
+    expect(pc.esc.at(-1)).toBe(true);
+  });
+
+  test('a brain started again with a line of the same name, and its state lost: the old run\'s yes is not taken by the new line', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.clock.advance(3000);
+    w.brain.show(offer('item-chase-1-1', { fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(800);
+    pc.down.fate = (m) => (m.type === 'ack' ? 'lose' : 'carry');
+    pc.key('yes');
+    w.restart();
+    w.brain.show(offer('item-chase-1-1', { fold: 0 } as Partial<NotchLine>));
+    pc.down.fate = (m) => (m.type === 'state' || m.type === 'ack' ? 'lose' : 'carry');
+    const before = w.heard.length;
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * 10);
+    expect(w.heard.slice(before)).toEqual([]);
+    expect(sentAnswers(pc, 'yes').every((m) => m.brain !== undefined)).toBe(true);
+  });
+
+  test('an undo lost on a long fuse and given up on: the fuse running out on the page says no done after it', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show({ id: 'f9', kind: 'send', say: ['Sending'], ms: 9000 });
+    w.clock.advance(800);
+    pc.up.fate = (m) => (m.type === 'answer' ? 'lose' : 'carry');
+    pc.key('esc');
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * NOTCH_ANSWER_SENDS + 100);
+    // Answerable again, for the undo to be said again: not for "it ran out".
+    expect(pc.answered()).toBe(false);
+    pc.up.fate = () => 'carry';
+    w.clock.advance(6000);
+    expect(sentAnswers(pc, 'done')).toEqual([]);
+    expect(answers(w, 'done')).toEqual([]);
+  });
+
+  test('a page told the whole by a new run of the brain sends nothing more it held for the run before', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    // Not a moment after its first hello, so that it says the next at once.
+    w.clock.advance(3000);
+    w.brain.show(offer('o1', { fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(800);
+    pc.down.fate = (m) => (m.type === 'ack' ? 'lose' : 'carry');
+    pc.key('yes');
+    const n = sentAnswers(pc, 'yes')[0]!.n;
+    w.restart();
+    // The page learns of the new run (it is refused at its next try, and says hello), while it still has
+    // tries of the old answer to make.
+    const first = (pc.told.find(ofType('state')) as Extract<NotchToPage, { type: 'state' }>).brain;
+    while (!pc.told.some((m) => m.type === 'state' && m.brain !== first)) w.clock.advance(100);
+    expect(sentAnswers(pc, 'yes').length).toBeLessThan(NOTCH_ANSWER_SENDS);
+    const after = pc.said.length;
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * 10);
+    expect(pc.said.slice(after).filter((m) => m.type === 'answer' && m.n === n)).toEqual([]);
+  });
+
+  test('a second pick unlike the first, after the first was given up on: the first that reached the brain stands, and the page shows the line answered', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show({ id: 'c1', kind: 'offer', say: ['Which day?'], options: ['Thursday', 'Friday'], fold: 0 });
+    w.clock.advance(800);
+    pc.up.fate = (m) => (m.type === 'answer' ? 'hold' : 'carry');
+    const opts = (): HTMLElement[] => [...pc.root.querySelectorAll<HTMLElement>('.opts button, .opt, [data-opt]')];
+    const pick = (label: string): void => { opts().find((b) => (b.textContent ?? '').includes(label))!.click(); };
+    pick('Thursday');
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * NOTCH_ANSWER_SENDS + 10);
+    expect(pc.answered()).toBe(false);
+    pick('Friday');
+    const [first, second] = [sentAnswers(pc, 'pick')[0]!, sentAnswers(pc, 'pick').at(-1)!];
+    expect(second.option).toBe('Friday');
+    expect(second.n).not.toBe(first.n);
+    pc.up.fate = () => 'carry';
+    inOrder(pc.up);
+    expect(answers(w, 'pick').map((a) => a.option)).toEqual(['Thursday']);
+    expect(pc.told.filter((m) => m.type === 'ack' && m.n === second.n)).toEqual([{ type: 'ack', n: second.n!, took: false }]);
+    expect(pc.answered()).toBe(true);
+  });
+
+  test('a yes slow past the give-up, and a no given after it: the yes stands and the no is late', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(offer('o1', { fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(800);
+    pc.up.fate = (m) => (m.type === 'answer' ? 'hold' : 'carry');
+    pc.key('yes');
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * NOTCH_ANSWER_SENDS + 10);
+    pc.key('esc');
+    pc.up.fate = () => 'carry';
+    inOrder(pc.up);
+    expect(answers(w).map((a) => a.act)).toEqual(['yes']);
+    expect(w.brain.current().line?.id).toBe('o1');
+  });
+
+  test('a yes in the last moment of an offer, lost once, still counts in place of the fold', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(offer());
+    w.clock.advance(NOTCH_FOLD_MS - 50);
+    let lose = 1;
+    pc.up.fate = (m) => (m.type === 'answer' && lose-- > 0 ? 'lose' : 'carry');
+    pc.key('yes');
+    w.clock.advance(NOTCH_FOLD_GRACE_MS + 2000);
+    expect(answers(w).map((a) => a.act)).toEqual(['yes']);
+    expect(w.brain.current().line?.id).toBe('o1');
+    // Every page put it away with the fold: it is back, answered, until the brain says what next.
+    expect(pc.answered()).toBe(true);
+  });
+
+  test('a yes that comes after the grace is late, and the fold stands', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(offer());
+    w.clock.advance(NOTCH_FOLD_MS - 50);
+    pc.up.fate = (m) => (m.type === 'answer' ? 'hold' : 'carry');
+    pc.key('yes');
+    w.clock.advance(NOTCH_FOLD_GRACE_MS + 100);
+    pc.up.fate = () => 'carry';
+    inOrder(pc.up);
+    expect(answers(w).map((a) => a.act)).toEqual(['fold']);
+  });
+
+  test('an offer\'s time does not run while its only page is refused for its version, and starts again when a page comes', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(offer());
+    w.clock.advance(1000);
+    // What is on that desktop now is a page of version 1, and nothing else speaks from there.
+    pc.up.fate = () => 'lose';
+    pc.send({ type: 'hello', v: 1 });
+    w.clock.advance(7000);
+    // A page of this version comes back: the offer has all its time from here.
+    pc.up.fate = () => 'carry';
+    pc.send({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
+    w.clock.advance(NOTCH_FOLD_MS - 100);
+    expect(answers(w, 'fold')).toEqual([]);
+    w.clock.advance(100 + NOTCH_FOLD_GRACE_MS);
+    expect(answers(w, 'fold')).toHaveLength(1);
+  });
+
+  test('a page told the whole again while another desktop\'s answer holds the line shows it answered, with no undo', () => {
+    const w = make();
+    const pc = w.desk('pc'), mac = w.desk('mac');
+    w.clock.advance(3000);
+    w.brain.show({ id: 'f2', kind: 'send', say: ['Sending'], ms: 9000 });
+    w.clock.advance(800);
+    mac.key('esc');
+    expect(answers(w).map((a) => a.act)).toEqual(['undo']);
+    expect(pc.answered()).toBe(false);
+    // Something the brain said to the pc could not be read: it asks for the whole, and learns the fuse is decided.
+    pc.receive({ type: 'patch' });
+    expect(pc.answered()).toBe(true);
+    expect(pc.root.querySelector('.hint')?.textContent ?? '').not.toContain('undo');
+    pc.key('esc');
+    w.clock.advance(10_000);
+    expect(sentAnswers(pc)).toEqual([]);
+  });
+
+  test('a page of version 1 left up across the update is opened anew on its first answer, once for the connection', () => {
+    const w = make();
+    const refused: [string, number][] = [];
+    w.brain.onRefused((id, v) => refused.push([id, v]));
+    const pc = w.desk('pc');
+    w.brain.show(offer());
+    pc.disconnect();
+    // It never says hello again: it only answers, as version 1 did, with no number.
+    pc.send({ type: 'answer', id: 'o1', act: 'yes' });
+    pc.send({ type: 'answer', id: 'o1', act: 'no' });
+    expect(refused).toEqual([['pc', 1]]);
+    expect(answers(w)).toEqual([]);
+  });
+
+  test('at rest a page says how far it has read once a minute, with a line up every few seconds, and a brain started again under a resting page is still found', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    const ats = (): number => pc.said.filter(ofType('at')).length;
+    w.clock.advance(600_000);
+    expect(ats()).toBeLessThanOrEqual(600_000 / 60_000);
+    w.brain.show(offer('o1', { fold: 0 } as Partial<NotchLine>));
+    const before = ats();
+    w.clock.advance(NOTCH_AT_EVERY_MS * 4);
+    expect(ats() - before).toBe(4);
+    w.brain.rest();
+    w.restart();
+    pc.disconnect();
+    w.brain.show(offer('n1', { say: ['New run line'], fold: 0 } as Partial<NotchLine>));
+    w.clock.advance(60_000 + 3000);
+    expect(pc.text()).toContain('New run line');
   });
 });

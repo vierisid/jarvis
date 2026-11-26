@@ -317,6 +317,7 @@ describe('a message from the page, read by the brain', () => {
       { type: 'answer', n: 7, id: 'f', act: 'done', seen: true },
       { type: 'answer', n: 8, id: 'f', act: 'undo' }, { type: 'answer', n: 9, id: 'w', act: 'stop' }, { type: 'answer', n: 10, id: 'o', act: 'no' },
       { type: 'answer', n: 11, id: 'o', act: 'fold' }, { type: 'answer', n: 12, id: 'r', act: 'done' },
+      { type: 'answer', n: 13, id: 'o', act: 'yes', since: 400, brain: 'b1_x-2' },
       { type: 'hand', id: 'l1', on: true }, { type: 'hand', id: 'l1', on: false },
       { type: 'at', seq: 0 }, { type: 'at', seq: 41 },
       { type: 'open' }, { type: 'stop' }, { type: 'signed-out' },
@@ -344,6 +345,8 @@ describe('a message from the page, read by the brain', () => {
       { type: 'answer', id: 'l1', act: 'yes', n: 0 }, { type: 'answer', id: 'l1', act: 'yes', n: -1 }, { type: 'answer', id: 'l1', act: 'yes', n: 1.5 },
       { type: 'answer', id: 'l1', act: 'yes', n: '1' }, { type: 'answer', id: 'l1', act: 'yes', n: null }, { type: 'answer', id: 'l1', act: 'yes', n: 2 ** 60 },
       { type: 'answer', id: 'l1', act: 'yes', n: Number.NaN }, { type: 'answer', id: 'l1', act: 'yes', n: Number.POSITIVE_INFINITY },
+      { type: 'answer', id: 'l1', act: 'yes', brain: '' }, { type: 'answer', id: 'l1', act: 'yes', brain: 'a b' }, { type: 'answer', id: 'l1', act: 'yes', brain: 7 },
+      { type: 'answer', id: 'l1', act: 'yes', brain: 'x'.repeat(65) },
       { type: 'answer', id: 'l1', act: 'yes', since: -1 }, { type: 'answer', id: 'l1', act: 'yes', since: 0.5 }, { type: 'answer', id: 'l1', act: 'yes', since: 'soon' },
       { type: 'answer', id: 'l1', act: 'pick', index: -1 }, { type: 'answer', id: 'l1', act: 'pick', index: 100 }, { type: 'answer', id: 'l1', act: 'pick', index: 1.5 },
       { type: 'answer', id: 'l1', act: 'word', value: 7 }, { type: 'answer', id: 'l1', act: 'word', word: 'x'.repeat(501) },
@@ -442,5 +445,15 @@ describe('the rules of a line, which the brain writes into it', () => {
     expect(told).toEqual({ id: 'o', kind: 'offer', say: ['Reply?'], after: { yes: 'hold', no: 'rest', fold: 'rest' }, away: 'none', asking: true, gate: { dead: 350, esc: 0 }, fold: 9000 });
     expect(given.after).toEqual({ yes: 'rest' });
     expect('fold' in given).toBe(false);
+  });
+});
+
+describe('a line the brain holds answered', () => {
+  test('says so as `held`, read only as true or false, and is nothing else', () => {
+    const line = { ...notchRuled({ id: 'f', kind: 'send', say: ['Sent'], ms: 4000 } as NotchLine), held: true };
+    expect(parseNotchToPage({ type: 'patch', seq: 1, line })).toEqual({ type: 'patch', seq: 1, line });
+    const { held: _held, ...open } = line;
+    expect(parseNotchToPage({ type: 'patch', seq: 1, line: { ...open, held: false } })).toEqual({ type: 'patch', seq: 1, line: open });
+    expect(parseNotchToPage({ type: 'patch', seq: 1, line: { ...open, held: 'yes' } })).toBeNull();
   });
 });

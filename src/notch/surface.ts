@@ -13,7 +13,7 @@
  * See docs/notch/README.md and ./protocol.ts (version 2).
  */
 import {
-  NOTCH_ANSWERS_KEPT, NOTCH_BIRTHS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_HOLDS_MS, NOTCH_PROTOCOL_VERSION,
+  NOTCH_ANSWERS_KEPT, NOTCH_BIRTHS, NOTCH_FOLD_GRACE_MS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_HOLDS_MS, NOTCH_PROTOCOL_VERSION,
   notchAfter, notchRuled, notchRules, notchWhereApp, parseNotchFromPage, parseNotchToPage,
 } from './protocol.ts';
 import type {
@@ -103,6 +103,14 @@ export class NotchSurface {
   /** When each desktop app's page last said a hand is on the line that is up. */
   private readonly hands = new Map<string, number>();
   private fold: NotchFold | null = null;
+  /**
+   * An offer the brain has just folded, for NOTCH_FOLD_GRACE_MS: an answer
+   * the person gave it while it was up, still on its way, is taken in place of
+   * the fold. Whoever waits on the offer hears the fold when that time is out.
+   */
+  private folded: { line: NotchLine; ms: number; timer: unknown } | null = null;
+  /** The answer that holds the line on the notch (a yes, a pick, a fuse's done or undo): the first one taken stands. */
+  private held: NotchAnswer | null = null;
   private births = 0;
   private readonly answerListeners = new Set<(answer: NotchAnswer, sidecarId?: string) => void>();
   private readonly openListeners = new Set<(sidecarId: string) => void>();
@@ -140,17 +148,24 @@ export class NotchSurface {
       this.pages.delete(sidecarId);
       this.refused.delete(sidecarId);
       this.hands.delete(sidecarId);
-      // Nobody can answer it now: its time does not run while it is on no page.
-      if (this.pages.size === 0 && this.fold) {
-        this.timers?.clearTimeout(this.fold.timer);
-        this.fold.from = null;
-      }
+      this.unlistened();
     });
+  }
+
+  /** Nobody can answer an offer while it is on no page: its time does not run then. */
+  private unlistened(): void {
+    if (this.pages.size === 0 && this.fold) {
+      this.timers?.clearTimeout(this.fold.timer);
+      this.fold.from = null;
+    }
   }
 
   /** Puts a line on the notch, in place of whatever is there. */
   show(line: NotchLine): void {
+    // A fold that waited for an answer on its way is heard now: something else is on the notch.
+    this.foldedNow();
     this.line = structuredClone(line);
+    this.held = null;
     this.shownAt = this.now();
     this.hands.clear();
     this.endFold();
@@ -164,7 +179,9 @@ export class NotchSurface {
 
   /** Back to the eyes. */
   rest(): void {
+    this.foldedNow();
     this.line = null;
+    this.held = null;
     this.endFold();
     this.hands.clear();
     this.push({ type: 'patch', line: null });
@@ -364,6 +381,10 @@ export class NotchSurface {
     // `done` from it is no proof that a fuse was seen. It is told so, and says hello.
     if (!this.pages.has(sidecarId)) {
       this.tell(sidecarId, { type: 'refuse', v: NOTCH_PROTOCOL_VERSION });
+      // An answer without a number is one only a page of version 1 gives: one that was left up across an
+      // update of the brain, and never says hello again. It cannot load itself again: it is opened anew,
+      // once for each connection (and no more often than src/daemon allows).
+      if (message.type === 'answer' && message.n === undefined) this.refusedPage(sidecarId, 1);
       return;
     }
     if (message.type === 'hand') {
@@ -385,11 +406,10 @@ export class NotchSurface {
       // with. It is counted as no page at all until it says hello in this version.
       this.pages.delete(sidecarId);
       this.hands.delete(sidecarId);
-      const first = !this.refused.has(sidecarId);
-      this.refused.add(sidecarId);
-      if (first) this.log(`[notch] the page speaks version ${message.v} of the messages, the brain version ${NOTCH_PROTOCOL_VERSION}: it is refused until it has loaded itself again`);
+      // Such a page is no page: an offer's time does not run for it.
+      this.unlistened();
       this.tell(sidecarId, { type: 'refuse', v: NOTCH_PROTOCOL_VERSION });
-      if (first) for (const listener of this.refusedListeners) listener(sidecarId, message.v);
+      this.refusedPage(sidecarId, message.v);
       return;
     }
     this.refused.delete(sidecarId);
@@ -415,12 +435,43 @@ export class NotchSurface {
     for (const listener of this.helloListeners) listener(sidecarId);
   }
 
+  /** Says once for each connection that a page of another version was refused, and who may open it anew. */
+  private refusedPage(sidecarId: string, v: number): void {
+    if (this.refused.has(sidecarId)) return;
+    this.refused.add(sidecarId);
+    this.log(`[notch] the page speaks version ${v} of the messages, the brain version ${NOTCH_PROTOCOL_VERSION}: it is refused until it has loaded itself again`);
+    for (const listener of this.refusedListeners) listener(sidecarId, v);
+  }
+
   private answered(sidecarId: string, message: Extract<NotchFromPage, { type: 'answer' }>): void {
+    // An answer to another run of the brain: line names repeat from one run to the next, and a line of the
+    // same name here is another line. It is not taken, nor its number kept: the page is told it is not
+    // known here, says hello, and learns what this run shows.
+    if (message.brain !== undefined && message.brain !== this.brain) {
+      this.tell(sidecarId, { type: 'refuse', v: NOTCH_PROTOCOL_VERSION });
+      return;
+    }
     const heard = this.heard.get(sidecarId) ?? { page: '', took: new Map<number, boolean>(), floor: 0 };
     this.heard.set(sidecarId, heard);
+    // An offer the brain folded a moment ago, answered while it was up: the answer was on its way. It is
+    // taken in place of the fold, and the offer is back for whatever the answer does to it.
+    const folded = this.folded;
+    let revived = false;
+    if (!this.line && folded && folded.line.id === message.id && message.act !== 'fold' && notchAfter(folded.line, message.act) !== undefined
+      && (message.since === undefined || message.since < folded.ms) && !(message.n !== undefined && (heard.took.has(message.n) || message.n <= heard.floor))) {
+      this.timers?.clearTimeout(folded.timer);
+      this.folded = null;
+      this.line = folded.line;
+      this.held = null;
+      revived = true;
+    }
     const line = this.line;
-    // An answer about a line that is no longer there is late, not wrong.
-    const took = line !== null && line.id === message.id;
+    const rules = line ? notchRules(line) : null;
+    // An answer about a line that is no longer there is late, not wrong. So is one that would settle a line
+    // another answer already holds (a second pick, another desktop's no after a yes, an undo after the fuse
+    // was done): the first that was taken stands.
+    const settles = rules?.after[message.act] !== undefined;
+    const took = line !== null && line.id === message.id && !(settles && this.held !== null);
     if (message.n !== undefined) {
       // The same answer again (its `ack` was lost, or was slow): it was taken, or found late, when it first
       // came. It is told the same again and is not taken a second time. A number older than all that are
@@ -439,7 +490,12 @@ export class NotchSurface {
       // Before anybody hears of it: whoever does may throw, and the page would send it again for nothing.
       this.tell(sidecarId, { type: 'ack', n: message.n, took });
     }
-    if (!line || !took) return;
+    if (!line || !took) {
+      // The page gave a second answer to a line that holds the first: it is told the line as it stands,
+      // answered, so that it shows what was taken and not what it nodded at.
+      if (line && line.id === message.id && this.pages.has(sidecarId)) this.push({ type: 'patch', line: this.lineNow() }, sidecarId);
+      return;
+    }
     if (message.act === 'word' && message.word !== undefined && message.value !== undefined) {
       setWord(line, message.word, message.value);
       // A hand was on it a moment ago: it is given its time again, a line's time, as the page used to give it.
@@ -449,19 +505,29 @@ export class NotchSurface {
         this.armFold();
       }
     }
-    const rules = notchRules(line);
+    const after = notchRules(line);
     // The page holds a line that came by itself shut for its first moment. It says how long after drawing
     // the line the answer was given, and one that came sooner than the line allows is said here. It is
     // still taken: whether it should be is the owner's to decide (docs/notch/fixes/07-page-renderer.md).
-    if ((message.act === 'yes' || message.act === 'pick') && message.since !== undefined && message.since < rules.gate.esc && this.early++ < 5) {
-      this.log(`[notch] a ${message.act} came ${message.since} ms after its line was drawn, sooner than the ${rules.gate.esc} ms the line allows`);
+    if ((message.act === 'yes' || message.act === 'pick') && message.since !== undefined && message.since < after.gate.esc && this.early++ < 5) {
+      this.log(`[notch] a ${message.act} came ${message.since} ms after its line was drawn, sooner than the ${after.gate.esc} ms the line allows`);
     }
-    // It was answered and waits, dimmed, for what the brain says next: it does not fold meanwhile.
-    if (rules.after[message.act] === 'hold' && this.fold?.id === line.id) this.endFold();
+    // It was answered and waits, dimmed, for what the brain says next: it does not fold meanwhile. Not a
+    // letter's done that does not vouch for the letter: it decides nothing, and a page that saw the letter
+    // may still say so.
+    const unvouched = line.kind === 'send' && !!line.blocks?.length && message.act === 'done' && message.seen !== true;
+    if (after.after[message.act] === 'hold' && !unvouched) {
+      // The first answer that holds the line stands: whatever else would settle it is late (above).
+      this.held = message;
+      if (this.fold?.id === line.id) this.endFold();
+      // Every page had put the offer away with the fold: it comes back, answered, until the brain says what next.
+      if (revived) this.push({ type: 'patch', line: this.lineNow() });
+    }
     // After these the page that answered has gone back to rest by itself. After any other the line stays
     // until the brain says what next.
-    if (rules.after[message.act] === 'rest') {
+    if (after.after[message.act] === 'rest') {
       this.line = null;
+      this.held = null;
       this.endFold();
       this.hands.clear();
       // The page that answered is at rest. Any other still shows the line, and would for ever: nothing more
@@ -508,10 +574,23 @@ export class NotchSurface {
       return;
     }
     this.line = null;
+    this.held = null;
     this.fold = null;
     this.hands.clear();
     this.push({ type: 'patch', line: null });
-    for (const listener of this.answerListeners) listener({ type: 'answer', id: fold.id, act: 'fold' });
+    // Whoever waits hears of it in a moment: a yes given in the last of its time may still be on its way.
+    const folded = { line, ms: fold.ms, timer: null as unknown };
+    this.folded = folded;
+    folded.timer = this.timers.setTimeout(() => { if (this.folded === folded) this.foldedNow(); }, NOTCH_FOLD_GRACE_MS);
+  }
+
+  /** The offer that was folded is heard of as folded now, if it has not been yet. */
+  private foldedNow(): void {
+    const folded = this.folded;
+    if (!folded) return;
+    this.folded = null;
+    this.timers?.clearTimeout(folded.timer);
+    for (const listener of this.answerListeners) listener({ type: 'answer', id: folded.line.id, act: 'fold' });
   }
 
   /** Everything the notch is, as a page is told it at once. */
@@ -539,10 +618,12 @@ export class NotchSurface {
   private lineNow(): NotchLine | null {
     const line = this.line;
     if (!line) return null;
-    if (line.kind !== 'say' && line.kind !== 'send') return notchRuled(line);
+    // A line that holds an answer says so: a page that comes up draws it answered (a fuse that was done shows no undo).
+    const held = this.held ? { held: true } : {};
+    if (line.kind !== 'say' && line.kind !== 'send') return { ...notchRuled(line), ...held };
     const total = Math.max(0, line.ms);
     const left = Math.max(0, Math.min(total, Math.round(total - (this.now() - this.shownAt))));
-    return notchRuled({ ...line, left });
+    return { ...notchRuled({ ...line, left }), ...held };
   }
 
   /** What is said to one page outside the row of numbered messages: that an answer came, or that the page is refused. */
