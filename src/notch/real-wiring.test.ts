@@ -19,13 +19,14 @@
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { ApprovalManager } from '../authority/approval.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
+import type { HumanRequest } from '../workflows/runtime/human-input-contract.ts';
 import { PeerLink } from '../peers/link.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
 import { NOTCH_AGENT_TICK_MS, NotchAgentStore } from './agents.ts';
 import { NOTCH_APPROVAL_LOOK_MS } from './approvals.ts';
 import { NotchCallStore } from './call.ts';
 import { MAIL_GLANCE_MS } from './mail/attach.ts';
-import { NOTCH_FAILURE_LOOK_MS } from './news.ts';
+import { NOTCH_FAILURE_LOOK_MS, type NotchNews, type NotchOpenFailure } from './news.ts';
 import { NOTCH_PEOPLE_TICK_MS } from './people.ts';
 import type { NotchBlock, NotchLine } from './protocol.ts';
 import { NOTCH_QUESTION_LOOK_MS } from './questions.ts';
@@ -80,6 +81,8 @@ interface Given {
   ticking?: boolean;
   /** Called when an interval is cleared, and when a part is told to stop. */
   log?: (line: string) => void;
+  /** What is already so when the notch is made. */
+  before?: (state: { questions: HumanRequest[]; failures: NotchOpenFailure[] }) => void;
 }
 
 /** A notch with every part given, each on a stand-in for what the product hands it. */
@@ -93,7 +96,11 @@ function everything(given: Given = {}) {
   // The notch's own clock never runs here: a line stays until it is answered.
   const clock = { setTimeout: (_fn: () => void, _ms: number) => ({}), clearTimeout: (_handle: unknown) => {} };
   const db = getDb();
-  const state = { paused: false, pauseAsked: 0, emergencyHeard: 0, promisesHeard: 0, opened: [] as (string | null)[], pages: [] as string[], flows: new Map<string, boolean>(), pausedFlows: [] as string[] };
+  const state = {
+    paused: false, pauseAsked: 0, opened: [] as (string | null)[], pages: [] as string[], flows: new Map<string, boolean>(), pausedFlows: [] as string[],
+    ranFlows: [] as string[], failures: [] as NotchOpenFailure[], questions: [] as HumanRequest[], forgotten: [] as string[],
+    tasks: { asked: 0, there: false, hear: null as NotchNews['taskEnded'] | null },
+  };
   const emergencyListeners = new Set<(state: 'normal' | 'paused') => void>();
   const promiseListeners = new Set<unknown>();
   const executed: unknown[] = [];
@@ -136,9 +143,9 @@ function everything(given: Given = {}) {
       create: () => ({ id: 'p', when_due: null }),
       kept: () => kept,
     },
-    questions: { pending: () => [], get: () => null, answer: () => ({ status: 200 }) } as never,
-    openFailures: () => [],
-    onTaskEnded: () => false,
+    questions: { pending: () => state.questions, get: (id: string) => state.questions.find((one) => one.id === id) ?? null, answer: () => ({ status: 200 }) } as never,
+    openFailures: () => state.failures,
+    onTaskEnded: (listener) => { state.tasks.asked++; if (state.tasks.there) state.tasks.hear = listener; return state.tasks.there; },
     asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null, look: { port: { onEvent() {} } as never } },
     where: { port: { onEvent() {}, dispatchRPC: async () => ({}) } },
     mail: { db, tab: () => null, think: async () => '', noClock } as never,
@@ -146,7 +153,8 @@ function everything(given: Given = {}) {
     agents: {
       db, noClock,
       workflows: {
-        build: async () => ({ ok: false, why: 'not here' }), enable: () => ({ ok: true }), run: () => ({ ok: true }), remove: async () => true,
+        build: async () => ({ ok: false, why: 'not here' }), enable: () => ({ ok: true }), remove: async () => true,
+        run: (flowId: string) => { state.ranFlows.push(flowId); return { ok: true }; },
         pause: (flowId: string, paused: boolean) => { if (paused) state.pausedFlows.push(flowId); state.flows.set(flowId, !paused); return true; },
         look: (flowId: string) => (state.flows.has(flowId) ? { job: 'the numbers', enabled: state.flows.get(flowId)! } : null),
         runs: () => [], madeSince: () => [],
@@ -171,7 +179,7 @@ function everything(given: Given = {}) {
       },
     } as never,
     office: {
-      memory: { list: () => [{ id: 'f1', about: 'Sam', text: 'prefers calls', source: 'chat' }], forget: () => true },
+      memory: { list: () => [{ id: 'f1', about: 'Sam', text: 'prefers calls', source: 'chat' }], forget: (id) => { state.forgotten.push(id); return true; } },
       keys: { read: async () => ({ talk: ['ctrl', 'meta'], yes: ['meta', 'alt'], mac: false }), change: async () => ({ why: 'no' }) },
       voice: () => ({ by: 'Whisper', language: 'English' }),
       connections: () => [{ id: 'gmail', name: 'Gmail', state: 'on', how: 'Through your browser.' }],
@@ -194,6 +202,7 @@ function everything(given: Given = {}) {
     else if (name === 'day.around') deps.day = { ...all.day, around: undefined };
     else delete deps[name];
   }
+  given.before?.(state);
   const made = clocks(() => attachNotchReal(surface, deps as unknown as NotchRealDeps), (one) => given.log?.(`clock: ${one.ms}`));
   const real = made.out;
   live = real;
@@ -201,6 +210,7 @@ function everything(given: Given = {}) {
   const blocks = (): NotchBlock[] => { const shown = line(); return shown && 'blocks' in shown && Array.isArray(shown.blocks) ? shown.blocks as NotchBlock[] : []; };
   return {
     real, surface, state, started: made.started, db, executed, kept, link, fromPage, line, blocks,
+    resume: (): void => { (all.emergency as unknown as { resume(): void }).resume(); },
     title: (): string => text(line()?.say),
     async open(): Promise<void> { fromPage({ type: 'open' }); await wait(); },
     async answer(more: Record<string, unknown>): Promise<void> { fromPage({ type: 'answer', id: line()!.id, ...more }); await wait(); },
@@ -596,5 +606,173 @@ describe('stop, with every part given', () => {
     await w.open();
     expect(w.line()).toBeNull();
     expect(w.real.inbox.present('late', async (stage) => { await stage.say(['Late.'], 1000); })).toBe(false);
+  });
+});
+
+const question = (id: string, title: string): HumanRequest => ({
+  id, kind: 'approval', title, prompt: '', fields: [], requestKey: 'k', workflowName: 'Monthly invoices',
+  flowId: 'f', runId: 'r', created: NOON, deadline: NOON + 3_600_000, status: 'pending', answers: null, generation: 0,
+});
+
+describe('what looks by itself, put together', () => {
+  /** Every clock of that pace runs once. */
+  const tick = async (w: ReturnType<typeof everything>, ms: number): Promise<void> => { for (const one of w.started.filter((each) => each.ms === ms && !each.cleared)) one.fn(); await wait(); };
+
+  test('a question that waits when the notch is made is on it at once, and a later one at the next look', async () => {
+    const w = everything({ before: (state) => { state.questions.push(question('q1', 'Send the 30 invoices')); } });
+    await wait();
+    expect(w.title()).toBe('Send the 30 invoices?');
+    await w.answer({ act: 'no' });
+    await wait();
+    w.state.questions.splice(0, 1, question('q2', 'Pay the 4 suppliers'));
+    expect(w.title()).not.toBe('Pay the 4 suppliers?');
+    await tick(w, NOTCH_QUESTION_LOOK_MS);
+    expect(w.title()).toBe('Pay the 4 suppliers?');
+  });
+
+  test('a failure that was open when the notch was made is not news; one of an agent, later, is said as the agent\'s own with its two ways on', async () => {
+    const w = everything({ before: (state) => { state.failures.push({ key: 'old', headline: 'An old failure.' } as NotchOpenFailure); } });
+    fill(w);
+    await wait();
+    expect(w.line()).toBeNull();
+    w.state.failures.push({ key: 'k1', headline: 'Gmail needs you to sign in again.', flowId: 'flow-1', steps: ['connect', 'run_again'] } as NotchOpenFailure);
+    await tick(w, NOTCH_FAILURE_LOOK_MS);
+    // The agent is named by the part that keeps the agents.
+    expect([w.line()?.kind, w.title()]).toEqual(['offer', 'Tony stopped. Gmail needs you to sign in again.']);
+    await w.answer({ act: 'yes' });
+    // The way to a sign-in is the notch's own Connections.
+    expect([w.line()?.kind, w.title()]).toEqual(['sheet', 'Connections']);
+    await w.answer({ act: 'no' });
+    expect(w.title()).toBe('Run Tony again now?');
+    await w.answer({ act: 'yes' });
+    expect(w.state.ranFlows).toEqual(['flow-1']);
+    expect(w.title()).toBe('Tony is running again.');
+  });
+
+  test('with everything stopped, an agent that had stopped is not run again', async () => {
+    const w = everything({ without: ['office', 'day'] });
+    fill0(w);
+    w.state.failures.push({ key: 'k1', headline: 'It broke.', flowId: 'flow-1', steps: ['run_again'] } as NotchOpenFailure);
+    await tick(w, NOTCH_FAILURE_LOOK_MS);
+    expect(w.title()).toBe('Tony stopped. It broke.');
+    w.state.paused = true;
+    await w.answer({ act: 'yes' });
+    expect(w.state.ranFlows).toEqual([]);
+    expect(w.title()).toBe('Everything is stopped. Wake me first.');
+  });
+
+  test('without a pause to ask, an agent that had stopped is run again', async () => {
+    const w = everything({ without: ['office', 'day', 'emergency'] });
+    fill0(w);
+    w.state.failures.push({ key: 'k1', headline: 'It broke.', flowId: 'flow-1', steps: ['run_again'] } as NotchOpenFailure);
+    await tick(w, NOTCH_FAILURE_LOOK_MS);
+    await w.answer({ act: 'yes' });
+    expect(w.state.ranFlows).toEqual(['flow-1']);
+  });
+
+  test('the end of a task is asked for until the task manager is there, and no more after', async () => {
+    const w = everything();
+    const asking = w.started.find((one) => one.ms === 500)!;
+    asking.fn();
+    asking.fn();
+    expect([w.state.tasks.asked, asking.cleared]).toEqual([2, false]);
+    w.state.tasks.there = true;
+    asking.fn();
+    expect([w.state.tasks.asked, asking.cleared]).toEqual([3, true]);
+    // What it was given is the news: a task that ends is said.
+    w.state.tasks.hear!('complete', { id: 't1', agentName: 'Mara', task: 'the report' });
+    await wait();
+    expect(w.title()).toBe('Mara finished: the report');
+  });
+
+  test('a task manager that never comes is given up after two minutes of asking', () => {
+    const w = everything();
+    const asking = w.started.find((one) => one.ms === 500)!;
+    for (let n = 0; n < 120; n++) asking.fn();
+    expect([w.state.tasks.asked, asking.cleared]).toEqual([120, false]);
+    asking.fn();
+    expect([w.state.tasks.asked, asking.cleared]).toEqual([121, true]);
+  });
+});
+
+/** An agent on duty, and nothing else. */
+function fill0(w: ReturnType<typeof everything>): void {
+  new NotchAgentStore(w.db).add({ flowId: 'flow-1', name: 'Tony', rung: 'asks first', sentence: 'Every Monday at 9:00, send Sam the numbers.', madeAt: NOON - 60_000, rungAt: NOON - 60_000, askedAt: 0, toldRun: '' });
+  w.state.flows.set('flow-1', true);
+}
+
+describe('the back office, put together', () => {
+  test('Memory lists how a person is always written to beside what else is known, and each is forgotten where it is kept', async () => {
+    const w = everything();
+    w.real.mail!.store.setTone({ name: 'Marco Bianchi', address: 'marco@example.com' }, 'shorter', NOON);
+    await w.open();
+    await w.answer({ act: 'button', button: 'memory' });
+    const rows = (): string[] => w.blocks().filter((block) => block.kind === 'row').map((block) => { const row = block as { id?: string; lead?: string; say?: unknown; small?: string }; return `${row.id} | ${row.lead}: ${text(row.say)} | ${row.small ?? ''}`; });
+    expect(rows()).toEqual(['tone:marco@example.com | Marco Bianchi: gets short replies | you said so on the notch', 'f1 | Sam: prefers calls | chat']);
+    for (const row of ['tone:marco@example.com', 'f1']) {
+      await w.answer({ act: 'button', button: 'forget', row });
+      await w.answer({ act: 'button', button: 'sure', row });
+    }
+    expect(w.real.mail!.store.tones()).toEqual([]);
+    expect(w.state.forgotten).toEqual(['f1']);
+    expect(w.real.memory!.count()).toBe(1);
+  });
+
+  test('without the mail layer Memory is the product\'s memory alone, and a manner of writing cannot be forgotten there', async () => {
+    const w = everything({ without: ['mail'] });
+    expect(w.real.memory!.count()).toBe(1);
+    await w.open();
+    await w.answer({ act: 'ask', text: 'what do you remember' });
+    expect(w.title()).toBe('What I remember');
+  });
+
+  test('a press that names a link Home did not show: the connections open all the same, and a part that is not there opens nothing', async () => {
+    const w = everything({ without: ['office.connections'] });
+    await w.open();
+    expect(w.buttons()).not.toContain('connections: Connections');
+    await w.answer({ act: 'button', button: 'connections' });
+    expect([w.line()?.kind, w.title()]).toEqual(['sheet', 'Connections']);
+    await w.answer({ act: 'no' });
+    expect(w.line()?.kind).toBe('ask');
+    w.real.stop();
+    const none = everything({ without: ['office', 'day', 'openDashboard'] });
+    await none.open();
+    for (const button of ['memory', 'connections', 'settings', 'dashboard', 'nothing']) {
+      await none.answer({ act: 'button', button });
+      expect([button, none.line()?.kind]).toEqual([button, 'ask']);
+    }
+  });
+
+  test('a suggestion goes to the count, and says nothing by itself', async () => {
+    const w = everything();
+    expect(w.real.suggestions.toast('JARVIS: Stand up', 'You have been sitting for two hours.')).toBe(true);
+    expect(await w.real.suggestions.toastWithReceipt('JARVIS: Drink', 'Water.')).toBe('shown');
+    await wait();
+    expect(w.line()).toBeNull();
+    expect(w.surface.current().count).toBe(2);
+  });
+});
+
+describe('Esc twice, put together', () => {
+  test('the face at rest is the one the part that knows where the person is gives, and that part is told of sleep and of waking', async () => {
+    const w = everything();
+    let refreshed = 0;
+    let faces = 0;
+    const where = w.real.where!;
+    const refresh = where.refresh.bind(where);
+    const face = where.face.bind(where);
+    where.refresh = () => { refreshed++; refresh(); };
+    where.face = () => { faces++; return face(); };
+    w.fromPage({ type: 'stop' });
+    await wait();
+    expect(w.state.pauseAsked).toBe(1);
+    expect(refreshed).toBe(1);
+    expect(w.title()).toBe('Everything is stopped. Nothing runs until you wake me.');
+    const asked = faces;
+    // Woken from anywhere: the notch has the face that part gives it, and the part is told again.
+    w.resume();
+    await wait();
+    expect(faces).toBeGreaterThan(asked);
+    expect(refreshed).toBe(2);
   });
 });
