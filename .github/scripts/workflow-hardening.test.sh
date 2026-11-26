@@ -3950,7 +3950,7 @@ expect_clean "update-webview.yml: upstream code runs only inside a sealed, diges
 		'      - name: Collect the vendored tree' $'      - run: scripts/vendor-webview.sh "$VERSION"\n      - name: Collect the vendored tree' \
 		'runs a repository script on the host, outside docker run'
 	expect_caught 'a host Go toolchain back in the build job (#1255)' contained "$WORKFLOWS/update-webview.yml" \
-		'      - name: Collect the vendored tree' $'      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n      - name: Collect the vendored tree' \
+		'      - name: Collect the vendored tree' $'      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0\n      - name: Collect the vendored tree' \
 		'installs Go on the host runner'
 	expect_caught 'Go by absolute path on the host (#1255 review)' contained "$WORKFLOWS/update-webview.yml" \
 		'      - name: Collect the vendored tree' $'      - run: /usr/local/go/bin/go test ./...\n      - name: Collect the vendored tree' \
@@ -4535,8 +4535,8 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'          xcrun stapler staple "$APP"' $'          xcrun stapler staple "$APP"\n          bash -c "$X"' \
 		"sign-macos: runs shell text or sources a file ${R870}"
 	expect_caught 'setup-go in the installer signing job (#870)' narrow "$WORKFLOWS/installer-release.yml" \
-		$'      - name: Verify the installer app\n' $'      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          cache: false\n      - name: Verify the installer app\n' \
-		"sign-macos: uses actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e ${R870}"
+		$'      - name: Verify the installer app\n' $'      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0\n        with:\n          cache: false\n      - name: Verify the installer app\n' \
+		"sign-macos: uses actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 ${R870}"
 	expect_caught 'a local action in the sidecar macOS signing job (#870)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'      - name: Unpack the bundles\n' $'      - uses: ./.github/actions/bun-setup\n      - name: Unpack the bundles\n' \
 		"sign-sidecar-darwin: uses ./.github/actions/bun-setup ${R870}"
