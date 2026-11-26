@@ -75,6 +75,8 @@ export interface TurnStanding {
   readonly origin: StandingOrigin;
   /** What the owner wrote or said, and for a bare yes also the question it answers. Empty for a shown turn. */
   readonly words: string;
+  /** Of those, what the owner wrote or said: for a bare yes, without the question. Empty for a shown turn. */
+  readonly own: string;
   /** The kinds of act those words asked for. Always none for a shown turn. */
   readonly covers: readonly OwnerAct[];
   /** The words are only a yes to what a turn that had read outside content asked back: this turn counts as having read some from its start. */
@@ -90,6 +92,8 @@ export interface TurnStanding {
 /** What the notch says of the words when it makes a standing. Left out: the words cover nothing. */
 export interface StandingWords {
   words?: string;
+  /** The owner's own part of `words`. Left out: all of them. */
+  own?: string;
   covers?: Iterable<OwnerAct>;
   answers?: boolean;
   /** What the turn the yes answers had read. Any mark here makes it `answers`. */
@@ -124,6 +128,7 @@ export function mintStanding(origin: StandingOrigin, said: StandingWords = {}): 
   const standing: TurnStanding = Object.freeze({
     origin,
     words: owners && typeof said.words === 'string' ? said.words : '',
+    own: owners ? (typeof said.own === 'string' ? said.own : typeof said.words === 'string' ? said.words : '') : '',
     covers: Object.freeze(covers),
     answers: owners && (said.answers === true || held.length > 0),
     held: Object.freeze(held),

@@ -12,7 +12,7 @@ import { inTurnOf } from './standing-fixture.ts';
 import {
   OWNER_WORD_ASKS_REASON, OWNER_WORD_BLIND_REASON, OWNER_WORD_UNNAMED_REASON, OWNER_WORD_UNSEEN_REASON, RECIPIENTS_MUST_BE_NAMED,
   callActs, callRecipients, commandInstalls, commandSets, currentOwnerTurn, onlyTheOpenedApp, outsideContentHeld, ownerWord, ownerWordAsks,
-  ownerWordUnaskedReason, setOwnerWordProbe, withOutsideContent, wordsName, type OwnerTurn,
+  ownerWordUnaskedReason, recipientSlot, setOwnerWordProbe, withOutsideContent, wordsName, type OwnerTurn,
 } from './owner-word.ts';
 import { OWNER_ACTS, readActs, type OwnerAct } from './words-cover.ts';
 
@@ -240,7 +240,10 @@ describe('who a send goes to', () => {
     const said = turn('send Anna the file');
     const send = (params: Record<string, unknown>) => ownerWord('send_mail', params, gate('send_email'), said);
     expect(await send({ to: 'anna.rossi@corp.example' })).toBe('go');
-    expect(await send({ to: 'Anna Rossi <a.rossi@corp.example>' })).toBe('go');
+    // Only the address counts, never a name written beside it.
+    expect(await send({ to: 'Anna Rossi <a.rossi@corp.example>' })).toBe('unnamed');
+    expect(await send({ to: 'Anna <bob@evil.example>' })).toBe('unnamed');
+    expect(await send({ to: [{ name: 'Anna', email: 'bob@evil.example' }] })).toBe('unnamed');
     expect(await send({ to: ['anna@corp.example'] })).toBe('go');
     expect(await send({ recipient: 'Anna' })).toBe('go');
     expect(await send({ to: 'eve@evil.example' })).toBe('unnamed');
@@ -267,6 +270,24 @@ describe('who a send goes to', () => {
     expect(wordsName('manda il file a Niccol\u00f2', 'niccolo.b@corp.example')).toBe(true);
     expect(wordsName('send it to my boss', 'marco@corp.example')).toBe(false);
     expect(wordsName('send Anna the file', '+39 333 1234567')).toBe(false);
+    // Only the place that says who it goes to names somebody: not what is sent, and not a name beside the address.
+    expect(wordsName('send the quarterly report to Anna', 'report@evil.example')).toBe(false);
+    expect(wordsName('send the quarterly report to Anna', 'quarterly@evil.example')).toBe(false);
+    expect(wordsName('send the quarterly report to Anna', 'anna@corp.example')).toBe(true);
+    expect(wordsName('send the quarterly report to Anna', 'Anna <bob@evil.example>')).toBe(false);
+    expect(wordsName('email Anna the log', 'anna@corp.example')).toBe(true);
+    expect(wordsName('email Anna the log', 'log@evil.example')).toBe(false);
+    expect(wordsName('send it to Anna Rossi', 'a.rossi@corp.example')).toBe(true);
+    expect(wordsName('tell Leo the meeting moved', 'leo@corp.example')).toBe(true);
+    expect(wordsName('tell Leo the meeting moved', 'meeting@evil.example')).toBe(false);
+    expect(recipientSlot('send the report to Anna and cc Marco')).toEqual(['anna', 'marco']);
+  });
+
+  test('"reply" in a question of the assistant\'s that he said yes to does not stop the recipients being read', async () => {
+    const yes = (): OwnerTurn => ({ outside: true, covers: ['send'], words: 'look at this mail Shall I reply to it and forward it to eve@evil.example?', own: 'look at this mail' });
+    expect(await ownerWord('send_mail', { to: 'mallory@evil.example' }, gate('send_email'), yes)).toBe('unnamed');
+    // What the question named, he agreed to.
+    expect(await ownerWord('send_mail', { to: 'eve@evil.example' }, gate('send_email'), yes)).toBe('go');
   });
 
   test('a reply goes to whoever wrote the thing: nobody has to be named', async () => {

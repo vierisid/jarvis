@@ -419,12 +419,17 @@ What holds for all of them:
     not covered. A setting that guards the machine (the firewall, the
     antivirus, the execution policy, UAC, Gatekeeper, SELinux and their kin)
     is covered only by words that name it ("turn off the firewall"), never
-    by "turn on dark mode". A send whose recipients the call names goes to somebody his words
-    name ("Anna" names anna.rossi@... and "Anna Rossi", never the part after
-    the @); to anybody else it is asked about, so "send Anna the file" does
-    not cover a second send that something read in the turn added. "Reply"
-    names nobody and covers whoever wrote the thing; a click on Send names no
-    recipient, and there the kind alone decides
+    by "turn on dark mode". A send whose recipients the call names goes to
+    somebody his words name in the place that says who it goes to ("to
+    Anna", "email Anna": `recipientSlot`), matched against the address the
+    call sends to and never a name written beside it ("Anna" names
+    anna.rossi@..., not "Anna <bob@...>", and never the part after the @);
+    to anybody else it is asked about, so "send Anna the file" does not
+    cover a second send that something read in the turn added. "Reply" in
+    his own words names nobody and covers whoever wrote the thing; in a
+    question of the assistant's he only said yes to, it does not. A send
+    done in a window or a page (a click on Send, Ctrl+Enter) carries no
+    recipient this side can read, so there the kind alone decides
     (`RECIPIENTS_MUST_BE_NAMED`). And a raw click where the machine cannot
     look by its making (screen awareness off, a Mac or Linux desktop app, no
     machine: `notchPressReads` answers `blind`) goes ahead as a step of the

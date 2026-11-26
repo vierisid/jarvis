@@ -68,7 +68,7 @@ function setup(steps: [string, Record<string, unknown>][] = STEPS) {
   /** What the next turns answer, in order. After them: the plain answer. */
   const replies: string[] = [];
   /** What each turn was, as seen from inside it. */
-  const turns: { text: string; requestId: string; who: string | null; owners: boolean; note: string | undefined; outside: string[]; asked: boolean[]; covers: readonly string[] | null; words: string | null; answers: boolean | null; held: readonly string[] | null }[] = [];
+  const turns: { text: string; requestId: string; who: string | null; owners: boolean; note: string | undefined; outside: string[]; asked: boolean[]; covers: readonly string[] | null; words: string | null; answers: boolean | null; held: readonly string[] | null; own: string | null }[] = [];
   const transport = new BriefChatTransport({
     db: getDb(), send: () => {},
     runner: { ready: () => true, stream: (input) => ({ onComplete: async () => {}, stream: (async function* () {
@@ -79,7 +79,7 @@ function setup(steps: [string, Record<string, unknown>][] = STEPS) {
         asked.push(out.includes('AWAITING_APPROVAL'));
       }
       turns.push({ text: input.text, requestId: input.requestId, who: currentStanding()?.origin ?? null, owners: ownerAskedOnNotch(), note: notchTurnNote(),
-        outside: input.untrustedSources ?? [], asked, covers: currentStanding()?.covers ?? null, words: currentStanding()?.words ?? null, answers: currentStanding()?.answers ?? null, held: currentStanding()?.held ?? null });
+        outside: input.untrustedSources ?? [], asked, covers: currentStanding()?.covers ?? null, words: currentStanding()?.words ?? null, answers: currentStanding()?.answers ?? null, held: currentStanding()?.held ?? null, own: currentStanding()?.own ?? null });
       yield { type: 'text' as const, text: replies.shift() ?? 'Installs are up 12%.' };
       yield done;
     })() }) },
@@ -252,7 +252,7 @@ describe('from the notch to the place a tool call is decided', () => {
     await h.ran1();
     h.reply('continue');
     await h.ran1(2);
-    expect(h.turns[1]).toMatchObject({ text: 'continue', who: 'typed', owners: true, outside: [], answers: true, covers: [], words: 'write a poem Shall I write it in Notepad?', held: ['desktop_launch_app'] });
+    expect(h.turns[1]).toMatchObject({ text: 'continue', who: 'typed', owners: true, outside: [], answers: true, covers: [], words: 'write a poem Shall I write it in Notepad?', held: ['desktop_launch_app'], own: 'write a poem' });
     expect(h.turns[1]!.note?.startsWith(NOTCH_TURN_NOTE)).toBe(true);
     // The writing goes ahead; a command was in neither his words nor the question.
     expect(h.turns[1]!.asked).toEqual([false, false, true, true]);

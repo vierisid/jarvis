@@ -69,10 +69,13 @@
  *     covered only by words that name it (`commandSecurity`);
  *   - a send whose recipients can be read from the call must go to somebody
  *     the owner's words name: "send it to Anna" does not cover a send to
- *     somebody else in the same turn. A name is matched as a word against
- *     the address or the name the call gives; "reply" names nobody and
- *     covers whoever wrote the thing. Where the call names no recipient (a
- *     click on Send), the kind alone decides;
+ *     somebody else in the same turn. A name in the place of who it goes to
+ *     ("to Anna", "email Anna") is matched against the address the call
+ *     sends to, never a name written beside it (`wordsName`); "reply" in his
+ *     own words names nobody and covers whoever wrote the thing. Where the
+ *     call names no recipient, the kind alone decides: a send done in a
+ *     window or a page (a click on Send, Ctrl+Enter) carries no recipient
+ *     this side can read, so the rule does not reach it;
  *   - a raw click where the machine cannot look by its making (screen
  *     awareness off, a Mac or Linux desktop app, no machine) goes ahead as a
  *     step of the turn, also after an app was opened and its windows were
@@ -379,19 +382,55 @@ export function callRecipients(params: Record<string, unknown>): string[] {
 
 const plain = (text: string): string => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-/** Words of a sentence that name nobody. */
+/** Words of a sentence that name nobody: small words, and what is sent rather than who it goes to. */
 const NO_NAME = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'these', 'those', 'file', 'files', 'mail', 'email', 'message', 'send', 'forward', 'reply',
   'please', 'you', 'can', 'could', 'would', 'will', 'him', 'her', 'them', 'his', 'their', 'from', 'about', 'now', 'then', 'also', 'not', 'all', 'yes', 'shall',
   'che', 'con', 'per', 'del', 'della', 'dei', 'gli', 'una', 'uno', 'questo', 'questa', 'invia', 'manda', 'inoltra', 'rispondi', 'messaggio', 'posta', 'non',
-  'com', 'org', 'net', 'www', 'http', 'https', 'gmail', 'outlook', 'hotmail', 'yahoo', 'icloud']);
+  'com', 'org', 'net', 'www', 'http', 'https', 'gmail', 'outlook', 'hotmail', 'yahoo', 'icloud',
+  'its', 'our', 'your', 'my', 'some', 'any', 'new', 'newest', 'latest', 'last', 'first', 'report', 'reports', 'document', 'documents', 'doc', 'docs', 'pdf', 'log', 'logs',
+  'link', 'links', 'photo', 'photos', 'picture', 'pictures', 'invoice', 'invoices', 'note', 'notes', 'summary', 'deck', 'slides', 'list', 'draft', 'copy', 'text',
+  'quarterly', 'monthly', 'weekly', 'daily', 'whole', 'full', 'team', 'everyone', 'everybody', 'il', 'lo', 'la', 'le', 'un', 'una', 'mio', 'mia', 'tuo', 'tua']);
+
+/** The verbs after which the next word is who something goes to ("send Anna the file", "tell Leo", "scrivi a Marco"). */
+const SEND_VERB = /^(?:send|email|e-mail|mail|message|text|tell|forward|ping|write|dm|invia|manda|scrivi|inoltra|rispondi|avvisa|dillo|di)$/;
+/** The words before who something goes to. */
+const TO_WORD = /^(?:to|cc|bcc|a|ad|per)$/;
 
 /**
- * Whether the owner's words name this recipient. A word of theirs (three
- * letters or more, and not one that names nobody) has to be a word of the
- * recipient's name, or of the part of an address before the @, or begin one
- * ("Anna" names anna.rossi@corp.example and "Anna Rossi"). An address they
- * wrote out names itself. The part after the @ never does: "corp" in their
- * sentence does not name everybody at corp.example.
+ * The names the owner's words give in the place that says who something goes
+ * to: the word right after a verb of sending ("email Anna the log"), and up
+ * to three words after "to", "cc", "a" ("the quarterly report to Anna
+ * Rossi"). Words that name nobody are skipped after "to" and end the place
+ * after a verb ("send the report to Anna" names Anna and not "report").
+ */
+export function recipientSlot(words: string): string[] {
+  const all = plain(words).replace(/[^\s<>"'(),;]+@[^\s<>"'(),;]+/g, ' ').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const names = new Set<string>();
+  const nameLike = (word: string | undefined): word is string => word !== undefined && word.length >= 3 && !NO_NAME.has(word) && !/^\d+$/.test(word);
+  for (let i = 0; i < all.length; i += 1) {
+    if (SEND_VERB.test(all[i]!)) {
+      if (nameLike(all[i + 1])) names.add(all[i + 1]!);
+    } else if (TO_WORD.test(all[i]!)) {
+      for (let j = i + 1; j < Math.min(all.length, i + 4); j += 1) {
+        const word = all[j]!;
+        if (SEND_VERB.test(word) || TO_WORD.test(word)) break;
+        if (nameLike(word)) names.add(word);
+      }
+    }
+  }
+  return [...names];
+}
+
+/**
+ * Whether the owner's words name this recipient. Only what the call sends to
+ * is read: the address, never a name written beside it ("Anna <bob@x>" goes
+ * to bob). An address the owner wrote out names itself. Otherwise a name in
+ * the place of who it goes to (`recipientSlot`) has to be a word of the part
+ * of the address before the @, or begin one when it has four letters or more
+ * ("Anna" names anna.rossi@corp.example). The part after the @ never counts:
+ * "corp" does not name everybody at corp.example. A recipient that is no
+ * address (a chat, a channel, a person's handle) is matched the same way on
+ * its own words.
  */
 export function wordsName(words: string, recipient: string): boolean {
   const said = plain(words);
@@ -399,12 +438,9 @@ export function wordsName(words: string, recipient: string): boolean {
   if (!whole) return true;
   const address = /[^\s<>"'(),;]+@[^\s<>"'(),;]+/.exec(whole)?.[0] ?? '';
   if (address && said.includes(address)) return true;
-  // The name beside the address and the part before the @; with no address, the whole of it.
-  const named = address ? `${whole.replace(address, ' ')} ${address.slice(0, address.indexOf('@'))}` : whole;
+  const named = address ? address.slice(0, address.indexOf('@')) : whole;
   const parts = named.split(/[^\p{L}\p{N}]+/u).filter((part) => part.length >= 2);
-  // Their words with every address taken out first: the part after an @ names nobody.
-  const mine = said.replace(/[^\s<>"'(),;]+@[^\s<>"'(),;]+/g, ' ').split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3 && !NO_NAME.has(word));
-  return mine.some((word) => parts.some((part) => part === word || (word.length >= 4 && part.startsWith(word))));
+  return recipientSlot(words).some((word) => parts.some((part) => part === word || (word.length >= 4 && part.startsWith(word))));
 }
 
 /** Words that send to whoever wrote the thing in front, and so name nobody: a reply. */
@@ -553,6 +589,8 @@ export interface OwnerTurn {
   covers: readonly OwnerAct[];
   /** The words themselves, for who a send may go to. */
   words: string;
+  /** Of those, the owner's own: without a question of the assistant's that a bare yes agreed to. Left out: all of `words`. */
+  own?: string;
   /**
    * Whether some of what it read is of another kind than an app it opened
    * and that app's windows (`onlyTheOpenedApp`): what a click nobody can
@@ -578,7 +616,7 @@ export function currentOwnerTurn(own?: ReadonlySet<string>): OwnerTurn | null {
   const outside = standing.answers || unknown || read.length > 0;
   // A yes whose asking turn is not known: as a turn that read anything.
   const beyond = unknown || (standing.answers && standing.held.length === 0) || (read.length > 0 && !onlyTheOpenedApp(read));
-  return { outside, covers: standing.covers, words: standing.words, beyond };
+  return { outside, covers: standing.covers, words: standing.words, ...(standing.own !== standing.words ? { own: standing.own } : {}), beyond };
 }
 
 /**
@@ -662,7 +700,8 @@ export async function ownerWord(
       || (now.covers.includes('settings') && commandSets(command) && (!commandSecurity(command) || wordsNameSecurity(now.words))))) continue;
     return `unasked-${act}`;
   }
-  if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send') && !REPLIES.test(now.words)) {
+  // "Reply" in his own words names whoever wrote the thing; in a question of the assistant's he only said yes to, it does not.
+  if (RECIPIENTS_MUST_BE_NAMED && acts.includes('send') && !REPLIES.test(now.own ?? now.words)) {
     if (callRecipients(params).some((recipient) => !wordsName(now.words, recipient))) return 'unnamed';
   }
   return 'go';
