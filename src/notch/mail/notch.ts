@@ -27,9 +27,12 @@
  *   a time on the line  when the reply offers a time and the calendar gave
  *                       free ones, the line is the prototype's: "Anna asked
  *                       to move Thursday. Offer a slot?" with the times as
- *                       keys. A pick puts that time into the reply and sends
- *                       it, with the same fuse. The reply itself is in Home's
- *                       list for whoever wants to read it first
+ *                       keys. A pick puts that time into the reply, and the
+ *                       letter is on the notch, with the time lit, while a
+ *                       fuse of eight seconds burns on it. Then it goes: no
+ *                       second key. Esc in the fuse takes the pick back and
+ *                       the line with the times is up again. A letter too
+ *                       long for the paper is opened as a draft instead
  *   yes on the line     shows the draft, on paper, with who it goes to
  *   a lit word          the tone: the reply is written again in that manner.
  *                       The time, when the reply names one: the owner's own
@@ -82,6 +85,21 @@ import type { MailLook, MailWatch } from './watch.ts';
 
 /** How long the owner has to take a yes back before the reply goes out. */
 export const MAIL_FUSE_MS = 5000;
+/**
+ * How long the letter of a picked time is on the notch, under its fuse, before
+ * it goes. Longer than a reply's five seconds: this is the first time the
+ * owner sees the letter, and there is no second yes (the owner's decision of
+ * 26 November 2026). The owner's to tune.
+ */
+export const MAIL_SLOT_FUSE_MS = 8000;
+/**
+ * The most rows of a letter that goes on a pick. The paper on the notch must
+ * hold it without scrolling, and it has to be read while the fuse burns. A
+ * longer letter is opened as any draft is, and waits for its yes.
+ */
+export const MAIL_SLOT_PAPER_ROWS = 12;
+/** How many columns a row of the paper is counted as. Fewer than it holds: a letter is rather opened than cut off. */
+export const MAIL_SLOT_PAPER_COLUMNS = 48;
 /** How often the thread is asked whether it shows a reply that was sent, and how long between two askings. */
 export const MAIL_SENT_LOOKS = 2;
 export const MAIL_SENT_LOOK_MS = 1500;
@@ -237,6 +255,32 @@ export function mailDraftBlocks(row: MailProposalRow, note?: string): NotchBlock
   return blocks;
 }
 
+/**
+ * The letter of a picked time as it is shown under its fuse: who it goes to,
+ * and every line of it, with the time lit. Nothing on it can be changed: the
+ * time is not a word here, and there are no links. What is on this paper is
+ * what is sent.
+ */
+export function mailSlotBlocks(row: MailProposalRow): NotchBlock[] {
+  let lit = false;
+  const lines = row.draft.split('\n').filter((line) => line.trim()).map((line): NotchPart[] => {
+    const at = row.time && !lit ? line.indexOf(row.time) : -1;
+    if (at < 0) return [line];
+    lit = true;
+    return [line.slice(0, at), em(row.time!), line.slice(at + row.time!.length)].filter((part) => part !== '');
+  });
+  const to: NotchPart[] = ['To ', em(names(row.to))];
+  if (row.cc.length) to.push('  ·  Copy to ', em(names(row.cc)));
+  to.push(`  ·  Re: ${short(row.subject, 80)}`);
+  return [{ kind: 'paper', to, lines }];
+}
+
+/** How many rows of the paper a letter takes, counted on the safe side: a wide sign (an ideograph, an emoji) is two columns. */
+export function mailPaperRows(draft: string): number {
+  const columns = (line: string): number => [...line.trim()].reduce((sum, sign) => sum + (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|\p{Extended_Pictographic}/u.test(sign) ? 2 : 1), 0);
+  return draft.split('\n').filter((line) => line.trim()).reduce((rows, line) => rows + Math.max(1, Math.ceil(columns(line) / MAIL_SLOT_PAPER_COLUMNS)), 0);
+}
+
 export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMail {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));
@@ -295,9 +339,11 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
   /**
    * One reply, from its line to its end. `line: false` opens the draft at
    * once: the owner picked it from the list. Comes back `settled` when the
-   * reply no longer waits, `waits` when it does.
+   * reply no longer waits, `waits` when it does. `back`: the line with the
+   * times is up again because the owner took a pick back. Esc on it then is
+   * "not now", as the key says: the reply is kept.
    */
-  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean; steer?: string; pick?: string }): Promise<NotchItemEnd> {
+  async function play(stage: NotchStage, id: string, options: { line: boolean; keep?: 'back' | 'close'; asked?: boolean; steer?: string; pick?: string; back?: boolean }): Promise<NotchItemEnd> {
     let row = store.proposal(id);
     if (!row || row.state !== 'ready') return 'settled';
     const who = mailFirstName(row.who);
@@ -320,8 +366,10 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       await stage.say(['The thread has moved on since. This reply is no longer needed.'], 3400, { src: 'mail' });
       return 'settled';
     };
-    /** The time picked on the line, as the notch says it: the reply goes out with it, and is not opened first. */
+    /** The time picked on the line, as the notch says it: the letter goes out with it, shown under its fuse. */
     let offering: string | null = null;
+    /** A time was picked, and the letter is too long to be read under a fuse: it is opened as a draft. */
+    let long = false;
     if (options.line) {
       // A reply whose times have passed while it waited is written again, for the calendar as it is now.
       if (row.slots?.length && !openSlots(row)) {
@@ -356,7 +404,9 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
           if (slotsUp === mine) slotsUp = null;
           if (pick === GONE) return movedOn();
           if (pick.act === 'fold') return 'waits';
-          if (pick.act === 'no') return decline(id);
+          // Esc on the line that came back after a pick was taken back is not a no to the reply:
+          // whoever presses Esc twice to be sure nothing goes must not lose the reply for it.
+          if (pick.act === 'no') return options.back ? 'waits' : decline(id);
           chosen = open.find((slot) => slot.say === pick.option);
           if (pick.act !== 'pick' || !chosen) continue;
         }
@@ -374,10 +424,12 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
           row = { ...row, draft: row.draft.replace(row.time!, chosen.words), time: chosen.words, updatedAt: now() };
           store.put(row);
         }
-        offering = chosen.say;
+        // Nothing a model wrote goes out unseen. A letter that the paper holds whole is shown under
+        // the fuse. One that it does not is opened as any draft, and waits for its own yes.
+        if (mailPaperRows(row.draft) > MAIL_SLOT_PAPER_ROWS) long = true; else offering = chosen.say;
         break;
       }
-      if (!offering) {
+      if (!offering && !long) {
         const first = await unlessGone(stage.offer([...source('you', 'You'), ' have not replied to ', em(who), '. I drafted a reply.'], 'show', { src: 'mail' }));
         if (first === GONE) return movedOn();
         if (first.act === 'fold') return 'waits';
@@ -388,7 +440,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     if (!offering) {
     // The draft, on paper. Only yes and Esc answer it: a click somewhere else is neither.
     const sheet = stage.id();
-    stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row), yes: 'send', stay: true, ...(options.keep ? { no: options.keep } : {}), src: 'mail' });
+    stage.put({ id: sheet, kind: 'sheet', say: ['Reply to ', em(who)], blocks: mailDraftBlocks(row, long ? 'Too long to send on a pick: read it first. Not sent yet.' : undefined), yes: 'send', stay: true, ...(options.keep ? { no: options.keep } : {}), src: 'mail' });
     /** The owner said what the reply is to say: it is written again with that, and the paper says so while it is. */
     const retell = async (value: string): Promise<boolean> => {
       stage.surface.update(sheet, { blocks: mailDraftBlocks({ ...row!, told: value }, 'Writing it again…') });
@@ -492,12 +544,18 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // and forgot that Send had been pressed. This fails when the stage ends, and the wait with it.
     const over = stage.answer(stage.id(), []);
     over.catch(() => {});
+    /** `back`: a picked time was taken back. The line with the times comes up again, once the thread is let go. */
+    const ended = await (async (): Promise<NotchItemEnd | 'back'> => {
     try {
       // The one way a mail is sent in a thread (./send.ts): written, the fuse, Send, and the look.
       const end = await sendMail(mailbox, plan, {
         stopped: () => stopped,
         gate: async () => {
-          went = await stage.fuse(offering ? ['Offering ', em(offering), ` to ${who}…`] : ['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
+          // A picked time: the letter is on the notch for as long as the fuse burns, with the time lit.
+          // It is the first and only time the owner sees it before it goes, so the fuse is longer.
+          went = offering
+            ? await stage.fuse(['Offering ', em(offering), ` to ${who}…`], MAIL_SLOT_FUSE_MS, { src: 'mail', blocks: mailSlotBlocks(going) })
+            : await stage.fuse(['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
           return went === 'done';
         },
         // A reply is called sent when it is the last word in its thread: Gmail's word alone is not it.
@@ -516,7 +574,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
             : end.draft === 'theirs' ? ['Not sent. The draft that was in that thread is left as it was.']
               : end.draft === 'gone' ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'],
           3200, { src: 'mail' });
-        return 'waits';
+        return offering ? 'back' : 'waits';
       }
       if (end.state === 'not_sent' && end.at === 'write' && end.draft === 'theirs') {
         // Somebody's draft is in that thread: the owner's own, or an earlier
@@ -541,7 +599,11 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       if (end.state === 'not_sent' && end.at === 'gate') {
         // Taken back, or nobody was there to see it burn: nothing went out, and the draft was taken away.
         if (went === 'undo') await stage.say(end.draft === 'gone' ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
-        return 'waits';
+        // A picked time whose fuse was not seen to burn out, by a page that may still be there (it
+        // does not vouch for a letter whose end was never on screen): the fuse ran out before the
+        // owner's eyes, so it is said that nothing went.
+        else if (offering) await stage.say(end.draft === 'gone' ? ['Not sent: the letter was not seen to its end. The reply is kept.'] : ['Not sent: the letter was not seen to its end. The draft is still in your Gmail drafts.'], 4200, { mood: 'careful', src: 'mail' });
+        return offering && went === 'undo' ? 'back' : 'waits';
       }
       if (end.state === 'not_sent') {
         // The page refused before it pressed Send: nothing went.
@@ -584,6 +646,9 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     } finally {
       watch.release(id);
     }
+    })();
+    // Esc took the pick back, and nothing else: the owner is where they were, on the line with the times.
+    return ended === 'back' ? play(stage, id, { line: true, back: true, ...(options.asked ? { asked: true } : {}) }) : ended;
   }
 
   /**

@@ -717,6 +717,9 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     waits again. A fuse nobody saw burn out sends nothing. Esc before that
     is a no on a reply that was offered: on its line, and on the draft that
     line led to, the reply is turned down and does not come back (21). A
+    reply that offers a time has one pick in the place of the two yeses,
+    and since 26 November 2026 its letter is on paper too, for as long as
+    its fuse burns (199): no letter goes that was not on the notch first. A
     draft the owner opened themselves, from the list or from Home's row, is
     closed by Esc and kept, and the key says so: the sheet's `no` word is
     "back" or "close" there. Found on the owner's first evening with it (15
@@ -760,6 +763,14 @@ browser, `notch.ts` is the line, and `attach.ts` puts them together.
     that. A send the page refused before pressing anything sent nothing,
     and is said as that. A draft that could not be taken out of a thread is
     said, or written in the chase's log.
+    A reply, a picked time, a chase's mail and the follow-up of a call are
+    written and sent in a thread by one piece of code since 26 November
+    2026 (`sendMail` in `src/notch/mail/send.ts`): the draft, the fuse,
+    Send, the look. What differs is said by who calls it: whether Gmail's
+    word is enough, and whether what did not go stays in the drafts. And a
+    notch that is taken between Send and the second look at the thread
+    still writes down that the mail may have gone. It had forgotten it,
+    and kept the browser tab to itself until the brain was started again.
 63. **One reply per thread, asked again before it is shown.** A newer
     message in a thread overtakes the reply to the older one. Before a reply
     speaks up by itself the mailbox is asked whether it is still an answer to
@@ -2591,8 +2602,9 @@ letter. They are kept with the reply. On the notch such a reply has the
 prototype's line in the place of "You have not replied to Anna. I drafted
 a reply.", with the times as keys. A pick puts that time into the letter
 and sends it the way any reply is sent: into the thread as a draft, the
-fuse, and out. "Offering Friday at 10:00 to Anna…", then "Offered Friday
-at 10:00 to Anna."
+fuse, and out. While the fuse burns the letter is on the notch (199):
+"Offering Friday at 10:00 to Anna…" with the paper under it, then "Offered
+Friday at 10:00 to Anna."
 
 196. **Which times are free is read off the calendar by rule, never by a
     model.** Monday to Friday, 9:00 to 18:00 in the owner's time zone, half
@@ -2608,11 +2620,39 @@ at 10:00 to Anna."
 198. **The keys are the notch's words, the letter keeps its own.** The key
     says "Tuesday at 10:00", made from the instant by code. What goes into
     an Italian letter is the Italian the model wrote for that instant.
-199. **A pick is the yes.** The reply goes out with the picked time and is
-    not opened first, as in the prototype. The fuse is the same five
-    seconds, and Esc inside it takes the offer back and leaves no draft.
-    Whoever wants to read the letter first finds it in Home's row, where
-    the time is a word with the free times as its choices.
+199. **A pick is the yes, and the letter is seen before it goes.** Decided
+    by the owner on 26 November 2026. A pick puts the time into the letter,
+    and the letter is on the notch, on paper, with who it goes to and the
+    picked time lit, while a fuse of eight seconds burns on it
+    (`MAIL_SLOT_FUSE_MS`, the owner's to tune). When the fuse was seen to
+    burn out it goes: no second key, as in the prototype. Esc inside it
+    takes the pick back and nothing else: nothing is sent, no draft is left
+    in Gmail, and the line with the times is up again. Esc on the line that
+    came back is "not now", and the reply is kept: whoever presses Esc
+    twice to be sure nothing goes has not turned a reply down. On the line
+    as it first comes, Esc is a no (202).
+    It had gone "not opened first": five seconds on the words "Offering
+    Friday at 10:00 to Anna…", and a letter a model had written, from a
+    mail anybody can send, went out in the owner's name with nobody having
+    read it. That was against rules 61 and 116, which this restores. The
+    fuse is longer than a reply's five seconds because it is the only time
+    the letter is seen. Nothing on that paper can be changed or pressed,
+    and a click somewhere else is not an undo: the owner goes on working
+    while it burns.
+    A fuse nobody saw burn out sends nothing (22). The page does not say
+    it burnt out when the end of the letter was never on screen, and then
+    the line says that nothing went. A letter of more than
+    `MAIL_SLOT_PAPER_ROWS` rows is not read in eight seconds and may not
+    fit the paper: the pick opens it as a draft, with the time in it, and
+    it waits for its own yes (61). Whoever wants to read a letter before
+    picking finds it in Home's row, where the time is a word with the free
+    times as its choices. It is called sent as any reply is (62), and one
+    that may have gone is looked for before a second yes sends anything.
+    The mail the model reads is read without what its sender hid from the
+    eye (`unseen` in `page/threads.js`: an element that says of itself
+    that it is not shown, has no size, or is see-through). That is a first
+    fence and not the wall: white words on white, and what a style sheet
+    hides, are still read.
 200. **The calendar is asked again at the pick.** A reply can wait for
     hours. Before the letter is written into the thread the hours round
     the picked time are read again, for at most `MAIL_SLOT_ASK_MS`. A time
@@ -2629,6 +2669,11 @@ What is not done, or not proven:
 - **No real mail has gone through it.** The rule, the model's part and the
   line are tested with stand-ins. Whether the real model words three times
   well, in every language, is not known.
+- **The letter under its fuse has not been seen on a real notch.** The page
+  draws it in tests that have no layout. Whether twelve rows are read in
+  eight seconds, whether they fit the paper on a small screen or under a
+  camera housing, and how the fuse looks round a sheet, are the owner's to
+  see.
 - **The working day is fixed**: 9:00 to 18:00, Monday to Friday, half an
   hour. There is no setting for it, and a meeting's own length is not read
   from the mail.
@@ -3507,6 +3552,13 @@ time it says hello again 20 times at the most, never closer together than
 it asks no more, and is still told every change. The brain checks its own
 messages with the same reader before it sends them and logs one the page
 will drop.
+
+A `send` can carry `blocks`: what is going out, on paper under the sentence
+for as long as the fuse burns (the letter of a picked time, rule 199). They
+are read as strictly as a sheet's: a `send` whose blocks cannot be read is
+dropped whole, and nothing burns. The page says such a fuse ran out only
+when the end of what it shows has been on screen. Only Esc is an undo: a
+click away from it answers nothing.
 
 A `say` and a `send` in a `state` carry `left`: how much of their `ms` is
 still to come, by the brain's clock. A page that comes up in the middle of a

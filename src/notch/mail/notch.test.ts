@@ -5,10 +5,10 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { NotchInbox } from '../inbox.ts';
-import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchToPage } from '../protocol.ts';
+import { NOTCH_FUSE_SEEN_MS, parseNotchToPage, type NotchAnswerAct, type NotchBlock, type NotchLine, type NotchPart, type NotchToPage } from '../protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface, type NotchSurfacePort } from '../surface.ts';
 import { MAIL_WHY_DRAFT_THERE, type MailReplyPlan, type MailReplySession, type MailStep, type Mailbox } from './mailbox.ts';
-import { MAIL_FUSE_MS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailSteer, mailToneFacts } from './notch.ts';
+import { MAIL_FUSE_MS, MAIL_SLOT_FUSE_MS, MAIL_SLOT_PAPER_COLUMNS, MAIL_SLOT_PAPER_ROWS, MAIL_STEER_KEYS_MS, MAIL_STEER_SAID_MS, attachNotchMail, mailDraftBlocks, mailPaperRows, mailSlotBlocks, mailSteer, mailToneFacts } from './notch.ts';
 import type { MailCalendarEvent } from './proposer.ts';
 import { MailStore, mailProposalId, type MailProposalRow } from './store.ts';
 import { mailPerson } from './thread.ts';
@@ -55,11 +55,15 @@ function harness(rows: MailProposalRow[], options: {
   calendar?: (from: number, to: number) => Promise<MailCalendarEvent[] | null>;
   /** What writing a reply again for the calendar as it is now gives. */
   redraftNow?: (before: MailProposalRow) => MailProposalRow | null;
+  /** The replies as a brain before this one left them: the same database, after a restart. */
+  db?: Database;
 } = {}) {
   let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
+  /** What each desktop app was told, in order. */
+  const told: { to: string; message: NotchToPage }[] = [];
   const port: NotchSurfacePort = {
-    dispatchRPC(_sidecarId, _method, params) { pushed.push((params as { message: NotchToPage }).message); return Promise.resolve({}); },
+    dispatchRPC(sidecarId, _method, params) { const message = (params as { message: NotchToPage }).message; pushed.push(message); told.push({ to: sidecarId, message }); return Promise.resolve({}); },
     onEvent(listener) { onEvent = listener; },
     onSidecarDisconnected() {},
   };
@@ -69,11 +73,12 @@ function harness(rows: MailProposalRow[], options: {
     setTimeout: (fn: () => void, ms: number) => { const timer = { fn, at: now + ms }; timers.push(timer); return timer; },
     clearTimeout: (handle: unknown) => { const at = timers.indexOf(handle as { fn: () => void; at: number }); if (at >= 0) timers.splice(at, 1); },
   };
-  const surface = new NotchSurface(port, () => {});
-  const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
+  const surface = new NotchSurface(port, () => {}, () => now);
+  const fromPage = (message: unknown, from = 'pc'): void => onEvent(from, { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   fromPage({ type: 'hello', v: 1 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
-  const store = new MailStore(new Database(':memory:'));
+  const db = options.db ?? new Database(':memory:');
+  const store = new MailStore(db);
   for (const entry of rows) store.put(entry);
 
   const did: string[] = [];
@@ -138,7 +143,9 @@ function harness(rows: MailProposalRow[], options: {
   });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    mail, store, inbox, did, looked, plans, redrafts, held, line, surface, asks,
+    mail, store, inbox, did, looked, plans, redrafts, held, line, surface, asks, db, told,
+    /** Something a desktop app says: `from` is which one. */
+    async page(from: string, message: Record<string, unknown>): Promise<void> { fromPage(message, from); await settle(); },
     looks: () => looks,
     /** The time, as the mail layer reads it. */
     at: (): number => AT + 10_000 + now,
@@ -620,7 +627,7 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     await h.answer('pick', { option: 'Tuesday at 10:00' });
     expect(h.plans).toEqual([{ thread: T1, to: ['leo@lumen.example'], cc: ['anna@lumen.example'], text: 'Hi Leo,\nTuesday at 10:00 would suit me.\nSam' }]);
     expect(h.did).toEqual(['write']);
-    expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_FUSE_MS });
+    expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_SLOT_FUSE_MS });
     expect(h.said()).toBe('Offering Tuesday at 10:00 to Leo…');
     await h.answer('done');
     expect(h.did).toEqual(['write', 'send', 'sent?']);
@@ -669,14 +676,411 @@ describe('a reply that offers a time, with free times from the calendar', () => 
     expect(text((left.mail.homeRow() as { say: NotchPart[] }).say)).toBe('Reply to Leo is drafted');
   });
 
-  test('Esc while the fuse burns takes the offer back: nothing is sent and no draft is left', async () => {
-    const h = harness([offers()]);
-    await h.arrive();
-    await h.answer('pick', { option: 'Tuesday at 10:00' });
-    await h.answer('undo');
-    expect(h.did).toEqual(['write', 'discard']);
-    expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
-    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  // The owner's decision of 26 November 2026: a picked time is no longer sent unseen. The letter a
+  // model wrote is on the notch, with the time lit, while a fuse of eight seconds burns on it.
+  describe('the letter of a picked time is shown under its fuse', () => {
+    const LETTER = 'Hi Leo,\nTuesday at 10:00 would suit me.\nSam';
+    const ID = row().id;
+    const picked = async (options: Parameters<typeof harness>[1] = {}, extra: Partial<MailProposalRow> = {}) => {
+      const h = harness([offers(extra)], options);
+      await h.arrive();
+      await h.answer('pick', { option: 'Tuesday at 10:00' });
+      return h;
+    };
+    const sends = (h: ReturnType<typeof harness>): number => h.did.filter((step) => step === 'send').length;
+    const paperOf = (shown: NotchLine | null): Extract<NotchBlock, { kind: 'paper' }> | undefined =>
+      (shown?.kind === 'send' ? shown.blocks : undefined)?.find((block): block is Extract<NotchBlock, { kind: 'paper' }> => block.kind === 'paper');
+
+    test('whole, with who it goes to and the picked time lit; nothing is sent while it burns, and no key is asked for', async () => {
+      const h = await picked();
+      const shown = h.line();
+      expect(shown).toMatchObject({ kind: 'send', ms: MAIL_SLOT_FUSE_MS, src: 'mail' });
+      expect(MAIL_SLOT_FUSE_MS).toBe(8000);
+      expect(h.said()).toBe('Offering Tuesday at 10:00 to Leo…');
+      const paper = paperOf(shown)!;
+      expect(text(paper.to)).toBe('To Leo Bianchi  ·  Copy to Anna Conti  ·  Re: Deck for Thursday?');
+      expect(paper.lines).toEqual([['Hi Leo,'], [{ em: 'Tuesday at 10:00' }, ' would suit me.'], ['Sam']]);
+      // What is on the paper is what is in the thread, line for line.
+      expect(paper.lines.map(text).join('\n')).toBe(h.plans[0]!.text);
+      expect(h.plans[0]!.text).toBe(LETTER);
+      // Nothing on it can be changed or pressed: it is read, or taken back.
+      expect(JSON.stringify(shown)).not.toContain('"word"');
+      expect((shown as { blocks: NotchBlock[] }).blocks.every((block) => block.kind === 'paper')).toBe(true);
+      // And it is a line the page can read: one it could not would be dropped there, and burn nothing.
+      expect(parseNotchToPage({ type: 'show', line: shown })).not.toBeNull();
+      // It is in the thread as a draft and no further, for the whole of the fuse.
+      expect(h.did).toEqual(['write']);
+      await h.advance(MAIL_SLOT_FUSE_MS - 1);
+      expect(h.did).toEqual(['write']);
+      expect(h.store.proposal(ID)!.state).toBe('ready');
+      // The fuse ran out before somebody's eyes: it goes, with no further key.
+      await h.answer('done');
+      expect(h.did).toEqual(['write', 'send', 'sent?']);
+      expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+      expect(h.store.proposal(ID)!.state).toBe('sent');
+    });
+
+    test('the time is lit once, where the letter names it, and never in who it goes to', () => {
+      const blocks = mailSlotBlocks(offers({ draft: 'Monday at 15:00 works.\n\nSee you then,\nSam', subject: 'Monday at 15:00?', cc: [] }));
+      expect(blocks).toEqual([{ kind: 'paper', to: ['To ', { em: 'Leo Bianchi' }, '  ·  Re: Monday at 15:00?'], lines: [[{ em: 'Monday at 15:00' }, ' works.'], ['See you then,'], ['Sam']] }]);
+      // A reply with no time has nothing lit, and is still shown whole.
+      expect(mailSlotBlocks(row({ time: null, draft: 'Yes.\nSam' }))[0]).toMatchObject({ lines: [['Yes.'], ['Sam']] });
+    });
+
+    test('a time picked by voice is shown the same way', async () => {
+      const h = harness([offers()]);
+      await h.arrive();
+      const keys = h.at();
+      h.inbox.add({ id: 'talk', subject: 'talk', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Listening'], play: async (stage) => { await stage.offer(['Listening'], 'ok'); return 'settled'; } });
+      await settle();
+      const route = h.mail.route('Tuesday at ten works', { source: 'spoken', at: keys })!;
+      await h.answer('yes');
+      route.run();
+      await settle();
+      expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_SLOT_FUSE_MS });
+      expect(paperOf(h.line())!.lines[1]).toEqual([{ em: 'Tuesday at 10:00' }, ' would suit me.']);
+      expect(h.did).toEqual(['write']);
+    });
+
+    describe('Esc', () => {
+      test('at any moment of the fuse: nothing is sent, no draft is left, and the line with the times is up again', async () => {
+        for (const at of [0, 3000, MAIL_SLOT_FUSE_MS - 1]) {
+          const h = await picked();
+          await h.advance(at);
+          await h.answer('undo');
+          expect(h.did).toEqual(['write', 'discard']);
+          expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+          await h.answer('done');
+          // Where the owner was: the same question, with the same times.
+          expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+          expect(keys(h)).toEqual(['Monday at 15:00', 'Tuesday at 10:00', 'Wednesday at 9:30']);
+          expect(h.store.proposal(ID)!.state).toBe('ready');
+          // The thread was let go before the line came back: the watcher is not held off while it waits.
+          expect(h.held).toEqual([`hold ${ID}`, `release ${ID}`]);
+          expect(sends(h)).toBe(0);
+        }
+      });
+
+      test('on the line that came back it is "not now": pressing Esc twice to be sure does not turn the reply down', async () => {
+        const h = await picked();
+        await h.answer('undo');
+        await h.answer('done');
+        await h.answer('no');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+        expect(h.line()).toBeNull();
+        expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('Reply to Leo is drafted');
+        expect(h.did).toEqual(['write', 'discard']);
+      });
+
+      test('on the line as it first comes it is still a no', async () => {
+        const h = harness([offers()]);
+        await h.arrive();
+        await h.answer('no');
+        expect(h.store.proposal(ID)!.state).toBe('declined');
+      });
+
+      test('from the line that came back another time can be picked, and that is the letter that is shown and sent', async () => {
+        const h = await picked();
+        await h.answer('undo');
+        await h.answer('done');
+        await h.answer('pick', { option: 'Wednesday at 9:30' });
+        expect(paperOf(h.line())!.lines[1]).toEqual([{ em: 'Wednesday at 9:30' }, ' would suit me.']);
+        await h.answer('done');
+        expect(h.plans.map((plan) => plan.text)).toEqual([LETTER, 'Hi Leo,\nWednesday at 9:30 would suit me.\nSam']);
+        expect(h.did).toEqual(['write', 'discard', 'write', 'send', 'sent?']);
+        expect(h.said()).toBe('Offered Wednesday at 9:30 to Leo.');
+      });
+
+      test('while it is still being put in the thread: nothing is sent, what was written is taken away, and the line is up again', async () => {
+        let written: () => void = () => {};
+        const h = await picked({ writeWhen: new Promise<void>((resolve) => { written = resolve; }) });
+        expect(h.said()).toBe('Putting it in the thread…');
+        await h.answer('stop');
+        written();
+        await settle();
+        expect(h.did).toEqual(['write', 'discard']);
+        expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+        await h.answer('done');
+        expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+      });
+
+      test('when the draft cannot be taken out of Gmail again, that is what is said', async () => {
+        const h = await picked({ steps: { discard: { ok: false, why: 'no bin' } } });
+        await h.answer('undo');
+        expect(h.said()).toBe('Not sent. The draft is still in your Gmail drafts.');
+        expect(sends(h)).toBe(0);
+      });
+
+      test('after the fuse ran out it is too late, and the letter goes once', async () => {
+        const h = await picked();
+        const fuse = h.line()!.id;
+        await h.answer('done');
+        // An Esc that was on its way from another desktop when it ran out here.
+        await h.page('pc', { type: 'answer', id: fuse, act: 'undo' });
+        expect(sends(h)).toBe(1);
+        expect(h.did).not.toContain('discard');
+        expect(h.store.proposal(ID)!.state).toBe('sent');
+      });
+    });
+
+    test('a fuse nobody saw burn out sends nothing, leaves no draft, and it is said that nothing went', async () => {
+      const h = await picked();
+      // It is waited for a little past its time, and not given up before.
+      await h.advance(MAIL_SLOT_FUSE_MS + 1499);
+      expect(h.did).toEqual(['write']);
+      expect(h.line()).toMatchObject({ kind: 'send' });
+      await h.advance(1);
+      expect(h.did).toEqual(['write', 'discard']);
+      // The page may be there and not have vouched (the end of the letter was never on screen): the
+      // fuse then ran out before the owner's eyes, and they are told what that meant.
+      expect(h.said()).toBe('Not sent: the letter was not seen to its end. The reply is kept.');
+      expect(h.store.proposal(ID)!.state).toBe('ready');
+      await h.answer('done');
+      // Nobody took it back: the line does not come up again by itself.
+      expect(h.line()).toBeNull();
+      expect(sends(h)).toBe(0);
+    });
+
+    test('the notch is stopped in the middle of the fuse: the fuse is cut, nothing is sent, and no draft is left', async () => {
+      const h = await picked();
+      const fuse = h.line()!.id;
+      await h.advance(4000);
+      h.inbox.stop();
+      await settle();
+      expect(h.did).toEqual(['write', 'discard']);
+      expect(h.store.proposal(ID)!.state).toBe('ready');
+      expect(h.held).toEqual([`hold ${ID}`, `release ${ID}`]);
+      // A page that had not heard of it and says the fuse ran out changes nothing.
+      await h.page('pc', { type: 'answer', id: fuse, act: 'done' });
+      await h.advance(MAIL_SLOT_FUSE_MS * 2);
+      expect(sends(h)).toBe(0);
+    });
+
+    test('something urgent does not take the notch from a burning letter, and so cannot drop the pick without a word', async () => {
+      const h = await picked();
+      h.inbox.add({ id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Now'], play: async (stage) => { await stage.offer(['Now'], 'ok'); return 'settled'; } });
+      await settle();
+      expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_SLOT_FUSE_MS });
+      await h.answer('done');
+      expect(sends(h)).toBe(1);
+    });
+
+    test('the brain goes down in the middle of the fuse: nothing was sent, and the one that comes up sends nothing over the draft that was left', async () => {
+      const before = await picked();
+      await before.advance(4000);
+      expect(before.did).toEqual(['write']);
+      // No more of that brain runs. The next one has the same replies, and Gmail still holds the draft.
+      const after = harness([], { db: before.db, steps: { write: { ok: false, why: MAIL_WHY_DRAFT_THERE } } });
+      expect(after.store.proposal(ID)).toMatchObject({ state: 'ready', time: 'Tuesday at 10:00', draft: LETTER });
+      await after.arrive();
+      // A fuse is not carried over a restart: the question is asked again, and nothing is taken as said.
+      expect(after.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+      await after.advance(MAIL_SLOT_FUSE_MS * 2);
+      expect(after.did).toEqual([]);
+      await after.answer('pick', { option: 'Tuesday at 10:00' });
+      expect(after.did).toEqual(['write']);
+      expect(after.said()).toBe('There is a draft in that thread already. I left it alone, and nothing was sent.');
+      expect(sends(before) + sends(after)).toBe(0);
+    });
+
+    describe('with two desktops', () => {
+      const two = async () => {
+        const h = harness([offers()]);
+        await h.page('mac', { type: 'hello', v: 1 });
+        await h.arrive();
+        await h.answer('pick', { option: 'Tuesday at 10:00' });
+        return h;
+      };
+
+      test('both are shown the letter, from its start', async () => {
+        const h = await two();
+        const fuse = h.line()!.id;
+        const shown = h.told.filter((entry) => entry.message.type === 'show' && entry.message.line.id === fuse);
+        expect(shown.map((entry) => entry.to).sort()).toEqual(['mac', 'pc']);
+        for (const entry of shown) expect(entry.message).toMatchObject({ line: { kind: 'send', ms: MAIL_SLOT_FUSE_MS, blocks: [{ kind: 'paper' }] } });
+      });
+
+      test('Esc on one of them takes it back, whatever the other says afterwards', async () => {
+        const h = await two();
+        const fuse = h.line()!.id;
+        await h.page('mac', { type: 'answer', id: fuse, act: 'undo' });
+        await h.page('pc', { type: 'answer', id: fuse, act: 'done' });
+        expect(h.did).toEqual(['write', 'discard']);
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+        await h.answer('done');
+        expect(h.said()).toBe('Leo asked to move Thursday. Offer a slot?');
+        expect(sends(h)).toBe(0);
+      });
+
+      test('seen to burn out on one, it goes once: the other saying so too does not send it again', async () => {
+        const h = await two();
+        const fuse = h.line()!.id;
+        await h.page('pc', { type: 'answer', id: fuse, act: 'done' });
+        await h.page('mac', { type: 'answer', id: fuse, act: 'done' });
+        expect(sends(h)).toBe(1);
+        expect(h.plans).toHaveLength(1);
+      });
+    });
+
+    describe('a desktop that comes up in the middle of the fuse', () => {
+      const stateTo = (h: ReturnType<typeof harness>, to: string) => h.told.filter((entry) => entry.to === to && entry.message.type === 'state').at(-1)!.message as Extract<NotchToPage, { type: 'state' }>;
+
+      test('is told the letter and how much of the fuse is left, and the fuse is not started again', async () => {
+        const h = await picked();
+        const fuse = h.line()!.id;
+        await h.advance(3000);
+        await h.page('pc', { type: 'hello', v: 1 });
+        const line = stateTo(h, 'pc').line!;
+        expect(line).toMatchObject({ id: fuse, kind: 'send', ms: MAIL_SLOT_FUSE_MS, left: 5000 });
+        expect(paperOf(line)!.lines[1]).toEqual([{ em: 'Tuesday at 10:00' }, ' would suit me.']);
+        expect(parseNotchToPage({ type: 'state', line, count: 0 })).not.toBeNull();
+        // Nothing went for the hello, and the same fuse still decides.
+        expect(h.did).toEqual(['write']);
+        await h.answer('done');
+        expect(sends(h)).toBe(1);
+      });
+
+      test('with less left than anybody can read it in, the page does not vouch for it, and nothing is sent', async () => {
+        const h = await picked();
+        await h.advance(MAIL_SLOT_FUSE_MS - NOTCH_FUSE_SEEN_MS + 1);
+        await h.page('mac', { type: 'hello', v: 1 });
+        const line = stateTo(h, 'mac').line!;
+        expect(line.kind === 'send' ? line.left : undefined).toBe(NOTCH_FUSE_SEEN_MS - 1);
+        // Such a page says nothing when the time is up (ui/src/notch/surface/safety.test.ts). Nobody else does either.
+        await h.advance(NOTCH_FUSE_SEEN_MS + 1500);
+        expect(h.did).toEqual(['write', 'discard']);
+        expect(h.said()).toBe('Not sent: the letter was not seen to its end. The reply is kept.');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+      });
+
+      test('Esc there is still an undo', async () => {
+        const h = await picked();
+        const fuse = h.line()!.id;
+        await h.advance(MAIL_SLOT_FUSE_MS - 500);
+        await h.page('mac', { type: 'hello', v: 1 });
+        await h.page('mac', { type: 'answer', id: fuse, act: 'undo' });
+        expect(h.did).toEqual(['write', 'discard']);
+        expect(h.said()).toBe('Not sent. No draft is left in Gmail.');
+      });
+    });
+
+    describe('Gmail says nothing after Send was pressed', () => {
+      const silent: MailStep = { ok: false, why: 'Gmail did not say it was sent', pressed: true };
+      /** The pick, the fuse seen to burn out, the press, and a thread that does not show the letter. */
+      const unsure = async (went: boolean | null, steps: { send?: MailStep } = { send: silent }) => {
+        const h = await picked({ steps, sent: [false], went });
+        await h.advance(MAIL_SLOT_FUSE_MS);
+        const pressedAt = h.at();
+        await h.answer('done');
+        await h.advance(1500);
+        return { h, pressedAt };
+      };
+
+      test('it is "may have gone": not called sent, not called a draft, and the line does not come back to be picked again', async () => {
+        const { h } = await unsure(false);
+        expect(h.did).toEqual(['write', 'send', 'sent?', 'sent?']);
+        expect(h.said()).toBe('I pressed Send, and nothing says it went. Look in the thread before sending it again.');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+        await h.answer('done');
+        expect(h.line()).toBeNull();
+        // Kept: it waits in Home, with the picked time in it.
+        expect(text((h.mail.homeRow() as { say: NotchPart[] }).say)).toBe('Reply to Leo is drafted');
+      });
+
+      test('the thread shows it a moment later: it is sent, and called so', async () => {
+        const h = await picked({ steps: { send: silent }, sent: [false, true] });
+        await h.answer('done');
+        await h.advance(1500);
+        expect(h.said()).toBe('Offered Tuesday at 10:00 to Leo.');
+        expect(h.store.proposal(ID)!.state).toBe('sent');
+      });
+
+      /** The second yes: the reply opened from Home, and yes on its draft. */
+      const again = async (h: ReturnType<typeof harness>) => {
+        await h.answer('done');
+        h.did.length = 0;
+        h.inbox.present('again', (stage) => h.mail.open(stage));
+        await settle();
+        expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'send' });
+        await h.answer('yes');
+      };
+
+      test('the second yes looks in the thread first, for the letter as it went and from the moment of the press', async () => {
+        const { h, pressedAt } = await unsure(true);
+        await again(h);
+        expect(h.did).toEqual(['went?']);
+        expect(h.looked).toEqual([{ text: LETTER, thread: T1, since: pressedAt }]);
+        expect(h.said()).toBe('It had gone: it is in the thread. I did not send it again.');
+        expect(h.store.proposal(ID)!.state).toBe('sent');
+      });
+
+      test('when the mailbox cannot say whether it went, the second yes sends nothing', async () => {
+        const { h } = await unsure(null);
+        await again(h);
+        expect(h.did).toEqual(['went?']);
+        expect(h.said()).toBe('I cannot see whether it went the first time, so I am not sending it again. Look in the thread first.');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+      });
+
+      test('when it is not there, the second yes sends it as any reply, with its own fuse', async () => {
+        const { h } = await unsure(false);
+        await again(h);
+        expect(h.did).toEqual(['went?', 'write']);
+        expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_FUSE_MS });
+      });
+
+      test('Gmail said it went and the thread does not show it: that too is looked for before a second yes sends anything', async () => {
+        const { h } = await unsure(null, {});
+        expect(h.said()).toBe('Gmail says it was sent, but I do not see it in the thread yet. I will look again.');
+        expect(h.store.proposal(ID)!.state).toBe('ready');
+        await again(h);
+        expect(h.did).toEqual(['went?']);
+      });
+
+      test('Send refused before it was pressed: nothing went, it says where the draft is, and no look is owed', async () => {
+        const h = await picked({ steps: { send: { ok: false, why: 'the reply is not to those people', pressed: false } } });
+        await h.answer('done');
+        expect(h.said()).toBe('I could not send it. It is in your Gmail drafts.');
+        await again(h);
+        expect(h.did).toEqual(['write']);
+      });
+    });
+
+    describe('a letter too long to be read under a fuse', () => {
+      const lines = (count: number): string => ['Hi Leo,', 'Monday at 15:00 would suit me.', ...Array.from({ length: count - 3 }, (_, at) => `Point ${at + 1} of the agenda.`), 'Sam'].join('\n');
+
+      test('rows are counted on the safe side: a long line is several, a wide sign is two columns, an empty line is none', () => {
+        expect(mailPaperRows('Hi Leo,\n\nSam')).toBe(2);
+        expect(mailPaperRows('x'.repeat(MAIL_SLOT_PAPER_COLUMNS))).toBe(1);
+        expect(mailPaperRows('x'.repeat(MAIL_SLOT_PAPER_COLUMNS + 1))).toBe(2);
+        expect(mailPaperRows('会'.repeat(MAIL_SLOT_PAPER_COLUMNS / 2 + 1))).toBe(2);
+        expect(mailPaperRows(lines(MAIL_SLOT_PAPER_ROWS))).toBe(MAIL_SLOT_PAPER_ROWS);
+      });
+
+      test('one that the paper just holds goes under the fuse', async () => {
+        const h = await picked({}, { draft: lines(MAIL_SLOT_PAPER_ROWS) });
+        expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_SLOT_FUSE_MS });
+        expect(paperOf(h.line())!.lines).toHaveLength(MAIL_SLOT_PAPER_ROWS);
+      });
+
+      test('one row more and it is opened as a draft: nothing is written or sent until its own yes, with the picked time in it', async () => {
+        const h = await picked({}, { draft: lines(MAIL_SLOT_PAPER_ROWS + 1) });
+        expect(h.did).toEqual([]);
+        expect(h.line()).toMatchObject({ kind: 'sheet', yes: 'send', stay: true });
+        expect(notes(h.blocks()).at(-1)).toBe('Too long to send on a pick: read it first. Not sent yet. Tone [yours]');
+        const paper = h.blocks().find((block) => block.kind === 'paper') as Extract<NotchBlock, { kind: 'paper' }>;
+        expect(text(paper.lines[1])).toBe('[Tuesday at 10:00] would suit me.');
+        await h.advance(MAIL_SLOT_FUSE_MS * 2);
+        expect(h.did).toEqual([]);
+        await h.answer('yes');
+        expect(h.did).toEqual(['write']);
+        expect(h.line()).toMatchObject({ kind: 'send', ms: MAIL_FUSE_MS });
+        expect(h.plans[0]!.text).toContain('Tuesday at 10:00 would suit me.');
+        await h.answer('done');
+        expect(h.said()).toBe('Sent to Leo.');
+      });
+    });
   });
 
   test('a time that was taken since is not offered: the calendar is asked at the pick, and the others are still there', async () => {
