@@ -251,7 +251,15 @@ export class NotchSurface {
     // itself. After any other the line stays until the brain says what next.
     const gone = message.act === 'no' || message.act === 'fold'
       || (line.kind === 'say' && (message.act === 'done' || message.act === 'yes'));
-    if (gone) this.line = null;
+    if (gone) {
+      this.line = null;
+      // The page that answered is at rest. Any other still shows the line, and would for ever: nothing more
+      // is said about a line that is gone here, and an answer to it from there is dropped as late. So the
+      // others are told to rest, before whoever hears the answer shows the next thing.
+      for (const other of [...this.pages]) {
+        if (other !== sidecarId) this.push({ type: 'rest' }, other);
+      }
+    }
     for (const listener of this.answerListeners) listener(message, sidecarId);
   }
 

@@ -314,3 +314,83 @@ describe('a page that comes up in the middle of a line that runs out', () => {
     expect(stateLine(h)).toEqual({ ...send, left: 4000 });
   });
 });
+
+describe('two desktop apps on one brain', () => {
+  const two = (): ReturnType<typeof harness> => {
+    const h = harness();
+    h.say('pc', { type: 'hello', v: 1 });
+    h.say('laptop', { type: 'hello', v: 1 });
+    h.pushed.length = 0;
+    return h;
+  };
+
+  test('a no or a fold on one takes the line off the other, which would have kept it for ever', () => {
+    for (const act of ['no', 'fold'] as const) {
+      const h = two();
+      h.surface.show({ ...offer, fold: 0 });
+      h.pushed.length = 0;
+      h.say('pc', { type: 'answer', id: 'l1', act });
+      // The one that answered went back to rest by itself, and is told nothing.
+      expect(h.pushed).toEqual([{ to: 'laptop', message: { type: 'rest' } }]);
+    }
+  });
+
+  test('a result that one of them finished showing leaves the other too', () => {
+    for (const act of ['done', 'yes'] as const) {
+      const h = two();
+      h.surface.show({ id: 'r1', kind: 'say', say: ['Sent.'], ms: 2000 });
+      h.pushed.length = 0;
+      h.say('laptop', { type: 'answer', id: 'r1', act });
+      expect(h.pushed).toEqual([{ to: 'pc', message: { type: 'rest' } }]);
+    }
+  });
+
+  test('the other is told before whoever hears the answer shows the next thing, so the next thing is not what is taken off', () => {
+    const h = two();
+    h.surface.onAnswer(() => { h.surface.show({ id: 'next', kind: 'say', say: ['Not now, then.'], ms: 2000 }); });
+    h.surface.show(offer);
+    h.pushed.length = 0;
+    h.say('pc', { type: 'answer', id: 'l1', act: 'no' });
+    expect(h.pushed.filter((p) => p.to === 'laptop').map((p) => p.message.type)).toEqual(['rest', 'show']);
+    expect(h.pushed.filter((p) => p.to === 'pc').map((p) => p.message.type)).toEqual(['show']);
+  });
+
+  test('a yes on one leaves it dimmed there until the brain says what next; a no on the other then takes it off the first too', () => {
+    const h = two();
+    h.surface.show(offer);
+    h.pushed.length = 0;
+    h.say('pc', { type: 'answer', id: 'l1', act: 'yes' });
+    // After a yes the line stays, here and on both pages.
+    expect(h.pushed).toEqual([]);
+    h.say('laptop', { type: 'answer', id: 'l1', act: 'no' });
+    expect(h.surface.current().line).toBeNull();
+    expect(h.pushed).toEqual([{ to: 'pc', message: { type: 'rest' } }]);
+  });
+
+  test('an answer that ends nothing, or is about a line that is gone, is told to nobody', () => {
+    const h = two();
+    h.surface.show({ id: 'f1', kind: 'send', say: ['Sending'], ms: 3000 });
+    h.pushed.length = 0;
+    h.say('pc', { type: 'answer', id: 'f1', act: 'done' });
+    h.say('pc', { type: 'answer', id: 'old', act: 'no' });
+    expect(h.pushed).toEqual([]);
+  });
+
+  test('a desktop app that is not there is not told', () => {
+    const h = two();
+    h.surface.show(offer);
+    h.gone('laptop');
+    h.pushed.length = 0;
+    h.say('pc', { type: 'answer', id: 'l1', act: 'no' });
+    expect(h.pushed).toEqual([]);
+  });
+
+  test('with one desktop app nothing more is said than before', () => {
+    const h = harness();
+    h.say('pc', { type: 'hello', v: 1 });
+    h.surface.show(offer);
+    h.pushed.length = 0;
+    h.say('pc', { type: 'answer', id: 'l1', act: 'no' });
+    expect(h.pushed).toEqual([]);
+  });
+});
