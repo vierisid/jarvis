@@ -22,6 +22,7 @@
  * is the person's, in a window they can see.
  */
 import type { NotchBlock, NotchButton, NotchPart, NotchWord } from './protocol.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
@@ -283,5 +284,74 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
     settings,
     connections,
     sound,
+  };
+}
+
+/** What the settings and the connections are given of the product. */
+export interface NotchPrefsGiven extends Pick<NotchPrefsDeps, 'keys' | 'voice' | 'connections' | 'connect'> {
+  /** Opens the dashboard at one of its settings pages. */
+  openPage?: (sidecarId: string | null, page: NotchSettingsPage) => void;
+  /** Opens the dashboard itself. */
+  openDashboard?: (sidecarId: string | null) => void;
+  /** Whether the brain was given day one, listening to calls, noticing: each has its link or its row in Settings when it was. */
+  dayOne: boolean;
+  calls: boolean;
+  notice: boolean;
+}
+
+/**
+ * The notch's own settings and the connections, as a feature of the notch
+ * (./feature.ts), with their quiet links at the foot of Home. Absent on a
+ * brain that was not given where to keep the settings.
+ *
+ * Day one, the calls and the noticing are made after this: each is asked for
+ * when its row is drawn or its word is changed.
+ */
+export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'prefs'> {
+  return {
+    id: 'prefs',
+    needs: ['moves', 'canDo'],
+    wants: ['where', 'dayOne', 'calls', 'notice'],
+    make(ctx) {
+      const settings = ctx.settings;
+      const moves = ctx.use('moves');
+      const canDo = ctx.use('canDo');
+      if (!settings || !moves || !canDo) return null;
+      const where = ctx.use('where');
+      const { openPage, openDashboard } = given;
+      const api = attachNotchPrefs({
+        inbox: ctx.inbox, settings, log: ctx.log,
+        setSound: (on) => ctx.surface.setSound(on),
+        keys: given.keys,
+        voice: given.voice,
+        see: where ? (stage) => where.see(stage) : undefined,
+        moves: (stage) => moves.open(stage),
+        canDo: (stage) => canDo.open(stage),
+        dayOne: given.dayOne ? () => ctx.use('dayOne')?.again() : undefined,
+        // Listening to calls: whether it is offered, and whether the other side is heard.
+        calls: given.calls ? { row: () => ctx.use('calls')?.settingsRow() ?? null, set: (name, value) => ctx.use('calls')?.setWord(name, value) ?? false } : undefined,
+        // Noticing: whether it offers one thing in the window the person is in.
+        notice: given.notice ? { row: () => ctx.use('notice')?.settingsRow() ?? null, set: (name, value) => ctx.use('notice')?.setWord(name, value) ?? false } : undefined,
+        connections: given.connections,
+        connect: given.connect,
+        // A page of the dashboard when it can be opened at one, the dashboard itself when not.
+        openDashboard: openPage || openDashboard
+          ? (sidecarId, page) => { if (page && openPage) openPage(sidecarId, page); else openDashboard?.(sidecarId); }
+          : undefined,
+      });
+      return {
+        api,
+        // The connections have their link when the brain can tell what is connected.
+        homeLinks: () => [
+          ...(given.connections ? [{ id: 'connections', label: 'Connections', quiet: true }] : []),
+          { id: 'settings', label: 'Settings', quiet: true },
+        ],
+        press: async (stage, link) => {
+          if (link === 'connections') { await api.connections(stage); return 'stay'; }
+          if (link === 'settings') return (await api.settings(stage)) === 'leave' ? 'leave' : 'stay';
+          return null;
+        },
+      };
+    },
   };
 }

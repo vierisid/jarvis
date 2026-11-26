@@ -26,9 +26,9 @@ import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
 import { notchNewsFeature } from './news.ts';
 import type { NotchNews, NotchOpenFailure } from './news.ts';
-import { attachNotchPause } from './pause.ts';
+import { notchPauseFeature } from './pause.ts';
 import type { NotchPauseDeps } from './pause.ts';
-import { attachNotchPromises } from './promises.ts';
+import { notchPromisesFeature } from './promises.ts';
 import { notchQuestionsFeature } from './questions.ts';
 import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
@@ -37,14 +37,14 @@ import { attachNotchNotice, type NotchNotice, type NotchNoticeDeps } from './not
 import { attachNotchDrop, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
-import { NOTCH_MAIL_ITEM, mailToneFacts } from './mail/notch.ts';
+import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
 import { NotchPresence } from './presence.ts';
 import { NotchQuiet, notchQuietHome } from './quiet.ts';
 import { NotchSettings } from './settings.ts';
 import { attachNotchSoon, type NotchSoon } from './soon.ts';
 import type { NotchClock } from './stage.ts';
 import { notchBirthAfter, type NotchSurface } from './surface.ts';
-import { attachNotchSuggestions } from './suggestions.ts';
+import { notchSuggestionsFeature } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
 import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
 import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatchPort } from './catch.ts';
@@ -59,14 +59,14 @@ import type { PeerFileFound } from './people-files.ts';
 import { PeerStore } from '../peers/store.ts';
 import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
 import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
-import { attachNotchMemory, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
-import { attachNotchMoves, type NotchMoves } from './moves.ts';
-import { attachNotchPrefs, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
+import { notchMemoryFeature, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
+import { notchMovesFeature, type NotchMoves } from './moves.ts';
+import { notchPrefsFeature, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { attachNotchDayOne, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
-import { attachNotchCanDo, type NotchCanDo } from './cando.ts';
+import { notchCanDoFeature, type NotchCanDo } from './cando.ts';
 import { notchBeforeNotes } from './before.ts';
 import type { NotchPart } from './protocol.ts';
-import { attachNotchSaid } from './said.ts';
+import { notchSaidFeature } from './said.ts';
 import { whereQuestion } from './point.ts';
 import { createNotchRegistry } from './registry.ts';
 
@@ -401,8 +401,6 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   let drop: NotchDrop | null = null;
   let around: NotchAround | null = null;
   let stopWhere: () => void = () => {};
-  let stopPromises: () => void = () => {};
-  let stopPause: () => void = () => {};
   const todayDeps = {
     executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
     keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
@@ -454,13 +452,16 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   // The parts that are not features yet are stopped after those that are, in the order they always were. Each
   // is asked for when the notch is stopped: one that was not made by then has nothing to stop.
   for (const part of [
-    () => stopPromises(), () => stopPause(),
     () => asks?.stop(), () => people?.stop(), () => dayOne?.stop(), () => lookAt?.stop(), () => drop?.stop(), () => stopWhere(), () => mail?.stop(),
     () => presence?.stop(), () => around?.stop(), () => jobs?.stop(), () => catcher?.stop(), () => teach?.stop(), () => put?.stop(),
     () => standing?.stop(), () => calls?.stop(), () => notice?.stop(), () => agents?.stop(),
   ]) registry.onStop(part);
   // And reached by their ids by the features that lean on them.
+  registry.lend('mail', () => mail);
   registry.lend('agents', () => agents);
+  registry.lend('calls', () => calls);
+  registry.lend('notice', () => notice);
+  registry.lend('dayOne', () => dayOne);
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
     clock: deps.clock,
@@ -500,6 +501,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     })
     : null;
   stopWhere = () => where?.stop();
+  registry.lend('where', () => where);
   let talk: NotchTalk | null = null;
   if (deps.asks && deps.jobs) {
     // Doing it in view (pass 10). Before asking, which sends "Watch me" and "run it" here.
@@ -542,17 +544,10 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   // The back office that fits in a sheet (pass 12): what is remembered, the notch's own settings,
   // what is connected, and every movement, playable by hand. Reached from the foot of Home, and by saying so.
   const office = deps.office;
-  // How a person is always written to ("Always use a short tone with Marco?") is something that was learned:
-  // it stands in Memory with everything else that is remembered, and is forgotten there.
-  const toneFacts = (about?: string): ReturnType<NotchMemoryDeps['list']> => mailToneFacts(mail?.store.tones() ?? [], about);
-  const memory: NotchMemory | null = office?.memory ? attachNotchMemory({
-    inbox, log,
-    list: (about) => [...toneFacts(about), ...office.memory!.list(about)],
-    forget: (id) => (id.startsWith('tone:') ? (mail?.store.forgetTone(id.slice('tone:'.length)) ?? false) : office.memory!.forget(id)),
-  }) : null;
-  const moves: NotchMoves = attachNotchMoves({ inbox, resting: () => surface.resting(), log });
+  const memory: NotchMemory | null = registry.add(notchMemoryFeature(office?.memory));
+  const moves: NotchMoves = registry.must(notchMovesFeature);
   // Everything it does, on one sheet: day one ends on it, the settings lead to it, "what can you do" opens it.
-  const canDo: NotchCanDo = attachNotchCanDo({ inbox });
+  const canDo: NotchCanDo = registry.must(notchCanDoFeature);
   // The organisation: the people whose Jarvises this one may talk to. Only with the engine's switch on.
   if (deps.peers) {
     people = attachNotchPeople({
@@ -577,28 +572,12 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
   }
   // What is said with a line up is tried as an answer to that line (./said.ts). An instruction's own lines are read by ./asks.ts.
-  const saidLine = attachNotchSaid({ inbox, line: () => surface.current().line, skip: (item) => item.startsWith('ask:'), log });
-  const openPage = office?.openPage;
-  const prefs: NotchPrefs | null = settings ? attachNotchPrefs({
-    inbox, settings, log,
-    setSound: (on) => surface.setSound(on),
-    keys: office?.keys,
-    voice: office?.voice,
-    see: where ? (stage) => where.see(stage) : undefined,
-    moves: (stage) => moves.open(stage),
-    canDo: (stage) => canDo.open(stage),
-    dayOne: deps.dayOne ? () => dayOne?.again() : undefined,
-    // Listening to calls: whether it is offered, and whether the other side is heard.
-    calls: deps.calls ? { row: () => calls?.settingsRow() ?? null, set: (name, value) => calls?.setWord(name, value) ?? false } : undefined,
-    // Noticing: whether it offers one thing in the window the person is in.
-    notice: deps.notice ? { row: () => notice?.settingsRow() ?? null, set: (name, value) => notice?.setWord(name, value) ?? false } : undefined,
-    connections: office?.connections,
-    connect: office?.connect,
-    // A page of the dashboard when it can be opened at one, the dashboard itself when not.
-    openDashboard: openPage || deps.openDashboard
-      ? (sidecarId, page) => { if (page && openPage) openPage(sidecarId, page); else deps.openDashboard?.(sidecarId); }
-      : undefined,
-  }) : null;
+  const saidLine = registry.must(notchSaidFeature);
+  const prefs: NotchPrefs | null = registry.add(notchPrefsFeature({
+    keys: office?.keys, voice: office?.voice, connections: office?.connections, connect: office?.connect,
+    openPage: office?.openPage, openDashboard: deps.openDashboard,
+    dayOne: deps.dayOne !== undefined, calls: deps.calls !== undefined, notice: deps.notice !== undefined,
+  }));
   if (deps.asks) {
     const emergency = deps.emergency;
     asks = attachNotchAsks(inbox, {
@@ -630,18 +609,16 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       here: () => people?.names() ?? [],
       unheard: (why) => dayOne?.unheard(why) ?? false,
       pointed: (shown) => dayOne?.pointed(shown),
-      // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed.
+      // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed. The
+      // features have theirs, as they stand when Home is opened; the dashboard's is the last.
       more: {
         buttons: () => [
-          ...(memory ? [{ id: 'memory', label: 'Memory', quiet: true }] : []),
-          ...(prefs && office?.connections ? [{ id: 'connections', label: 'Connections', quiet: true }] : []),
-          ...(prefs ? [{ id: 'settings', label: 'Settings', quiet: true }] : []),
+          ...registry.homeLinks(),
           ...(deps.openDashboard ? [{ id: 'dashboard', label: 'Dashboard', quiet: true }] : []),
         ],
         press: async (stage, button) => {
-          if (button === 'memory' && memory) { await memory.open(stage); return 'stay'; }
-          if (button === 'connections' && prefs) { await prefs.connections(stage); return 'stay'; }
-          if (button === 'settings' && prefs) return (await prefs.settings(stage)) === 'leave' ? 'leave' : 'stay';
+          const went = await registry.press(stage, button);
+          if (went !== null) return went;
           if (button === 'dashboard' && deps.openDashboard) { deps.openDashboard(stage.from()); return 'leave'; }
           return null;
         },
@@ -722,20 +699,13 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
   }
   const promises = deps.promises;
-  if (promises) stopPromises = attachNotchPromises(inbox, { executor: promises.executor });
+  registry.add(notchPromisesFeature(promises?.executor));
   // A fixture promise is kept by writing one line, not by a model turn.
   const appendFixtureLog = promises?.appendFixtureLog;
   if (promises && appendFixtureLog) {
     promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
   }
-  if (deps.emergency) {
-    stopPause = attachNotchPause(surface, inbox, {
-      controller: deps.emergency,
-      restFace: where ? () => where.face() : undefined,
-      changed: where ? () => where.refresh() : undefined,
-      log,
-    });
-  }
+  registry.add(notchPauseFeature(deps.emergency));
   const questions: NotchQuestions | null = registry.add(notchQuestionsFeature(deps.questions ? { ...deps.questions, openDashboard: deps.openDashboard } : undefined));
   if (deps.mail) {
     const emergency = deps.emergency;
@@ -928,8 +898,9 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     surface.onHello(() => made.cameUp());
   }
 
+  const suggestions = registry.must(notchSuggestionsFeature);
   return {
-    inbox, approvals, news, questions, suggestions: attachNotchSuggestions(inbox), fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
+    inbox, approvals, news, questions, suggestions, fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
     // A notch that was stopped tells the person nothing: what it would have said goes where it went before there was a notch.
     showing: () => !registry.stopped() && surface.listening() > 0,

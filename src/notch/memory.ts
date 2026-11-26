@@ -21,7 +21,9 @@
  * conversation. Here it is shown to its owner and goes nowhere else.
  */
 import type { NotchBlock, NotchPart } from './protocol.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
+import { mailToneFacts } from './mail/notch.ts';
 import type { NotchStage } from './stage.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
@@ -150,5 +152,39 @@ export function attachNotchMemory(deps: NotchMemoryDeps): NotchMemory {
     },
     open,
     count: () => facts().length,
+  };
+}
+
+/**
+ * What is remembered, as a feature of the notch (./feature.ts), with its
+ * quiet link at the foot of Home. Absent on a brain that was not given its
+ * memory.
+ *
+ * How a person is always written to ("Always use a short tone with Marco?")
+ * is something that was learned: it stands here with everything else that is
+ * remembered, and is forgotten here. The mail layer is asked for when the
+ * sheet is opened, so it does not matter that it is made after this.
+ */
+export function notchMemoryFeature(given: Pick<NotchMemoryDeps, 'list' | 'forget'> | undefined): NotchFeatureDef<'memory'> {
+  return {
+    id: 'memory',
+    wants: ['mail'],
+    make(ctx) {
+      if (!given) return null;
+      const api = attachNotchMemory({
+        inbox: ctx.inbox, log: ctx.log,
+        list: (about) => [...mailToneFacts(ctx.use('mail')?.store.tones() ?? [], about), ...given.list(about)],
+        forget: (id) => (id.startsWith('tone:') ? (ctx.use('mail')?.store.forgetTone(id.slice('tone:'.length)) ?? false) : given.forget(id)),
+      });
+      return {
+        api,
+        homeLinks: () => [{ id: 'memory', label: 'Memory', quiet: true }],
+        press: async (stage, link) => {
+          if (link !== 'memory') return null;
+          await api.open(stage);
+          return 'stay';
+        },
+      };
+    },
   };
 }

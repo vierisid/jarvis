@@ -33,6 +33,7 @@
  *     nothing.
  *   - Nothing here asks a model. It is a reading, not a guess.
  */
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 
 /** One answer to a line, as the page would have sent it, without the line's id. */
@@ -376,3 +377,15 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
   };
 }
 
+
+/**
+ * What is said over the line that is up, as a feature of the notch
+ * (./feature.ts). An instruction's own lines are not read here: a spoken
+ * reply to its question is read by ./asks.ts itself.
+ */
+export const notchSaidFeature: NotchFeatureDef<'said'> = {
+  id: 'said',
+  make: (ctx) => ({
+    api: attachNotchSaid({ inbox: ctx.inbox, line: () => ctx.surface.current().line, skip: (item) => item.startsWith('ask:'), log: ctx.log }),
+  }),
+};

@@ -15,6 +15,7 @@
  * really takes: ./cando.test.ts puts each of them to the code that reads it.
  * A row for something that is not built does not belong here.
  */
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -122,3 +123,9 @@ export function attachNotchCanDo(deps: { inbox: NotchInbox }): NotchCanDo {
     open,
   };
 }
+
+/** Everything it does, on one sheet, as a feature of the notch (./feature.ts). */
+export const notchCanDoFeature: NotchFeatureDef<'canDo'> = {
+  id: 'canDo',
+  make: (ctx) => ({ api: attachNotchCanDo({ inbox: ctx.inbox }) }),
+};

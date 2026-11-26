@@ -17,6 +17,7 @@
  * changed by playing one, and names in them are made up.
  */
 import { NOTCH_BIRTHS, type NotchBlock, type NotchBirth, type NotchLine, type NotchMood, type NotchPart } from './protocol.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchStage } from './stage.ts';
 import type { NotchAct } from './surface.ts';
@@ -238,3 +239,9 @@ export function attachNotchMoves(deps: NotchMovesDeps): NotchMoves {
     open,
   };
 }
+
+/** The movements as a feature of the notch (./feature.ts). */
+export const notchMovesFeature: NotchFeatureDef<'moves'> = {
+  id: 'moves',
+  make: (ctx) => ({ api: attachNotchMoves({ inbox: ctx.inbox, resting: () => ctx.surface.resting(), log: ctx.log }) }),
+};

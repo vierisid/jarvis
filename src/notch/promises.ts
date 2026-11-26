@@ -16,6 +16,7 @@
  * cut off by a restart and therefore not run again.
  */
 import type { CommitmentEvent } from '../daemon/commitment-executor.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 
@@ -159,4 +160,18 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
         return;
     }
   });
+}
+
+/**
+ * The promises as a feature of the notch (./feature.ts): it hears the
+ * executor until it is stopped. Absent on a brain that was not given one.
+ */
+export function notchPromisesFeature(executor: NotchPromiseDeps['executor'] | undefined): NotchFeatureDef<'promises'> {
+  return {
+    id: 'promises',
+    make(ctx) {
+      if (!executor) return null;
+      return { api: {}, stop: attachNotchPromises(ctx.inbox, { executor }) };
+    },
+  };
 }

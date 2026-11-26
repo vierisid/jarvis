@@ -16,6 +16,7 @@
  * notch says where it is reset.
  */
 import type { EmergencyState } from '../authority/emergency.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchMood } from './protocol.ts';
 import type { NotchSurface } from './surface.ts';
@@ -100,4 +101,28 @@ export function attachNotchPause(surface: NotchSurface, inbox: NotchInbox, deps:
   apply(deps.controller.getState(), false);
 
   return () => { offStop(); offState(); };
+}
+
+/**
+ * Esc twice as a feature of the notch (./feature.ts): it hears the keys and
+ * the product's pause until it is stopped. Absent on a brain that was not
+ * given the pause. With the part that knows where the person is, the face at
+ * rest is that part's, and it is told when the notch goes to sleep or wakes.
+ */
+export function notchPauseFeature(controller: NotchPauseDeps['controller'] | undefined): NotchFeatureDef<'pause'> {
+  return {
+    id: 'pause',
+    wants: ['where'],
+    make(ctx) {
+      if (!controller) return null;
+      const where = ctx.use('where');
+      const stop = attachNotchPause(ctx.surface, ctx.inbox, {
+        controller,
+        restFace: where ? () => where.face() : undefined,
+        changed: where ? () => where.refresh() : undefined,
+        log: ctx.log,
+      });
+      return { api: {}, stop };
+    },
+  };
 }

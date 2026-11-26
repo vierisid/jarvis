@@ -16,6 +16,7 @@
  * A suggestion is news here: said once, asking nothing. Acting on one is
  * still done on its card in the dashboard.
  */
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 
@@ -62,3 +63,9 @@ export function attachNotchSuggestions(inbox: NotchInbox): NotchSuggestions {
     toastWithReceipt: async (title, body) => { add(title, body); return 'shown'; },
   };
 }
+
+/** Where suggestion toasts go while the notch is on, as a feature of the notch (./feature.ts). */
+export const notchSuggestionsFeature: NotchFeatureDef<'suggestions'> = {
+  id: 'suggestions',
+  make: (ctx) => ({ api: attachNotchSuggestions(ctx.inbox) }),
+};
