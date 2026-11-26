@@ -22,11 +22,33 @@ const when = (text) => {
 // The text of a piece of mail, with its line breaks, and without the history quoted inside it.
 const BLOCK = new Set(['P', 'DIV', 'TR', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TABLE', 'BLOCKQUOTE', 'PRE', 'HR', 'SECTION', 'ARTICLE', 'HEADER', 'FOOTER']);
 const SKIP = new Set(['STYLE', 'SCRIPT', 'HEAD', 'TITLE', 'IMG', 'SVG', 'NOSCRIPT']);
+// What the sender hid from the eye. These words go to a model, and what the model writes is sent in
+// the owner's name: text that only the model would read is an instruction slipped past the owner, so
+// it is not read. Only what an element says of itself can be asked: this page is never drawn, so
+// nothing is known of what a style sheet does, nor of white words on white. It is a first fence, not
+// the wall: the wall is that the owner sees the letter before it goes.
+const ZERO = /^0(\.0+)?(px|pt|em|rem|ex|%)?$/;
+const unseen = (node) => {
+  if (node.hasAttribute('hidden')) return true;
+  const style = node.getAttribute('style');
+  if (!style) return false;
+  const says = {};
+  for (const one of style.toLowerCase().replace(/!important/g, '').split(';')) {
+    const at = one.indexOf(':');
+    if (at > 0) says[one.slice(0, at).trim()] = one.slice(at + 1).trim();
+  }
+  if (says.display === 'none' || says.visibility === 'hidden' || says.visibility === 'collapse' || says['mso-hide'] === 'all') return true;
+  if (ZERO.test(says['font-size'] || '') || ZERO.test(says.opacity || '')) return true;
+  // No room at all, and what does not fit is cut off.
+  const cut = [says.overflow, says['overflow-x'], says['overflow-y']].some((value) => (value || '').startsWith('hidden'));
+  return cut && ['height', 'max-height', 'width', 'max-width'].some((side) => ZERO.test(says[side] || ''));
+};
 const textOf = (root) => {
   let out = '';
   const walk = (node) => {
     if (node.nodeType === 3) { out += node.textContent.replace(/\s+/g, ' '); return; }
     if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+    if (unseen(node)) return;
     // A line break is a line break every time: two of them, or one alone in a block, are the empty line
     // between two paragraphs, which is how the writer set their mail out.
     if (node.tagName === 'BR') { out += '\n'; return; }
