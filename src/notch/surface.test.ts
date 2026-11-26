@@ -315,6 +315,20 @@ describe('a page that comes up in the middle of a line that runs out', () => {
   });
 });
 
+describe('a message the page will not be able to read', () => {
+  test('is said where it was made, a few times only, and is still sent', () => {
+    const h = harness();
+    h.say('pc', { type: 'hello', v: 1 });
+    h.surface.show(offer);
+    expect(h.logs).toEqual([]);
+    // A sheet with no blocks.
+    for (let i = 0; i < 8; i++) h.surface.show({ id: `bad${i}`, kind: 'sheet', say: ['Approve?'], yes: 'approve' } as never);
+    expect(h.logs.length).toBe(5);
+    expect(h.logs[0]).toBe('[notch] a show message (sheet, bad0) is not one the page can read: it will be dropped there');
+    expect(h.pushed.filter((p) => p.message.type === 'show').length).toBe(9);
+  });
+});
+
 describe('two desktop apps on one brain', () => {
   const two = (): ReturnType<typeof harness> => {
     const h = harness();

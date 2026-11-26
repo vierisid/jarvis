@@ -11,7 +11,7 @@
  * `notch.message` event the other), which carries them without reading them.
  * See docs/notch/README.md and ./protocol.ts.
  */
-import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, notchWhereApp, parseNotchFromPage } from './protocol.ts';
+import { NOTCH_BIRTHS, NOTCH_PROTOCOL_VERSION, notchWhereApp, parseNotchFromPage, parseNotchToPage } from './protocol.ts';
 import type { NotchBirth, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp } from './protocol.ts';
 
 /** The desktop app event that carries one message from the page. */
@@ -48,6 +48,7 @@ export class NotchSurface {
   private readonly signedOutListeners = new Set<(sidecarId: string) => void>();
   private readonly helloListeners = new Set<(sidecarId: string) => void>();
   private complaints = 0;
+  private unreadable = 0;
   /** When the line on the notch was shown, by `now`. */
   private shownAt = 0;
 
@@ -279,6 +280,13 @@ export class NotchSurface {
   }
 
   private push(message: NotchToPage, only?: string): void {
+    // The page reads every message whole, and drops one it cannot read. One that the brain itself made
+    // wrong is said here, where it was made and can be found. It is still sent: the page is the judge.
+    if (this.unreadable < 5 && !parseNotchToPage(message)) {
+      this.unreadable++;
+      const kind = 'line' in message && message.line ? ` (${String(message.line.kind)}, ${String(message.line.id)})` : '';
+      this.log(`[notch] a ${message.type} message${kind} is not one the page can read: it will be dropped there`);
+    }
     const targets = only === undefined ? [...this.pages] : [only];
     for (const sidecarId of targets) {
       this.port.dispatchRPC(sidecarId, 'notch.push', { message }).catch((error: unknown) => {

@@ -10,6 +10,7 @@
  */
 import { NOTCH_PROTOCOL_VERSION } from '../../../src/notch/protocol.ts';
 import type { NotchFromPage, NotchToPage } from '../../../src/notch/protocol.ts';
+import { realNotchPageClock, type NotchPageClock } from './surface/dom.ts';
 import type { NotchSurface } from './surface/index.ts';
 
 type Polygons = number[][][];
@@ -134,16 +135,31 @@ export function connectHousing(surface: Pick<NotchSurface, 'setHousing'>, host: 
   } catch { /* no desktop app here: no housing */ }
 }
 
-/** How many times a message that could not be read is written to the desktop app's log. A brain that is wrong is wrong often. */
+/** How many times in one episode a message that could not be read is written to the desktop app's log. A brain that is wrong is wrong often. */
 export const NOTCH_DROPPED_LOGGED = 5;
 
 /**
  * Wires a surface to the desktop app, then says hello to the brain.
- * `helloAgainMs` is how often the hello is said again while no state has
- * come: NOTCH_HELLO_AGAIN_MS when not given (the tests give less).
+ *
+ * The page says hello once, and again while it is out of step with the brain:
+ * until the first `state` has come, and from the moment something the brain
+ * said was dropped. That is one episode. It ends when a `state` is read whole,
+ * and in it the hello is said again NOTCH_HELLO_TRIES times at the most, never
+ * closer together than NOTCH_HELLO_AGAIN_MS, however many messages are dropped
+ * meanwhile: each hello makes the brain tell everything again, and lets what
+ * was missed speak up. When the tries are spent the page asks no more. It is
+ * still told every change, and a new episode begins only after a `state` that
+ * could be read.
+ *
+ * `clock` and `helloAgainMs` are for the tests.
  */
-export function connectNotch(surface: NotchSurface, host: NotchWindow = window as unknown as NotchWindow, options: { helloAgainMs?: number } = {}): void {
+export function connectNotch(
+  surface: NotchSurface,
+  host: NotchWindow = window as unknown as NotchWindow,
+  options: { helloAgainMs?: number; clock?: NotchPageClock } = {},
+): void {
   const helloEvery = options.helloAgainMs ?? NOTCH_HELLO_AGAIN_MS;
+  const clock = options.clock ?? realNotchPageClock;
   let sent: Polygons | null = null;
   let sentAt = 0;
   let trailing: ReturnType<typeof setTimeout> | null = null;
@@ -172,50 +188,48 @@ export function connectNotch(surface: NotchSurface, host: NotchWindow = window a
   surface.onOutline(report);
   /** The brain has answered the hello with what the notch shows, and nothing it said since was dropped. */
   let stated = false;
-  let tries = 0;
+  /** How often the hello was said again, and how many drops were logged, in this episode. */
+  let tries = 0, logged = 0;
   let helloAt = -Infinity;
-  let again: ReturnType<typeof setInterval> | null = null;
+  let waiting: number | null = null;
   const hello = (): void => {
-    helloAt = performance.now();
+    helloAt = clock.now();
     notchSend(host)({ type: 'hello', v: NOTCH_PROTOCOL_VERSION });
   };
   // The hello, or the state that answers it, can be lost on the way. The page then stayed unborn: it drew
   // nothing and dropped all that was said to it, while the brain counted it as listening. Said again until
   // a state has come.
   const keepAsking = (): void => {
-    if (again !== null) return;
-    again = setInterval(() => {
-      if (stated || ++tries > NOTCH_HELLO_TRIES) { if (again !== null) clearInterval(again); again = null; return; }
+    if (waiting !== null || stated || tries >= NOTCH_HELLO_TRIES) return;
+    waiting = clock.after(helloEvery, () => {
+      waiting = null;
+      if (stated || tries >= NOTCH_HELLO_TRIES) return;
+      tries++;
       hello();
-    }, helloEvery);
+      keepAsking();
+    });
   };
-  /** Said now, unless it was said a moment ago: a brain that answers with something unreadable is not asked in a loop. */
-  const helloSoon = (): void => { if (performance.now() - helloAt >= helloEvery) hello(); };
-  // Something the brain said could not be read, and was dropped whole. What the notch shows may no longer be
+  // Something the brain said could not be read, and was dropped. What the notch shows may no longer be
   // what the brain believes it shows, so the brain is asked for the whole of it again. (A line that could
   // not be drawn, told to a page that came up, used to leave that page drawing nothing and hearing nothing
   // until the desktop app was started again: the state had come, so the hello was never said a second time.)
-  let dropped = 0, droppedNow = false;
+  let droppedNow = false;
   surface.onDropped((what) => {
     droppedNow = true;
-    if (dropped++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`a message from the brain could not be read and was dropped: ${what}`));
+    if (logged++ < NOTCH_DROPPED_LOGGED) quietly(() => host.__notch_log?.(`a message from the brain could not be read and was dropped: ${what}`));
     stated = false;
-    helloSoon();
+    // At once, unless it was said a moment ago: a brain that answers with the same thing is not asked in a loop.
+    if (tries < NOTCH_HELLO_TRIES && clock.now() - helloAt >= helloEvery) { tries++; hello(); }
     keepAsking();
   });
   host.__notch_receive = (message) => {
     droppedNow = false;
     surface.receive(message);
-    if (droppedNow) return;
-    if ((message as { type?: unknown } | null)?.type === 'state') {
-      stated = true;
-      // The next time the page is out of step it may ask as often again.
-      tries = 0;
-    } else if (!stated) {
-      // The brain is speaking to a page that has no state from it: its tries may be long used up (a line
-      // that could not be read stayed up for minutes), and this is the moment the brain may have one that can.
-      helloSoon();
-    }
+    if (droppedNow || (message as { type?: unknown } | null)?.type !== 'state') return;
+    // Read whole: the page is in step again, and the episode is over.
+    stated = true;
+    tries = 0;
+    logged = 0;
   };
   host.__notch_cursor = (x, y, down) => surface.pointer(x, y, !!down);
   // The keys: what they said, which they are on this machine, and whether Esc

@@ -8,12 +8,12 @@
  * one of its `tell`, `propose`, `sheet`, `work` and `sending`.
  */
 import { NOTCH_NAME } from '../../../../src/notch/name.ts';
-import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_MOODS, notchWhereApp, parseNotchToPage } from '../../../../src/notch/protocol.ts';
+import { NOTCH_APPS, NOTCH_ARRIVALS, NOTCH_FUSE_SEEN_MS, NOTCH_MOODS, notchWhereApp, readNotchToPage } from '../../../../src/notch/protocol.ts';
 import type {
   NotchAnswerAct, NotchApp, NotchBlock, NotchFromPage, NotchLine, NotchMood, NotchPart, NotchToPage, NotchWhereApp, NotchWord,
 } from '../../../../src/notch/protocol.ts';
 import { renderBlocks } from './blocks.ts';
-import { SKELETON, btn, createFrames, createTimers, el, need } from './dom.ts';
+import { SKELETON, btn, createFrames, createTimers, el, need, realNotchPageClock, type NotchPageClock } from './dom.ts';
 import { createEdge } from './edge.ts';
 import { createEyes } from './eyes.ts';
 import { duo, mkHint, setKeyPairs, type Hint } from './hints.ts';
@@ -33,6 +33,8 @@ export interface NotchSurfaceOptions {
   focus?: (take: boolean) => void;
   /** Force reduced motion on or off; default follows prefers-reduced-motion. */
   reducedMotion?: boolean;
+  /** The time the surface goes by: when a line was drawn, and when what it scheduled is due. The browser's when not given. */
+  clock?: NotchPageClock;
 }
 
 export interface NotchSurface {
@@ -66,9 +68,10 @@ export interface NotchSurface {
   /** Told whenever the notch starts or stops showing a question that waits for a yes or a no. */
   onAsking(listener: (asking: boolean) => void): void;
   /**
-   * Told whenever something the brain said could not be read and was dropped,
-   * with a word or two on what it was. The notch is as it was before it; it
-   * may no longer be what the brain believes it shows.
+   * Told whenever something the brain said could not be read and was dropped
+   * (all of it, or the line of a `state`), with a word or two on what it was.
+   * The notch may no longer be what the brain believes it shows. Not told of
+   * a message that is well formed and of a kind this page does not know.
    */
   onDropped(listener: (what: string) => void): void;
   destroy(): void;
@@ -161,7 +164,8 @@ export function createNotchSurface(
     queueMicrotask(() => { flushing = false; flush(); });
   };
 
-  const timers = createTimers();
+  const clock = options.clock ?? realNotchPageClock;
+  const timers = createTimers(clock);
   const frames = createFrames(flush);
   const sounds = createSounds();
   // The display's camera housing, when it has one (a MacBook's). Told by the desktop app.
@@ -175,7 +179,7 @@ export function createNotchSurface(
   let count = 0, shownCount = 0;
   /** Every `show` makes whatever was scheduled for the line before it void. */
   let tok = 0, shownAt = 0;
-  /** What `tok` was when the last thing was drawn whole. Not `tok` any more: what was scheduled for it is void. */
+  /** What `tok` was when the last thing was drawn. Not `tok` any more: what was scheduled for it is void. */
   let shownTok = 0;
   /**
    * When the line that is up runs out, for a result and a burning fuse: so
@@ -326,7 +330,7 @@ export function createNotchSurface(
   /** Whether the end of the sheet that is up has been on screen at some moment, and since when. */
   let sheetSeen = false;
   let sheetSeenAt = 0;
-  const sawSheetEnd = (): void => { if (!sheetSeen) { sheetSeen = true; sheetSeenAt = performance.now(); } };
+  const sawSheetEnd = (): void => { if (!sheetSeen) { sheetSeen = true; sheetSeenAt = clock.now(); } };
 
   /** A sheet with more below fades at its lower edge. */
   function more(): void {
@@ -344,12 +348,12 @@ export function createNotchSurface(
    * that came by itself: the person may be in the middle of a yes to something
    * else, or of a shortcut that ends like one.
    */
-  const tooSoon = (): boolean => performance.now() - shownAt < (line?.unasked ? YES_DEAD_UNASKED_MS : YES_DEAD_MS);
+  const tooSoon = (): boolean => clock.now() - shownAt < (line?.unasked ? YES_DEAD_UNASKED_MS : YES_DEAD_MS);
 
   /** When the last two clicks on the notch came. */
   let clickAt = 0;
   let clickBefore = 0;
-  const noteClick = (): void => { clickBefore = clickAt; clickAt = performance.now(); };
+  const noteClick = (): void => { clickBefore = clickAt; clickAt = clock.now(); };
   /**
    * Whether a click on a yes or on a choice cannot have been meant for the
    * line that is up. Two cases. The line came by itself a moment ago: the
@@ -375,7 +379,7 @@ export function createNotchSurface(
 
   function show(v: View, instant = false): void {
     tok++;
-    shownAt = performance.now();
+    shownAt = clock.now();
     wrap.classList.remove('fusing', 'talk');
     if (shape.N.mode === 'talk') { shape.N.tgt = null; shape.morphStop(); }
     sentence.reset();
@@ -491,7 +495,7 @@ export function createNotchSurface(
     plain: (parts) => sentence.plain(parts),
     button: (id, row) => {
       // A double click is one press: the second answer was kept for the next thing that waited on this line.
-      const now = performance.now();
+      const now = clock.now();
       const which = `${id}\n${row ?? ''}`;
       if (which === pressed && now - pressedAt < 400) return;
       pressed = which;
@@ -545,18 +549,21 @@ export function createNotchSurface(
    * the screen, and the keys answering for the new one that nobody saw.
    */
   function drawLine(l: NotchLine, instant = false): void {
-    const before = { line, cur, due, folding };
+    // `live`: what the line that is up has scheduled still stands (a line on its way in along the edge has
+    // already made it void).
+    const before = { line, cur, due, folding, tok, live: tok === shownTok };
     try { showLine(l, instant); } catch (error) {
       console.error('[notch] a line could not be drawn', error);
       line = before.line;
       cur = before.cur;
       due = before.due;
       if (!cur) { try { rest(true); } catch { /* nothing more can be done here */ } return; }
-      // What was scheduled for the line that stays may have gone with the attempt (a draw that got as far
-      // as the screen makes it void, and any attempt stops its fold): a result then stayed up for ever, and
-      // an offer never folded. Then it is drawn again as it stands, with what is left of its time. When
-      // nothing of it was touched it is left alone: drawing it again would empty a field being typed in.
-      if (tok === shownTok && !before.folding) return;
+      // A draw that got as far as the screen has replaced some or all of the line that stays, and made void
+      // what it had scheduled; any attempt stops its fold. A result then stayed up for ever, an offer never
+      // folded, and the screen could show the line that failed while the keys answered for the other. Then
+      // the line that stays is drawn again as it stands, with what is left of its time. When nothing of it
+      // was touched it is left alone: drawing it again would empty a field being typed in.
+      if (tok === before.tok && before.live && !before.folding) return;
       try { again(); } catch { try { rest(true); } catch { /* nothing more can be done here */ } }
     }
   }
@@ -574,11 +581,12 @@ export function createNotchSurface(
     // What is left of its time: by the page's own count when it is the line it already shows, or else as the
     // brain says (for a page that came up in the middle of it), or else all of it.
     const timed = l.kind === 'say' || l.kind === 'send' ? l : null;
-    const own = same && timed && due?.id === l.id ? Math.max(0, due.at - performance.now()) : undefined;
+    const own = same && timed && due?.id === l.id ? Math.max(0, due.at - clock.now()) : undefined;
     const total = timed ? Math.max(0, timed.ms) : 0;
     const left = Math.min(total, Math.max(0, own ?? timed?.left ?? total));
-    // A fuse the brain says has nothing left was not seen to burn by this page: it cannot say it ran out.
-    const seen = own !== undefined || left > 0 || total === 0;
+    // A fuse this page did not show from its start, with too little left for anybody to read it and press
+    // Esc, was not seen to burn: the page cannot say it ran out (NOTCH_FUSE_SEEN_MS).
+    const seen = own !== undefined || timed?.left === undefined || left >= Math.min(total, NOTCH_FUSE_SEEN_MS);
     due = null;
     dropKeyboard();
     line = l;
@@ -597,7 +605,7 @@ export function createNotchSurface(
       // Esc on a result is "seen": it goes, like yes.
       me.onEsc = () => { answer('done'); rest(); };
       show({ body: 'line', say: l.say, ...common }, instant);
-      due = { id: l.id, at: performance.now() + left };
+      due = { id: l.id, at: clock.now() + left };
       later(left, () => { answer('done'); rest(); });
       return;
     }
@@ -635,7 +643,7 @@ export function createNotchSurface(
         if (sheetAtEnd()) sawSheetEnd();
         // The end must have been there for a moment: the press that brought it up is not the yes, and a
         // second quick press behind it is not one either. Reading takes longer than that.
-        if (sheetSeen && performance.now() - sheetSeenAt >= WHOLE_READ_MS) { yes(); return; }
+        if (sheetSeen && clock.now() - sheetSeenAt >= WHOLE_READ_MS) { yes(); return; }
         if (sheetSeen) return;
         sheetEl.scrollTop = Math.min(sheetEl.scrollHeight, sheetEl.scrollTop + Math.max(80, sheetEl.clientHeight - 64));
         more();
@@ -714,7 +722,7 @@ export function createNotchSurface(
         };
         show({ body: 'line', say: l.say, hint: { cap: 'esc', act: 'undo' }, ...common, mood: l.mood ?? 'write' }, instant);
         if (!seen) return;
-        due = { id: l.id, at: performance.now() + left };
+        due = { id: l.id, at: clock.now() + left };
         shape.burn(total, left);
         later(left, () => {
           if (me.done) return;
@@ -920,12 +928,16 @@ export function createNotchSurface(
   function receive(raw: NotchToPage): void {
     if (!alive) return;
     // Read whole before anything changes: a message that is not one is dropped, and the notch stays as it was.
-    const message = parseNotchToPage(raw);
-    if (!message) {
-      const what = named(raw);
-      for (const listener of dropListeners) listener(what);
-      return;
+    // One of a kind this page has never heard of (a newer brain) is passed over without a word.
+    const read = readNotchToPage(raw);
+    if (!read.message || read.lineLost) {
+      if (read.message || read.why === 'malformed') {
+        const what = named(raw);
+        for (const listener of dropListeners) listener(what);
+      }
+      if (!read.message) return;
     }
+    const message = read.message;
     try {
       switch (message.type) {
         case 'state': {
@@ -937,11 +949,16 @@ export function createNotchSurface(
           if (message.eye) nin.dataset.eye = 'eye'; else delete nin.dataset.eye;
           // And whether it makes its small sounds: the person's own choice, kept by the brain.
           sounds.set(message.sound === true);
-          if (message.line) {
+          if (cur && line && (read.lineLost || message.line?.id === line.id)) {
+            // The line this page already shows, told again (the page said hello again): it stays as it is.
+            // Drawn again it forgot that it was answered: an Esc on a fuse was followed by "it ran out", a
+            // yes could be given twice, and a field being typed in was emptied. And a line that could not
+            // be read takes nothing off the notch either.
+          } else if (message.line) {
             edge.appear();
             // A line that cannot be drawn must not leave the page unborn: it then drew nothing and heard
             // nothing more until it was loaded again. It rests, and can be shown the next thing.
-            try { showLine(structuredClone(message.line), true, message.line.id === line?.id); } catch (error) {
+            try { showLine(message.line, true); } catch (error) {
               console.error('[notch] a line could not be drawn', error);
               try { rest(true); } catch { /* nothing more can be done here */ }
             }
@@ -959,10 +976,10 @@ export function createNotchSurface(
         case 'show':
           if (!born) return;
           if (message.line.arrive && (NOTCH_ARRIVALS as readonly string[]).includes(message.line.arrive) && !reduce) {
-            const next = structuredClone(message.line), mine = ++tok;
+            const next = message.line, mine = ++tok;
             arriving = next;
             edge.arrive(message.line.arrive, () => { if (arriving === next) arriving = null; if (mine === tok) drawLine(next); });
-          } else drawLine(structuredClone(message.line));
+          } else drawLine(message.line);
           return;
         case 'rest':
           if (born) rest();
@@ -1033,13 +1050,13 @@ export function createNotchSurface(
     sounds.sfx('tick');
   };
   const onPointerUp = (): void => {
-    if (scrub?.moved) scrubbed = performance.now();
+    if (scrub?.moved) scrubbed = clock.now();
     scrub = null;
   };
   const onClick = (e: MouseEvent): void => {
     const word = liveOf(e.target);
     if (word) {
-      if (performance.now() - scrubbed > 250 && !(cur?.done)) sentence.cycle(word, 1);
+      if (clock.now() - scrubbed > 250 && !(cur?.done)) sentence.cycle(word, 1);
       return;
     }
     // A press on "close" puts the notch to rest before this handler hears of
@@ -1053,7 +1070,7 @@ export function createNotchSurface(
     const word = liveOf(e.target);
     if (!word || cur?.done) return;
     e.preventDefault();
-    const now = performance.now();
+    const now = clock.now();
     if (now - lastWheel < 140) return;
     lastWheel = now;
     sentence.cycle(word, e.deltaY > 0 ? 1 : -1);

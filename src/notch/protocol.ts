@@ -324,6 +324,17 @@ export function notchWhereApp(value: unknown): NotchWhereApp | null {
   return icon ? { name, icon } : { name };
 }
 
+/**
+ * The least of a fuse a page must be told is left for it to say, at its end,
+ * that it ran out. A page that comes up in the middle of a fuse did not show
+ * what went before: with less than this left, nobody had the time to read the
+ * line and press Esc, so the page burns nothing and says nothing ran out (the
+ * brain then counts the fuse as lost, and the yes behind it decides nothing).
+ * Esc is still an undo. A page that showed the fuse from its start is not
+ * held to this. The owner's to tune.
+ */
+export const NOTCH_FUSE_SEEN_MS = 2000;
+
 /** Brain to page. */
 export type NotchToPage =
   /** The answer to hello: everything the notch should be showing, at once. */
@@ -642,20 +653,45 @@ function readLine(value: unknown): NotchLine {
   return line;
 }
 
-function readToPage(m: Raw): NotchToPage | null {
-  if (m.type === 'rest') return { type: 'rest' };
-  if (m.type === 'show') return { type: 'show', line: readLine(m.line) };
-  if (m.type === 'count') return { type: 'count', count: number(m.count) };
-  if (m.type === 'face') return { type: 'face', mood: oneOf(NOTCH_MOODS, m.mood) ?? unread() };
-  if (m.type === 'where') return { type: 'where', app: notchWhereApp(m.app) };
+/**
+ * A message as the page reads it. Three things can come of it:
+ *   - a message. With `lineLost`, a `state` whose line could not be read: the
+ *     rest of it stands (how many wait, the face, the app in front) and its
+ *     line is null, so that a page which comes up is not left with nothing.
+ *   - `unknown`: well formed, and of a kind this page has never heard of (a
+ *     `type` it does not have, a face it cannot make). A brain newer than the
+ *     page says such things. They are passed over without a word.
+ *   - `malformed`: it says it is something the page knows, and is not.
+ */
+export type NotchRead =
+  | { message: NotchToPage; lineLost?: true }
+  | { message: null; why: 'unknown' | 'malformed' };
+
+function readToPage(m: Raw): NotchRead {
+  if (typeof m.type !== 'string') return unread();
+  if (m.type === 'rest') return { message: { type: 'rest' } };
+  if (m.type === 'show') return { message: { type: 'show', line: readLine(m.line) } };
+  if (m.type === 'count') return { message: { type: 'count', count: number(m.count) } };
+  if (m.type === 'face') {
+    const mood = oneOf(NOTCH_MOODS, text(m.mood));
+    return mood ? { message: { type: 'face', mood } } : { message: null, why: 'unknown' };
+  }
+  if (m.type === 'where') return { message: { type: 'where', app: notchWhereApp(m.app) } };
   if (m.type === 'state') {
-    const state: Extract<NotchToPage, { type: 'state' }> = { type: 'state', line: absent(m.line) ? null : readLine(m.line), count: number(m.count) };
+    const state: Extract<NotchToPage, { type: 'state' }> = { type: 'state', line: null, count: number(m.count) };
+    let lineLost = false;
+    if (!absent(m.line)) {
+      try { state.line = readLine(m.line); } catch (error) {
+        if (!(error instanceof NotchUnread)) throw error;
+        lineLost = true;
+      }
+    }
     put(state, 'born', oneOf(NOTCH_BIRTHS, m.born));
     put(state, 'face', oneOf(NOTCH_MOODS, m.face));
     if (m.where !== undefined) state.where = notchWhereApp(m.where);
     put(state, 'eye', optFlag(m.eye));
     put(state, 'sound', optFlag(m.sound));
-    return state;
+    return lineLost ? { message: state, lineLost: true } : { message: state };
   }
   if (m.type === 'update') {
     const id = text(m.id);
@@ -666,7 +702,7 @@ function readToPage(m: Raw): NotchToPage | null {
     put(update, 'heard', optText(m.heard));
     put(update, 'over', optFlag(m.over));
     if (!absent(m.blocks)) update.blocks = readBlocks(m.blocks);
-    return update;
+    return { message: update };
   }
   if (m.type === 'act') {
     // A movement is never worth losing the others for: one that is not known is left out.
@@ -684,9 +720,9 @@ function readToPage(m: Raw): NotchToPage | null {
     put(act, 'mouth', oneOf(MOUTHS, m.mouth));
     if (isNumber(m.park)) act.park = m.park;
     if (typeof m.sound === 'boolean') act.sound = m.sound;
-    return act;
+    return { message: act };
   }
-  return null;
+  return { message: null, why: 'unknown' };
 }
 
 /**
@@ -695,21 +731,28 @@ function readToPage(m: Raw): NotchToPage | null {
  * the page must be able to draw whatever it lets in. So a message is read
  * whole before anything on the notch changes, and one that is not exactly a
  * message (a line with no id, a sheet with no blocks, a part of a sentence
- * that is not one) is null: it is dropped, and the notch stays as it was.
+ * that is not one) is not let in: the notch stays as it was.
  *
  * Two things are taken more lightly, as the page always took them. What only
  * dresses a line or moves the notch (a mood, a mark, an app, a way of
  * arriving, the movements of `act`) is left out when it is not known, and the
  * rest stands. And the map takes what it can of what it is given.
  *
- * What comes back is a new object with nothing in it but what a message has.
+ * A message that is read is a new object with nothing in it but what a
+ * message has. See `NotchRead` for what else can come of it.
  */
-export function parseNotchToPage(raw: unknown): NotchToPage | null {
-  if (!isRaw(raw)) return null;
+export function readNotchToPage(raw: unknown): NotchRead {
+  if (!isRaw(raw)) return { message: null, why: 'malformed' };
   try {
     return readToPage(raw);
   } catch (error) {
-    if (error instanceof NotchUnread) return null;
+    if (error instanceof NotchUnread) return { message: null, why: 'malformed' };
     throw error;
   }
+}
+
+/** The same, for whoever only asks whether it is a message, whole: that message, or null. */
+export function parseNotchToPage(raw: unknown): NotchToPage | null {
+  const read = readNotchToPage(raw);
+  return read.message && !read.lineLost ? read.message : null;
 }

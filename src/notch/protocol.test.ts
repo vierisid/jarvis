@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseNotchToPage } from './protocol.ts';
+import { parseNotchToPage, readNotchToPage } from './protocol.ts';
 import type { NotchBlock, NotchLine, NotchToPage } from './protocol.ts';
 
 const word = { name: 'when', value: 'Tuesday', options: ['Tuesday', 'Friday'], label: 'Day', read: 'day', syn: { Friday: ['end of the week'] }, free: true, long: false } as const;
@@ -188,5 +188,27 @@ describe('a message from the brain, read by the page', () => {
     expect(parseNotchToPage({ type: 'where', app: { name: '  Mail  ', icon: 'javascript:alert(1)' } })).toEqual({ type: 'where', app: { name: 'Mail' } });
     expect(parseNotchToPage({ type: 'where', app: { icon } })).toEqual({ type: 'where', app: null });
     expect(parseNotchToPage({ type: 'where' })).toEqual({ type: 'where', app: null });
+  });
+
+  test('a message of a kind the page has never heard of is told apart from one that is wrong', () => {
+    // What a newer brain may say: well formed, and unknown here.
+    for (const message of [{ type: 'patch', seq: 3, line: null }, { type: 'effect' }, { type: 'face', mood: 'furious' }]) {
+      expect(readNotchToPage(message)).toEqual({ message: null, why: 'unknown' });
+      expect(parseNotchToPage(message)).toBeNull();
+    }
+    // It says it is something the page knows, and is not; or it is not a message at all.
+    for (const message of [null, 42, [], {}, { type: 7 }, { type: 'face' }, { type: 'face', mood: 7 }, { type: 'count' }, { type: 'show', line: { id: 'a', kind: 'banner', say: [] } }]) {
+      expect(readNotchToPage(message)).toEqual({ message: null, why: 'malformed' });
+    }
+    expect(readNotchToPage({ type: 'rest' })).toEqual({ message: { type: 'rest' } });
+  });
+
+  test('a state whose line cannot be read keeps the rest of what it says, and says the line was lost', () => {
+    const read = readNotchToPage({ type: 'state', count: 3, face: 'closed', eye: true, line: { id: 'a', kind: 'sheet', say: ['Approve?'] } });
+    expect(read).toEqual({ message: { type: 'state', line: null, count: 3, face: 'closed', eye: true }, lineLost: true });
+    // Whole, it is not a message.
+    expect(parseNotchToPage({ type: 'state', count: 3, line: { id: 'a', kind: 'sheet', say: ['Approve?'] } })).toBeNull();
+    // What is wrong outside the line is wrong for all of it.
+    expect(readNotchToPage({ type: 'state', count: 'three', line: null })).toEqual({ message: null, why: 'malformed' });
   });
 });

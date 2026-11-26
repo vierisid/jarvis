@@ -115,15 +115,32 @@ export interface Timers {
   clear(): void;
 }
 
-export function createTimers(): Timers {
+/**
+ * The time the page goes by: what the time is, and a call after a while. The
+ * real one is the browser's. The tests give their own, so that nothing they
+ * check depends on how fast the machine is that day.
+ */
+export interface NotchPageClock {
+  now(): number;
+  after(ms: number, fn: () => void): number;
+  cancel(id: number): void;
+}
+
+export const realNotchPageClock: NotchPageClock = {
+  now: () => performance.now(),
+  after: (ms, fn) => window.setTimeout(fn, ms),
+  cancel: (id) => window.clearTimeout(id),
+};
+
+export function createTimers(clock: NotchPageClock = realNotchPageClock): Timers {
   const ids = new Set<number>();
   return {
     after(ms, fn) {
-      const id = window.setTimeout(() => { ids.delete(id); fn(); }, ms);
+      const id = clock.after(ms, () => { ids.delete(id); fn(); });
       ids.add(id);
       return id;
     },
-    cancel(id) { window.clearTimeout(id); ids.delete(id); },
-    clear() { ids.forEach(id => window.clearTimeout(id)); ids.clear(); },
+    cancel(id) { clock.cancel(id); ids.delete(id); },
+    clear() { ids.forEach(id => clock.cancel(id)); ids.clear(); },
   };
 }
