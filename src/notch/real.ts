@@ -405,11 +405,13 @@ export function notchRead(parts: NotchReadParts, text: string, how?: NotchAskHow
     const reading = about?.read(text) ?? null;
     return reading ? reading.then((hit) => ({ hit, asksFor: null, how: 'read' as const, ms: 0 })) : null;
   }
-  // After sentences that were not read in time the reading rests: nothing is asked, and nothing waits.
-  if (parts.reader.resting()) return null;
+  const people = about?.reads(text) ?? null;
+  // After sentences that were not read in time the reading rests: nothing is asked, and nothing waits. Each
+  // tier rests on its own, so a sentence that names somebody here is still read while the small tier rests.
+  if (parts.reader.resting(people && people.names.length > 0 ? 'people' : 'small')) return null;
   let app: string | null = null;
   try { app = parts.app?.() ?? null; } catch { app = null; }
-  return parts.reader.read({ text, how, table: notchIntents(parts.routers), app, people: about?.reads(text) ?? null });
+  return parts.reader.read({ text, how, table: notchIntents(parts.routers), app, people });
 }
 
 /**

@@ -32,13 +32,23 @@
  * then decides as it decides for fixed words (`placeReading`):
  *
  *   - an intent that is not one of those offered is "none";
- *   - what it filled in has to come out of the owner's own sentence, and is
- *     turned into the intent's fixed words, which are put to the table like
- *     any sentence: so the state the intent needs, the order of the bands,
- *     the line or the fuse before anything goes all hold, because it is the
- *     same match;
+ *   - for the intents of the table, what it filled in has to come out of the
+ *     owner's own sentence (a name, what an agent is to do, a number, a time
+ *     the sentence writes), and is turned into the intent's fixed words,
+ *     which are put to the table like any sentence, marked as read: so the
+ *     state the intent needs, the order of the bands and the reply rule hold
+ *     because it is the same match, and whatever acts on the screen, sends or
+ *     creates shows its line first, whatever is live (`readAsks`);
+ *   - a word for a colleague ("people") is not put back through the table:
+ *     it is the reading of ./people-read.ts, parsed and done by ./people.ts
+ *     as before there was one reader. Whom it is for is one of the colleagues
+ *     the sentence names, by number; the words, the file and the minutes are
+ *     the model's, as they always were, and go under the fuse or the line
+ *     that kind of word always had. A plain question is no word, question or
+ *     job for them, but can still be a file, a time or a look;
  *   - a sentence an intent must never take (`never`) is not that intent;
- *   - a plain question is never something that sends, creates or acts;
+ *   - a plain question is never made into an intent of the table that
+ *     sends, creates or acts;
  *   - any other form of answer is no reading at all.
  *
  * The sentence is data in the question. It can say "ignore the rules and
@@ -58,7 +68,7 @@
 import { NOTCH_NAME } from './name.ts';
 import { peerPlain } from '../peers/notes.ts';
 import {
-  NOTCH_SENTENCE_ACTS, resolveIntent,
+  NOTCH_INTENT_ACTS_GUARDED, NOTCH_SENTENCE_ACTS, resolveIntent,
   type NotchAsksFor, type NotchIntent, type NotchIntentHit, type NotchIntentHow, type NotchSentenceAct,
 } from './intents.ts';
 import { NOTCH_PEOPLE_READ_KINDS, NOTCH_PEOPLE_READ_MS, NOTCH_PEOPLE_READ_NONE, NOTCH_PEOPLE_READ_PEOPLE, NOTCH_PEOPLE_READ_WORDS } from './people-read.ts';
@@ -175,7 +185,7 @@ export function intentReadSystem(table: readonly NotchIntent[], people: boolean)
     `- "settings": how ${NOTCH_NAME} or the computer behaves from now on is to be changed.`,
     '- "screen": it is about what is on the screen in the app in front of the owner now: where something is in it, how something is done in it, or something to click, type or change there.',
     '- "create": something that lasts is to be made: a file, a document, a reminder, a calendar entry, an agent.',
-    'A sentence can ask for several: "install vite and email Anna the log" is "install" and "send". Name an act only when the sentence asks for it to be done. When you are not sure, leave it out: what is left out is asked about before it is done, and what is named is not.',
+    'A sentence can ask for several: "install vite and email Anna the log" is "install" and "send". Name an act only when the sentence clearly asks for it to be done. When you are not sure, leave it out.',
     '"update Chrome" and "set up docker" are "install". "write an email to Anna" is "send". "pull the latest changes" is "command". "dark mode please" is "settings".',
     'An act that is only spoken of, or forbidden, is not asked for: "do not under any circumstances send this" and "summarise what to send" ask for no "send"; "run a search for flights" and "make it run faster" ask for no "command".',
     'A question that only wants an answer asks for none. "how do I cook rice" asks for none. "how do I export this as PDF", with a program in front that can, is "screen".',
@@ -271,6 +281,9 @@ export function plainQuestion(text: string): boolean {
   return ASKS.test(said) || /\?\s*$/.test(said);
 }
 
+/** The kinds of a reading about a colleague that a plain question can still be. */
+const PEOPLE_ASKED_AS_QUESTION: readonly string[] = ['file-from', 'file-to', 'time', 'look'];
+
 const flat = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const asActs = (act: NotchIntent['act']): NotchSentenceAct[] => ((NOTCH_SENTENCE_ACTS as readonly string[]).includes(act) ? [act as NotchSentenceAct] : []);
 
@@ -285,14 +298,19 @@ export function placeReading(reading: IntentReading, ask: IntentReadAsk): (Notch
   // A sentence that was cut to fit the question was not read whole: nothing is made of a part of it.
   if (peerPlain(ask.text, NOTCH_INTENT_READ_SAID_MAX + 1).length > NOTCH_INTENT_READ_SAID_MAX) return null;
   if (reading.intent === NOTCH_INTENT_PEOPLE) {
-    // Only when colleagues were offered: a sentence that names nobody here is a word for nobody.
-    if (!ask.people || ask.people.names.length === 0 || question) return null;
+    // Only when colleagues were offered: a sentence that names nobody here is a word for nobody. A plain
+    // question is no word, question or job for them ("what did Leo say?"); it can still be a file of theirs
+    // or for them, a time with them or a look, as it was read before ("when can Leo and I talk", "can Leo
+    // send me the contract?"), each shown first as the fixed words show it.
+    if (!ask.people || ask.people.names.length === 0) return null;
+    if (question && !PEOPLE_ASKED_AS_QUESTION.includes(reading.slots.kind ?? '')) return null;
     let taken: ReturnType<IntentReadPeople['take']> = null;
     try { taken = ask.people.take(reading.raw); } catch { taken = null; }
     if (!taken) return null;
     const { id, did, run } = taken;
     const intent = ask.table.find((one) => one.id === id);
     if (!intent) return null;
+    if (NOTCH_INTENT_ACTS_GUARDED.includes(intent.act) && intent.first === 'acts') return null;
     if ((intent.never ?? []).some((never) => flat(never) === flat(ask.text))) return null;
     // A reply to a question the assistant asked back is the answer (`inReply`), for a reading as for a fixed match.
     if (ask.how?.reply === true && intent.inReply !== true) return null;
@@ -303,11 +321,14 @@ export function placeReading(reading: IntentReading, ask: IntentReadAsk): (Notch
   // A question is never something that sends, creates or acts, whatever was made of it.
   if (question && intent.act !== 'none') return null;
   if ((intent.never ?? []).some((never) => flat(never) === flat(ask.text))) return null;
+  // A pick that would act at once on the screen, send or create is taken only from an intent that then asks first.
+  if (NOTCH_INTENT_ACTS_GUARDED.includes(intent.act) && intent.first === 'acts' && intent.readAsks !== true) return null;
   let words: string | null = null;
   try { words = intent.read.words(reading.slots, ask.text); } catch { words = null; }
   if (!words) return null;
-  // The fixed words that say the same thing, put to the table like any sentence: taken by that intent, or by none.
-  const hit = resolveIntent(ask.table, words, ask.how);
+  // The fixed words that say the same thing, put to the table like any sentence: taken by that intent, or by
+  // none. Marked as read, so that what acts, sends or creates shows its line first, whatever is live.
+  const hit = resolveIntent(ask.table, words, { source: 'typed', at: 0, ...ask.how, read: true });
   return hit && hit.intent.id === intent.id ? hit : null;
 }
 
@@ -329,23 +350,28 @@ export interface NotchIntentReaderDeps {
 export interface NotchIntentReader {
   /** Reads one sentence. Never throws, and never takes longer than the deadline. */
   read(ask: IntentReadAsk): Promise<NotchRead>;
-  /** Whether the reading rests now, after sentences that were not read in time. */
-  resting(): boolean;
+  /**
+   * Whether the reading rests now, after sentences that were not read in time. One rest for each tier: the
+   * small one's 2.5 s, and the eight seconds of a sentence that names somebody here. Sentences of one never
+   * put the other to rest, so words about colleagues are still read while the small tier rests.
+   */
+  resting(tier?: 'small' | 'people'): boolean;
 }
 
 export function createNotchIntentReader(deps: NotchIntentReaderDeps): NotchIntentReader {
   const now = deps.now ?? Date.now;
   const clock = deps.clock ?? { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
   const log = deps.log ?? ((line: string) => console.log(line));
-  let misses = 0;
-  let restUntil = 0;
+  const misses = { small: 0, people: 0 };
+  const restUntil = { small: 0, people: 0 };
   const unread = (how: NotchRead['how'], ms: number): NotchRead => ({ hit: null, asksFor: null, how, ms });
   return {
-    resting: () => now() < restUntil,
+    resting: (tier = 'small') => now() < restUntil[tier],
     async read(ask) {
       const began = now();
-      if (began < restUntil) return unread('resting', 0);
       const people = ask.people && ask.people.names.length > 0 ? ask.people : null;
+      const tier = people ? 'people' as const : 'small' as const;
+      if (began < restUntil[tier]) return unread('resting', 0);
       const deadline = people ? (deps.peopleMs ?? NOTCH_PEOPLE_READ_MS) : (deps.readMs ?? NOTCH_INTENT_READ_MS);
       const stop = new AbortController();
       let timer: unknown = null;
@@ -366,13 +392,13 @@ export function createNotchIntentReader(deps: NotchIntentReaderDeps): NotchInten
       const ms = now() - began;
       if (raw === null) {
         stop.abort();
-        misses += 1;
-        const rests = misses >= NOTCH_INTENT_READ_MISSES;
-        if (rests) { restUntil = now() + NOTCH_INTENT_READ_REST_MS; misses = 0; }
-        log(`[notch] a sentence was not read by the model in time (${deadline} ms): it goes on as an instruction${rests ? `. That is ${NOTCH_INTENT_READ_MISSES} in a row: no sentence is read for ${Math.round(NOTCH_INTENT_READ_REST_MS / 60_000)} minutes` : ''}`);
+        misses[tier] += 1;
+        const rests = misses[tier] >= NOTCH_INTENT_READ_MISSES;
+        if (rests) { restUntil[tier] = now() + NOTCH_INTENT_READ_REST_MS; misses[tier] = 0; }
+        log(`[notch] a sentence was not read by the model in time (${deadline} ms): it goes on as an instruction${rests ? `. That is ${NOTCH_INTENT_READ_MISSES} in a row: no sentence ${tier === 'people' ? 'that names somebody here ' : 'that names nobody here '}is read for ${Math.round(NOTCH_INTENT_READ_REST_MS / 60_000)} minutes` : ''}`);
         return unread('late', ms);
       }
-      misses = 0;
+      misses[tier] = 0;
       const reading = intentReadParse(raw);
       if (!reading) {
         log(`[notch] a sentence was read by the model in ${ms} ms, and the answer is in no form: it goes on as an instruction`);

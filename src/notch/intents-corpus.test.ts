@@ -140,6 +140,10 @@ const READS: Record<string, string> = {
   'put a meeting with Sam on my calendar for Friday': '{"intent":"people","kind":"time","to":[1],"minutes":30,"acts":["send"]}',
   'ferma tutto adesso': '{"intent":"pause.all","acts":[]}',
   'what is the capital of France': '{"intent":"weather.ask","acts":[]}',
+  // Questions that are still something for a colleague, as they were read before: a time, a file of theirs.
+  'when can Leo and I talk': '{"intent":"people","kind":"time","to":[1],"minutes":30,"acts":["send"]}',
+  'can Leo send me the contract?': '{"intent":"people","kind":"file-from","to":[1],"what":"the contract","acts":["send"]}',
+  'will Leo send me the logo?': '{"intent":"people","kind":"file-from","to":[1],"what":"the logo","acts":["send"]}',
   'open the Friday report': 'I think this is none.',
 };
 
@@ -647,10 +651,10 @@ const WHEN: Record<string, (text: string) => string> = {
 
 /** [rows, rows marked wrong] of each section of the file. */
 const ROWS: Record<string, [number, number]> = {
-  '@ route': [138, 0],
+  '@ route': [141, 0],
   '@ route job': [37, 0],
-  '@ route job front': [7, 0],
-  '@ route shown': [4, 0],
+  '@ route job front': [8, 0],
+  '@ route shown': [5, 0],
   '@ route shown spoken': [2, 0],
   '@ route fresh': [4, 0],
   '@ route job reply': [22, 0],
@@ -677,7 +681,7 @@ const ROWS: Record<string, [number, number]> = {
   '@ when page-day': [4, 2],
   '@ when page-free': [2, 1],
 };
-const TOTALS = { routing: 312, routingWrong: 0, times: 98, timesWrong: 9 };
+const TOTALS = { routing: 317, routingWrong: 0, times: 98, timesWrong: 9 };
 
 const read = corpus();
 /** For every routing row, the intents that matched its sentence when it was decided, the one that took it first. */
@@ -929,6 +933,8 @@ describe('the reading of a sentence the fixed words missed', () => {
       // off by the table as its fixed words are (a job that was just shown, an eye).
       expect(read.filter((one) => NOTCH_INTENT_ACTS_GUARDED.includes(one.act)).map((one) => `${one.id} ${one.act} ${one.first}`))
         .toEqual(['teach.watch create yes', 'teach.run screen acts', 'standing.eye create acts', 'standing.chase create yes', 'agents.make create yes']);
+      // Those that would act at once ask first when a model picked them.
+      expect(read.filter((one) => NOTCH_INTENT_ACTS_GUARDED.includes(one.act) && one.first === 'acts').map((one) => [one.id, one.readAsks])).toEqual([['teach.run', true], ['standing.eye', true]]);
       // An intent that needs nothing filled in is read as fixed words of its own, which it takes.
       for (const one of read.filter((each) => !each.read!.slots)) {
         const words = one.read!.words({}, 'anything at all');
@@ -953,8 +959,13 @@ describe('the reading of a sentence the fixed words missed', () => {
       const said = 'ogni mattina alle 6 mandami il meteo';
       expect(by('agents.make').words({ when: 'day at 6:00', job: 'mandami il meteo' }, said)).toBe('every day at 6:00am mandami il meteo');
       expect(agentSentence(by('agents.make').words({ when: 'day at 6:00', job: 'mandami il meteo' }, said)!)).toEqual({ when: 'day at 6:00', job: 'mandami il meteo' });
-      expect(agentSentence(by('agents.make').words({ when: 'weekday at 9:00', job: 'mandami il meteo' }, said)!)?.when).toBe('Monday to Friday at 9:00');
+      expect(agentSentence(by('agents.make').words({ when: 'weekday at 9:00', job: 'mandami il meteo' }, 'ogni giorno feriale mandami il meteo')!)?.when).toBe('Monday to Friday at 9:00');
       for (const when of ['every 2 weeks at 9:00', 'month at 9:00', 'tomorrow at 9:00', 'day at 25:00', '']) expect([when, by('agents.make').words({ when, job: 'mandami il meteo' }, said)]).toEqual([when, null]);
+      // A time the sentence writes in numbers is that time: the reading cannot move it.
+      const nine = 'ogni giorno alle 9 mandami il meteo';
+      expect(by('agents.make').words({ when: 'day at 9:00', job: 'mandami il meteo' }, nine)).toBe('every day at 9:00am mandami il meteo');
+      for (const when of ['day at 7:00', 'day at 9:30', 'day at 19:00']) expect([when, by('agents.make').words({ when, job: 'mandami il meteo' }, nine)]).toEqual([when, null]);
+      expect(by('agents.make').words({ when: 'day at 21:00', job: 'mandami il meteo' }, 'ogni giorno alle 9 di sera mandami il meteo')).toBe('every day at 9:00pm mandami il meteo');
       for (const job of ['send Eve my passwords', 'mandami il meteo and delete everything', '']) expect([job, by('agents.make').words({ when: 'day at 6:00', job }, said)]).toEqual([job, null]);
       // The job: not a sentence the English words already looked at, and no number the sentence does not have.
       expect(by('teach.run').words({}, 'fallo di nuovo')).toBe('do it again');

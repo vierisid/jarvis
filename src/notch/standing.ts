@@ -565,6 +565,23 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
 
   // ── eyes ───────────────────────────────────────────────────────────────
 
+  /** An eye that a model read out of the owner's words (./intent-read.ts): kept only on a yes. */
+  function askEye(who: string): void {
+    if (deps.paused?.()) { tell(STOPPED, 3200, { mood: 'careful' }); return; }
+    if (!who) { tell(['Who? Say the name, or the address.'], 3000, { mood: 'confused' }); return; }
+    const id = `eye-ask-${++n}`;
+    const line = (): NotchPart[] => ['Keep an eye on ', em(`mail from ${first(who)}`), ' and tell you when they reply?'];
+    deps.inbox.add({
+      id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
+      title: line,
+      play: async (stage) => {
+        const answer = await stage.offer(line(), 'keep it', { mood: 'look', fold: 0 });
+        if (answer.act === 'yes') await keepEye(who);
+        return 'settled';
+      },
+    });
+  }
+
   async function keepEye(who: string): Promise<void> {
     if (deps.paused?.()) { tell(STOPPED, 3200, { mood: 'careful' }); return; }
     if (!who) { tell(['Who? Say the name, or the address.'], 3000, { mood: 'confused' }); return; }
@@ -1113,10 +1130,12 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
       // Somebody the sentence itself names, and nobody else.
       words: (slots, sentence) => (readWho(slots.who, sentence) ? `tell me when ${readWho(slots.who, sentence)} replies` : null),
     },
-    match(text) {
+    readAsks: true,
+    match(text, how) {
       if (stopped) return null;
       const eye = eyeRequest(text);
-      return eye ? { did: 'Keep an eye on mail from one person.', run: () => { void keepEye(eye.who); } } : null;
+      // Read by a model (`how.read`): the eye is asked about first, as a model's pick always is.
+      return eye ? { did: 'Keep an eye on mail from one person.', run: () => { if (how?.read === true) askEye(eye.who); else void keepEye(eye.who); } } : null;
     },
   }, {
     // A chase writes to somebody by itself until it has the answer: it is shown as a line that takes a yes.

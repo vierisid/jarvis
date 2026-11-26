@@ -254,6 +254,21 @@ describe('keep an eye on this', () => {
     expect(away.eyes).toEqual([false]);
   });
 
+  test('an eye a model read out of the words is asked about first, and kept only on the yes', async () => {
+    for (const answer of ['yes', 'no']) {
+      const h = harness();
+      const eye = h.standing.intents().find((one) => one.id === 'standing.eye')!;
+      expect(eye.readAsks).toBe(true);
+      eye.match('tell me when Sam replies', { source: 'typed', at: 0, read: true })!.run();
+      await settle();
+      expect(h.said()).toBe('Keep an eye on mail from Sam and tell you when they reply?');
+      expect(h.standing.counts().eyes).toBe(0);
+      await h.reply(answer);
+      await h.pass(100);
+      expect([answer, h.standing.counts().eyes]).toEqual([answer, answer === 'yes' ? 1 : 0]);
+    }
+  });
+
   test('one eye per person, and none on someone who is already being chased', async () => {
     const h = harness();
     await h.speak('Tell me when Sam replies');

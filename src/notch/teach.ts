@@ -536,7 +536,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
    * be seen (the owner, 26 November 2026). Asked for on its own row, or at its time and answered with a yes,
    * it is done as before.
    */
-  function startSkill(learned: NotchLearned, said = false): void {
+  function startSkill(learned: NotchLearned, said = false, asked = false): void {
     const effect = deps.effect(learned.skill);
     if (effect.missing) { tell(['I no longer have that job. Show me again.'], 'sorry'); return; }
     if (effect.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
@@ -559,7 +559,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
         if (!deps.jobs.start(plan)) tell(['I am in the middle of something else.']);
       })();
     };
-    if (!effect.deletes) {
+    if (!effect.deletes || asked) {
       if (!said || now() - learned.createdAt < NOTCH_TEACH_FRESH_MS) { begin(); return; }
       void (async () => {
         if (await windowInFront(learned.placed)) { begin(); return; }
@@ -765,7 +765,33 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
   }
 
   /** "Run it", with or without a number. */
-  async function runIt(count: number | null): Promise<void> {
+  /**
+   * The job, asked for in words a model read (./intent-read.ts): a model's pick never sets the hands to work
+   * by itself, whatever is live (docs/notch/README.md, 264). One line first, "Do <the job> again?", or for a
+   * job that deletes the line that says so; on its yes the job runs as the fixed words run it, and nothing
+   * is asked a second time.
+   */
+  function runItAsked(count: number | null): void {
+    if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.']); return; }
+    const learned = fresh ? store.get(fresh.learned) ?? null : store.all()[0] ?? null;
+    const what = learned ? short(learned.what, 60) : 'what you began';
+    const deletes = learned ? deps.effect(learned.skill).deletes === true : false;
+    const line = (): NotchPart[] => (deletes ? ['That job ', em('deletes'), ' something. Do ', em(what), ' again?'] : [learned ? 'Do ' : 'Go on with ', em(what), learned ? ' again?' : '?']);
+    const id = `teach-read-${++tells}`;
+    deps.inbox.add({
+      id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
+      title: line,
+      play: async (stage) => {
+        const answer = await stage.offer(line(), 'do it', { mood: deletes ? 'careful' : 'look', fold: 0 });
+        if (answer.act !== 'yes') return 'settled';
+        if (deps.paused?.()) { await stage.say(['Everything is stopped. Wake me first.'], 3200, { mood: 'careful' }); return 'settled'; }
+        void runIt(count, true);
+        return 'settled';
+      },
+    });
+  }
+
+  async function runIt(count: number | null, asked = false): Promise<void> {
     if (deps.paused?.()) { tell(['Everything is stopped. Wake me first.']); return; }
     if (deps.jobs.busy()) { tell(['I am in the middle of something. Stop it first.']); return; }
     // The rounds of the last showing, while they are still where to go on from.
@@ -781,7 +807,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       const skill = store.get(learnedId)?.skill;
       const effect = skill ? deps.effect(skill) : null;
       if (effect?.pays) { tell(['That job pays for something. I do not do that from here.']); return; }
-      if (!effect?.deletes) { begin(); return; }
+      if (!effect?.deletes || asked) { begin(); return; }
       const id = `teach-delete-${++tells}`;
       deps.inbox.add({
         id, subject: id, class: 'person', speaks: true, urgent: true, asked: true,
@@ -810,7 +836,8 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     const [last] = store.all();
     if (!last) { tell(['I have not been shown a job yet. Say "watch me" and do it once.'], 'confused', 4600); return; }
     // By words alone: at once when it was only just shown or its window is in front, and asked about otherwise.
-    startSkill(last, true);
+    // Asked already (`runItAsked`): done, as a press on its row is.
+    startSkill(last, !asked, asked);
   }
 
   /** The jobs it was shown, as a sheet: each can be run, taken off its schedule, or forgotten. */
@@ -898,12 +925,14 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       },
     },
     over: ['said.answer'],
-    match(text) {
+    readAsks: true,
+    match(text, how) {
       if (stopped) return null;
       const run = runItRequest(text);
       // Only when there is something it could mean: otherwise the words are an instruction like any other.
+      // Read by a model (`how.read`): a line first, whatever is live.
       if (run && (fresh || store.all().length > 0 || deps.catcher?.()?.last())) {
-        return { did: 'Did the job again.', run: () => { void runIt(run.count); } };
+        return { did: 'Did the job again.', run: () => { if (how?.read === true) runItAsked(run.count); else void runIt(run.count); } };
       }
       return null;
     },

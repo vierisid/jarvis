@@ -18,13 +18,15 @@ function table(state: { job?: boolean; ran?: string[] } = {}): NotchIntent[] {
       match: (text) => (/^pause$/i.test(text.trim()) ? hit('Stopped everything.') : null) },
     { id: 'teach.run', feature: 'teach', says: 'do the job that was shown again', band: 'command', act: 'screen', first: 'acts', live: 'a job that was just shown, or its window in front',
       examples: ['do it again', 'run it'], never: ['do it by email'],
-      match: (text) => (state.job && /^(?:do it(?: again)?|run it(?: on \d+)?)$/i.test(text.trim()) ? hit('Did the job again.') : null),
+      readAsks: true,
+      match: (text, how) => (state.job && /^(?:do it(?: again)?|run it(?: on \d+)?)$/i.test(text.trim()) ? hit(how?.read ? 'Asked: do the job again?' : 'Did the job again.') : null),
       read: { slots: { count: 'how many' }, words: (slots, sentence) => (/^do it\b/i.test(sentence) ? null : slots.count === undefined ? 'do it again' : /^\d+$/.test(slots.count) && sentence.includes(slots.count) ? `run it on ${slots.count}` : null) } },
     { id: 'people.say', feature: 'people', says: 'tell somebody something', band: 'command', act: 'send', first: 'fuse', examples: ['tell Anna I am late'],
       match: (text) => { const said = /^tell (Anna|Eve) (.+)$/i.exec(text.trim()); return said ? hit(`Tell ${said[1]}: ${said[2]}`) : null; } },
     { id: 'standing.eye', feature: 'standing', says: 'keep an eye on mail from one person', band: 'command', act: 'create', first: 'acts', alone: 'an eye only ever tells the owner',
       examples: ['tell me when Sam replies'],
-      match: (text) => { const said = /^tell me when (\p{L}+) replies$/iu.exec(text.trim()); return said ? hit(`Keep an eye on ${said[1]}.`) : null; },
+      readAsks: true,
+      match: (text, how) => { const said = /^tell me when (\p{L}+) replies$/iu.exec(text.trim()); return said ? hit(how?.read ? `Asked: keep an eye on ${said[1]}?` : `Keep an eye on ${said[1]}.`) : null; },
       read: { slots: { who: 'the person' }, words: (slots, sentence) => (slots.who && saidIn(sentence, slots.who) && /^\p{L}+$/u.test(slots.who) ? `tell me when ${slots.who} replies` : null) } },
     { id: 'prefs.settings', feature: 'prefs', says: 'open the settings of the notch', band: 'open', act: 'none', first: 'acts', examples: ['settings', 'show me the settings'],
       match: (text) => (/^settings$/i.test(text.trim()) ? hit('Show the settings.') : null), read: readAs('settings') },
@@ -197,7 +199,7 @@ describe('the deadline, and a model that fails', () => {
       expect((await reading).how).toBe('late');
     }
     expect(r.made.resting()).toBe(true);
-    expect(r.logs.at(-1)).toContain('3 in a row: no sentence is read for 5 minutes');
+    expect(r.logs.at(-1)).toContain('3 in a row: no sentence that names nobody here is read for 5 minutes');
     // While it rests the model is not asked, and nothing waits.
     expect(await r.made.read(ask('impostazioni'))).toEqual({ hit: null, asksFor: null, how: 'resting', ms: 0 });
     expect(r.calls).toHaveLength(NOTCH_INTENT_READ_MISSES);
@@ -209,6 +211,38 @@ describe('the deadline, and a model that fails', () => {
     await settle();
     await r.answer('{"intent":"prefs.settings","acts":[]}', 400);
     expect((await again).hit?.did).toBe('Show the settings.');
+  });
+
+  test('each tier rests on its own: words about a colleague are still read while the small tier rests, and their eight seconds put nothing else to rest', async () => {
+    const r = reader();
+    const said = 'let Anna know I am late';
+    const anna = () => colleagues(['Anna'], said);
+    // Three late sentences about Anna, at eight seconds each: the small tier is not put to rest.
+    for (let round = 0; round < NOTCH_INTENT_READ_MISSES; round++) {
+      const reading = r.made.read(ask(said, { people: anna() }));
+      await r.advance(NOTCH_PEOPLE_READ_MS);
+      expect((await reading).how).toBe('late');
+    }
+    expect(r.made.resting('people')).toBe(true);
+    expect(r.made.resting('small')).toBe(false);
+    const small = r.made.read(ask('impostazioni'));
+    await settle();
+    await r.answer('{"intent":"prefs.settings","acts":[]}');
+    expect((await small).hit?.did).toBe('Show the settings.');
+    // And the other way round: with the small tier resting, a word for Anna is still asked.
+    const s2 = reader();
+    for (let round = 0; round < NOTCH_INTENT_READ_MISSES; round++) {
+      const reading = s2.made.read(ask('impostazioni'));
+      await s2.advance(NOTCH_INTENT_READ_MS);
+      await reading;
+    }
+    expect(s2.made.resting()).toBe(true);
+    expect(s2.made.resting('people')).toBe(false);
+    const word = s2.made.read(ask(said, { people: anna() }));
+    await settle();
+    expect(s2.calls).toHaveLength(NOTCH_INTENT_READ_MISSES + 1);
+    await s2.answer('{"intent":"people","kind":"tell","to":[1],"words":"I am late","acts":["send"]}');
+    expect((await word).hit?.did).toBe('Tell Anna: I am late');
   });
 
   test('an answer in time, or a failure, between two late ones: they are not three in a row', async () => {
@@ -273,8 +307,9 @@ describe('the model proposes, the table disposes', () => {
 
   test('an intent that is offered, in other words: placed, by the fixed words that say the same', async () => {
     expect(await read('impostazioni', '{"intent":"prefs.settings","acts":[]}')).toMatchObject({ hit: { did: 'Show the settings.' }, asksFor: { acts: [], by: 'intent' }, how: 'read' });
-    expect(await read('avvisami quando Sam risponde', '{"intent":"standing.eye","who":"Sam","acts":["create"]}')).toMatchObject({ hit: { did: 'Keep an eye on Sam.' } });
-    expect(await read('fallo 3 volte', '{"intent":"teach.run","count":"3","acts":["screen"]}')).toMatchObject({ hit: { did: 'Did the job again.' } });
+    expect(await read('avvisami quando Sam risponde', '{"intent":"standing.eye","who":"Sam","acts":["create"]}')).toMatchObject({ hit: { did: 'Asked: keep an eye on Sam?' } });
+    // Read, the job is asked about first, with a job live or not: the intent is told it was read.
+    expect(await read('fallo 3 volte', '{"intent":"teach.run","count":"3","acts":["screen"]}')).toMatchObject({ hit: { did: 'Asked: do the job again?' } });
   });
 
   test('what an intent covers is the table\'s word for it, never the model\'s', async () => {
@@ -407,8 +442,24 @@ describe('a sentence that carries instructions for the model', () => {
   test('whatever a reading selects that sends, creates or acts shows a line first, or is let off by the table as its fixed words are', () => {
     for (const one of table({ job: true })) {
       if (!one.read || !['screen', 'send', 'create', 'command', 'install'].includes(one.act)) continue;
-      expect([one.id, one.first !== 'acts' || one.live !== undefined || one.alone !== undefined]).toEqual([one.id, true]);
+      expect([one.id, one.first !== 'acts' || one.readAsks === true]).toEqual([one.id, true]);
     }
+  });
+
+  test('an intent that would act at once on the screen, send or create, and does not ask first when read, is never placed', () => {
+    const bare = table({ job: true }).map((one) => (one.id === 'teach.run' ? { ...one, readAsks: undefined } : one));
+    expect(placeReading(intentReadParse('{"intent":"teach.run","acts":["screen"]}')!, ask('fallo', { table: bare }))).toBeNull();
+    expect(placeReading(intentReadParse('{"intent":"teach.run","acts":["screen"]}')!, ask('fallo'))?.did).toBe('Asked: do the job again?');
+  });
+
+  test('the words a reading gives must be taken by the intent it named, and by no other', () => {
+    // prefs.settings read as words that the table gives to standing.eye: none.
+    const sly = table({ job: true }).map((one) => (one.id === 'prefs.settings' ? { ...one, read: readAs('tell me when Sam replies') } : one));
+    const got = placeReading(intentReadParse('{"intent":"prefs.settings","acts":[]}')!, ask('impostazioni', { table: sly }));
+    expect(got).toBeNull();
+    // Words that no intent takes: none.
+    const none = table({ job: true }).map((one) => (one.id === 'prefs.settings' ? { ...one, read: readAs('nothing at all') } : one));
+    expect(placeReading(intentReadParse('{"intent":"prefs.settings","acts":[]}')!, ask('impostazioni', { table: none }))).toBeNull();
   });
 });
 

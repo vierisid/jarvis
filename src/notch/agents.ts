@@ -34,6 +34,18 @@ import { readAs, routeByIntents, saidIn, type NotchIntent } from './intents.ts';
 import { readSchedule, readWhen, sayWhen, sayWhenPlain } from './when.ts';
 
 const em = (text: string): NotchPart => ({ em: text });
+
+/**
+ * Whether the time a reading gave can be the owner's own: when the sentence writes numbers, the hour (as a
+ * 12- or a 24-hour clock) and any minutes are among them. A sentence with no number ("ogni sera", "alle
+ * sei") is read in words, and its time is the reading's, said back on the line before anything is made.
+ */
+function whenFromSentence(when: { hour: number; minute: number }, sentence: string): boolean {
+  const numbers = new Set((sentence.match(/\d+/g) ?? []).map(Number));
+  if (numbers.size === 0) return true;
+  const hours = [when.hour, when.hour % 12 === 0 ? 12 : when.hour % 12];
+  return hours.some((hour) => numbers.has(hour)) && (when.minute === 0 || numbers.has(when.minute));
+}
 const word = (name: string, value: string, options: readonly string[], more: Partial<NotchWord> = {}): NotchPart =>
   ({ word: { name, value, options: [...new Set(options)], ...more } });
 const cap = (text: string): string => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
@@ -767,13 +779,13 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
     // its own kind of schedule out of that (./when.ts). What it is to do has to be the owner's own words.
     read: {
       slots: {
-        when: 'the schedule, in English, as "<day> at <H:MM>" on a 24-hour clock: "Monday at 9:00", "day at 18:00" (every day), "weekday at 9:00" (Monday to Friday), "Monday and Friday at 9:00". An hour from 1 to 6 with no word for the morning or the night is the afternoon ("at 6" is 18:00). With no hour said, 9:00. Only a day of the week and an hour: for anything else ("every 2 weeks", "every month", "every hour", two times) the intent is "none"',
+        when: 'the schedule, in English, as "<day> at <H:MM>" on a 24-hour clock: "Monday at 9:00", "day at 18:00" (every day), "weekday at 9:00" (Monday to Friday), "Monday and Friday at 9:00". An hour from 1 to 6 with no word for the morning or the night is the afternoon ("at 6" is 18:00). With no hour said: 18:00 for every evening, 21:00 for every night, 9:00 otherwise. Only a day of the week and an hour: for anything else ("every 2 weeks", "every month", "every hour", two times) the intent is "none"',
         job: 'what it is to do, in the owner\'s own words and language, without the schedule',
       },
       words(slots, sentence) {
         const when = readWhen(slots.when ?? '', { exact: true });
         const job = (slots.job ?? '').replace(/[.!?\s]+$/, '').trim();
-        if (!when || when.days.length === 0 || !job || !saidIn(sentence, job)) return null;
+        if (!when || when.days.length === 0 || !job || !saidIn(sentence, job) || !whenFromSentence(when, sentence)) return null;
         return `every ${sayWhenPlain(when)} ${job}`;
       },
     },

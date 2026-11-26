@@ -14,7 +14,9 @@
  * The rules, the same for all of them:
  *
  *   - Every word of a schedule is read, or it is no schedule. What cannot be
- *     read is refused, never turned into something near it: "every 2 weeks",
+ *     read is refused (null here; the caller then makes nothing of it and
+ *     says nothing of it: a sentence goes on as an instruction, a lit word
+ *     keeps its value), never turned into something near it: "every 2 weeks",
  *     "every other day", "every month", a second time ("and friday at 4pm"),
  *     an hour that is none ("at 25").
  *   - A weekday is Monday to Friday.

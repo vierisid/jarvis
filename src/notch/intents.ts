@@ -149,7 +149,12 @@ export const NOTCH_INTENT_BANDS: readonly NotchIntentBand[] = ['control', 'up', 
  * How some words came: typed or spoken, and when the typing was sent or the talk keys went down. `reply`: they
  * are the answer to a question the assistant asked back, typed into its line or said while it was up.
  */
-export interface NotchIntentHow { source: 'spoken' | 'typed' | 'offered' | 'shown'; at: number; reply?: boolean }
+/**
+ * `read`: the sentence was not taken by the fixed words; a model read it and named this intent
+ * (./intent-read.ts). An intent that acts on the screen, sends or creates then always shows its line first,
+ * whatever is live: the model proposes, and only the owner's yes disposes (`readAsks`).
+ */
+export interface NotchIntentHow { source: 'spoken' | 'typed' | 'offered' | 'shown'; at: number; reply?: boolean; read?: boolean }
 
 /** What an intent would do with a sentence: what the ledger says was done, and the doing. Nothing happens until `run`. */
 export interface NotchIntentHit { did: string; run(): void }
@@ -186,6 +191,11 @@ export interface NotchIntent {
    * only the fixed words are it.
    */
   read?: NotchIntentRead;
+  /**
+   * For an intent with `read` whose act is guarded and that acts at once (`first: 'acts'`): it shows a line
+   * and waits for a yes when `how.read` is set. Without it such an intent cannot be named by a reading at all.
+   */
+  readAsks?: true;
 }
 
 /** How an intent is reached from a reading of a sentence. See the top of this file. */
