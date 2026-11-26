@@ -184,9 +184,12 @@ function auditOutcome(kind: Exclude<NotchActionKind, 'approval'>, outcome: Notch
 const ROW_ELSEWHERE: Partial<Record<NotchActionKind, readonly NotchActionOutcome[]>> = {
   mail_reply: ['done'], mail_slot: ['done'], chase_mail: ['done'],
   agent_made: ['done', 'undone'],
-  job_rounds: ['done', 'unsure', 'undone'], job_skill: ['done', 'unsure', 'undone'], put: ['done', 'unsure', 'undone'],
+  // A job's own row is there however it ended, may have happened too (it keeps its Undo there). A thing put
+  // that may have landed has none: the job of it is only opened once it is there. Nor has an approval whose
+  // outcome is not known: Today lists those only once their receipt says done.
+  job_rounds: ['done', 'unsure', 'undone'], job_skill: ['done', 'unsure', 'undone'], put: ['done', 'undone'],
   promise: ['done'],
-  approval: ['done', 'unsure', 'undone', 'handed'],
+  approval: ['done', 'undone', 'handed'],
 };
 
 /** The small word on the right of a row of Today. */

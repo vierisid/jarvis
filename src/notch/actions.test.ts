@@ -308,6 +308,16 @@ describe('the rows Today gets from the list', () => {
     ]);
   });
 
+  test('a thing put that may have landed and an approval that may have happened are rows too: nothing else lists them. A job that may have is its own row', () => {
+    const h = made();
+    h.actions.record({ kind: 'put', what: 'Put the total from Excel into Word', asked: { seen: 'line', how: 'key' }, outcome: 'unsure' });
+    h.actions.record({ kind: 'approval', what: 'Send the invoice to Anna', approvalId: 'r1', asked: { seen: 'line', how: 'key', fuseMs: 3000 }, outcome: 'unsure' });
+    h.actions.record({ kind: 'job_rounds', what: 'Copied 3 rows', ref: 'job:1', asked: { seen: 'line', how: 'key' }, outcome: 'unsure' });
+    expect(h.actions.today(0).map((row) => [row.text, row.small]).sort()).toEqual([
+      ['Put the total from Excel into Word', 'may have happened'], ['Send the invoice to Anna', 'may have happened'],
+    ]);
+  });
+
   test('only from the moment that is asked for', () => {
     const h = made();
     h.actions.record({ kind: 'people_tell', what: 'early', asked: { seen: 'line', how: 'said' }, outcome: 'done' });
