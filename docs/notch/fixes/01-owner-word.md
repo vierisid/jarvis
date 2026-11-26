@@ -133,8 +133,26 @@ command key with backspace in a text field on the desktop.
 
 ## Status
 
-- C1 standing on the turn: pending
-- C2 who wrote the words: pending
+- C1 standing on the turn: done in "notch: a turn's standing is an object
+  the notch makes, and a question the notch wrote is not the owner's word".
+  How it is carried and where it stops is in README 41. Two things the
+  design had differently: nothing is "resumed after a restart" (a restart
+  fails every running turn, and a notch attached again in the same process
+  finds the turn's standing still in the turn store), and the standing has
+  only `origin` so far (`words` and `covers` belong to C3 and C4).
+  Still a way in, by its making: any code in the brain can import
+  `mintStanding` and call the turn store's `submit` (the sites test names
+  the callers), code that runs inside a live owner turn has that turn's
+  standing, and the script route (`/api/notch/script`, behind the demo
+  token) types and speaks as the owner on purpose.
+- C2 who wrote the words: done in the same commit, as a guarded turn (the
+  open decision below was taken that way for now). Not done: the ledger
+  still shows a shown question as "Typed" (no fourth source), and a typed
+  "yes" to a question a shown turn asked back is the owner's word like any
+  typed answer, with the earlier attachment only in the history (C3, C4).
+  A shown turn with no attachment at all would be judged as a dashboard
+  turn with none, where a command that deletes is not asked about; both
+  callers always hand over a file.
 - C3 the boundary after outside content: pending
 - C4 what the words cover, fuse line: pending
 - C5 delete reader and click check: done in "notch: a delete by its path,

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { OWNER_WORD_ASKS_REASON, OWNER_WORD_UNSEEN_REASON, STILL_ASKED, callDeletesOrPays, commandDeletes, keysDelete, ownerWord, ownerWordAsks, setOwnerWordProbe } from './owner-word.ts';
 import { ownerAskedOnNotch } from './app-open.ts';
 import { withBriefTurn, type BriefExecutionContext } from '../brief/chat-context.ts';
+import { turnContext } from './standing-fixture.ts';
 import { NOTCH_SWITCH } from '../notch/switch.ts';
 
 afterEach(() => setOwnerWordProbe(null));
@@ -232,27 +233,31 @@ describe('saying it is the approval', () => {
 });
 
 describe('the standing ends with the asking', () => {
-  const context = (requestId: string, controller = new AbortController()): BriefExecutionContext =>
-    ({ conversationId: 'c', turnId: 't', requestId, signal: controller.signal, progress: () => {} });
+  const bare = (requestId: string): BriefExecutionContext =>
+    ({ conversationId: 'c', turnId: 't', requestId, signal: new AbortController().signal, progress: () => {} });
 
   test('a turn from the notch has it while it runs, and not once it is over or was stopped', () => {
     const before = process.env[NOTCH_SWITCH];
     process.env[NOTCH_SWITCH] = '1';
     try {
-      const running = context('notch-spoken-1');
+      const running = turnContext('spoken');
       expect(withBriefTurn(running, () => ownerAskedOnNotch())).toBe(true);
       // The turn ended. A timer it left behind still carries its context.
       running.over = true;
       expect(withBriefTurn(running, () => ownerAskedOnNotch())).toBe(false);
       // Esc: stopped. Nothing more goes ahead on the owner's word.
       const controller = new AbortController();
-      const stopped = context('notch-typed-2', controller);
+      const stopped = turnContext('typed', { controller });
       expect(withBriefTurn(stopped, () => ownerAskedOnNotch())).toBe(true);
       controller.abort();
       expect(withBriefTurn(stopped, () => ownerAskedOnNotch())).toBe(false);
       // A dashboard turn never had it.
-      expect(withBriefTurn(context('req-1'), () => ownerAskedOnNotch())).toBe(false);
+      expect(withBriefTurn(bare('req-1'), () => ownerAskedOnNotch())).toBe(false);
       expect(ownerAskedOnNotch()).toBe(false);
+      // Nor did a turn that names itself as the notch's turns are named.
+      expect(withBriefTurn(bare('notch-typed-2'), () => ownerAskedOnNotch())).toBe(false);
+      // Nor a turn whose words the notch wrote for the owner.
+      expect(withBriefTurn(turnContext('shown'), () => ownerAskedOnNotch())).toBe(false);
     } finally {
       if (before === undefined) delete process.env[NOTCH_SWITCH]; else process.env[NOTCH_SWITCH] = before;
     }

@@ -4,6 +4,7 @@ import { approvalDashboardOnly, approvalDecidableBy, DASHBOARD_DECIDER, NOTCH_DE
 import { rawUiGate } from './ui-intent.ts';
 import { resolveToolGate } from './tool-action-map.ts';
 import { withBriefTurn } from '../brief/chat-context.ts';
+import { inTurnOf } from './standing-fixture.ts';
 import { NOTCH_SWITCH } from '../notch/switch.ts';
 
 let before: string | undefined;
@@ -11,8 +12,10 @@ beforeEach(() => { before = process.env[NOTCH_SWITCH]; process.env[NOTCH_SWITCH]
 afterEach(() => { if (before === undefined) delete process.env[NOTCH_SWITCH]; else process.env[NOTCH_SWITCH] = before; });
 
 const open = (executable: unknown, args?: unknown): Record<string, unknown> => ({ executable, ...(args === undefined ? {} : { args }) });
-/** Runs `fn` inside a turn whose request id is `requestId`. */
-const inTurn = <T>(requestId: string, fn: () => T): T =>
+/** Runs `fn` inside a turn the owner spoke on the notch. */
+const spoken = <T>(fn: () => T): T => inTurnOf('spoken', fn);
+/** Runs `fn` inside a turn that was given no standing and whose request id is `requestId`. */
+const named = <T>(requestId: string, fn: () => T): T =>
   withBriefTurn({ conversationId: 'c', turnId: 't', requestId, signal: new AbortController().signal, progress: () => {} }, fn);
 
 describe('what a plain app open is', () => {
@@ -88,22 +91,35 @@ describe('where it needs no approval', () => {
   test('only inside a turn the owner started on the notch', () => {
     expect(ownerAskedOnNotch()).toBe(false);
     expect(appOpenNeedsNoApproval('desktop_launch_app', open('steam'))).toBe(false);
-    expect(inTurn('notch-spoken-1', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(true);
-    expect(inTurn('notch-typed-1', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(true);
-    // A dashboard turn, and a turn that only looks like one.
-    expect(inTurn('req-123', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
-    expect(inTurn('x-notch-typed-1', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
+    expect(spoken(() => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(true);
+    expect(inTurnOf('typed', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(true);
+    // A dashboard turn.
+    expect(named('req-123', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
+  });
+
+  test('not for a turn that only names its ids the way the notch does', () => {
+    // The id was the whole test once. It says nothing now (./standing.ts).
+    for (const id of ['notch-typed-1', 'notch-spoken-1', 'notch-typed-0f8fad5b-d9cb-469f-a165-70867728950e']) {
+      expect(named(id, () => ownerAskedOnNotch())).toBe(false);
+      expect(named(id, () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
+    }
+  });
+
+  test('not for a turn whose words the notch wrote: nothing was said', () => {
+    expect(inTurnOf('shown', () => ownerAskedOnNotch())).toBe(false);
+    expect(inTurnOf('shown', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
+    expect(inTurnOf('shown', () => rawUiGate('desktop_launch_app', open('steam'))?.confirm)).toBe('always');
   });
 
   test('never with the notch switch off', () => {
     delete process.env[NOTCH_SWITCH];
-    expect(inTurn('notch-spoken-1', () => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
+    expect(spoken(() => appOpenNeedsNoApproval('desktop_launch_app', open('steam')))).toBe(false);
   });
 
   test('the review that every desktop action gets is lifted for it, and for nothing else', () => {
     // Outside a notch turn: reviewed on screen, as always.
     expect(rawUiGate('desktop_launch_app', open('steam'))?.confirm).toBe('always');
-    inTurn('notch-spoken-1', () => {
+    spoken(() => {
       expect(rawUiGate('desktop_launch_app', open('steam'))).toBeNull();
       const gate = resolveToolGate(undefined, 'desktop_launch_app', open('steam'));
       expect(gate.confirm).toBeUndefined();

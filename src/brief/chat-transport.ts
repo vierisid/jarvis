@@ -19,6 +19,7 @@ import type { BriefProvider } from './providers.ts';
 import type { BriefChatEvent, BriefSendTurn, BriefTurnRef } from './contracts.ts';
 import type { BriefCapabilities } from './capabilities.ts';
 import { currentBriefTurn, withBriefTurn, type BriefExecutionContext } from './chat-context.ts';
+import { grantStanding, isUnusedStanding, type TurnStanding } from '../authority/standing.ts';
 
 type Client = ServerWebSocket<unknown>;
 export interface ScopedChatInput extends BriefTurnRef {
@@ -46,7 +47,11 @@ function ref(value: Record<string, unknown>): BriefTurnRef {
   return { conversationId: id(value.conversationId), turnId: id(value.turnId), requestId: id(value.requestId) };
 }
 
-/** Turn and request ids only the brain itself may make (submit). */
+/**
+ * Turn and request ids only the brain itself may make (submit). The shape of
+ * an id gives a turn nothing (authority/standing.ts); this keeps a socket from
+ * taking an id the notch is about to use.
+ */
 const RESERVED_TURN_ID = /^notch-/i;
 
 /** Rejections echo only valid routing IDs, never arbitrary client payloads. */
@@ -112,8 +117,15 @@ export class BriefChatTransport implements BriefProvider {
    * The caller hears how it goes through onEvent. Throws a
    * ConversationRequestError for what a socket send is refused for: a
    * conversation that already has a turn, a full queue, a reused identity.
+   *
+   * `standing` is what the notch gives a turn the owner started there
+   * (authority/standing.ts). Only this door takes one: a socket send has no
+   * field for it. It is kept in memory with the scheduled turn and tied to
+   * the turn when it runs. Anything that was not made by the notch's mint is
+   * dropped here, and a second submit of a turn that already exists changes
+   * nothing about the first.
    */
-  submit(input: BriefTurnRef & { text: string; attachmentIds?: string[] }): { turn: ChatTurn; created: boolean } {
+  submit(input: BriefTurnRef & { text: string; attachmentIds?: string[]; standing?: TurnStanding }): { turn: ChatTurn; created: boolean } {
     if (this.stopped) throw new ConversationRequestError('Conversation chat is unavailable.', 409);
     const identity = { conversationId: id(input.conversationId), turnId: id(input.turnId), requestId: id(input.requestId) };
     if (typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 65_536) throw new ConversationRequestError('Invalid chat text or speech setting');
@@ -122,7 +134,7 @@ export class BriefChatTransport implements BriefProvider {
     // dashboard send binds them, under the same limits.
     const accepted = this.repository.accept({ ...identity, text: input.text, speak: false, attachmentIds: attachmentIds(input.attachmentIds) });
     for (const event of accepted.events) this.emit(event);
-    if (accepted.created) this.schedule(accepted.turn, null, true);
+    if (accepted.created) this.schedule(accepted.turn, null, true, isUnusedStanding(input.standing) ? input.standing : null);
     return { turn: accepted.turn, created: accepted.created };
   }
   /** Every event of every turn, for a listener inside the brain. Comes back with what removes it. */
@@ -247,14 +259,14 @@ export class BriefChatTransport implements BriefProvider {
     for (const event of this.repository.finishEvents(turn, 'cancelled')) this.emit(event);
     this.controllers.get(turn.turnId)?.abort(new DOMException('Turn cancelled', 'AbortError'));
   }
-  private schedule(turn: ChatTurn, client: Client | null, progressEnabled: boolean): void {
+  private schedule(turn: ChatTurn, client: Client | null, progressEnabled: boolean, standing: TurnStanding | null = null): void {
     const controller = new AbortController();
     this.controllers.set(turn.turnId, controller);
     // Admission owns speech even before synthesis starts. Leaving the chat
     // removes this entry permanently, so returning cannot join encoded audio
     // midway or unexpectedly start speech for a turn the user left.
     if (turn.speak && client) this.audioOwners.set(turn.turnId, { turn, client, started: false });
-    const job = this.limit(() => this.execute(turn, client, controller, progressEnabled), controller.signal).catch(error => {
+    const job = this.limit(() => this.execute(turn, client, controller, progressEnabled, standing), controller.signal).catch(error => {
       if (!controller.signal.aborted) console.error('[BriefChat] Turn storage became unavailable:', error instanceof Error ? error.name : 'unknown');
     }).finally(() => {
       this.audioOwners.delete(turn.turnId);
@@ -277,7 +289,7 @@ export class BriefChatTransport implements BriefProvider {
     this.send(client, 'brief_chat_audio', { conversationId: turn.conversationId, turnId, requestId: turn.requestId,
       sequence: this.repository.nextSequence(turn.conversationId), phase: 'end', cancelled }, turn.requestId);
   }
-  private async execute(turn: ChatTurn, client: Client | null, controller: AbortController, progressEnabled: boolean): Promise<void> {
+  private async execute(turn: ChatTurn, client: Client | null, controller: AbortController, progressEnabled: boolean, standing: TurnStanding | null = null): Promise<void> {
     const signal = controller.signal;
     // Any tool, agent or delegated task that started in this turn may have
     // changed something, so a later failure must not say nothing was done.
@@ -311,6 +323,8 @@ export class BriefChatTransport implements BriefProvider {
     // One object for the whole turn, marked when the turn is over: what the
     // turn leaves running keeps it, and can tell (chat-context.ts).
     const context: BriefExecutionContext = { ...identity, signal, progress };
+    // The standing the notch gave this turn, tied to this one object.
+    if (standing) grantStanding(context, standing);
     try {
       if (signal.aborted || isTerminalTurn(this.repository.get(turn).state)) return;
       this.emit(this.repository.start(turn));

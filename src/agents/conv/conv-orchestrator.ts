@@ -120,6 +120,16 @@ export const OWNER_DIRECT_ROUTING_NOTE =
   + 'Before delegating, ask a question only when the request is genuinely ambiguous. '
   + 'They see your reply as one line on their screen, so answer in one short sentence when you can.';
 
+/**
+ * The same for a turn from the notch whose words the owner did not write:
+ * they circled something without a word, or pressed a button on a file. Fixed
+ * text. It keeps the one line and gives no authorization: nothing was said.
+ */
+export const OWNER_SHOWN_ROUTING_NOTE =
+  'This request came from the owner\'s own computer: they pointed at something on their screen or handed over a file, '
+  + 'and the words of the request were written for them by this product. They asked for an answer about it and nothing else. '
+  + 'They see your reply as one line on their screen, so answer in one short sentence when you can.';
+
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
   userIdentity?: string;
@@ -211,6 +221,13 @@ export type ConvTurn = {
    * pebbleVoice: the router gets one fixed sentence (`OWNER_DIRECT_ROUTING_NOTE`).
    */
   ownerDirect?: boolean;
+  /**
+   * This turn came from the notch with words the product wrote for the owner
+   * (a circle with nothing said, a button on a dropped file). A boolean, like
+   * the two above: one fixed sentence (`OWNER_SHOWN_ROUTING_NOTE`), which says
+   * nothing of authorization.
+   */
+  ownerShown?: boolean;
   /**
    * This chat's taint carry-over (agents/turn-taint-carry.ts), handed to
    * every task the turn dispatches or resumes. The caller closes it.
@@ -860,6 +877,10 @@ export class ConvOrchestrator {
     if (turn.ownerDirect) {
       parts.push('# Direct Request');
       parts.push(OWNER_DIRECT_ROUTING_NOTE);
+      parts.push('');
+    } else if (turn.ownerShown) {
+      parts.push('# Shown On Their Screen');
+      parts.push(OWNER_SHOWN_ROUTING_NOTE);
       parts.push('');
     }
 

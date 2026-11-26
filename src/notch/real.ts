@@ -704,7 +704,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       const owner = asks;
       lookAt = attachNotchLook(deps.asks.look.port, {
         inbox,
-        ask: (text, files) => { owner.typed(text, files); },
+        // Nothing was said with it: the question is the notch's own, not the owner's word.
+        ask: (text, files) => { owner.shown(text, files); },
         talking: (sidecarId) => talk?.open(sidecarId) ?? false,
         modelReady: deps.asks.look.modelReady ?? deps.asks.modelReady,
         paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
@@ -721,7 +722,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     // A file dropped on the notch (pass 9) waits for its question: one of three offered, typed, or said.
     const owner = asks;
     drop = attachNotchDrop(surface, inbox, {
-      ask: (text, files) => { owner.typed(text, files); },
+      // A button's words are the notch's own; what was typed in the field is the owner's.
+      ask: (text, files, said) => { if (said) owner.typed(text, files); else owner.shown(text, files); },
       tell: (parts, mood) => { owner.tell(parts, mood); },
       // For somebody in the organisation: the file goes on as it was dropped (./people-files.ts).
       ...(people ? { send: { to: () => people!.fileTargets(), file: (to: string, file: { name: string; bytes: Uint8Array }) => people!.sendFile(to, file) } } : {}),

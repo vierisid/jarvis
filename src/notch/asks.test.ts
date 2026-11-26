@@ -8,6 +8,7 @@ import type { NotchAskFile, NotchAsksDeps, NotchRemembered, NotchTurnDoor } from
 import { NotchInbox } from './inbox.ts';
 import type { NotchItem } from './inbox.ts';
 import { NotchLedger } from './ledger.ts';
+import { isUnusedStanding } from '../authority/standing.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
@@ -17,7 +18,7 @@ const settle = async (): Promise<void> => { for (let i = 0; i < 20; i++) await P
 /** A turn store that does what it is told, turn by turn. */
 function fakeDoor() {
   const listeners = new Set<(event: BriefChatEvent) => void>();
-  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string } }>();
+  const turns = new Map<string, { ref: BriefTurnRef; text: string; state: BriefTurnState; reply: string; error?: { code: string; message: string }; who?: string | null; real?: boolean }>();
   let sequence = 0;
   let busy = false;
   let ready = true;
@@ -34,7 +35,8 @@ function fakeDoor() {
     submit(turn) {
       if (busy) throw Object.assign(new Error('Conversation already has an active turn'), { status: 409 });
       if (turns.has(turn.turnId)) return;
-      turns.set(turn.turnId, { ref: { conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId }, text: turn.text, state: 'running', reply: '' });
+      turns.set(turn.turnId, { ref: { conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId }, text: turn.text, state: 'running', reply: '',
+        who: turn.standing?.origin ?? null, real: isUnusedStanding(turn.standing) });
     },
     cancel(ref) { if (turns.get(ref.turnId)?.state === 'running') emit(ref.turnId, { kind: 'terminal', state: 'cancelled' }); },
     onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -53,6 +55,8 @@ function fakeDoor() {
     end: (turnId: string, state: 'completed' | 'failed' | 'cancelled' = 'completed', error?: { code: string; message: string }) =>
       emit(turnId, { kind: 'terminal', state, ...(error ? { error } : {}) }),
     texts: (): string[] => [...turns.values()].map((turn) => turn.text),
+    /** Who wrote the words of each turn, as the door was told, and whether what it was told is the notch's own mint. */
+    who: (): [string | null, boolean][] => [...turns.values()].map((turn) => [turn.who ?? null, turn.real === true]),
   };
 }
 
@@ -1871,5 +1875,81 @@ describe('words for somebody of the organisation, read by the model', () => {
     expect(ran).toEqual([]);
     expect(h.door.texts()).toEqual([]);
     expect(row(h)).toMatchObject({ state: 'refused' });
+  });
+});
+
+describe('who wrote the words goes with the turn (authority/standing.ts)', () => {
+  const file: NotchAskFile = { kind: 'document', name: 'Deck.pdf', mediaType: 'application/pdf', bytes: new Uint8Array(8) };
+
+  test('typed and spoken words are the owner\'s; an offer that was taken has no standing, as before', async () => {
+    const typed = harness();
+    await typed.type('open Notepad and write a poem');
+    expect(typed.door.who()).toEqual([['typed', true]]);
+
+    const spoken = harness();
+    await spoken.speak('t1', 'open Notepad and write a poem');
+    await spoken.advance(NOTCH_HEARD_MS);
+    expect(spoken.door.who()).toEqual([['spoken', true]]);
+
+    const offered = harness();
+    offered.asks.offered('Leo asked for the October revenue. Reply to him here with the number.');
+    await settle();
+    expect(offered.door.who()).toEqual([[null, false]]);
+  });
+
+  test('words said about something circled or dropped are the owner\'s, and so are words typed about it', async () => {
+    const spoken = harness();
+    spoken.asks.listen('t1'); await settle();
+    spoken.asks.released('t1'); await settle();
+    spoken.asks.words('t1', 'reply to this', { files: [file] }); await settle();
+    await spoken.advance(NOTCH_HEARD_MS);
+    expect(spoken.door.who()).toEqual([['spoken', true]]);
+
+    const typed = harness();
+    typed.asks.typed('what changed since the last deck?', [file]);
+    await settle();
+    expect(typed.door.who()).toEqual([['typed', true]]);
+  });
+
+  test('a question the notch wrote runs and is kept like something typed, and is nobody\'s word', async () => {
+    const h = harness();
+    const id = h.asks.shown('What does this tell me?', [file]);
+    await settle();
+    expect(h.door.texts()).toEqual(['What does this tell me?']);
+    expect(h.door.who()).toEqual([['shown', true]]);
+    // Its row and its ids are as they were: the id says nothing about its standing.
+    expect(row(h)).toMatchObject({ id, source: 'typed', state: 'running', kind: 'turn', turnId: `notch-${id}`, requestId: `notch-typed-${id}` });
+    const turn = h.door.running();
+    h.door.say(turn, 'Installs are up 12% on last week.');
+    h.door.end(turn);
+    await settle();
+    expect(h.said()).toBe('Installs are up 12% on last week.');
+  });
+
+  test('the answer to a question Jarvis asked back is typed by the owner: it has their word, also after a shown turn', async () => {
+    const h = harness();
+    h.asks.shown('What does this tell me?', [file]);
+    await settle();
+    const first = h.door.running();
+    h.door.say(first, 'Shall I put these in a table?');
+    h.door.end(first);
+    await settle();
+    expect(h.line()).toMatchObject({ kind: 'ask' });
+    await h.answer('ask', { text: 'yes, in Excel' });
+    expect(h.door.texts()).toEqual(['What does this tell me?', 'yes, in Excel']);
+    expect(h.door.who()).toEqual([['shown', true], ['typed', true]]);
+  });
+
+  test('each turn gets a standing of its own, never the last one again', async () => {
+    const h = harness();
+    await h.type('first');
+    const one = h.door.running();
+    h.door.say(one, 'Done with the first.');
+    h.door.end(one);
+    await settle();
+    await h.answer('done');
+    await h.type('second');
+    expect(h.door.texts()).toEqual(['first', 'second']);
+    expect(h.door.who()).toEqual([['typed', true], ['typed', true]]);
   });
 });

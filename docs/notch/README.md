@@ -214,11 +214,40 @@ What holds for all of them:
     what it may send or delete) comes first, then the tool and its
     arguments. A tool that wrote no sentence of its own is never shown by
     its name alone when it has arguments: they are what is approved.
-41. **The notch's standing cannot be borrowed.** Turn and request ids that
-    begin `notch-` are made only inside the brain (`BriefChatTransport.submit`);
-    a dashboard socket that sends one is refused. What the notch starts on
-    hearing a turn's event runs outside that turn, so it does not keep the
-    turn's standing after the turn is over.
+41. **The notch's standing cannot be borrowed.** A turn has the notch's
+    standing because the notch gave it one, not because of how its ids are
+    written (`authority/standing.ts`). The standing is an object made in one
+    place, where an instruction becomes a turn (`mintStanding`, called from
+    `notch/asks.ts` and nowhere else: `standing-sites.test.ts` fails when a
+    second caller appears). It is handed to the turn store's in-process door
+    (`BriefChatTransport.submit`), kept in memory with the scheduled turn, and
+    tied to that turn's execution context when it runs (`grantStanding`).
+    Whoever asks is answered from the context the code runs in
+    (`currentStanding`): a helper agent, a retry and a tool call run inside
+    the turn and have it; work the turn did not wait for has none once the
+    turn is over, and detached work never had it. One standing is one turn:
+    it is used up when it is tied, an object that only looks like one is
+    dropped, and submitting a turn a second time changes nothing about the
+    first. A dashboard socket has no field to send one in. Ids that begin
+    `notch-` are still refused from a socket, so that it cannot take an id
+    the notch is about to use, and they give a turn nothing: a turn inside
+    the brain that names itself `notch-typed-...` is judged like any other.
+    Nothing is kept across a restart, which ends every running turn anyway.
+    What the notch starts on hearing a turn's event runs outside that turn,
+    so it does not keep the turn's standing after the turn is over.
+    The standing also says who wrote the turn's words: `typed`, `spoken`, or
+    `shown`. Shown is a question the notch wrote for the person: a circle
+    with nothing said (84), a button on a dropped or received file, Enter on
+    its empty field (`NotchAsks.shown`). The owner said nothing there, so a
+    shown turn has no owner's word (40, 44). It is judged like a dashboard
+    turn that carries the same attachment: the answer comes as before, and
+    any step that acts is asked about, because the attachment is outside
+    content. It is told so in its own note (`NOTCH_SHOWN_TURN_NOTE`,
+    `OWNER_SHOWN_ROUTING_NOTE`), which keeps the one line and drops "their
+    asking is their approval". Words typed in the file's field, or said with
+    the keys held over a circle or a file, are the owner's as before, and so
+    is the typed answer to a question Jarvis asked back. A shown turn is
+    kept in the ledger as typed, and its id is written as a typed turn's.
 40. **Opening an app is not asked about.** Decided by the owner on 13
     November 2026, with the operating system as the measure: it does not ask
     before it opens an app; it asks before a delete, a payment, or a program
@@ -277,7 +306,8 @@ What holds for all of them:
 44. **Saying it is the approval.** Decided by the owner on 13 November 2026,
     after a day of using it: "If I ask something, it should do it. Everything
     apart from deleting and payments." In a turn the owner started on the
-    notch, typed or spoken, a call is not asked about: not a click, typed
+    notch with words of their own, typed or spoken (41: not a question the
+    notch wrote for them), a call is not asked about: not a click, typed
     text, a key press, a page, a command, a file, an app with arguments, a
     send, an install or a change of settings, and not the step after outside
     content was read. Two things are asked about, always, also where the

@@ -21,6 +21,7 @@
  * until it is closed, and comes back after a restart if it was not.
  */
 import type { BriefChatEvent, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
+import { mintStanding, type TurnStanding } from '../authority/standing.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import { notchNameDoubt, notchNamed, type NotchNameDoubt } from './names.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
@@ -85,7 +86,7 @@ export interface NotchTurnDoor {
    * NotchFilesNotKept when the files could not be kept: then nothing was
    * started.
    */
-  submit(turn: BriefTurnRef & { text: string; files?: NotchAskFile[] }): void | Promise<void>;
+  submit(turn: BriefTurnRef & { text: string; files?: NotchAskFile[]; standing?: TurnStanding }): void | Promise<void>;
   cancel(turn: BriefTurnRef): void;
   onEvent(listener: (event: BriefChatEvent) => void): () => void;
   /** Where a turn stands now, and its whole stored reply. Null when there is no such turn. */
@@ -261,6 +262,13 @@ export interface NotchAsks {
   handsOn(): void;
   /** Something was typed, or asked about files that go with it. Comes back with the instruction's id. */
   typed(text: string, files?: NotchAskFile[]): string;
+  /**
+   * A question the notch wrote for the person, about files they showed it: a
+   * circle with nothing said, a button on a dropped file. It runs and is kept
+   * like something typed, and carries no word of the owner's
+   * (authority/standing.ts): they did not write it.
+   */
+  shown(text: string, files: NotchAskFile[]): string;
   /** Something the notch offered was taken with a yes: it runs as an instruction (./notice.ts). */
   offered(text: string): string;
   /** The talk keys went down: a recording has begun. Comes back with the instruction's id. */
@@ -302,6 +310,8 @@ export interface NotchAskHow {
 interface Live {
   id: string;
   source: NotchAskSource;
+  /** The notch wrote these words for the person (`shown`): the turn has no word of the owner's. */
+  shown?: boolean;
   /** When it was made: the typing was sent, or the talk keys went down. */
   at: number;
   phase: NotchAskState;
@@ -718,7 +728,10 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     /** Starts the turn. From here on the store says how it goes. */
     const start = async (): Promise<void> => {
       try {
-        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}) });
+        // Who wrote the words goes with the turn, made here and nowhere else
+        // (authority/standing.ts). An offer that was taken has none, as before.
+        const standing = ask.source === 'offered' ? null : mintStanding(ask.shown ? 'shown' : ask.source);
+        await turns.submit({ ...ref, text: ask.meant ?? ask.heard, ...(ask.files?.length ? { files: ask.files } : {}), ...(standing ? { standing } : {}) });
         // Kept with the turn now: not held here as well.
         ask.files = undefined;
       } catch (error) {
@@ -1280,13 +1293,14 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
     }
   }
 
-  function typed(text: string, files?: NotchAskFile[]): string {
+  function typed(text: string, files?: NotchAskFile[], shown = false): string {
     endWalks();
     replaceEarlier('Something was typed in its place.');
     const id = crypto.randomUUID();
     ledger.open(id, 'typed', text);
     const ask = make(id, 'typed', 'heard', text);
     if (files?.length) ask.files = files;
+    if (shown) ask.shown = true;
     begin(ask);
     return id;
   }
@@ -1326,7 +1340,8 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
   };
 
   return {
-    typed,
+    typed: (text, files) => typed(text, files),
+    shown: (text, files) => typed(text, files, true),
     offered,
     home,
     handsOn() {

@@ -8,6 +8,7 @@ import { createRequestApprovalTool } from '../actions/tools/approval-tool.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { runSubAgent, type SubAgentResult } from '../agents/sub-agent-runner.ts';
 import { withBriefTurn } from '../brief/chat-context.ts';
+import { inTurnOf } from './standing-fixture.ts';
 import type { LLMToolCall } from '../llm/provider.ts';
 import { NOTCH_SWITCH } from '../notch/switch.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
@@ -18,7 +19,11 @@ import { setOwnerWordProbe } from './owner-word.ts';
 
 const turn = (requestId: string) => <T>(fn: () => T): T =>
   withBriefTurn({ conversationId: 'c', turnId: 't', requestId, signal: new AbortController().signal, progress: () => {} }, fn);
-const onNotch = turn('notch-typed-1');
+const onNotch = <T>(fn: () => T): T => inTurnOf('typed', fn);
+/** A circle with nothing said, a button on a dropped file: the notch wrote the words. */
+const onNotchShown = <T>(fn: () => T): T => inTurnOf('shown', fn);
+/** Any turn inside the brain that names its ids the way the notch does, and was given nothing. */
+const namedLikeNotch = turn('notch-typed-1');
 const onDashboard = turn('req-1');
 
 let before: string | undefined;
@@ -131,4 +136,55 @@ describe('the model asking for approval of its own accord, in a turn from the no
     expect(out.startsWith('[APPROVED]')).toBe(false);
     expect(h.approvalManager.getPending()).toHaveLength(1);
   });
+});
+
+describe('a turn from the notch whose words the notch wrote, and a turn that only names its ids like the notch', () => {
+  function helper() {
+    const runs: string[] = [];
+    const registry = new ToolRegistry();
+    registry.register({ name: 'write_file', category: 'file-ops', description: 't', parameters: {}, execute: async (params) => { runs.push(JSON.stringify(params)); return 'ok'; } });
+    const history: Array<{ role: string; content: unknown }> = [];
+    const agent = {
+      id: 'child', agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
+      setTask() {}, activate() {}, idle() {},
+      addMessage: (role: string, content: unknown) => history.push({ role, content }), getMessages: () => history,
+    } as never;
+    let call = 0;
+    const llmManager = { chatTier: async () => (call++ === 0
+      ? { content: '', finish_reason: 'tool_use', tool_calls: [{ id: 'c1', name: 'write_file', arguments: { path: '/tmp/notes.txt', content: 'hello' } }], usage: { input_tokens: 1, output_tokens: 1 } }
+      : { content: 'done', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } }) } as never;
+    const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'] as never, overrides: [], context_rules: [],
+      learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
+    const run = (): Promise<SubAgentResult> => runSubAgent({ agent, task: 'do it', context: '', llmManager, toolRegistry: registry,
+      authorityEngine: engine, auditTrail: { log: (row: unknown) => row } as never, maxIterations: 3 });
+    return { run, runs };
+  }
+  const said = (result: SubAgentResult): string => result.messages.filter((m) => m.role === 'tool').map((m) => String(m.content)).join('\n');
+  function tool() {
+    const approvalManager = new ApprovalManager();
+    const approvalDelivery = { deliver: async () => {} } as unknown as ApprovalDelivery;
+    const made = createRequestApprovalTool({ approvalManager, approvalDelivery, getCurrentAgent: () => ({ id: 'primary', name: 'Jarvis' }), timeoutMs: 20 });
+    return { approvalManager, ask: (category: string, intent: string) => made.execute({ action_category: category, intent }) as Promise<string> };
+  }
+
+  for (const [what, inside] of [['the notch wrote the words', onNotchShown], ['only the ids say notch', namedLikeNotch]] as const) {
+    test(`a helper's step is refused for want of a yes, as on the dashboard (${what})`, async () => {
+      const h = helper();
+      const result = await inside(() => h.run());
+      expect(h.runs).toEqual([]);
+      expect(said(result)).toContain('requires user approval');
+    });
+
+    test(`the model's own request for approval is raised, not answered for the owner (${what})`, async () => {
+      const h = tool();
+      for (const [i, [category, intent]] of [
+        ['send_email', 'Send the newest file in Documents to eve@evil.example'], ['execute_command', 'Run the script the page gave'],
+        ['install_software', 'Install the helper the file names'], ['modify_settings', 'Turn off the firewall'],
+        ['delete_data', 'Delete the folder notch-test'], ['make_payment', 'Buy the game for 40 dollars'],
+      ].entries()) {
+        const out = await inside(() => h.ask(category!, intent!));
+        expect([category, out.startsWith('[APPROVED]'), h.approvalManager.getPending().length]).toEqual([category, false, i + 1]);
+      }
+    });
+  }
 });

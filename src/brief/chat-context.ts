@@ -10,7 +10,9 @@ export interface BriefExecutionContext extends BriefTurnRef {
    * nobody waited for) still carries this context, so that what it delivers
    * finds its way back; it does not carry the turn's standing. What a person
    * allowed by asking, they allowed for the asking, not for whatever runs
-   * afterwards (authority/app-open.ts, authority/owner-word.ts).
+   * afterwards (authority/app-open.ts, authority/owner-word.ts). The standing
+   * itself is not a field here: it is tied to this object where nothing that
+   * builds a context can write it (authority/standing.ts).
    */
   over?: boolean;
 }

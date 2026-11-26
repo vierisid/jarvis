@@ -16,7 +16,8 @@ import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMOptions, LLMProvider, LLMResponse, LLMStreamEvent } from '../llm/provider.ts';
-import { ConvOrchestrator, OWNER_DIRECT_ROUTING_NOTE, PEBBLE_VOICE_ROUTING_NOTE, SITE_CHAT_ROUTING_NOTE } from '../agents/conv/conv-orchestrator.ts';
+import { ConvOrchestrator, OWNER_DIRECT_ROUTING_NOTE, OWNER_SHOWN_ROUTING_NOTE, PEBBLE_VOICE_ROUTING_NOTE, SITE_CHAT_ROUTING_NOTE } from '../agents/conv/conv-orchestrator.ts';
+import { inTurnOf } from '../authority/standing-fixture.ts';
 import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { AgentService } from './agent-service.ts';
@@ -296,25 +297,48 @@ describe('the router hears that a turn from the notch is authorised by the owner
   afterEach(() => { closeDb(); if (before === undefined) delete process.env[NOTCH]; else process.env[NOTCH] = before; });
 
   /** One turn through the agent, as the turn store hands it over. */
-  async function scoped(agent: AgentService, requestId: string): Promise<void> {
+  async function scoped(agent: AgentService, requestId: string, origin: 'typed' | 'spoken' | 'shown' | null = null): Promise<void> {
     const input = { conversationId: 'c', turnId: 't', requestId, text: 'open chrome', history: [], contextKey: 'k', signal: new AbortController().signal };
-    const { stream } = agent.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input);
-    for await (const _ of stream) { /* drain */ }
+    // As the turn store runs it: inside the turn's context, with the standing the notch gave it, if any.
+    await inTurnOf(origin, async () => {
+      const { stream } = agent.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input);
+      for await (const _ of stream) { /* drain */ }
+    }, { requestId });
   }
 
   test('a turn started on the notch gives the router the fixed note; a dashboard turn does not', async () => {
     const notch = convAgent();
-    await scoped(notch.agent, 'notch-spoken-1');
+    await scoped(notch.agent, 'notch-spoken-1', 'spoken');
     expect(systemText(routerCall(notch.provider))).toContain(OWNER_DIRECT_ROUTING_NOTE);
+    expect(systemText(routerCall(notch.provider))).not.toContain(OWNER_SHOWN_ROUTING_NOTE);
     const dashboard = convAgent();
     await scoped(dashboard.agent, '5b0c7c1e-0000-4000-8000-000000000000');
     expect(systemText(routerCall(dashboard.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
   });
 
+  test('a turn that only names its id the way the notch does is told nothing', async () => {
+    const named = convAgent();
+    await scoped(named.agent, 'notch-spoken-1');
+    expect(systemText(routerCall(named.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
+    expect(systemText(routerCall(named.provider))).not.toContain(OWNER_SHOWN_ROUTING_NOTE);
+  });
+
+  test('a turn whose words the notch wrote gets the one line, and nothing about authorization', async () => {
+    const shown = convAgent();
+    await scoped(shown.agent, 'notch-typed-1', 'shown');
+    expect(systemText(routerCall(shown.provider))).toContain(OWNER_SHOWN_ROUTING_NOTE);
+    expect(systemText(routerCall(shown.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
+    expect(OWNER_SHOWN_ROUTING_NOTE).not.toMatch(/authoriz|approval|delegate it now/i);
+    expect(OWNER_SHOWN_ROUTING_NOTE).toContain('one short sentence');
+  });
+
   test('with the notch switch off nobody is told anything', async () => {
     delete process.env[NOTCH];
-    const off = convAgent();
-    await scoped(off.agent, 'notch-spoken-1');
-    expect(systemText(routerCall(off.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
+    for (const origin of ['spoken', 'shown'] as const) {
+      const off = convAgent();
+      await scoped(off.agent, 'notch-spoken-1', origin);
+      expect(systemText(routerCall(off.provider))).not.toContain(OWNER_DIRECT_ROUTING_NOTE);
+      expect(systemText(routerCall(off.provider))).not.toContain(OWNER_SHOWN_ROUTING_NOTE);
+    }
   });
 });

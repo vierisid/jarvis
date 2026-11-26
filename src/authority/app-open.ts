@@ -28,21 +28,20 @@
  * only with the notch switch on. Everywhere else `desktop_launch_app` is
  * reviewed on screen as before (authority/ui-intent.ts).
  */
-import { currentBriefTurn } from '../brief/chat-context.ts';
-import { notchEnabled } from '../notch/switch.ts';
-
-/** How the request id of a turn started on the notch begins (src/notch/asks.ts). */
-export const NOTCH_REQUEST_ID = /^notch-(typed|spoken)-/;
+import { currentStanding, ownersOwnWords } from './standing.ts';
 
 /**
  * Whether the code running now is inside a turn the owner started on the
- * notch, and that turn is still going. Once it has ended or been stopped
- * (Esc), whatever it left running has no standing from it.
+ * notch with words of their own, typed or spoken, and that turn is still
+ * going. Once it has ended or been stopped (Esc), whatever it left running
+ * has no standing from it.
+ *
+ * It is read from the standing the notch gave the turn (./standing.ts), never
+ * from how the turn's ids are written. A turn whose words the code wrote (a
+ * circle with nothing said, a button on a dropped file) is not one.
  */
 export function ownerAskedOnNotch(): boolean {
-  if (!notchEnabled()) return false;
-  const turn = currentBriefTurn();
-  return !!turn && NOTCH_REQUEST_ID.test(turn.requestId) && turn.over !== true && !turn.signal.aborted;
+  return ownersOwnWords(currentStanding());
 }
 
 /**

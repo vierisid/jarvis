@@ -91,8 +91,17 @@ import { runWithOrigin } from '../llm/origin.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
 import { commitmentPromptLine } from '../vault/commitment-text.ts';
 import { TurnTaintCarry, taintCarryKey, type TurnTaintLink } from '../agents/turn-taint-carry.ts';
-import { NOTCH_REQUEST_ID } from '../authority/app-open.ts';
-import { notchEnabled } from '../notch/switch.ts';
+import { currentStanding, ownersOwnWords } from '../authority/standing.ts';
+
+/**
+ * What the router is told about a turn from the notch: one of two fixed
+ * sentences, by who wrote the turn's words, or nothing for any other turn.
+ */
+function notchRouting(): { ownerDirect?: true; ownerShown?: true } {
+  const standing = currentStanding();
+  if (!standing) return {};
+  return ownersOwnWords(standing) ? { ownerDirect: true } : { ownerShown: true };
+}
 
 /** Untrusted sources that are someone else's words in the conversation itself: a turn on them teaches nothing. */
 const OTHERS_WORDS = new Set([CHANNEL_GUEST_CONVERSATION_SOURCE, GUEST_MESSAGE_SOURCE, FORWARDED_MESSAGE_SOURCE]);
@@ -465,7 +474,9 @@ export class AgentService implements Service, IAgentService {
           ...(channel === PEBBLE_CHANNEL ? { pebbleVoice: true } : {}),
           // A turn the owner started on the notch: the router is told so in
           // one fixed sentence (the task tier gets the fuller note as siteContext).
-          ...(conversation && notchEnabled() && NOTCH_REQUEST_ID.test(conversation.requestId) ? { ownerDirect: true } : {}),
+          // Which sentence is by who wrote the turn's words, read from its
+          // standing (authority/standing.ts): the owner, or the notch for them.
+          ...(conversation ? notchRouting() : {}),
           ...(carry ? { taintCarry: carry } : {}),
         }, taskListener)) {
           if (event.type === 'text') {

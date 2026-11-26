@@ -5598,7 +5598,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         ready: () => agentService.status() === 'running' && !activeTurns.isDraining,
         // A turn started on the notch is told so, in the per-turn part of
         // the prompt (notchTurnNote). Every other turn gets nothing, as before.
-        stream: input => agentService.streamMessage(input.text, 'websocket', notchTurnNote(input.requestId), null, input.contextKey, input),
+        stream: input => agentService.streamMessage(input.text, 'websocket', notchTurnNote(), null, input.contextKey, input),
       },
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),

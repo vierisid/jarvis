@@ -103,7 +103,7 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
   const fromPage = (message: unknown): void => onEvent('pc', { event_type: NOTCH_MESSAGE_EVENT, payload: { message } });
   fromPage({ type: 'hello', v: 1 });
   const inbox = new NotchInbox(surface, { clock, log: () => {} });
-  const asked: { text: string; files: NotchAskFile[] }[] = [];
+  const asked: { text: string; files: NotchAskFile[]; said?: boolean }[] = [];
   const told: string[] = [];
   const logs: string[] = [];
   /** The files that were read by themselves when they arrived. */
@@ -111,7 +111,7 @@ function harness(options: { paused?: () => boolean; busy?: boolean; people?: { i
   /** What was handed on to somebody in the organisation. */
   const sentOn: { to: string; name: string; bytes: Uint8Array }[] = [];
   const drop = attachNotchDrop(surface, inbox, {
-    ask: (words, files) => { asked.push({ text: words, files }); },
+    ask: (words, files, said) => { asked.push({ text: words, files, said }); },
     tell: (parts) => { told.push(text(parts)); },
     paused: options.paused, holdMs: 80, log: (line) => logs.push(line),
     ...(options.gist ? { gist: (one: NotchAskFile) => { read.push(one.name); return options.gist!(one); }, gistWaitMs: 300 } : {}),
@@ -262,6 +262,18 @@ describe('a file dropped on the notch', () => {
     await h.got();
     await h.answer('ask', { text: '  what does slide four ask the reader to do?  ' });
     expect(h.asked.map((ask) => [ask.text, ask.files.map((file) => file.name)])).toEqual([['what does slide four ask the reader to do?', ['Deck.pdf']]]);
+    // His own words: said so, and that is what gives the turn his word (authority/standing.ts).
+    expect(h.asked[0]!.said).toBe(true);
+  });
+
+  test('the words of a button, and of Enter on an empty field, are not his: said so', async () => {
+    for (const how of [['button', { button: 'ask0' }], ['button', { button: 'ask2' }], ['ask', { text: '' }], ['ask', { text: '   ' }], ['ask', {}]] as const) {
+      const h = harness();
+      h.drop.take(h.file('Deck.pdf', 'application/pdf', 300_000));
+      await h.got();
+      await h.answer(how[0], how[1]);
+      expect([how, h.asked.map((ask) => ask.said)]).toEqual([how, [false]]);
+    }
   });
 
   test('Enter on an empty field asks the first of the three', async () => {
@@ -723,7 +735,8 @@ describe('a file that arrived from somebody in the organisation', () => {
     h.drop.arrived({ name: 'Deck.pdf', bytes: pdf(), from: 'Leo', place: 'Downloads' });
     await h.got();
     await h.answer('ask', { text: 'what changed on the pricing slide?' });
-    expect(h.asked).toEqual([{ text: 'what changed on the pricing slide?', files: [expect.objectContaining({ name: 'Deck.pdf' })] }]);
+    // His own words about somebody else's file: they are still his.
+    expect(h.asked).toEqual([{ text: 'what changed on the pricing slide?', files: [expect.objectContaining({ name: 'Deck.pdf' })], said: true }]);
   });
 
   test('one that could not be put in a folder is held all the same, and says so', async () => {

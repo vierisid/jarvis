@@ -243,8 +243,12 @@ export function dropSuggestions(held: DropHeld[]): DropSuggestion[] {
 }
 
 export interface NotchDropDeps {
-  /** Runs an instruction that carries the files. */
-  ask(text: string, files: NotchAskFile[]): void;
+  /**
+   * Runs an instruction that carries the files. `said` is whether the person
+   * wrote the words (typed in the field); false for the words of a button or
+   * of Enter on an empty field, which this file wrote.
+   */
+  ask(text: string, files: NotchAskFile[], said: boolean): void;
   /** One line that is not about an instruction. */
   tell(parts: NotchPart[], mood?: 'careful' | 'confused' | 'sorry'): void;
   /**
@@ -470,7 +474,7 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
         // The words of a click were written for a file the person dropped. For one that was sent to them they say so.
         const sentHere = readable.every((one) => !!one.from);
         const question = typed || (sentHere ? (picked ?? asks[0]!).question.replace(/\bI dropped\b/g, 'I was sent') : (picked ?? asks[0]!).question);
-        deps.ask(question, hand());
+        deps.ask(question, hand(), typed !== '');
         return 'settled';
       },
     });
