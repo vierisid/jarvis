@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, afterEach, afterAll, test, expect } from 'bun:test';
+import { beforeAll, beforeEach, afterEach, afterAll, test, expect, setSystemTime } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import type { Root } from 'react-dom/client';
 import type { Goal } from './useGoalsData';
@@ -7,6 +7,9 @@ let React: typeof import('react'), createRoot: typeof import('react-dom/client')
 let originalFetch: typeof fetch, goal: Goal, writes: Array<{method: string; body: any}>, fail: boolean, workspace: string, hostStatus: number, staleRead: Goal | null;
 const wait = () => new Promise(r => setTimeout(r, 10));
 beforeAll(async () => {
+  // The fixtures and typed dates are fixed calendar days, and the form refuses a
+  // past date, so pin "today" or the tests expire as the real clock passes them.
+  setSystemTime(new Date(2026,10,15,12,0));
   GlobalRegistrator.register();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   React = await import('react'); ({createRoot} = await import('react-dom/client'));
@@ -48,7 +51,7 @@ beforeEach(() => {
   host=document.createElement('div');document.body.append(host);root=createRoot(host);
 });
 afterEach(async()=>{await React.act(async()=>root.unmount());host.remove();globalThis.fetch=originalFetch;});
-afterAll(()=>GlobalRegistrator.unregister());
+afterAll(()=>{GlobalRegistrator.unregister();setSystemTime();});
 async function render(){await React.act(async()=>{root.render(<Room mode="expanded"/>);await wait();});}
 function button(label:string, within:ParentNode=host){const b=[...within.querySelectorAll<HTMLButtonElement>('button')].find(x=>(x.getAttribute('aria-label')||x.textContent)?.trim()===label);expect(b).toBeTruthy();return b!;}
 async function click(label:string, within:ParentNode=host){await React.act(async()=>{const b=button(label,within);b.focus();b.click();await wait();});}
