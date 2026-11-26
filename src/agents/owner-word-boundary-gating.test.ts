@@ -25,16 +25,22 @@ type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<st
 
 const role = { id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['terminal', 'browser', 'desktop'], authority_level: 10 } as unknown as RoleDefinition;
 
+/** What the desktop answers, as a desktop app does: the app opened runs as 4242 and its window as 4243; another window is 777. */
+const ANSWERS: Record<string, (params: Record<string, unknown>) => string> = {
+  desktop_launch_app: () => JSON.stringify({ success: true, pid: 4242, window_visible: true, window_title: 'Untitled', window_pid: 4243 }),
+  desktop_snapshot: (params) => (params.pid === 777 ? 'Window: Inbox\nPID: 777\n[1] Button "Send"' : 'Window: Untitled - Notepad\nPID: 4243\n[3] Document'),
+};
+
 function build(more: Partial<AuthorityConfig> = {}, gating: Parameters<typeof buildTaintGating>[0] = undefined) {
   const calls: string[] = [];
   const registry = new ToolRegistry();
   const tool = (name: string, category: string, gate?: ActionCategory): ToolDefinition => ({
     name, description: 't', category, parameters: {},
     ...(gate ? { authorityGate: () => ({ actionCategory: gate, intent: `${name} as a test tool` }) } : {}),
-    execute: async (params) => { calls.push(`${name} ${JSON.stringify(params)}`); return 'ok'; },
+    execute: async (params) => { calls.push(`${name} ${JSON.stringify(params)}`); return ANSWERS[name]?.(params) ?? 'ok'; },
   });
   for (const one of [
-    tool('desktop_launch_app', 'desktop'), tool('desktop_click', 'desktop'), tool('desktop_type', 'desktop'), tool('desktop_snapshot', 'desktop'),
+    tool('desktop_launch_app', 'desktop'), tool('desktop_click', 'desktop'), tool('desktop_type', 'desktop'), tool('desktop_snapshot', 'desktop'), tool('desktop_screenshot', 'desktop'),
     tool('browser_snapshot', 'browser'), tool('browser_navigate', 'browser'), tool('run_command', 'terminal'), tool('write_file', 'file-ops'), tool('read_file', 'file-ops'),
     // (A category the product reads as a read, raised by the tool's own gate: a tool nobody classified is a command.)
     tool('send_mail', 'productivity', 'send_email'), tool('post_message', 'productivity', 'send_message'), tool('install_app', 'productivity', 'install_software'),
@@ -244,6 +250,37 @@ describe('"open Notepad and write a poem", typed on the notch', () => {
   });
 });
 
+describe('what opening an app gives, and what it does not', () => {
+  test('a window that is not of the app the turn opened, an app that shows what others wrote, and a picture of the whole screen each bring the blind click its question', async () => {
+    setOwnerWordProbe(async () => 'blind');
+    const cases: [string, string, [string, Record<string, unknown>][]][] = [
+      ['a window of another program', 'open Notepad and write a poem', [['desktop_launch_app', { executable: 'notepad' }], ['desktop_snapshot', { pid: 777 }]]],
+      ['"open Mail and summarise the newest message"', 'open Mail and summarise the newest message', [['desktop_launch_app', { executable: 'Mail' }], ['desktop_snapshot', {}]]],
+      ['a browser', 'open Chrome', [['desktop_launch_app', { executable: 'chrome' }], ['desktop_snapshot', {}]]],
+      ['a PDF viewer', 'open Acrobat', [['desktop_launch_app', { executable: 'C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe' }]]],
+      ['a picture of the whole screen', 'open Notepad and write a poem', [['desktop_launch_app', { executable: 'notepad' }], ['desktop_screenshot', {}]]],
+    ];
+    for (const [what, words, steps] of cases) {
+      const h = build();
+      const turn = new Set<string>();
+      for (const [name, args] of steps) expect([what, name, asked(await typed(words, () => h.run(name, args, turn)))]).toEqual([what, name, false]);
+      const out = await typed(words, () => h.run('desktop_click', { element_id: 1 }, turn));
+      expect([what, asked(out)]).toEqual([what, true]);
+      expect(h.approvals.getPending()[0]!.reason).toContain(OWNER_WORD_BLIND_REASON);
+    }
+  });
+
+  test('the app the turn opened, its own window by its process, and a picture of that window: no question at a blind click', async () => {
+    setOwnerWordProbe(async () => 'blind');
+    const h = build();
+    const turn = new Set<string>();
+    for (const [name, args] of [['desktop_launch_app', { executable: 'TextEdit' }], ['desktop_snapshot', { pid: 4243 }], ['desktop_snapshot', {}], ['desktop_screenshot', { pid: 4242 }],
+      ['desktop_click', { element_id: 3 }]] as const) {
+      expect([name, asked(await typed('open TextEdit and write a poem', () => h.run(name, args, turn)))]).toEqual([name, false]);
+    }
+  });
+});
+
 describe('the four examples, on every kind of machine: one that can say what a click lands on, and one that cannot', () => {
   const machines: [string, () => Promise<readonly ActionCategory[] | 'blind'>][] = [['it can look', async () => []], ['it cannot look', async () => 'blind']];
   for (const [machine, look] of machines) {
@@ -282,13 +319,32 @@ describe('the outside content arrives in the middle of a turn', () => {
     const h = build();
     const turn = new Set<string>();
     const go = (name: string, args: Record<string, unknown>) => typed('tidy up my notes folder', () => h.run(name, args, turn));
-    expect(asked(await go('run_command', { command: 'dir notes' }))).toBe(false);
     expect(asked(await go('post_message', { text: 'starting' }))).toBe(false);
+    expect(asked(await go('write_file', { path: 'notes/a.md', content: 'x' }))).toBe(false);
     expect(asked(await go('browser_snapshot', {}))).toBe(false);
     expect(asked(await go('run_command', { command: 'dir notes' }))).toBe(true);
     expect(asked(await go('post_message', { text: 'done' }))).toBe(true);
     expect(asked(await go('write_file', { path: 'notes/index.md', content: 'x' }))).toBe(false);
     expect(h.calls).toHaveLength(4);
+  });
+
+  test('a file read and a command\'s output are outside content here too: what was not asked for after them is asked about', async () => {
+    for (const [first, args, words] of [['read_file', { path: '~/Downloads/contract-from-client.txt' }, 'summarise ~/Downloads/contract-from-client.txt'],
+      ['run_command', { command: 'cat ~/Downloads/contract-from-client.txt' }, 'run cat on the contract']] as const) {
+      const h = build();
+      const turn = new Set<string>();
+      const go = (name: string, params: Record<string, unknown>) => typed(words, () => h.run(name, params, turn));
+      expect([first, asked(await go(first, args))]).toEqual([first, false]);
+      expect([first, asked(await go('post_message', { channel: 'exfil', text: 'x' }))]).toEqual([first, true]);
+      // The product's ordinary guard is not touched: the turn's own marks hold no such read.
+      expect(turn.size).toBe(0);
+    }
+    // Not in a turn that is no owner's: a dashboard turn reads a file as before.
+    const h = build();
+    const turn = new Set<string>();
+    const dash = <T>(fn: () => T): T => withBriefTurn({ conversationId: 'c', turnId: 't', requestId: 'req-1', signal: new AbortController().signal, progress: () => {} }, fn);
+    await dash(() => h.run('read_file', { path: 'x' }, turn));
+    expect(asked(await dash(() => h.run('post_message', { text: 'x' }, turn)))).toBe(false);
   });
 
   test('a delete is asked about before and after, as always', async () => {

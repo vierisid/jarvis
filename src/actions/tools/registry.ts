@@ -206,6 +206,18 @@ function killFence(): void {
   });
 }
 
+/**
+ * Told of every tool that ran, here where every dispatch path passes, with
+ * its arguments and what it answered (or the message it failed with). One
+ * listener: the owner's word (authority/owner-word.ts), which keeps what a
+ * turn the owner started on the notch has read. It only reads.
+ */
+let toolRan: ((name: string, params: Record<string, unknown>, result: unknown) => void) | null = null;
+
+export function setToolRunListener(next: typeof toolRan): void {
+  toolRan = next;
+}
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
   /** Default working directory for tools like run_command. Set by site builder context. */
@@ -263,11 +275,15 @@ export class ToolRegistry {
       // reaches while running (a sidecar call, a channel send, a TTS chunk)
       // refuses once Jarvis is stopped. Pause does not: work in flight
       // finishes, and nothing new starts.
-      return await observeToolExecution(name, () => withExecutionScope(killFence, () => {
+      const result = await observeToolExecution(name, () => withExecutionScope(killFence, () => {
         assertCurrentMemoryContext();
         return tool.execute(params);
       }), params.action);
+      toolRan?.(name, params, result);
+      return result;
     } catch (error) {
+      // What a tool answered when it failed was read as well.
+      toolRan?.(name, params, error instanceof Error ? error.message : String(error));
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and
       // that was the whole defect: `withExecutionScope` publishes the run's

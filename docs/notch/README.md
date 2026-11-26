@@ -362,7 +362,9 @@ What holds for all of them:
     Decided by the owner on 26 November 2026. "Saying it is the approval" is
     about what he said. Once such a turn has read something he did not write
     (a page, a dropped file, a window, an app that was opened, a mail or a
-    message somebody sent, memory he did not enter, a question of the
+    message somebody sent, memory he did not enter, any file read and any
+    command's output (for this boundary only: the ordinary guard still
+    exempts the owner's file reads), a question of the
     assistant's that he only said yes to, when the turn that asked it had
     read any of these), four kinds of act are asked about
     again in that turn, and only when his own sentence did not ask for that
@@ -439,13 +441,16 @@ What holds for all of them:
     page, a dropped or received file, a mail or a message somebody sent, a
     peer's words, memory he did not enter, a helper's report, a window the
     turn did not open): what it lands on cannot be read, and what was read
-    may have chosen it. The line is drawn by the tool the content came
-    through (`onlyTheOpenedApp`): the turn opened an app, and all else it
-    read came through the desktop's own tools. The turn keeps no more than
-    that, so once it has opened an app every window it reads is taken as
-    that app's; with no app opened, a window it read is one it did not
-    open. Typed text, keys and a click on a named element are never held
-    for this.
+    may have chosen it. The line (`onlyTheOpenedApp`): the turn opened an
+    app, that app is not one that shows what others wrote (a browser, a
+    mail or chat client, a document or PDF viewer), every window it read,
+    found an element in or brought forward is of that app's processes (the
+    launch's and its window's, as the desktop app reported them), and no
+    picture of the whole screen was taken (a picture of that app's window
+    is fine). The list of windows is taken as the app's: it names each
+    window by its title only, and the launch itself asks for it. So "open
+    Mail and summarise the newest message" asks at a blind Send, and the
+    Notepad poem does not.
     A helper agent is held to the same: what it has read itself and what
     the turn above it has read both count (`withOutsideContent`), and where
     nobody says what was read it is taken as read. It cannot hold a

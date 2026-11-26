@@ -84,12 +84,10 @@
  *     app and reading its own windows gave: a page, a dropped or received
  *     file, a mail or a message somebody sent, a peer's words, memory the
  *     owner did not enter, a helper's report, or a window the turn did not
- *     open (it read windows and opened no app). What it lands on cannot be
- *     read, and what was read may have chosen it. The line is drawn by the
- *     tool the content came through (`onlyTheOpenedApp`), which is all the
- *     turn keeps of it: once the turn has opened an app, every window it
- *     reads is taken as that app's, and a picture of the screen as a picture
- *     of it.
+ *     open, an opened app that shows what others wrote (a browser, a mail
+ *     or chat client, a document viewer), a picture of the whole screen, a
+ *     file read, a command's output. What it lands on cannot be read, and
+ *     what was read may have chosen it (`onlyTheOpenedApp`, `noteToolRun`).
  *
  * It is a reading, not a proof. A delete written so that none of this sees it
  * (a script that removes files, a button with no name) goes ahead like
@@ -111,6 +109,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
 import { ownersTurn, plainAppOpen } from './app-open.ts';
 import type { OwnerAct } from './words-cover.ts';
+import { setToolRunListener } from '../actions/tools/registry.ts';
 
 /** What is still asked about when the owner asked for the thing themselves. */
 export const STILL_ASKED: ReadonlySet<ActionCategory> = new Set<ActionCategory>(['delete_data', 'make_payment']);
@@ -471,6 +470,18 @@ export function withOutsideContent<T>(marks: ReadonlySet<string>, run: () => T, 
   return held.run({ marks, counts, above: held.getStore() }, run);
 }
 
+/**
+ * What this boundary counts as read beside a loop's taint marks, by the
+ * loop's set: only in a turn the owner started on the notch with words of
+ * their own, and never seen by the product's ordinary guard (those marks
+ * are not in the set). See `noteToolRun`.
+ */
+const alsoRead = new WeakMap<ReadonlySet<string>, Set<string>>();
+/** The processes an app the loop opened runs as (the launcher's and its window's). */
+const opened = new WeakMap<ReadonlySet<string>, Set<number>>();
+
+const alsoOf = (marks: ReadonlySet<string>): ReadonlySet<string> => alsoRead.get(marks) ?? new Set<string>();
+
 /** What has been read from outside where the code runs now. Null: nobody said, which is not "nothing". */
 export function outsideContentHeld(): string[] | null {
   const store = held.getStore();
@@ -478,9 +489,86 @@ export function outsideContentHeld(): string[] | null {
   const sources = new Set<string>();
   for (let level: Held | undefined = store; level; level = level.above) {
     for (const mark of level.marks) if (level.counts(mark)) sources.add(mark);
+    for (const mark of alsoOf(level.marks)) sources.add(mark);
   }
   return [...sources];
 }
+
+/**
+ * The tools whose answer the product's ordinary guard does not count as
+ * outside content (the owner's own files are its usual target, and a
+ * command's output is the command's) and this boundary does: a file the
+ * owner did not write reads the same as one they did, and nothing on this
+ * side can tell them apart, so every file read counts, wherever it is. It
+ * costs a question only for one of the four acts the words did not ask for.
+ */
+const READ_BY_THE_BOUNDARY: ReadonlySet<string> = new Set(['read_file', 'site_read_file', 'site_list_files', 'run_command']);
+
+/** What a desktop read is counted as when it is not of the app the turn opened. */
+export const NOT_THE_OPENED_APP = 'a window the turn did not open';
+/** And an app opened that shows what others wrote: a browser, a mail or chat client, a document viewer. */
+export const OPENED_APP_SHOWS_OTHERS = 'an app that shows what others wrote';
+/** And a picture of the whole screen. */
+export const WHOLE_SCREEN = 'a picture of the whole screen';
+
+/**
+ * Apps that show what others wrote as soon as they open: browsers, mail and
+ * chat clients, viewers of documents and PDFs. An editor the owner writes in
+ * (Notepad, TextEdit, Word) is not one.
+ */
+const SHOWS_OTHERS = /\b(?:chrome|google chrome|chromium|msedge|edge|microsoft edge|firefox|safari|brave|opera|vivaldi|arc|iexplore|tor browser|outlook|olk|hxoutlook|thunderbird|mail|mailspring|spark|evolution|geary|kmail|postbox|slack|teams|ms-teams|discord|telegram|whatsapp|signal|skype|zoom|messages|messenger|wechat|element|mattermost|viber|acrobat|acrord32|acrobat reader|adobe reader|preview|evince|okular|sumatrapdf|foxit\w*|xreader|atril|zathura|skim)\b/i;
+
+/** The processes a desktop tool's answer names, first the one it was about: a launch's and its window's, a read window's. */
+function pidsIn(result: unknown): number[] {
+  const text = typeof result === 'string' ? result : (() => { try { return JSON.stringify(result) ?? ''; } catch { return ''; } })();
+  const pids: number[] = [];
+  // A JSON field (not one inside an escaped string: what a window holds is quoted with a backslash), or a line that starts "PID:".
+  for (const match of text.matchAll(/(?<!\\)"(?:window_)?pid"\s*:\s*(\d+)|^PID:\s*(\d+)/gm)) pids.push(Number(match[1] ?? match[2]));
+  return pids.filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+}
+
+/**
+ * Hears every tool that ran (actions/tools/registry.ts) and keeps, for the
+ * tool loop it ran in, what this boundary counts as read beside the loop's
+ * taint marks. Only in a turn the owner started on the notch with words of
+ * their own:
+ *
+ *   - a file read and a command's output (`READ_BY_THE_BOUNDARY`);
+ *   - which processes an app the turn opened runs as, and whether it is one
+ *     that shows what others wrote (`OPENED_APP_SHOWS_OTHERS`);
+ *   - a window read, found in or brought forward that is not of such a
+ *     process (`NOT_THE_OPENED_APP`), and a picture of the whole screen
+ *     (`WHOLE_SCREEN`), since both show what the turn did not open.
+ */
+export function noteToolRun(name: string, params: Record<string, unknown>, result: unknown): void {
+  try {
+    const store = held.getStore();
+    if (!store || !ownersTurn()) return;
+    const marks = store.marks;
+    const add = (mark: string): void => {
+      const set = alsoRead.get(marks) ?? new Set<string>();
+      set.add(mark);
+      alsoRead.set(marks, set);
+    };
+    if (READ_BY_THE_BOUNDARY.has(name) || commandText(name, params)) add(name);
+    const mine = opened.get(marks) ?? new Set<number>();
+    if (name === 'desktop_launch_app') {
+      for (const pid of pidsIn(result)) mine.add(pid);
+      opened.set(marks, mine);
+      const program = typeof params.executable === 'string' ? params.executable.split(/[\\/]/).pop()!.replace(/\.(?:exe|app)$/i, '') : '';
+      if (SHOWS_OTHERS.test(program)) add(OPENED_APP_SHOWS_OTHERS);
+    } else if (name === 'desktop_snapshot' || name === 'desktop_find_element' || name === 'desktop_focus_window') {
+      const pid = typeof params.pid === 'number' ? params.pid : pidsIn(result)[0];
+      if (pid === undefined || !mine.has(pid)) add(NOT_THE_OPENED_APP);
+    } else if (name === 'desktop_screenshot' || name === 'capture_screen') {
+      if (!(typeof params.pid === 'number' && mine.has(params.pid))) add(WHOLE_SCREEN);
+    }
+  } catch {
+    // It only reads; a tool that ran is never failed by it.
+  }
+}
+
+setToolRunListener(noteToolRun);
 
 /**
  * What each turn the owner started with words of their own has read, by the
@@ -513,19 +601,26 @@ export function turnOutsideRead(turnId: string): string[] | null {
   const loops = loopsOfTurn.get(turnId);
   if (!loops) return null;
   const read = new Set<string>();
-  for (const loop of loops) for (const mark of loop.marks) if (loop.counts(mark)) read.add(mark);
+  for (const loop of loops) {
+    for (const mark of loop.marks) if (loop.counts(mark)) read.add(mark);
+    for (const mark of alsoOf(loop.marks)) read.add(mark);
+  }
   return [...read];
 }
 
 /**
  * The tools through which an app the turn opened, and its own windows, are
  * read: opening it, listing and focusing windows, reading what is in one,
- * finding an element, a click's own answer, a picture of the screen. Every
- * other mark is content of another kind: a page (the browser's tools), a
- * dropped or received file ('chat attachment'), a mail or a message somebody
- * sent (their tools, a forward, a guest's thread), a peer's words, memory
- * the owner did not enter, a helper's report ('delegate_task'), a shown
- * request, and any tool added later until it is named here.
+ * finding an element, a click's own answer, a picture of its window. Which
+ * window was read is kept beside them (`noteToolRun`): one that is not of
+ * the app the turn opened, an app that shows what others wrote and a
+ * picture of the whole screen each add a mark of their own, and so count as
+ * content of another kind. Every other mark is too: a page (the browser's
+ * tools), a dropped or received file ('chat attachment'), a mail or a
+ * message somebody sent (their tools, a forward, a guest's thread), a
+ * peer's words, memory the owner did not enter, a helper's report
+ * ('delegate_task'), a file read, a command's output, a shown request, and
+ * any tool added later until it is named here.
  */
 const APP_OWN_READS: ReadonlySet<string> = new Set([
   'desktop_launch_app', 'desktop_list_windows', 'desktop_focus_window', 'desktop_snapshot', 'desktop_find_element',
@@ -535,10 +630,10 @@ const APP_OWN_READS: ReadonlySet<string> = new Set([
 /**
  * Whether everything a turn read is what opening an app gave: the turn opened
  * one (`desktop_launch_app` is among its marks), and all else it read came
- * through the desktop's own tools. The turn keeps which tools it read
- * through, not which window: once it has opened an app, a window it reads is
- * taken as that app's. Without an app opened, a window that was read is one
- * the turn did not open, and counts as content of another kind.
+ * through the desktop's own tools from that app's own windows (no mark of
+ * `noteToolRun` says otherwise). The list of windows is taken as the app's:
+ * it names each window by its title, a line each, and the launch itself asks
+ * for it when a window could not be seen.
  */
 export function onlyTheOpenedApp(read: Iterable<string>): boolean {
   const marks = [...read];
@@ -612,7 +707,7 @@ export function currentOwnerTurn(own?: ReadonlySet<string>): OwnerTurn | null {
   const above = outsideContentHeld();
   const unknown = above === null && own === undefined;
   // What the turn that asked had read counts as read here from the first step (a bare yes to its question).
-  const read = [...new Set([...(own ?? []), ...(above ?? []), ...standing.held])];
+  const read = [...new Set([...(own ?? []), ...(own ? alsoOf(own) : []), ...(above ?? []), ...standing.held])];
   const outside = standing.answers || unknown || read.length > 0;
   // A yes whose asking turn is not known: as a turn that read anything.
   const beyond = unknown || (standing.answers && standing.held.length === 0) || (read.length > 0 && !onlyTheOpenedApp(read));
