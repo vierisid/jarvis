@@ -228,6 +228,11 @@ describe('after outside content, in a turn the owner typed', () => {
     expect(await ownerWord('change_setting', { name: 'firewall', value: 'off' }, gate('modify_settings'), turn('disable the firewall'))).toBe('go');
   });
 
+  test('"email Anna the log" covers a send, not a mail program run as a command', async () => {
+    expect(await ownerWord('run_command', { command: 'mail -s log anna@corp.example < app.log' }, gate('execute_command'), turn('email Anna the log'))).toBe('unasked-command');
+    expect(await ownerWord('send_mail', { to: 'anna@corp.example' }, gate('send_email'), turn('email Anna the log'))).toBe('go');
+  });
+
   test('a call whose own classifier failed is left to the ordinary rules, here too', async () => {
     expect(await ownerWord('run_skill', {}, { categories: ['execute_command'], unclassified: true }, turn('run the skill'))).toBeNull();
   });

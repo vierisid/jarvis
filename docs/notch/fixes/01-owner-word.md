@@ -143,11 +143,35 @@ command key with backspace in a text field on the desktop.
     not mention the new questions; it still says "do not call
     request_approval" for sends, commands and installs he asked for, and
     the questions for what he did not ask for come from the gate alone;
-  - where the line for a blind click falls: once the turn has opened an
-    app, every window it reads (and any picture of the screen) is taken as
-    that app's, since the turn keeps only which tools it read through;
-    with no app opened, a window read is one it did not open. A send made
-    by a raw click on such a machine after a dropped file is asked about.
+  - where the line for a blind click falls (narrowed after the security
+    review): the turn opened an app that is no browser, mail or chat
+    client or document viewer (an editor such as Word counts as the
+    owner's), every window it read is of that app's processes, and no
+    picture of the whole screen was taken. The list of windows is taken as
+    the app's (titles only). A send made by a raw click on such a machine
+    after a dropped file is asked about;
+  - coverage is per kind for the whole turn: "run the tests" covers every
+    command in that turn, "reply to this" every send (to whoever wrote the
+    thing), "install ..." every command that only installs;
+  - the history of the shared notch conversation can carry quoted injected
+    text into a later turn, which starts clean;
+  - "email Anna the log" does not cover a mail program run as a command
+    (asked);
+  - every file read and every command's output counts as outside content
+    for this boundary, wherever the file is (nothing here can tell the
+    owner's files from a download), so "run the build and email Leo" asks
+    about the mail if the words did not ask for one;
+  - recipients are matched on the address only, so "send Anna Rossi the
+    file" to "Anna Rossi <a.rossi@...>" is matched by "rossi", and
+    "send Anna the file" to it is asked;
+  - keys: Win alone, Win+R, Cmd+Space and Alt+F2 open a run place, and an
+    app named there (as `plainAppOpen` reads a name) is an app opened;
+    Ctrl+Alt+T is a command; Enter alone on a page that is no chat, a
+    nameless button, and a click on a remote browser's element after its
+    snapshot named it go by what it says; before such a snapshot, or on an
+    element it did not list, a browser click after outside content is
+    blind (asked when the content is of another kind than an opened app,
+    which a page always is).
 - Open: a code-written question as a guarded turn or a tool-less read; a
   fuse line for a send he asked for; an offer starting as tainted.
 
@@ -224,3 +248,18 @@ command key with backspace in a text field on the desktop.
   turn read is kept by its id, in memory, for the last 300 turns
   (`turnOutsideRead`); not known (a restart, an older turn) is taken as
   read.
+- Security review of the branch (fix first, eight findings): done in
+  "notch: install and turn-on words cover each command in the line only
+  when it installs or sets, a guarding setting needs naming, and an upload
+  or a push is a send", "notch: a send is named by its address and by the
+  place in his words that says who it goes to, and reply in a question he
+  said yes to names nobody", "notch: a file read, a command's output, a
+  window the turn did not open, an app that shows what others wrote and a
+  whole-screen picture count as outside content for the owner's word",
+  "notch: a bare yes with no question known to answer is a yes to a turn
+  that read anything" and "notch: after outside content a send or a
+  command made by a browser click, a key or typed text is read from where
+  it lands, and Enter where nothing can look is asked like a blind
+  click". Not read: a send typed into a mail window and sent by a click on
+  a nameless button; Enter on a web form that is no chat; the local
+  browser's page title (only its address is kept).
