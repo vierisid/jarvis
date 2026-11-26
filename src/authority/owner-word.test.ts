@@ -51,6 +51,11 @@ describe('what still asks when the owner asked for the thing', () => {
       'powershell -Command "(Get-Item a.txt).Delete()"', '$f.Delete()',
       // History thrown away on the other side.
       'git push --force', 'git push origin main --force', 'git push -f origin main', 'git push --force-with-lease origin main', 'git push origin +main',
+      'git push -fu origin x', 'git push -uf origin x', 'git push -d origin old', 'git push origin :old', 'git push --mirror', 'git push --prune origin',
+      'git -C repo push --force', 'git push origin "+main"', 'git push origin --delete feature', 'cd repo && git push -f', 'sudo git push -f', 'bash -c "git push --force"', '(cd repo; git push -f)', 'if ok; then git push --force; fi',
+      // The word that runs what follows, named by its own path, and the two dashes that end its options.
+      '/usr/bin/env rm x', 'sudo /usr/bin/env rm x', '/usr/bin/time -v rm x', 'nohup /usr/bin/env rm x', 'sudo -- rm -rf x', 'env -- rm x', 'sudo -u root -- rm x',
+      'bash -c "/bin/rm -rf build"', "sh -c '/usr/local/bin/trash a'",
     ]) {
       if (!commandDeletes(command)) missed.push(command);
     }
@@ -71,6 +76,11 @@ describe('what still asks when the owner asked for the thing', () => {
       'env', 'env FOO=1 node server.js', 'FOO=1 bun test', 'time ls', 'nohup node server.js &', 'nice -n 10 make', 'timeout 5 curl https://example.com',
       'command -v rm', 'which rm', 'man rm', 'cat docs/rm', 'ls /bin/rm', 'curl "https://example.com/rm"', 'cd ~/rm && ls', 'sudo -n ls', 'busybox ls',
       'git push', 'git push origin main', 'git push -u origin feature', 'git push --follow-tags', 'git push origin fix+more', 'node -e "m.delete(1)"', 'python -c "a.remove(1)"',
+      // A folder or a file that only shares a name with a program that removes.
+      'grep "x" docs/rm', 'cp "a b" /backup/trash', 'du -c /home/me/.local/share/Trash', 'wc -c src/del', 'head -c 100 logs/rd', 'curl -c jar/rd https://x', '/usr/bin/ri Array',
+      // A push that is only written about, and a method that is only searched for.
+      'git commit -m "never git push -f here"', 'git log --grep "git push --force"', 'echo "use git push --force-with-lease"', 'grep -rn ".Delete(" src',
+      'git push origin HEAD:main', 'git push --set-upstream origin dev', 'git push origin feature-f', 'git push --no-verify',
     ]) {
       if (commandDeletes(command)) wrong.push(command);
     }
@@ -95,7 +105,29 @@ describe('what still asks when the owner asked for the thing', () => {
     // Backspace by itself, or with a key that is not the command key, rubs out typed text.
     for (const keys of ['backspace', 'ctrl,backspace', 'alt,backspace', 'option,backspace', 'shift,backspace', 'cmd,b', 'cmd,s']) expect(keysDelete(keys)).toBe(false);
     expect(callDeletesOrPays('desktop_press_keys', { keys: 'cmd,backspace' }, ['control_app'])).toBe(true);
-    expect(callDeletesOrPays('browser_press_key', { key: 'Meta+Backspace' }, ['access_browser'])).toBe(true);
+    // In a page the keys go to the page, where they rub out a line of text: never a file.
+    expect(callDeletesOrPays('browser_press_key', { key: 'Meta+Backspace' }, ['access_browser'])).toBe(false);
+    expect(keysDelete('Meta+Backspace', false)).toBe(false);
+    expect(callDeletesOrPays('browser_press_key', { key: 'Delete' }, ['access_browser'])).toBe(true);
+  });
+
+  test('a very long command is read in a time that grows with its length', () => {
+    const slow: string[] = [];
+    for (const [name, text] of [
+      ['a variable after every break', ';a='.repeat(70_000)],
+      ['an option after every break', ';-a='.repeat(50_000)],
+      ['an address with many parts', `curl "https://example.com/?x=1${'&a=1'.repeat(50_000)}"`],
+      ['a push said over and over', 'git push '.repeat(22_000)],
+      ['words that run what follows', 'sudo -a x1 '.repeat(18_000)],
+      ['folders named by their path', '/usr/bin/env '.repeat(15_000)],
+      ['brackets', '('.repeat(200_000)],
+    ] as const) {
+      const start = performance.now();
+      expect(commandDeletes(text)).toBe(false);
+      const took = performance.now() - start;
+      if (took > 500) slow.push(`${name}: ${Math.round(took)} ms for ${text.length} letters`);
+    }
+    expect(slow).toEqual([]);
   });
 
   test('a call is a delete or a payment by its categories, its command or its keys', () => {

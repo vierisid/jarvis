@@ -79,9 +79,12 @@ ask once more on a failure, then ask the owner (chosen).
   - the delete reader also sees a command named by its path (`/bin/rm`),
     past an alias (`\rm`), behind a word that only runs what follows (`env`,
     `command`, `nohup`, `time`, `nice`, `timeout`, `busybox`, `sudo -u x`,
-    `xargs -0`), after a variable (`FOO=1 rm`), a forced `git push`, a
-    method that removes (`.unlink()`, `.rmdir()`, `.Delete()`), and the
-    command key with backspace;
+    `xargs -0`, also by its path and past `--`), after a variable
+    (`FOO=1 rm`), a `git push` that forces, deletes, mirrors or prunes, a
+    method that removes (`.unlink()`, `.rmdir()`, `.Delete()`), and on the
+    desktop the command key with backspace (not in a page). The same reader
+    decides what a peer may not do on this machine (`peerStep` in
+    `daemon/notch-peers.ts`), so that is wider too;
   - a raw click (`desktop_click`, `desktop_pointer`) whose look at the
     screen failed is asked once more, then asked of the owner with its own
     reason ("the screen could not be read..."). "Failed" is: no answer in
@@ -89,7 +92,10 @@ ask once more on a failure, then ask the owner (chosen).
     place (told apart by the machine's reported system: only the Windows app
     can say what is at a place). Where it cannot look by its making (screen
     awareness off, a Mac or Linux desktop app, no machine) the click goes
-    ahead as before, and so does a place it looked at and had no name for.
+    ahead as before, and so does a thing it read the kind of and had no name
+    for (a Pane in a game). A window named with nothing read in it is a look
+    that failed. An element id the Windows app no longer knows cannot be
+    told from a read that broke, so it asks.
 - C6. README 44 and the header of `owner-word.ts`, with a dated decision.
 
 Correction to the review (review-01 F5): an accepted Noticing offer does not
@@ -99,9 +105,18 @@ Nothing to fix there under this point.
 
 Still not read as a delete after C5 (the price README 44 already names):
 `mv x /tmp/gone` or `mv x /dev/null`, a quoted program name (`"/bin/rm" x`),
-`$(which rm) x`, a script file that removes things, `gio trash`, an
-AppleScript delete, lowercase `.delete()`, ctrl+D in Explorer, Enter on a
+`$(which rm) x`, `{ rm -rf x; }`, `eval rm x`, `bash -c "./rm x"`, a script
+file that removes things, `npx rimraf` / `bunx rimraf`, `trash-empty`,
+`gio trash`, `aws s3 rm`, `curl -X DELETE`, `gh repo delete`, `git tag -d`,
+`truncate` other than `-s 0`, a push handed to another machine
+(`ssh host "git push -f"`), an AppleScript delete, lowercase `.delete()`,
+ctrl+D in Explorer, the command key with backspace in a page, Enter on a
 focused Delete button, a button with no name.
+
+Read as a delete though it is none, and left so (each costs one question):
+a bare verb after a closing quote or a `-c` (`grep "x" rm`, `wc -c del`, as
+before C5), `tar -c /usr/bin/rm x`, `sudo -v rm`, `exec -a rm ls`, the
+command key with backspace in a text field on the desktop.
 
 ## Owner decisions
 
@@ -128,6 +143,8 @@ focused Delete button, a button with no name.
   (needs the desktop app to say what has focus), and the other things the
   screen says about a click (a send) are still dropped until C3. Narrowed
   in "notch: a click is asked about when the look failed, not where nothing
-  can look".
+  can look" and, after review, in "notch: the delete reader past a wrapper's
+  path and a push's other forms, in linear time, and a window alone is not a
+  look".
 - C6 README 44 and header: pending. README 44 does not yet say that a click
   whose look failed is asked about; the header of `owner-word.ts` does.

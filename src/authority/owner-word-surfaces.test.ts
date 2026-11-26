@@ -67,18 +67,19 @@ describe('a helper agent working on something asked on the notch', () => {
     expect(said(result)).toContain('requires user approval');
   });
 
-  test('cannot click on a screen that could not be read: it is refused like a delete, and nothing is pressed', async () => {
-    const click: LLMToolCall = { id: 'c3', name: 'desktop_click', arguments: { element_id: 9 } };
+  test('cannot act on a look that failed: it is refused like a delete, and nothing is done', async () => {
+    // A call nothing else would stop: no approval by the ordinary rules, and no confirmation of its own.
+    const look: LLMToolCall = { id: 'c3', name: 'desktop_click', arguments: { element_id: 9, action: 'get_value' } };
     try {
       setOwnerWordProbe(async () => []);
-      const seen = helper([click]);
+      const seen = helper([look]);
       await onNotch(() => seen.run());
-      expect(seen.runs).toEqual(['desktop_click {"element_id":9}']);
+      expect(seen.runs).toEqual(['desktop_click {"element_id":9,"action":"get_value"}']);
       setOwnerWordProbe(async () => null);
-      const blind = helper([click]);
+      const blind = helper([look]);
       const result = await onNotch(() => blind.run());
       expect(blind.runs).toEqual([]);
-      expect(said(result)).toContain('[AUTHORITY DENIED] desktop_click');
+      expect(said(result)).toContain('requires user approval');
     } finally {
       setOwnerWordProbe(null);
     }

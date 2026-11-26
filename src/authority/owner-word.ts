@@ -55,45 +55,64 @@ export const STILL_ASKED: ReadonlySet<ActionCategory> = new Set<ActionCategory>(
  * common tools that delete by a verb of their own. Read on the command as
  * written, so a name in quotes or after a pipe is seen too.
  */
+/** A letter of a word in a command: not a space, a break between commands, a quote, a redirect or an equals sign. */
+const LETTER = String.raw`[^\s;&|"'<>=]`;
+/** The folder a program is named with (`/bin/`, `.\tools\`), and one that holds programs, for where less is certain. */
+const FOLDER = String.raw`(?!-)${LETTER}{0,256}[\\/]`;
+const PROGRAM_FOLDER = String.raw`(?!-)(?:${LETTER}{0,256}bin[\\/]|[A-Za-z]:\\${LETTER}{0,256}\\)`;
+
 /**
  * What may stand between the place a command starts and its own word, none of
  * which changes what runs: a variable set for that one command (`FOO=1`), a
  * word that only runs what follows (`env`, `command`, `nohup`, `time`, `nice`,
- * `timeout`, `busybox`, and `sudo` again), such a word's own options with at
- * most one value each (`-n 10`, `-u www-data`, `-I {}`), and a bare number
+ * `timeout`, `busybox`, and `sudo` again), also by its path (`/usr/bin/env`),
+ * such a word's own options with at most one value each (`-n 10`,
+ * `-u www-data`, `-I {}`), the two dashes that end them, and a bare number
  * (`timeout 5`). Each kind starts differently from the others and an option's
- * value may be none of them, so a run of them reads one way only.
+ * value may be none of them, so a run of them reads one way only. None of
+ * them runs over a break between commands (; & |), and no more than sixteen
+ * are read, so the time this takes grows with the length of the command and
+ * no faster (pinned by a test on 200,000 letters).
  */
 const RUNS_WHAT_FOLLOWS = 'sudo|doas|env|command|builtin|nohup|time|nice|ionice|timeout|stdbuf|setsid|busybox|toybox|xargs|exec';
 const BEFORE_THE_WORD = [
-  String.raw`[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+`,
+  String.raw`[A-Za-z_]\w*=(?:"[^"]{0,256}"|'[^']{0,256}'|[^\s"';&|]*)\s+`,
   // (`command -v rm` only says where rm is.)
-  String.raw`(?!command\s+-[vV]\s)(?:${RUNS_WHAT_FOLLOWS})\s+`,
-  String.raw`-{1,2}\w[\w-]*(?:=\S*)?\s+(?:(?!(?:${RUNS_WHAT_FOLLOWS})\s)[^\s\d=-][^\s=]*\s+)?`,
+  String.raw`(?!command\s+-[vV]\s)(?:${FOLDER})?(?:${RUNS_WHAT_FOLLOWS})\s+`,
+  String.raw`-{1,2}\w[\w-]*(?:=[^\s;&|]*)?\s+(?:(?!(?:${FOLDER})?(?:${RUNS_WHAT_FOLLOWS})\s)[^\s\d=;&|-][^\s=;&|]*\s+)?`,
+  String.raw`--\s+`,
   String.raw`\d+(?:\.\d+)?[smhd]?\s+`,
 ].join('|');
+const PAST_THOSE = String.raw`\s*(?:${BEFORE_THE_WORD}){0,16}\\?`;
 
 /**
- * Where a command word can stand: at the start, after ; & | ( a newline or a
- * quote, or after a word that runs what follows; then past what changes
- * nothing (above), past the backslash that steps round an alias (`\rm`), and
- * past the folder the program is named with (`/bin/rm`, `.\tools\sdelete.exe`).
- * Both are counted (sixteen such words, a folder of 256 letters), so a very
- * long command is still read in a time that grows with its length.
+ * Where a command word can stand. For certain: at the start, after ; & | ( a
+ * newline or a backtick, or after a word that runs what follows. Perhaps:
+ * after a quote, or after the -c or /c that hands a command to a shell (a
+ * quote may as well close what came before, and -c is an option of many
+ * programs). Then past what changes nothing (above) and past the backslash
+ * that steps round an alias (`\rm`).
  */
-const AT_COMMAND = String.raw`(?:^|[;&|(\n\`"']|\b(?:sudo|doas|xargs|exec|then|do|else)\s|-exec(?:dir)?\s|(?:\/[ck]|-c|-command)\s+["']?)\s*(?:${BEFORE_THE_WORD}){0,16}\\?(?:[^\s;&|"'<>=]{0,256}[\\/])?`;
+const FOR_CERTAIN = String.raw`(?:^|[;&|(\n\`]|\b(?:sudo|doas|xargs|exec|then|do|else)\s|-exec(?:dir)?\s)`;
+const PERHAPS = String.raw`(?:["']|(?:\/[ck]|-c|-command)\s+["']?)`;
+
+/** The verbs that remove, in a shell, in cmd and as PowerShell's short names; and those of them that are programs with a path. */
+const VERBS = String.raw`(?:rm|rmdir|unlink|shred|srm|del|erase|rd|ri|rimraf|trash|trash-put|sdelete(?:64)?)(?:\.exe)?(?=\s|$)`;
+const PROGRAMS = String.raw`(?:rm|rmdir|unlink|shred|srm|rimraf|trash|trash-put|sdelete(?:64)?)(?:\.exe)?(?=\s|$)`;
 
 const DELETES: readonly RegExp[] = [
-  // The verbs that remove, in a shell, in cmd and as PowerShell's short names.
-  new RegExp(`${AT_COMMAND}(?:rm|rmdir|unlink|shred|srm|del|erase|rd|ri|rimraf|trash|trash-put|sdelete(?:64)?)(?:\\.exe)?(?=\\s|$)`, 'i'),
+  new RegExp(`(?:${FOR_CERTAIN}|${PERHAPS})${PAST_THOSE}${VERBS}`, 'i'),
+  // Named by its path (`/bin/rm`, `.\\tools\\sdelete.exe`). Where the start is
+  // only perhaps one, the folder has to be one that holds programs:
+  // `grep "x" docs/rm` and `du -c ~/.local/share/Trash` name a file.
+  new RegExp(`${FOR_CERTAIN}${PAST_THOSE}(?:${FOLDER})${PROGRAMS}`, 'i'),
+  new RegExp(`${PERHAPS}${PAST_THOSE}(?:${PROGRAM_FOLDER})${PROGRAMS}`, 'i'),
   // PowerShell by its long names.
   /\b(?:Remove-[A-Za-z]+|Uninstall-[A-Za-z]+|Unregister-[A-Za-z]+|Clear-(?:Content|Item|ItemProperty|RecycleBin|Disk|EventLog))\b/i,
   /\[(?:System\.)?IO\.(?:File|Directory)\]::Delete/i,
   // What a tool deletes by its own word.
   /\bfind\b[^|;&]*\s-delete\b/i,
-  /\bgit\s+(?:clean|rm|reset\s+--hard|checkout\s+--\s|branch\s+-D|push\s+[^|;&]*--delete|stash\s+(?:drop|clear))/i,
-  // A push that throws away what the other side had: forced by a flag, or by a + before the branch.
-  /\bgit\s+push\b(?:[^|;&]*\s)?(?:--force(?:-with-lease|-if-includes)?\b|-f\b|\+[\w./-])/,
+  /\bgit\s+(?:clean|rm|reset\s+--hard|checkout\s+--\s|branch\s+-D|stash\s+(?:drop|clear))/i,
   /\brsync\b[^|;&]*\s--delete/i,
   /\brobocopy\b[^|;&]*\s\/(?:MIR|PURGE)\b/i,
   /\b(?:docker|podman)\s+(?:(?:image|container|volume|network|system)\s+)?(?:rm|rmi|prune)\b/i,
@@ -108,27 +127,48 @@ const DELETES: readonly RegExp[] = [
   // A script given on the command line that removes files.
   /\b(?:os\.(?:remove|unlink|rmdir|removedirs)|shutil\.rmtree|(?:fs|fsPromises|promises)\.(?:rm|rmdir|unlink)(?:Sync)?|unlinkSync|rmSync|rmdirSync|File\.Delete|Directory\.Delete|FileUtils\.rm\w*)\b/,
   // A file or a folder removed by its own method: pathlib's `Path(x).unlink()`, PowerShell's `(Get-Item x).Delete()`.
-  /\.(?:unlink|rmdir|rmtree|Delete)\s*\(/,
+  // (On something: `grep ".Delete(" src` only looks for the word.)
+  /[\w)\]]\.(?:unlink|rmdir|rmtree|Delete)\s*\(/,
   // Emptying a file: writing nothing over it.
   /(?:^|[;&|\n])\s*(?::\s*)?>\s*[^\s&|>]/,
   /\btruncate\s+-s\s*0\b/i,
 ];
 
+/**
+ * A push that throws away what the other side had. Read one command at a
+ * time, with `git` where a command starts (so a push that is only written
+ * about, in a commit message or an echo, is not one), and then by what
+ * follows the word: forced (`--force`, `-f`, `-fu`), a delete (`--delete`,
+ * `-d`, `:branch`), `--mirror`, `--prune`, or a + before the branch.
+ */
+const PUSH = new RegExp(String.raw`(?:^[\s({$\`]*|(?:\/[ck]|-c|-command|\beval)\s+["']\s*)(?:(?:then|do|else)\s+)?(?:${BEFORE_THE_WORD}){0,16}(?:${FOLDER})?git(?:\.exe)?\s+(?:-{1,2}\w[\w-]*(?:=\S*)?\s+(?:[^\s-]\S*\s+)?){0,8}push(?=\s|$)`);
+const THROWS_AWAY = /(?:^|\s)(?:--(?:force(?:-with-lease|-if-includes)?|delete|mirror|prune)(?=[\s="')`]|$)|-[A-Za-z]*[fd][A-Za-z]*(?=[\s"')`]|$)|["']?[+:][\w./-])/;
+
+function pushThrowsAway(command: string): boolean {
+  if (!command.includes('push')) return false;
+  return command.split(/[;&|\n]/).some((part) => {
+    const push = PUSH.exec(part);
+    return push !== null && THROWS_AWAY.test(part.slice(push.index + push[0].length));
+  });
+}
+
 export function commandDeletes(command: unknown): boolean {
   if (typeof command !== 'string' || !command.trim()) return false;
-  return DELETES.some((pattern) => pattern.test(command));
+  return DELETES.some((pattern) => pattern.test(command)) || pushThrowsAway(command);
 }
 
 /**
  * Whether a key press deletes: the Delete key in any chord (in a file list
  * that removes the file), or on a Mac the command key with backspace, which
  * is how a file goes to the Trash there (and, with more keys, past it).
+ * `desktop` is false for keys sent into a page, where the command key with
+ * backspace rubs out a line of text and never a file.
  */
-export function keysDelete(keys: unknown): boolean {
+export function keysDelete(keys: unknown, desktop = true): boolean {
   if (typeof keys !== 'string') return false;
   const held = keys.split(/[,+]/).map((key) => key.trim().toLowerCase());
   if (held.some((key) => /^(?:delete|del|forwarddelete|kp_delete)$/.test(key))) return true;
-  return held.some((key) => /^(?:backspace|bs)$/.test(key)) && held.some((key) => /^(?:cmd|command|meta|super|win|windows)$/.test(key));
+  return desktop && held.some((key) => /^(?:backspace|bs)$/.test(key)) && held.some((key) => /^(?:cmd|command|meta|super|win|windows)$/.test(key));
 }
 
 /** The words of a call that can hold a command: the product's own tools for running one. */
@@ -147,7 +187,8 @@ function commandText(toolName: string, params: Record<string, unknown>): string 
 export function callDeletesOrPays(toolName: string, params: Record<string, unknown>, categories: readonly ActionCategory[]): boolean {
   if (categories.some((category) => STILL_ASKED.has(category))) return true;
   if (commandDeletes(commandText(toolName, params))) return true;
-  if ((toolName === 'desktop_press_keys' || toolName === 'browser_press_key') && keysDelete(params.keys ?? params.key)) return true;
+  if (toolName === 'desktop_press_keys' && keysDelete(params.keys ?? params.key)) return true;
+  if (toolName === 'browser_press_key' && keysDelete(params.keys ?? params.key, false)) return true;
   return false;
 }
 

@@ -107,9 +107,18 @@ describe('what a raw press would land on, for the word of the owner', () => {
   });
 
   test('a place the machine looked at and found no name for reads as nothing', async () => {
-    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ window_title: 'Hades', process_name: 'hades' }).deps)).toEqual([]);
+    // What is there has a kind (a game or a canvas is a Pane), so it was read.
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ element_role: 'Pane', element_name: '', window_title: 'Hades', process_name: 'hades' }).deps)).toEqual([]);
     expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Pane', element_name: '', window_title: 'Hades' }).deps)).toEqual([]);
     expect(await notchPressReads('desktop_click', { element_id: 3 }, machine({ element_role: 'Button', element_name: '' }).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ element_role: 'Unknown(50099)', element_name: '', window_title: 'Hades' }).deps)).toEqual([]);
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ own: true, window_title: 'Jarvis' }).deps)).toEqual([]);
+  });
+
+  test('a window named while the thing in it could not be read is a look that failed', async () => {
+    // The window comes from another call than the element: it is there also when the element read broke.
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ window_title: 'Checkout - Store', process_name: 'store' }).deps)).toBeNull();
+    expect(await notchPressReads('desktop_pointer', { x: 500, y: 250 }, machine({ window_title: '', process_name: 'store' }).deps)).toBeNull();
   });
 
   test('where it cannot look by its making, nothing is asked of the machine and the click is not held up', async () => {

@@ -100,15 +100,16 @@ const PRESSES = new Set(['click', 'double_click', 'invoke', 'select', 'toggle'])
  * Three answers, and they are kept apart:
  *
  *   - a list (often empty): the machine looked, or it cannot look by its
- *     making. A place with no name, in a window it could name, reads as
- *     nothing. So does a click where nothing can be asked at all: screen
+ *     making. A thing with no name, of a kind it could tell (a Pane, in a
+ *     game or a canvas), reads as nothing. So does a click where nothing can be asked at all: screen
  *     awareness is off, there is no machine to ask, or its desktop app cannot
  *     say what is at a place (`says`). The owner's word lets those go ahead,
  *     as a step in a turn they started. (Point 1, C3: once the owner's word
  *     knows whether the turn has read outside content, this case is to ask in
  *     such a turn and only there. It needs its own answer then.)
- *   - null: it can look, tried, and was told nothing at all about the place
- *     (an element it no longer knows, a read that broke). That is not
+ *   - null: it can look, tried, and was told nothing about the thing at the
+ *     place (an element it no longer knows, a read that broke; the window
+ *     round it may still be named). That is not
  *     "nothing is there";
  *   - a throw: the asking failed (no answer in time, a desktop app too old to
  *     know the question).
@@ -143,8 +144,11 @@ export async function notchPressReads(toolName: string, args: Record<string, unk
   const name = word('element_name');
   const title = word('window_title');
   if (name) return uiEffectHints('click', name, title);
-  // No name. It looked if it could say anything else about the place.
-  return title || word('process_name') || word('element_role') || said.own === true ? [] : null;
+  // No name. It looked if it could say what kind of thing is there (every
+  // element it reads has a kind), or that the window is one of its own. A
+  // window's title alone is not that: the window is found by another call
+  // than the element, and is named also when the element could not be read.
+  return word('element_role') || said.own === true ? [] : null;
 }
 
 /** The place an approval would land on, or null when it acts on nothing on a screen or the machine cannot say. */
