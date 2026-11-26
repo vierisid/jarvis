@@ -578,6 +578,16 @@ describe('what is written down of a thing that was put somewhere', () => {
     expect(entries(lost)).toMatchObject([{ kind: 'put', outcome: 'unsure' }]);
   });
 
+  test('a computer that is not connected was asked nothing: nothing was tried, and nothing is written', async () => {
+    const h = harness({ result: null });
+    h.put.shown('pc', looked(ROWS));
+    h.put.shown('pc', FIELD);
+    await settle();
+    await h.reply('yes');
+    expect(h.said()).toBe('Your computer is not connected.');
+    expect(entries(h)).toEqual([]);
+  });
+
   test('with everything stopped nothing was tried, and nothing is written', async () => {
     const h = harness({ paused: () => true });
     h.put.shown('pc', looked(ROWS));

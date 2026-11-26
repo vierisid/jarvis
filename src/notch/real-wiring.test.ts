@@ -930,7 +930,7 @@ describe('the list of what the notch did, with every part given', () => {
     expect(w.title()).toBe('Tony is switched off. It is still in Agents.');
     expect(list.since(0)).toMatchObject([{ kind: 'agent_made', outcome: 'undone', ref: 'agent:flow-1' }]);
     const trail = new AuditTrail();
-    expect(trail.queryEntries({ tool: 'notch_agent_made' })).toMatchObject([{ events: 2, outcome: 'succeeded', channel: 'notch', decided_by: 'notch' }]);
+    expect(trail.queryEntries({ tool: 'notch_agent_made' })).toMatchObject([{ events: 2, outcome: 'undone', channel: 'notch', decided_by: 'notch' }]);
     expect(trail.query({ tool: 'notch_agent_made_undo' })).toHaveLength(1);
   });
 

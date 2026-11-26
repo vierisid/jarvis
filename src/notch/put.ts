@@ -297,7 +297,8 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
         ...(job ? { ref: `job:${job}` } : {}),
       });
     };
-    if (lost || !result?.done) noted(lost ? 'unsure' : 'not_done', appSeen || 'where you pointed');
+    // A computer that is not connected was asked nothing: nothing was tried, and nothing is written (rule 262).
+    if (lost || (result && !result.done)) noted(lost ? 'unsure' : 'not_done', appSeen || 'where you pointed');
     if (lost) return { parts: ['I lost touch with your computer in the middle of it. Look whether it is there.'], ms: 5200, mood: 'sorry', mark: 'fail' };
     if (!result) return { parts: ['Your computer is not connected.'], ms: 3600, mood: 'sorry', mark: 'fail' };
     if (!result.done) return { parts: [actRefusal(result.why), ' Nothing was put there.'], ms: 4600, mood: 'sorry', mark: 'fail' };

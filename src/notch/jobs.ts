@@ -623,7 +623,8 @@ export function attachNotchJobs(inbox: NotchInbox, deps: NotchJobsDeps): NotchJo
     if (end.how === 'stopped' && did === 0) return;
     deps.actions?.record({
       kind: plan.kind === 'skill' ? 'job_skill' : 'job_rounds', ref: `job:${job.id}`, what: plan.words.title(did), asked: job.asked,
-      outcome: unsure ? 'unsure' : end.how === 'done' || did > 0 ? 'done' : 'not_done',
+      // Failed after some of it was done: done in part, and the audit hears that it failed.
+      outcome: unsure ? 'unsure' : end.how === 'done' || (end.how === 'stopped' && did > 0) ? 'done' : did > 0 ? 'partly' : 'not_done',
     });
   }
 

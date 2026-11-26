@@ -25,7 +25,8 @@ export type ResolutionChannel = 'click' | 'voice' | 'chat' | 'notification' | 'n
  * denied before anything ran, `unknown` may have run, and `dispatched` was
  * handed to its provider with the receipt still to come.
  */
-export type AuditOutcome = 'succeeded' | 'failed' | 'not_started' | 'unknown' | 'dispatched';
+/** `undone`: it was done and has been taken back since (the notch's own actions, src/notch/actions.ts). */
+export type AuditOutcome = 'succeeded' | 'failed' | 'not_started' | 'unknown' | 'dispatched' | 'undone';
 
 export type AuditEntry = {
   id: string;

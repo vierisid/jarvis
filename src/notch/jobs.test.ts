@@ -787,6 +787,18 @@ describe('what is written down of a job', () => {
     expect(entries(n)).toMatchObject([{ kind: 'job_rounds', outcome: 'not_done', what: 'Pasted 0 from notepad into excel' }]);
   });
 
+  test('a step refused after some were done: done in part, not done, and the audit hears that it failed', async () => {
+    const n = notch(FIVE);
+    n.next.push(null, null, null, null, { why: 'moved' });
+    n.start(5, YES);
+    await n.answer(5);
+    await settle();
+    expect(n.said()).toContain('I stopped at 1 of 5.');
+    expect(entries(n)).toMatchObject([{ kind: 'job_rounds', outcome: 'partly', what: 'Pasted 1 from notepad into excel' }]);
+    // Its row of Today is the job's own, as it always was.
+    expect(n.actions.today(0)).toEqual([]);
+  });
+
   test('a step whose answer never came may have landed: that is what the entry says', async () => {
     const n = notch(FIVE);
     n.next.push(null, null, null, 'lost');

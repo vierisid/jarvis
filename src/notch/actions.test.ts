@@ -213,13 +213,30 @@ describe('the audit trail gets every entry, as one ledger entry', () => {
     expect(h.trail.getStats()).toMatchObject({ total: 1, byOutcome: { succeeded: 1 } });
   });
 
-  test('taken back: the same ledger entry gets a row that says so, and still says the thing was done', () => {
+  test('taken back: the same ledger entry gets a row that says so, and taken back is its last word', () => {
     const h = made();
     h.actions.record({ kind: 'put', what: 'Put 3 rows from Notepad into Excel', asked: { seen: 'line', how: 'key' }, outcome: 'done', ref: 'job:j1' });
     h.tick(5);
     h.actions.undone('job:j1');
-    expect(h.trail.queryEntries()).toMatchObject([{ tool_name: 'notch_put', outcome: 'succeeded', events: 2 }]);
-    expect(h.trail.query({ tool: 'notch_put_undo' })).toMatchObject([{ executed: 1, channel: 'notch', outcome: null }]);
+    expect(h.trail.queryEntries()).toMatchObject([{ tool_name: 'notch_put', outcome: 'undone', events: 2 }]);
+    // The first row still says it was done; the taking back ran, and says so.
+    expect(h.trail.query({ tool: 'notch_put' })).toMatchObject([{ executed: 1, outcome: 'succeeded' }]);
+    expect(h.trail.query({ tool: 'notch_put_undo' })).toMatchObject([{ executed: 1, channel: 'notch', outcome: 'undone' }]);
+    // The statistics count entries, by their last word.
+    expect(h.trail.getStats(0).byOutcome).toEqual({ undone: 1 });
+  });
+
+  test('whether a row says it was carried out follows what came of it: done and done in part did something, the rest did not', () => {
+    const h = made();
+    const cases = [['done', 1, 'succeeded'], ['partly', 1, 'failed'], ['not_done', 0, 'failed'], ['unsure', 0, 'unknown']] as const;
+    for (const [outcome] of cases) h.actions.record({ kind: 'job_rounds', what: outcome, ref: `job:${outcome}`, asked: { seen: 'line', how: 'key' }, outcome });
+    for (const [outcome, executed, audited] of cases) {
+      const row = h.trail.query({}).find((one) => one.effect_id === h.actions.byRef(`job:${outcome}`)!.id)!;
+      expect([outcome, row.executed, row.outcome]).toEqual([outcome, executed, audited]);
+    }
+    // A send that did not go never started; one that may have gone is not known.
+    h.actions.record({ kind: 'people_tell', what: 'Message to Leo', ref: 'tell', asked: { seen: 'line', how: 'said' }, outcome: 'not_done' });
+    expect(h.trail.query({ tool: 'notch_people_tell' })).toMatchObject([{ executed: 0, outcome: 'not_started' }]);
   });
 
   test('a yes to an approval is written here and not to the audit: the product has already written that one', () => {

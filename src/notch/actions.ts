@@ -59,7 +59,8 @@ export type NotchActionKind =
 export type NotchActionSeen = 'line' | 'sheet' | 'letter' | 'nothing';
 /** How it was decided. */
 export type NotchActionHow = 'key' | 'said' | 'pick' | 'fuse' | 'system';
-export type NotchActionOutcome = 'done' | 'not_done' | 'unsure' | 'undone' | 'handed';
+/** `partly`: some of it was done, and then it failed (a job). */
+export type NotchActionOutcome = 'done' | 'partly' | 'not_done' | 'unsure' | 'undone' | 'handed';
 
 export interface NotchActionAsked {
   seen: NotchActionSeen;
@@ -170,6 +171,8 @@ const byOwner = (how: NotchActionHow): boolean => how === 'key' || how === 'said
 function auditOutcome(kind: Exclude<NotchActionKind, 'approval'>, outcome: NotchActionOutcome): AuditOutcome | null {
   if (outcome === 'done') return 'succeeded';
   if (outcome === 'unsure') return 'unknown';
+  // Done in part, then it failed: the audit has no word for half, and it did not succeed.
+  if (outcome === 'partly') return 'failed';
   if (outcome === 'not_done') return NOTCH_ACTION_CATEGORY[kind] === 'control_app' ? 'failed' : 'not_started';
   return null;
 }
@@ -187,7 +190,7 @@ const ROW_ELSEWHERE: Partial<Record<NotchActionKind, readonly NotchActionOutcome
   // A job's own row is there however it ended, may have happened too (it keeps its Undo there). A thing put
   // that may have landed has none: the job of it is only opened once it is there. Nor has an approval whose
   // outcome is not known: Today lists those only once their receipt says done.
-  job_rounds: ['done', 'unsure', 'undone'], job_skill: ['done', 'unsure', 'undone'], put: ['done', 'undone'],
+  job_rounds: ['done', 'partly', 'unsure', 'undone'], job_skill: ['done', 'partly', 'unsure', 'undone'], put: ['done', 'undone'],
   promise: ['done'],
   approval: ['done', 'undone', 'handed'],
 };
@@ -197,6 +200,7 @@ function small(row: NotchActionRow): string {
   if (row.outcome === 'undone') return 'taken back';
   const sends = row.kind !== 'approval' && (NOTCH_ACTION_CATEGORY[row.kind] === 'send_email' || NOTCH_ACTION_CATEGORY[row.kind] === 'send_message');
   if (row.outcome === 'unsure') return sends ? 'may have gone' : 'may have happened';
+  if (row.outcome === 'partly') return 'partly done';
   return sends ? 'sent' : 'done';
 }
 
@@ -258,11 +262,12 @@ export function attachNotchActions(db: Database, deps: NotchActionsDeps = {}): N
         action_category: NOTCH_ACTION_CATEGORY[row.kind],
         authority_decision: 'allowed',
         // An undo is something that was done, too: the taking back ran. The entry keeps its outcome.
-        executed: undo || row.outcome === 'done',
+        executed: undo || row.outcome === 'done' || row.outcome === 'partly',
         channel: undo || owner ? 'notch' : 'system',
         decided_by: undo || owner ? NOTCH_ACTION_DECIDER : NOTCH_ACTION_SYSTEM,
         effect_id: row.id,
-        outcome: undo ? null : auditOutcome(row.kind, row.outcome),
+        // Taken back is the last word of the ledger entry: a reader of the entry sees it, not "succeeded".
+        outcome: undo ? 'undone' : auditOutcome(row.kind, row.outcome),
       });
     } catch (error) {
       failed('an action was written down, but not in the audit trail', error);

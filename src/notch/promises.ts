@@ -61,16 +61,19 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
   /** Promises whose window was put on the notch as a fuse, and for how long: what the owner had before them. */
   const shown = new Map<string, number>();
   /**
-   * What came of a promise, written down (./actions.ts) when the executor says so. Nobody says yes to a
-   * promise when it is kept: with its window on the notch, the fuse was let burn out; with no notch up, the
-   * executor's clock ran it. The words are the promise's own, as the owner gave them.
+   * What came of a promise whose window the notch showed, written down (./actions.ts) when the executor
+   * says so. Nobody says yes to a promise when it is kept: the fuse was let burn out on the notch. A promise
+   * the notch never showed is the executor's own, run by its clock, and its turn's tools are audited by the
+   * product as ever: nothing of it is written here. Neither is one a restart cut off: whether the notch
+   * showed it before the restart is not known.
    */
   const noted = (commitmentId: string, what: string, outcome: NotchActionOutcome): void => {
     const fuseMs = shown.get(commitmentId);
     shown.delete(commitmentId);
+    if (fuseMs === undefined) return;
     deps.actions?.record({
       kind: 'promise', ref: `promise:${commitmentId}`, outcome, what: `Promised: ${promiseWords(what)}`,
-      asked: fuseMs === undefined ? { seen: 'nothing', how: 'system' } : { seen: 'line', how: 'fuse', fuseMs },
+      asked: { seen: 'line', how: 'fuse', fuseMs },
     });
   };
   /** Fuses waiting to hear what came of their promise. */
@@ -177,8 +180,6 @@ export function attachNotchPromises(inbox: NotchInbox, deps: NotchPromiseDeps): 
         return;
       }
       case 'interrupted':
-        // Cut off by a restart: it may have partly run.
-        noted(event.commitmentId, event.what, 'unsure');
         inbox.add(news(event.commitmentId,
           [em(promiseWords(event.what)), ' was cut off by a restart. It may have partly run, so I did not run it again.'], 5600, false));
         return;

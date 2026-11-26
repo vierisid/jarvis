@@ -329,11 +329,13 @@ describe('what is written down of a promise', () => {
     expect(today?.kind === 'sheet' && today.blocks[0]).toMatchObject({ kind: 'row', say: ['Send Anna the pricing'], small: 'promised' });
   });
 
-  test('kept while no notch was up: nothing was before anybody, and the entry says so', async () => {
+  test('kept while no notch was up: the executor\'s own, which the notch never showed. Nothing is written here', async () => {
     const h = harness({ page: false });
     const c = await announced(h);
     await h.fire(c.id);
-    expect(entries()).toMatchObject([{ kind: 'promise', outcome: 'done', seen: 'nothing', how: 'system', fuseMs: null }]);
+    expect(h.log).toHaveLength(1);
+    expect(entries()).toEqual([]);
+    expect(new AuditTrail().query({ tool: 'notch_promise' })).toEqual([]);
   });
 
   test('cancelled with Esc in its window: it never ran, and nothing is written', async () => {
@@ -346,7 +348,7 @@ describe('what is written down of a promise', () => {
     expect(new AuditTrail().query({ tool: 'notch_promise' })).toEqual([]);
   });
 
-  test('cut off in the middle by a restart: it may have partly run, and that is what the entry and the row of Today say', async () => {
+  test('cut off in the middle by a restart: whether the notch showed it is not known, and nothing is written', async () => {
     const first = new CommitmentExecutor('aggressive');
     cleanup.push(() => first.stop());
     first.setAgentService({ handleMessage: async () => new Promise<string>(() => {}) } as never);
@@ -358,14 +360,8 @@ describe('what is written down of a promise', () => {
     h.executor.start();
     await settle();
     expect(h.said()).toBe('Send the wire was cut off by a restart. It may have partly run, so I did not run it again.');
-    expect(entries()).toMatchObject([{ kind: 'promise', outcome: 'unsure', what: 'Promised: Send the wire', seen: 'nothing', how: 'system' }]);
-    expect(new AuditTrail().queryEntries({ tool: 'notch_promise' })).toMatchObject([{ outcome: 'unknown', executed: 0, channel: 'system' }]);
-    await h.answer('done');
-    await h.open();
-    expect(h.said()).toBe('Today: 1 thing done');
-    const today = h.line();
-    expect(today?.kind === 'sheet' && today.blocks[0]).toMatchObject({ kind: 'row', say: ['Promised: Send the wire'], small: 'may have happened' });
-    expect(today?.kind === 'sheet' && today.blocks[0]).not.toHaveProperty('buttons');
+    expect(entries()).toEqual([]);
+    expect(new AuditTrail().query({ tool: 'notch_promise' })).toEqual([]);
   });
 
   test('a brain that was not given where to write it down keeps its promise all the same, writes nothing, and makes no table', async () => {
