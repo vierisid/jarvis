@@ -615,6 +615,20 @@ describe('a shown job is done again where it was done', () => {
     expect(h.actions.since(0)).toMatchObject([{ kind: 'job_skill', outcome: 'done', seen: 'nothing', how: 'said' }]);
   });
 
+  test('asked for in words a model read: the line is put first, and the job is written down as a yes on that line', async () => {
+    const h = harness({ byPlace: true });
+    await shown(h);
+    const intent = h.teach.intents().find((one) => one.id === 'teach.run')!;
+    intent.match('run it', { source: 'typed', at: 0, read: true })!.run();
+    await settle();
+    expect(h.said()).toBe('Do renames the file and saves it again?');
+    expect(h.actions.since(0)).toEqual([]);
+    await h.reply('yes');
+    await settle();
+    expect(h.said()).toBe('Done. 2 steps.');
+    expect(h.actions.since(0)).toMatchObject([{ kind: 'job_skill', outcome: 'done', seen: 'line', how: 'key' }]);
+  });
+
   // The owner's first "run it", 16 November 2026: a job shown in a sheet in a
   // browser stopped at "0 of 12. I could not find the next thing to click".
   // A field on a page has no name to be found by. Where it was typed is known.
