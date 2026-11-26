@@ -8,16 +8,21 @@ package main
 // believed until it says otherwise. A page that hangs after saying so never
 // says otherwise, and Esc was then dead in every app on the machine until
 // Jarvis was quit. So the page is asked once a second whether it is there,
-// and one that has answered before and has not answered for five seconds is
-// no longer believed: Esc goes to the app in front again, and comes back to
-// the notch with the page's next answer.
+// for as long as it says it wants Esc, and one that has not answered for five
+// seconds is no longer believed: Esc goes to the app in front again, and
+// comes back to the notch with the page's next answer. Saying that it wants
+// Esc is itself an answer, so a page that says so and hangs at once is found
+// out like any other. A page that wants no Esc is not asked: there is
+// nothing it could be wrong about.
 //
-// The question is put on the window's own thread, so the same pulse says when
-// that thread stands still. On a Mac that thread is the main thread, where
+// The asking is done on the window's own thread, and something is put on
+// that thread every second whether the page is asked or not, so the same
+// pulse says when that thread stands still, once it has run at all. On a Mac that thread is the main thread, where
 // the taps on the keyboard and the pointer also run: while it stands still
 // every key on the machine waits on them. Then the taps are held off, and
-// what every goroutine was doing is written to the log once, because a hang
-// on a Mac leaves no report of its own to read afterwards.
+// what every goroutine was doing is written to the log (at most once in ten
+// minutes, and five times in the life of the program), because a hang on a
+// Mac leaves no report of its own to read afterwards.
 //
 // No platform calls in this file, and nothing in it waits for the window's
 // thread: what is put there is put and left.
@@ -51,22 +56,24 @@ type notchPulse struct {
 
 	mu sync.Mutex
 	// When the window's thread last ran what was put on it, and when the page
-	// last answered.
+	// last gave a sign: an answer, or any call of its own.
 	window, page time.Time
-	// A page counts as gone only after it has answered once. Before that it
-	// may still be loading, and it has not yet said anything about Esc that
-	// could be wrong.
-	answered bool
-	beat     time.Time
+	// The window's thread counts as gone only after it has run once. A window
+	// that is slow to start has not stopped.
+	ran bool
+	// The page says Esc would do something (NotchService.wantEsc). Only then
+	// is it asked, and only then can it count as gone.
+	asking bool
+	beat   time.Time
 	// What was last said, so that only a change is said again.
 	windowGone, pageGone bool
 }
 
 // notchPulseState is what a beat finds.
 type notchPulseState struct {
-	// The window's thread has not run anything for the limit.
+	// The window's thread ran before and has not run anything for the limit.
 	WindowGone bool
-	// The page has answered before and has not for the limit.
+	// The page wants Esc and has given no sign for the limit.
 	PageGone bool
 	// Whether each differs from what the beat before found.
 	WindowChanged, PageChanged bool
@@ -85,18 +92,35 @@ func newNotchPulse(now time.Time) *notchPulse {
 // Window is the window's thread running something of ours.
 func (p *notchPulse) Window(now time.Time) {
 	p.mu.Lock()
-	p.window = now
+	p.window, p.ran = now, true
 	p.mu.Unlock()
 }
 
-// Page is the page answering.
+// Page is a sign from the page: an answer to the question, or any call it
+// makes by itself.
 func (p *notchPulse) Page(now time.Time) {
 	p.mu.Lock()
-	p.page, p.answered = now, true
+	p.page = now
 	p.mu.Unlock()
 }
 
-// Beat is looked at once for every question asked.
+// Esc is the page saying whether Esc would do something on the notch. It is
+// a sign from the page like any other, and from when it wants Esc the page is
+// asked and held to answering.
+func (p *notchPulse) Esc(want bool, now time.Time) {
+	p.mu.Lock()
+	p.asking, p.page = want, now
+	p.mu.Unlock()
+}
+
+// Asking reports whether the page is to be asked now.
+func (p *notchPulse) Asking() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.asking
+}
+
+// Beat is looked at once a second.
 func (p *notchPulse) Beat(now time.Time) notchPulseState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -106,15 +130,15 @@ func (p *notchPulse) Beat(now time.Time) notchPulseState {
 	}
 	p.beat = now
 	s := notchPulseState{
-		WindowGone: now.Sub(p.window) > p.limit,
-		PageGone:   p.answered && now.Sub(p.page) > p.limit,
+		WindowGone: p.ran && now.Sub(p.window) > p.limit,
+		PageGone:   p.asking && now.Sub(p.page) > p.limit,
 	}
 	s.WindowChanged, s.PageChanged = s.WindowGone != p.windowGone, s.PageGone != p.pageGone
 	p.windowGone, p.pageGone = s.WindowGone, s.PageGone
 	return s
 }
 
-// notchPulseRun asks once a second until quit is closed. onWindow puts
+// notchPulseRun beats once a second until quit is closed. onWindow puts
 // something on the window's thread and comes back at once; ask puts the
 // question to the page and is called on that thread; tell hears every change.
 func notchPulseRun(p *notchPulse, quit <-chan struct{}, onWindow func(run func()), ask func(), tell func(notchPulseState)) {
@@ -124,7 +148,7 @@ func notchPulseRun(p *notchPulse, quit <-chan struct{}, onWindow func(run func()
 func notchPulseLoop(p *notchPulse, quit <-chan struct{}, every time.Duration, onWindow func(run func()), ask func(), tell func(notchPulseState)) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
-	// One question waits on the window's thread at the most: a thread that
+	// One thing waits on the window's thread at the most: a thread that
 	// stands still for an hour is not left an hour of questions to run.
 	var waiting atomic.Bool
 	last := notchPulseState{}
@@ -144,7 +168,10 @@ func notchPulseLoop(p *notchPulse, quit <-chan struct{}, every time.Duration, on
 			onWindow(func() {
 				waiting.Store(false)
 				p.Window(time.Now())
-				ask()
+				// A page that wants no Esc is left alone.
+				if p.Asking() {
+					ask()
+				}
 			})
 		}
 		last = p.Beat(time.Now())
@@ -157,31 +184,66 @@ func notchPulseLoop(p *notchPulse, quit <-chan struct{}, every time.Duration, on
 // notchPulseTell is what is done about a change. It is called on the pulse's
 // own goroutine.
 func notchPulseTell(s notchPulseState) {
-	// First, and whatever else: Esc is the app's again, or the notch's again.
-	notch.setStalled(s.Unseen())
+	notchPulseTellTo(notch, s, platformNotchInputStalled, time.Now())
+}
+
+func notchPulseTellTo(svc *NotchService, s notchPulseState, hold func(stalled bool), now time.Time) {
 	if s.Ended {
+		// The page is going away, and the service forgets what was said of it
+		// when it does (detachPage). Esc is not given back to a page that is
+		// not answering for the moment in between.
 		if s.WindowChanged {
-			platformNotchInputStalled(false)
+			hold(false)
 		}
 		return
 	}
+	// First, and whatever else: Esc is the app's again, or the notch's again.
+	svc.setStalled(s.Unseen())
 	if s.WindowChanged {
 		if s.WindowGone {
+			stacks := "(not written again so soon: see the last time)"
+			if notchDumps.allow(now) {
+				stacks = string(notchAllStacks())
+			}
 			log.Printf("[notch] the window's thread has not run for %v: Esc is left to the app in front, and the watch on the keyboard and the pointer is held off until it runs again. Every goroutine:\n%s",
-				notchPulseLimit, notchAllStacks())
+				notchPulseLimit, stacks)
 		} else {
 			log.Printf("[notch] the window's thread runs again")
 		}
-		platformNotchInputStalled(s.WindowGone)
-		return
+		hold(s.WindowGone)
 	}
-	if s.PageChanged && !s.WindowGone {
+	if s.PageChanged {
 		if s.PageGone {
 			log.Printf("[notch] the page has not answered for %v: Esc is left to the app in front until it does", notchPulseLimit)
 		} else {
 			log.Printf("[notch] the page answers again")
 		}
 	}
+}
+
+// How often what every goroutine is doing may be written to the log: a
+// thread that stops and starts must not fill the disk with it.
+const (
+	notchDumpEvery = 10 * time.Minute
+	notchDumpMost  = 5
+)
+
+type notchDumpLimit struct {
+	mu    sync.Mutex
+	last  time.Time
+	count int
+}
+
+var notchDumps notchDumpLimit
+
+func (d *notchDumpLimit) allow(now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.count >= notchDumpMost || (d.count > 0 && now.Sub(d.last) < notchDumpEvery) {
+		return false
+	}
+	d.last, d.count = now, d.count+1
+	return true
 }
 
 // notchAllStacks is what every goroutine is doing, for the log: where each

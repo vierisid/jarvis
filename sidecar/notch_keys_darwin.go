@@ -241,7 +241,9 @@ func notchTapSeen(kind, mods int) bool {
 
 // notchKeysTapHold holds the keyboard tap off while the main thread stands
 // still, and lets it go when it runs again (platformNotchInputStalled). Keys
-// came and went unseen meanwhile, so none is taken as still down afterwards.
+// came and went unseen meanwhile, so afterwards the keyboard is asked what
+// is down now and only what differs is put right (notchKeyboard.resync): a
+// hold that was not needed does not end somebody's talking.
 func notchKeysTapHold(hold bool) {
 	notchTapMu.Lock()
 	C.jarvis_notch_tap_hold(boolToCInt(hold))
@@ -250,7 +252,10 @@ func notchKeysTapHold(hold bool) {
 		return
 	}
 	if kb := notchTapKeyboard.Load(); kb != nil {
-		kb.reset()
+		var mods, esc C.int
+		var downs C.uint
+		C.jarvis_notch_keys_now(&mods, &downs, &esc)
+		kb.resync(notchMods(mods), esc != 0)
 	}
 }
 

@@ -3,9 +3,19 @@
 package main
 
 import (
+	"runtime"
 	"testing"
 	"time"
 )
+
+// The main thread of a test binary belongs to the goroutine that starts the
+// tests, from here on, and that goroutine only waits for them. So no test
+// ever runs on the main thread, where a wait for the main thread is answered
+// in place and the test below would pass by luck on code that is wrong. No
+// darwin test needs the main thread: none makes a window or runs a loop.
+func init() {
+	runtime.LockOSThread()
+}
 
 // The freeze on a Mac (docs/notch/fixes/10-sidecar-platform.md): sending a
 // pointer home asked the main thread how tall the camera housing is, and

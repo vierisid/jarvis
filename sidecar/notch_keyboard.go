@@ -245,6 +245,23 @@ func (kb *notchKeyboard) reset() {
 	kb.act(notchKeyVerdict{Actions: ended})
 }
 
+// resync is for after the watch on the keyboard was held off for a while
+// (notch_pulse.go): it is told which modifiers are down now and whether Esc
+// is. Only what went stale is put right. Keys that are as they were believed
+// to be change nothing, so somebody who was talking through it is still
+// talking; a pair let go meanwhile ends the talking as letting go does.
+func (kb *notchKeyboard) resync(mods notchMods, escDown bool) {
+	kb.mu.Lock()
+	sameMods, escStale := kb.engine.mods == mods, kb.engine.escHeld && !escDown
+	kb.mu.Unlock()
+	if !sameMods {
+		kb.key(notchKeyModifiers, mods)
+	}
+	if escStale {
+		kb.key(notchKeyEscUp, mods)
+	}
+}
+
 func (kb *notchKeyboard) setPairs(pairs notchKeyPairs) {
 	kb.mu.Lock()
 	ended := kb.engine.SetPairs(pairs)

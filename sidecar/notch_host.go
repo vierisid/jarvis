@@ -186,6 +186,10 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 			wv.Eval(script)
 		})
 	}
+	// The pulse (notch_pulse.go): a page that wants Esc and stops giving any
+	// sign is not taken to hold Esc any more. The calls below by which the
+	// page says something of its state are each such a sign.
+	pulse := newNotchPulse(time.Now())
 	bind := func(name string, fn any) {
 		if err := wv.Bind(name, fn); err != nil {
 			log.Printf("[notch] Bind(%s) failed: %v", name, err)
@@ -234,17 +238,21 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 	// __notch_send(text) sends the brain one message, as JSON text. Messages
 	// the other way arrive as the argument of window.__notch_receive.
 	bind("__notch_send", func(text string) error {
+		pulse.Page(time.Now())
 		return notch.fromPage(text)
 	})
 	// __notch_esc(want): whether Esc would do anything on the notch right now.
 	// Only then is it taken from the app in front.
 	bind("__notch_esc", func(want bool) {
+		// The pulse first: from here the page is held to answering.
+		pulse.Esc(want, time.Now())
 		notch.wantEsc(want)
 	})
 	// __notch_asking(asking): whether the notch is showing something that
 	// waits for the person's yes or no. While it is, it does not hide for a
 	// fullscreen video (notchShouldHide).
 	bind("__notch_asking", func(asking bool) {
+		pulse.Page(time.Now())
 		platformNotchAsking(handle, asking)
 	})
 	// __notch_keys(): the two pairs of keys on this machine, for the hints.
@@ -263,9 +271,7 @@ func bindNotch(wv webview.WebView, handle unsafe.Pointer) (stop func()) {
 		w, h := notchHousingLook()
 		return []int{w, h}
 	})
-	// __notch_alive(): the page answering the pulse (notch_pulse.go). A page
-	// that has answered and then stops is not taken to hold Esc any more.
-	pulse := newNotchPulse(time.Now())
+	// __notch_alive(): the page answering the pulse.
 	bind("__notch_alive", func() {
 		pulse.Page(time.Now())
 	})

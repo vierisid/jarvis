@@ -376,7 +376,11 @@ func (l *NotchLook) Down(x, y int) bool {
 	at := lookPoint{x, y}
 	l.mu.Lock()
 	hands := l.hands
-	// A press on one of this program's own windows is that window's.
+	// A press on one of this program's own windows is that window's. Own is
+	// asked with the lock held. On a Mac it is answered on the main thread,
+	// so Down may only be called there by the thread that watches the
+	// pointer, which is the main thread: from anywhere else it would wait for
+	// the main thread with this lock held.
 	if hands == nil || (!l.pen.Busy() && l.pen.Armed() && hands.Own(at)) {
 		l.mu.Unlock()
 		return false
@@ -1007,7 +1011,8 @@ func (l *NotchLook) Clicked(x, y int) {
 		l.mu.Unlock()
 		return
 	}
-	// A click on the notch itself (to stop, to read what it says) is not a step.
+	// A click on the notch itself (to stop, to read what it says) is not a
+	// step. Asked with the lock held: see Down for who may call this on a Mac.
 	if hands.Own(lookPoint{x, y}) {
 		l.mu.Unlock()
 		return

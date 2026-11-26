@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,20 +26,47 @@ import (
 // takes its lock where the Mac's do (notch_look_darwin.go), and a goroutine
 // that stands in for the main thread. Each case holds the main thread at the
 // worst moment: inside home, with every lock home is called under.
+//
+// One wait for the main thread under the look's lock is left, and is safe by
+// who calls it and by nothing else: Own, asked in Down and in Clicked. On a
+// Mac both are called by the tap, on the main thread, where the question is
+// answered in place. The hands here do the same: asked on the fake main
+// thread Own answers, asked anywhere else it waits for the main thread, so a
+// case that called Down or Clicked from a goroutine would stand still.
 
 // fakeMain runs what is put on it, one thing after another, as a main thread
 // does its queue.
-type fakeMain struct{ queue chan func() }
+type fakeMain struct {
+	queue chan func()
+	// Which goroutine it is.
+	id uint64
+}
 
 func newFakeMain() *fakeMain {
 	m := &fakeMain{queue: make(chan func(), 64)}
+	started := make(chan struct{})
 	go func() {
+		m.id = goroutineID()
+		close(started)
 		for run := range m.queue {
 			run()
 		}
 	}()
+	<-started
 	return m
 }
+
+// goroutineID is the number the runtime gives the goroutine that asks, read
+// from its own stack ("goroutine 12 [running]:").
+func goroutineID() uint64 {
+	buf := make([]byte, 64)
+	fields := strings.Fields(string(buf[:runtime.Stack(buf, false)]))
+	id, _ := strconv.ParseUint(fields[1], 10, 64)
+	return id
+}
+
+// here is [NSThread isMainThread].
+func (m *fakeMain) here() bool { return goroutineID() == m.id }
 
 // async is dispatch_async: put down and left.
 func (m *fakeMain) async(run func()) { m.queue <- run }
@@ -67,6 +95,7 @@ func (m *fakeMain) idle(within time.Duration) bool {
 type macLikeHands struct {
 	*fakeHands
 	look *NotchLook
+	main *fakeMain
 	// lookMac.mu
 	lock sync.Mutex
 	gen  int
@@ -104,9 +133,17 @@ func (h *macLikeHands) after(wait time.Duration, gen int, run func()) {
 	})
 }
 
-func (h *macLikeHands) Watch()                { h.look.Wants() }
-func (h *macLikeHands) Own(at lookPoint) bool { return false }
-func (h *macLikeHands) locked()               { h.lock.Lock(); h.lock.Unlock() }
+func (h *macLikeHands) Watch() { h.look.Wants() }
+
+// Own is macOwnAt: answered in place on the main thread, asked of the main
+// thread and waited for anywhere else.
+func (h *macLikeHands) Own(at lookPoint) bool {
+	if !h.main.here() {
+		h.main.sync(func() {})
+	}
+	return false
+}
+func (h *macLikeHands) locked() { h.lock.Lock(); h.lock.Unlock() }
 func (h *macLikeHands) InkBegin(at lookPoint, screen lookRect, scale float64) {
 	h.locked()
 }
@@ -163,7 +200,7 @@ type mainWorld struct {
 // and waits (what the Mac's hands did), or reads what was kept.
 func newMainWorld(asks bool) *mainWorld {
 	w := &mainWorld{look: newNotchLook(), main: newFakeMain()}
-	w.hands = &macLikeHands{fakeHands: &fakeHands{}, look: w.look, timed: make(chan struct{}, 1)}
+	w.hands = &macLikeHands{fakeHands: &fakeHands{}, look: w.look, main: w.main, timed: make(chan struct{}, 1)}
 	if asks {
 		w.hands.housing = func() { w.main.sync(func() {}) }
 	} else {
@@ -338,9 +375,56 @@ func TestNotchLookHandsThatAskTheMainThreadStandStill(t *testing.T) {
 	}
 }
 
-// The Mac's hands cannot be built here, so what they must not do is also held
-// to in their text: home reads the housing as it was kept, and nothing in the
-// file asks the system for it. It is asked on the main thread and waited for.
+// Why Down and Clicked belong to the main thread on a Mac: Own is asked with
+// the look's lock held. From a goroutine it waits for the main thread, and
+// the main thread, inside a tap, waits for the lock.
+func TestNotchLookOwnIsSafeOnlyOnTheMainThread(t *testing.T) {
+	// On the main thread, as the tap calls it: answered in place, with the
+	// main thread busy in that very call.
+	w := newMainWorld(false)
+	w.waitedFor(t)
+	clicked := make(chan struct{})
+	w.main.async(func() {
+		w.look.Clicked(900, 900)
+		close(clicked)
+	})
+	select {
+	case <-clicked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a click seen on the main thread stood still")
+	}
+	// From a goroutine, while the main thread is given a move of the pointer
+	// at the moment Own is asked: neither moves again.
+	w = newMainWorld(false)
+	w.waitedFor(t)
+	begun := make(chan struct{})
+	held := make(chan struct{})
+	w.main.async(func() {
+		close(begun)
+		<-held
+		w.look.Move(5, 5)
+	})
+	<-begun
+	done := make(chan struct{})
+	go func() {
+		w.look.Clicked(900, 900)
+		close(done)
+	}()
+	// Clicked has the lock and is waiting for the main thread by now.
+	time.Sleep(20 * time.Millisecond)
+	close(held)
+	select {
+	case <-done:
+		t.Fatal("a click seen off the main thread got through: the hands here no longer wait for the main thread in Own, so nothing holds the callers to the main thread")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// The Mac's hands cannot be built here, so what home must not do is also held
+// to in the text of their file: home reads the housing as it was kept, and
+// nothing in the file asks the system for it, or waits for the main thread
+// by itself. That is not all of it: Own waits for the main thread through
+// notch_mac_darwin.go, and is safe by its callers alone (the test above).
 func TestNotchLookMacHomeAsksNobodyForTheHousing(t *testing.T) {
 	raw, err := os.ReadFile("notch_look_darwin.go")
 	if err != nil {
@@ -354,7 +438,7 @@ func TestNotchLookMacHomeAsksNobodyForTheHousing(t *testing.T) {
 		t.Fatal("notch_look_darwin.go no longer reads the housing as it was kept")
 	}
 	if strings.Contains(text, "dispatch_sync(") {
-		t.Fatal("notch_look_darwin.go waits for the main thread: every one of its hands is called with a lock held")
+		t.Fatal("notch_look_darwin.go waits for the main thread by itself: every such wait in it has to be weighed against the locks its callers hold")
 	}
 }
 

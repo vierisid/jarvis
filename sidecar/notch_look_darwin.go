@@ -45,10 +45,12 @@ extern int goNotchLookMouse(int kind, int x, int y);
 
 static CFMachPortRef jarvis_look_tap = NULL;
 static CFRunLoopSourceRef jarvis_look_tap_source = NULL;
-static int jarvis_look_tap_wanted = 0;
+// Both are written from goroutines (under lookTapMu, below) and read by the
+// tap on the main thread, which takes no lock: so they are atomic.
+static _Atomic int jarvis_look_tap_wanted = 0;
 // Held off because the main thread, which serves the tap, stands still
 // (jarvis_look_tap_hold). While it is, the tap is not switched on.
-static int jarvis_look_tap_held = 0;
+static _Atomic int jarvis_look_tap_held = 0;
 
 // kind: 1 the left button went down, 2 it came up, 3 the pointer moved, 4 it
 // moved with the button held, 5 the right button came up.
@@ -600,10 +602,21 @@ func notchLookMouseSeen(kind, x, y int) bool {
 // notchLookTapHold holds the watch on the pointer off while the main thread
 // stands still, and lets it go when it runs again (platformNotchInputStalled).
 func notchLookTapHold(hold bool) {
+	lookTapMu.Lock()
+	defer lookTapMu.Unlock()
 	C.jarvis_look_tap_hold(boolToCInt(hold))
 }
 
+// lookTapMu is held while the tap is made, switched or held off: the three
+// are done from any goroutine and from the main thread. Whoever holds it asks
+// the look what it wants (its lock comes second, and Watch is never called
+// with it held) and waits for nothing else, above all not for the main
+// thread.
+var lookTapMu sync.Mutex
+
 func (m *lookMac) Watch() {
+	lookTapMu.Lock()
+	defer lookTapMu.Unlock()
 	on := m.look.Wants()
 	if C.jarvis_look_tap_set(boolToCInt(on)) == 0 && on {
 		log.Printf("[notch] look: the system refused the watch on the pointer")
@@ -618,6 +631,12 @@ func (m *lookMac) Screen(at lookPoint) (lookRect, float64) {
 	return rect, 1
 }
 
+// Own asks AppKit, which is done on the main thread: called anywhere else it
+// waits for the main thread (jarvis_mac_own_at, notch_mac_darwin.go). The
+// look calls it with its lock held, in Down and in Clicked, and that is safe
+// for one reason only: on a Mac both are called by the tap, on the main
+// thread, where the question is answered in place. Own must never be called
+// from a goroutine with a lock held that the main thread takes.
 func (m *lookMac) Own(at lookPoint) bool { return macOwnAt(at) }
 
 func (m *lookMac) Front(at lookPoint) (app, title string) {
@@ -745,8 +764,9 @@ func (m *lookMac) InkEnd(stay time.Duration) {
 // came out of the housing itself would come out of nothing.
 //
 // It is called with this file's lock held, and mostly with the look's as
-// well, and the main thread takes both inside the taps (a move of the pointer,
-// a click, Shift going down). So nothing here may wait for the main thread:
+// well, on goroutines, and the main thread takes both inside the taps (a move
+// of the pointer, a click, Shift going down). So home may not wait for the
+// main thread:
 // asked of the system here, the housing was a wait for the main thread, and a
 // ring that ended while the pointer moved froze the app for good. The housing
 // is read as it was last kept (notchHousingKept), which waits for nobody.
