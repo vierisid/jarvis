@@ -511,6 +511,31 @@ describe('a prepared reply on the notch', () => {
     });
   });
 
+  // Send was pressed, and the notch was taken between the two looks at the thread. That a mail may
+  // have gone was then forgotten: nothing had written it down yet, and the next yes sent it again.
+  test('something takes the notch right after Send was pressed: that it may have gone is still remembered', async () => {
+    const h = harness([row()], { steps: { send: { ok: false, why: 'Gmail did not say it was sent', pressed: true } }, sent: [false], went: null });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.did).toEqual(['write', 'send', 'sent?']);
+    // The thread does not show it yet, and it is about to be asked again, when something urgent takes the notch.
+    h.inbox.add({ id: 'urgent', subject: 'urgent', class: 'person', speaks: true, urgent: true, asked: true, once: true, title: () => ['Now'], play: async (stage) => { await stage.offer(['Now'], 'ok'); return 'settled'; } });
+    await settle();
+    expect(h.said()).toBe('Now');
+    // The send is over: the thread is the watcher's again (and the tab is free for the next look).
+    expect(h.held).toEqual([`hold ${row().id}`, `release ${row().id}`]);
+    await h.answer('yes');
+    h.did.length = 0;
+    h.inbox.present('again', (stage) => h.mail.open(stage));
+    await settle();
+    await h.answer('yes');
+    // The second yes looks first, and as the mailbox cannot say, nothing is written or sent.
+    expect(h.did).toEqual(['went?']);
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
   // Gmail's word is not enough: sent means it is the last word in the thread.
   test('is called sent only when the mailbox shows it, and looks twice before saying it does not', async () => {
     const late = harness([row()], { sent: [false, true] });

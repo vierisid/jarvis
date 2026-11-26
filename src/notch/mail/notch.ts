@@ -72,8 +72,9 @@ import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
 import { saidOption } from '../said.ts';
 import { NotchStageEnded, type NotchStage } from '../stage.ts';
-import { MAIL_WHY_DRAFT_THERE, type Mailbox, type MailReplyPlan } from './mailbox.ts';
+import type { Mailbox, MailReplyPlan } from './mailbox.ts';
 import type { MailCalendarEvent } from './proposer.ts';
+import { sendMail } from './send.ts';
 import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot } from './slots.ts';
 import type { MailProposalRow, MailStore, MailTone } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
@@ -81,6 +82,9 @@ import type { MailLook, MailWatch } from './watch.ts';
 
 /** How long the owner has to take a yes back before the reply goes out. */
 export const MAIL_FUSE_MS = 5000;
+/** How often the thread is asked whether it shows a reply that was sent, and how long between two askings. */
+export const MAIL_SENT_LOOKS = 2;
+export const MAIL_SENT_LOOK_MS = 1500;
 /** How long after saying that nothing waits it is not said again: coming back to Gmail is not a question. */
 export const MAIL_NOTHING_AGAIN_MS = 30 * 60 * 1000;
 /** A look this recent is taken as the state of the mailbox when the owner comes to Gmail. */
@@ -481,96 +485,102 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // all the same a few seconds later. An Esc here ends it before anything is sent.
     let stopped = false;
     stage.answer(putting, ['stop']).then(() => { stopped = true; }, () => {});
+    /** How the fuse ended: only a fuse that was seen to burn out lets the reply go. */
+    let went = 'lost' as 'done' | 'undo' | 'lost';
+    // A wait on the stage never comes back once the stage has ended (its timer is cleared, and
+    // nothing fails it). Between two looks at the thread that left the tab's turn taken for good
+    // and forgot that Send had been pressed. This fails when the stage ends, and the wait with it.
+    const over = stage.answer(stage.id(), []);
+    over.catch(() => {});
     try {
-      return await mailbox.reply(plan, async (reply) => {
-        if (stopped) {
-          await stage.say(['Not sent. It is kept here.'], 3200, { src: 'mail' });
-          return 'waits';
-        }
-        const wrote = await reply.write();
-        if (stopped) {
-          // A draft that was there before is somebody's: stopping this reply does not throw that one away.
-          const theirs = !wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE;
-          const gone = theirs ? { ok: false as const, why: '' } : await reply.discard().catch(() => ({ ok: false as const, why: '' }));
-          await stage.say(theirs ? ['Not sent. The draft that was in that thread is left as it was.'] : gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
-          return 'waits';
-        }
-        if (!wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE) {
-          // Somebody's draft is in that thread: the owner's own, or an earlier
-          // one that did not go. It is not written into, and above all it is
-          // not thrown away.
-          log('[notch] a reply was not written: its thread already holds a draft');
-          await stage.say(['There is a draft in that thread already. I left it alone, and nothing was sent.'], 5200, { mood: 'careful', src: 'mail' });
-          return 'waits';
-        }
-        if (!wrote.ok) {
-          log(`[notch] a reply could not be put in its thread: ${wrote.why}`);
-          // Whatever got as far as the page is taken away again: nothing half written is left behind.
-          // When that does not work the truth is said: a draft left in the thread stands in the way
-          // of every later reply to it, and the owner has to know where to look.
-          const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
-          if (!gone.ok) log(`[notch] what was begun in the thread could not be taken away: ${gone.why}`);
-          await stage.say(gone.ok
-            ? ['I could not put the reply in the thread, so nothing was sent. It is kept here.']
-            : ['I could not put the reply in the thread, so nothing was sent. A draft may be left in that thread in Gmail. The reply is kept here.'], gone.ok ? 4600 : 6200, { mood: 'worried', mark: 'fail', src: 'mail' });
-          return 'waits';
-        }
-        let went: 'done' | 'undo' | 'lost';
-        try {
+      // The one way a mail is sent in a thread (./send.ts): written, the fuse, Send, and the look.
+      const end = await sendMail(mailbox, plan, {
+        stopped: () => stopped,
+        gate: async () => {
           went = await stage.fuse(offering ? ['Offering ', em(offering), ` to ${who}…`] : ['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
-        } catch (error) {
-          // Something took the notch while the draft was in Gmail and not yet sent: it is not left there.
-          await reply.discard().catch(() => {});
-          throw error;
-        }
-        if (went !== 'done') {
-          // Taken back, or nobody was there to see it burn: nothing goes out, and nothing is left in Drafts.
-          const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
-          if (went === 'undo') await stage.say(gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
-          return 'waits';
-        }
-        const since = now();
-        const sent = await reply.send();
+          return went === 'done';
+        },
+        // A reply is called sent when it is the last word in its thread: Gmail's word alone is not it.
+        trust: 'thread',
+        // What the owner read and said yes to stays in their drafts when it does not go, and is said to be there.
+        leftover: 'keep',
+        asks: MAIL_SENT_LOOKS,
+        waitMs: MAIL_SENT_LOOK_MS,
+        wait: async (ms) => { await Promise.race([stage.wait(ms), over]); },
+        now,
+      });
+      if (end.state === 'not_sent' && end.at === 'stopped') {
+        // The owner stopped it. A draft that was there before is somebody's: stopping this reply does not throw that one away.
+        await stage.say(
+          end.draft === 'none' ? ['Not sent. It is kept here.']
+            : end.draft === 'theirs' ? ['Not sent. The draft that was in that thread is left as it was.']
+              : end.draft === 'gone' ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'],
+          3200, { src: 'mail' });
+        return 'waits';
+      }
+      if (end.state === 'not_sent' && end.at === 'write' && end.draft === 'theirs') {
+        // Somebody's draft is in that thread: the owner's own, or an earlier
+        // one that did not go. It is not written into, and above all it is
+        // not thrown away.
+        log('[notch] a reply was not written: its thread already holds a draft');
+        await stage.say(['There is a draft in that thread already. I left it alone, and nothing was sent.'], 5200, { mood: 'careful', src: 'mail' });
+        return 'waits';
+      }
+      if (end.state === 'not_sent' && end.at === 'write') {
+        log(`[notch] a reply could not be put in its thread: ${end.why}`);
+        // Whatever got as far as the page was taken away again: nothing half written is left behind.
+        // When that did not work the truth is said: a draft left in the thread stands in the way
+        // of every later reply to it, and the owner has to know where to look.
+        const gone = end.draft === 'gone';
+        if (!gone) log(`[notch] what was begun in the thread could not be taken away: ${end.leftWhy ?? ''}`);
+        await stage.say(gone
+          ? ['I could not put the reply in the thread, so nothing was sent. It is kept here.']
+          : ['I could not put the reply in the thread, so nothing was sent. A draft may be left in that thread in Gmail. The reply is kept here.'], gone ? 4600 : 6200, { mood: 'worried', mark: 'fail', src: 'mail' });
+        return 'waits';
+      }
+      if (end.state === 'not_sent' && end.at === 'gate') {
+        // Taken back, or nobody was there to see it burn: nothing went out, and the draft was taken away.
+        if (went === 'undo') await stage.say(end.draft === 'gone' ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
+        return 'waits';
+      }
+      if (end.state === 'not_sent') {
         // The page refused before it pressed Send: nothing went.
-        if (!sent.ok && sent.pressed === false) {
-          log(`[notch] a reply could not be sent: ${sent.why}`);
-          await stage.say(['I could not send it. It is in your Gmail drafts.'], 4600, { mood: 'worried', mark: 'fail', src: 'mail' });
-          return 'waits';
-        }
-        // Send was pressed. The mailbox is asked: a reply is called sent when it is the last word in its thread.
-        let there = await reply.sent(since);
-        if (there === false) { await stage.wait(1500); there = await reply.sent(since); }
-        if (!sent.ok && there !== true) {
-          // Gmail did not say it went, and the thread does not show it. It may have gone all the same:
-          // it used to be called "in your Gmail drafts", and the owner sent it a second time.
-          log(`[notch] a reply was sent and nothing confirms it: ${sent.why}`);
-          maybeSent.set(id, { since, text: going.draft });
-          await stage.say(['I pressed Send, and nothing says it went. Look in the thread before sending it again.'], 5200, { mood: 'worried', src: 'mail' });
-          return 'waits';
-        }
-        if (there === false) {
-          maybeSent.set(id, { since, text: going.draft });
+        log(`[notch] a reply could not be sent: ${end.why}`);
+        await stage.say(['I could not send it. It is in your Gmail drafts.'], 4600, { mood: 'worried', mark: 'fail', src: 'mail' });
+        return 'waits';
+      }
+      if (end.state === 'unsure') {
+        // Send was pressed and nothing shows that it went. It may have gone all the same: it is
+        // written down before anything is said, so that the next yes looks for it first whatever
+        // takes the notch now.
+        maybeSent.set(id, { since: end.since, text: going.draft });
+        if (end.said) {
           await stage.say(['Gmail says it was sent, but I do not see it in the thread yet. I will look again.'], 4600, { mood: 'curious', src: 'mail' });
           return 'waits';
         }
-        maybeSent.delete(id);
-        store.move(id, 'ready', 'sent', now());
-        await stage.say(offering ? ['Offered ', em(offering), ` to ${who}.`] : ['Sent to ', em(who), '.'], offering ? 2800 : 2400, { mood: 'happy', mark: 'check', src: 'mail' });
-        // The prototype: "Always use a short tone with Marco?" A reply that went in a manner the owner chose
-        // on its draft, and that does not stand for this person yet. Asked once: a no is not asked again.
-        const name = MAIL_TONE_NAMES[going.tone];
-        if (!offering && name && store.tone(going.who.address) !== going.tone && store.toneAsked(going.who.address) !== going.tone) {
-          const always = await stage.offer(['Always use a ', em(name), ' tone with ', em(who), '?'], 'yes', { mood: 'curious', src: 'mail' });
-          if (always.act === 'yes') {
-            store.setTone(going.who, going.tone, now());
-            log('[notch] a manner was remembered for one person');
-            await stage.say(['Remembered.'], 2400, { mood: 'happy', mark: 'check', src: 'mail' });
-          } else if (always.act === 'no') {
-            store.declineTone(going.who, going.tone, now());
-          }
+        // Gmail did not say it went, and the thread does not show it. It used to be called "in
+        // your Gmail drafts", and the owner sent it a second time.
+        log(`[notch] a reply was sent and nothing confirms it: ${end.why}`);
+        await stage.say(['I pressed Send, and nothing says it went. Look in the thread before sending it again.'], 5200, { mood: 'worried', src: 'mail' });
+        return 'waits';
+      }
+      maybeSent.delete(id);
+      store.move(id, 'ready', 'sent', now());
+      await stage.say(offering ? ['Offered ', em(offering), ` to ${who}.`] : ['Sent to ', em(who), '.'], offering ? 2800 : 2400, { mood: 'happy', mark: 'check', src: 'mail' });
+      // The prototype: "Always use a short tone with Marco?" A reply that went in a manner the owner chose
+      // on its draft, and that does not stand for this person yet. Asked once: a no is not asked again.
+      const name = MAIL_TONE_NAMES[going.tone];
+      if (!offering && name && store.tone(going.who.address) !== going.tone && store.toneAsked(going.who.address) !== going.tone) {
+        const always = await stage.offer(['Always use a ', em(name), ' tone with ', em(who), '?'], 'yes', { mood: 'curious', src: 'mail' });
+        if (always.act === 'yes') {
+          store.setTone(going.who, going.tone, now());
+          log('[notch] a manner was remembered for one person');
+          await stage.say(['Remembered.'], 2400, { mood: 'happy', mark: 'check', src: 'mail' });
+        } else if (always.act === 'no') {
+          store.declineTone(going.who, going.tone, now());
         }
-        return 'settled';
-      });
+      }
+      return 'settled';
     } finally {
       watch.release(id);
     }

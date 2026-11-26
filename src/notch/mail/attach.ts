@@ -22,10 +22,11 @@ import { firstWay } from '../ways.ts';
 import type { MailBrowser } from './browser.ts';
 import { browserCalendar } from './calendar.ts';
 import { browserDriveSearch } from './drive.ts';
-import { MAIL_WHY_DRAFT_THERE, browserMailbox, type Mailbox, type MailStep } from './mailbox.ts';
+import { browserMailbox, type Mailbox, type MailStep } from './mailbox.ts';
 import { attachNotchMail, type NotchMail } from './notch.ts';
 import { googlePage } from './page.ts';
 import type { MailCalendarEvent, MailThink } from './proposer.ts';
+import { sendMail } from './send.ts';
 import { MailStore, type MailProposalRow } from './store.ts';
 import { MailTabTurn } from './tab.ts';
 import { mailFirstName, type MailPerson, type MailThread } from './thread.ts';
@@ -132,46 +133,15 @@ export async function sendNudge(
   const also = plan.also ?? [];
   // To several people it is a mail of its own: a thread has its own people, and they are not these.
   if (plan.thread && also.length === 0) {
-    const since = now();
-    let pressed = false;
+    // The one way a mail is sent in a thread (./send.ts). A nudge is nobody's draft to keep: what
+    // did not go is taken away again, and Gmail's word that it went is enough.
+    const end = await sendMail(box, { thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, { trust: 'gmail', leftover: 'discard', asks: NUDGE_SENT_ASKS, waitMs: NUDGE_SENT_WAIT_MS, wait: sleep, now });
+    if (end.state === 'sent') return { ok: true };
     /** What was begun in the thread could not be taken away again: a draft may be left there. */
-    let left = false;
-    const discard = async (session: { discard(): Promise<MailStep> }, theirs = false): Promise<void> => {
-      const gone = await session.discard().catch((error: unknown): MailStep => ({ ok: false, why: error instanceof Error ? error.message : 'error' }));
-      // A draft that was there before is somebody's: that it is kept is how it should be, and no failure.
-      if (gone.ok || theirs) return;
-      left = true;
-      log(`[notch] what a nudge began in its thread could not be taken away: ${gone.why}`);
-    };
-    const inThread = await box.reply({ thread: plan.thread, to: [plan.address], cc: [], text: plan.text }, async (session): Promise<MailStep> => {
-      const written = await session.write();
-      if (!written.ok) {
-        // A write that failed half way is taken away again. Somebody's own draft is not: the page tells them apart.
-        await discard(session, written.why === MAIL_WHY_DRAFT_THERE);
-        return written;
-      }
-      const sent = await session.send();
-      // Gmail said, after the press, that it went: it went. The thread showing it is a matter of a moment.
-      if (sent.ok) return { ok: true };
-      // The page refused before it pressed Send: nothing went. What was written is taken away again.
-      if (sent.pressed === false) {
-        await discard(session);
-        return sent;
-      }
-      // Send was pressed, or it is not known that it was not: from here on it may be on its way.
-      // Gmail said nothing (it can take longer than is waited for): the thread is asked.
-      pressed = true;
-      let there = await session.sent(since);
-      for (let asks = 1; there === false && asks < NUDGE_SENT_ASKS; asks++) { await sleep(NUDGE_SENT_WAIT_MS); there = await session.sent(since); }
-      if (there === true) return { ok: true };
-      // Neither Gmail nor the thread says it went: what is still being written is taken away. When
-      // the reply has closed there is nothing to take away, and that is no failure of this.
-      await discard(session);
-      return { ok: false, why: NUDGE_UNSURE, pressed: true, since };
-    });
-    if (inThread.ok) return inThread;
+    const left = end.draft === 'left';
+    if (left) log(`[notch] what a nudge began in its thread could not be taken away: ${end.leftWhy ?? ''}`);
     // Send was pressed and nothing says it went: it may have. That is said, and it is not sent again.
-    if (pressed) return { ok: false, why: NUDGE_UNSURE, pressed: true, since, ...(left ? { left } : {}) };
+    if (end.state === 'unsure') return { ok: false, why: NUDGE_UNSURE, pressed: true, since: end.since, ...(left ? { left } : {}) };
     // The thread would not take it (it goes to others too, or it has moved on): a mail of its own, then.
     log('[notch] a nudge could not be written in its thread, so it goes as a new mail');
     // It goes as a mail of its own, and whoever asked is told when a draft was left in the thread.
