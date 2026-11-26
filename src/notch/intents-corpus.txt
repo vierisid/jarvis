@@ -370,10 +370,9 @@ yes => turn
 open the Friday report => turn
 settings => prefs: Show the settings.
 pause => pause: Stopped everything.
-# A new time for the offer is never read out of words that begin as the words for a job: "do 3 more" is not three
-# o'clock. With no job to mean they are an instruction. (They used to change the schedule to 15:00 and 17:00.)
-do 3 more => turn
-do it at 5 => turn
+# With no job that these words could mean, they are read as a new time for the offer, as they always were.
+do 3 more => said: Changed the line that was up: day at 15:00.
+do it at 5 => said: Changed the line that was up: day at 17:00.
 make it 5 => said: Changed the line that was up: day at 17:00.
 
 # The same offer, and a job was taught once: "do it" is the yes to the offer, because what is up stands before a
@@ -383,8 +382,9 @@ do it => said: Said yes to the line that was up.
 yes do it => said: Said yes to the line that was up.
 go ahead => said: Said yes to the line that was up.
 do the rest => teach: Did the job again. (a line first)
+# With a job they could mean, these words are the job's and no new time for the offer. "Do 3 more" is the job.
+# "Do it at 5" used to run the job; it has a word that is not about the job, so it is an instruction.
 do 3 more => teach: Did the job again. (a line first)
-# It used to run the job. It is not the job (a word that is not about it) and it is not a new time for the offer.
 do it at 5 => turn
 
 # ---------------------------------------------------------------------------------------------------------------

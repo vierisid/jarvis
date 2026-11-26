@@ -275,7 +275,7 @@ async function world(contexts: ReadonlySet<Context>) {
   const prefs = attachNotchPrefs({ inbox, settings, setSound: quiet, log: quiet });
   const moves = attachNotchMoves({ inbox, resting: () => surface.resting(), log: quiet });
   const canDo = attachNotchCanDo({ inbox });
-  const saidLine = attachNotchSaid({ inbox, line, skip: (item) => item.startsWith('ask:'), log: quiet });
+  const saidLine = attachNotchSaid({ inbox, line, skip: (item) => item.startsWith('ask:'), log: quiet, jobWords: (text) => teach.begins(text) });
 
   // The organisation: this one is Vera's, and it talks to Leo's, Anna's and Sam's.
   let people: ReturnType<typeof attachNotchPeople> | null = null;

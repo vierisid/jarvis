@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { NotchLine, NotchPart, NotchWord } from './protocol.ts';
+import { runItBegins } from './teach.ts';
 import { NOTCH_SAID_KEYS_MS, attachNotchSaid, notchLineReads, notchLineWords, saidAbout, saidOption, saidWhen, saidWords, type NotchSaid } from './said.ts';
 
 const word = (name: string, value: string, options: string[], more: Partial<NotchWord> = {}): NotchPart => ({ word: { name, value, options, ...more } });
@@ -282,9 +283,13 @@ describe('the line the talk keys were pressed over', () => {
 // The second review of fix 03: an answer over a line stood before every command, so "undo" picked a choice that
 // read "Undo it" and "do 3 more" became three o'clock on an offer.
 describe('what is said over a line, as intents of the one table', () => {
-  function over(line: NotchLine) {
+  function over(line: NotchLine, job = false) {
     const replayed: unknown[] = [];
-    const said = attachNotchSaid({ inbox: { showing: () => 'thing', replay: (_id, _reads, answers) => { replayed.push(answers); return true; } }, line: () => line, now: () => 1000, log: () => {} });
+    const said = attachNotchSaid({
+      inbox: { showing: () => 'thing', replay: (_id, _reads, answers) => { replayed.push(answers); return true; } }, line: () => line, now: () => 1000, log: () => {},
+      // As ./real.ts gives it: the words begin as a job's, and there is a job.
+      jobWords: (text) => job && runItBegins(text),
+    });
     said.keys();
     const [yes, answer] = said.intents();
     const how = { source: 'spoken' as const, at: 1000 };
@@ -302,14 +307,24 @@ describe('what is said over a line, as intents of the one table', () => {
     expect([h.yes('make it Friday at ten'), h.answer('make it Friday at ten')]).toEqual([null, 'Changed the line that was up: Friday at 10:00.']);
   });
 
-  test('a new time is never read out of words that begin as the words for a job', () => {
-    const h = over(sched);
-    for (const words of ['do 3 more', 'do it at 5', 'run it at 6', 'continue at 4', 'do the rest at 5', 'finish it by 5']) expect([words, h.yes(words), h.answer(words)]).toEqual([words, null, null]);
+  test('with a job that was shown, a new time is not read out of words that begin as the words for that job', () => {
+    const h = over(sched, true);
+    for (const words of ['do 3 more', 'do it at 5', 'run it at 6', 'continue at 4', 'do the rest at 5']) expect([words, h.yes(words), h.answer(words)]).toEqual([words, null, null]);
     for (const [words, value] of [['make it 5', 'day at 17:00'], ['at 5', 'day at 17:00'], ['do Friday at ten', 'Friday at 10:00']] as const) expect([words, h.answer(words)]).toEqual([words, `Changed the line that was up: ${value}.`]);
   });
 
+  test('with no job to mean, the same words change the time, as they always did', () => {
+    const h = over(sched);
+    expect(h.answer('do 3 more')).toBe('Changed the line that was up: day at 15:00.');
+    expect(h.answer('do it at 5')).toBe('Changed the line that was up: day at 17:00.');
+    // And a part that was told nothing about jobs reads them as ever.
+    const plain = attachNotchSaid({ inbox: { showing: () => 'thing', replay: () => true }, line: () => sched, now: () => 1000, log: () => {} });
+    plain.keys();
+    expect(plain.route('do it at 5', { source: 'spoken', at: 1000 })?.did).toBe('Changed the line that was up: day at 17:00.');
+  });
+
   test('a choice that reads like the words for a job can still be picked by them: only a new value is held back', () => {
-    const h = over({ id: 'l', kind: 'offer', say: ['Stopped at row 4. What now?'], options: ['Go on', 'Undo it', 'Leave it'] });
+    const h = over({ id: 'l', kind: 'offer', say: ['Stopped at row 4. What now?'], options: ['Go on', 'Undo it', 'Leave it'] }, true);
     expect(h.answer('go on')).toBe('Picked "Go on" on the line that was up.');
     expect(h.yes('go on')).toBeNull();
   });

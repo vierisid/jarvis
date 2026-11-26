@@ -592,7 +592,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     });
   }
   // What is said with a line up is tried as an answer to that line (./said.ts). An instruction's own lines are read by ./asks.ts.
-  const saidLine = registry.must(notchSaidFeature);
+  // Words that a shown job could mean are that job's, and are not read as a new value for the line.
+  const saidLine = registry.must(notchSaidFeature({ jobWords: (text) => teach?.begins(text) ?? false }));
   const prefs: NotchPrefs | null = registry.add(notchPrefsFeature({
     keys: office?.keys, voice: office?.voice, connections: office?.connections, connect: office?.connect,
     openPage: office?.openPage, openDashboard: deps.openDashboard,

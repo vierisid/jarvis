@@ -3273,9 +3273,10 @@ other.
     an offer is the yes to that offer (206), also when a job was once shown
     that "do it" could mean: that is the one thing said over a line that
     stands before a command. "Undo", "watch me", "tell Anna" and "continue"
-    keep their own meaning also when a choice on the line reads the same,
-    and a new time for an offer is never read out of words that begin as
-    the words for a job ("do 3 more" is not three o'clock). When two intents
+    keep their own meaning also when a choice on the line reads the same.
+    With a job that was shown, words that begin as the words for that job
+    are the job's and no new time for an offer ("do 3 more" is then not
+    three o'clock); with no job they change the time, as they always did. When two intents
     can match one sentence, the one that takes it names the other (`over`),
     and a test holds that no sentence of the corpus is matched twice
     without it.

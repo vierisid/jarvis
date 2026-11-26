@@ -97,8 +97,8 @@ const runRest = (text: string): string => text.trim().toLowerCase().replace(/[.!
 /**
  * Whether a sentence begins with the words that ask for the job, whatever follows them: "do it at 5",
  * "continue with the draft to Sam", "do 3 more". Such a sentence is the job when nothing else is in it
- * (`runItRequest`), and otherwise an instruction. It is never a new value for a word of the line that is up
- * (./said.ts), and with a job that was shown it is not read for whom it names (./real.ts, `notchRead`).
+ * (`runItRequest`), and otherwise an instruction. With a job that was shown it is not a new value for a word
+ * of the line that is up (./said.ts), and it is not read for whom it names (./real.ts, `notchRead`).
  */
 export function runItBegins(text: string): boolean {
   const rest = runRest(text);

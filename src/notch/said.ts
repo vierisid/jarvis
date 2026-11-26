@@ -36,7 +36,6 @@
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchAnswerAct, NotchBlock, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { routeByIntents, type NotchIntent } from './intents.ts';
-import { runItBegins } from './teach.ts';
 
 /** One answer to a line, as the page would have sent it, without the line's id. */
 export interface NotchSaid {
@@ -330,6 +329,12 @@ export interface NotchSaidLine {
 }
 
 export interface NotchSaidDeps {
+  /**
+   * Whether these words begin as the words for a job, and there is a job they could mean (./teach.ts,
+   * `begins`): "do 3 more", "do it at 5". Then they are the job's, or an instruction, and no new value for a
+   * word of the line is read out of them. With no job to mean they are read as ever. Not given: as ever.
+   */
+  jobWords?: (text: string) => boolean;
   /** The item on the notch, and a way to bring one back with its answer (./inbox.ts). */
   inbox: { showing(): string | null; replay(id: string, reads: string, answers: readonly NotchSaid[]): boolean };
   /** The line on the notch now. */
@@ -391,10 +396,10 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
     match(text, how) {
       const found = about(text, how);
       if (!found || plainYes(text, found.answers)) return null;
-      // A new value for a word is never read out of a sentence that begins as the words for a job: "do 3
-      // more" is not three o'clock, and "do it at 5" is not "make it 5".
+      // With a job that was shown, a new value for a word is not read out of a sentence that begins as the
+      // words for that job: "do 3 more" is then the job, not three o'clock. With no job it is read as ever.
       const changes = found.answers.length === 0 || found.answers[0]!.act === 'word';
-      return changes && runItBegins(text) ? null : hit(found);
+      return changes && deps.jobWords?.(text) === true ? null : hit(found);
     },
   }];
   return {
@@ -417,9 +422,11 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
  * (./feature.ts). An instruction's own lines are not read here: a spoken
  * reply to its question is read by ./asks.ts itself.
  */
-export const notchSaidFeature: NotchFeatureDef<'said'> = {
-  id: 'said',
-  make: (ctx) => ({
-    api: attachNotchSaid({ inbox: ctx.inbox, line: () => ctx.surface.current().line, skip: (item) => item.startsWith('ask:'), log: ctx.log }),
-  }),
-};
+export function notchSaidFeature(more: Pick<NotchSaidDeps, 'jobWords'> = {}): NotchFeatureDef<'said'> {
+  return {
+    id: 'said',
+    make: (ctx) => ({
+      api: attachNotchSaid({ inbox: ctx.inbox, line: () => ctx.surface.current().line, skip: (item) => item.startsWith('ask:'), log: ctx.log, ...more }),
+    }),
+  };
+}

@@ -88,8 +88,6 @@ Each of these is how it is built now, and one line to change.
   the job does. Whether it should mean the assistant's last answer is not settled.
 - "Block an hour with Leo in my calendar" (put, add, block, note ... on my calendar) no longer finds a time
   with Leo: it goes to the assistant as an entry to make.
-- Over an offer with no job ever shown, "do 3 more" and "do it at 5" used to change the offer's time (15:00,
-  17:00). They are now an instruction. "Make it 5" still changes it.
 - An eye ("tell me when Sam replies") is kept at once with nothing asked, as it always was. It is the one
   intent that creates something with no line first and no live context (`alone` says why).
 
