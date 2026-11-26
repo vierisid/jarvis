@@ -463,8 +463,10 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
         }
         const wrote = await reply.write();
         if (stopped) {
-          const gone = await reply.discard().catch(() => ({ ok: false as const, why: '' }));
-          await stage.say(gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
+          // A draft that was there before is somebody's: stopping this reply does not throw that one away.
+          const theirs = !wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE;
+          const gone = theirs ? { ok: false as const, why: '' } : await reply.discard().catch(() => ({ ok: false as const, why: '' }));
+          await stage.say(theirs ? ['Not sent. The draft that was in that thread is left as it was.'] : gone.ok ? ['Not sent. No draft is left in Gmail.'] : ['Not sent. The draft is still in your Gmail drafts.'], 3200, { src: 'mail' });
           return 'waits';
         }
         if (!wrote.ok && wrote.why === MAIL_WHY_DRAFT_THERE) {

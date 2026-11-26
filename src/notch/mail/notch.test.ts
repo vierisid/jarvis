@@ -33,6 +33,8 @@ const notes = (blocks: NotchBlock[]): string[] => blocks.flatMap((block) => (blo
 
 function harness(rows: MailProposalRow[], options: {
   steps?: Partial<Record<'write' | 'send' | 'discard', MailStep>>;
+  /** The page takes its time to write: the step answers when this does. */
+  writeWhen?: Promise<void>;
   sent?: (boolean | null)[];
   stillWaits?: boolean | null;
   /** Read at each asking: so that a test can change the answer while a line is up. */
@@ -82,7 +84,7 @@ function harness(rows: MailProposalRow[], options: {
     reply: async (plan, work) => {
       plans.push(plan);
       const session: MailReplySession = {
-        write: async () => { did.push('write'); return options.steps?.write ?? { ok: true }; },
+        write: async () => { did.push('write'); await options.writeWhen; return options.steps?.write ?? { ok: true }; },
         send: async () => { did.push('send'); return options.steps?.send ?? { ok: true }; },
         discard: async () => { did.push('discard'); return options.steps?.discard ?? { ok: true }; },
         sent: async () => { did.push('sent?'); return sent.length > 1 ? sent.shift()! : sent[0]!; },
@@ -396,6 +398,22 @@ describe('a prepared reply on the notch', () => {
     await h.answer('yes');
     expect(h.did).toEqual(['write']);
     expect(h.said()).toBe('There is a draft in that thread already. I left it alone, and nothing was sent.');
+    expect(h.store.proposal(row().id)!.state).toBe('ready');
+  });
+
+  // README 156. Esc while the reply was being put in the thread threw away whatever reply was open there.
+  test('stopped while it is being put in a thread that holds a draft: that draft is not thrown away', async () => {
+    let wrote!: () => void;
+    const h = harness([row()], { steps: { write: { ok: false, why: MAIL_WHY_DRAFT_THERE } }, writeWhen: new Promise<void>((resolve) => { wrote = resolve; }) });
+    await h.arrive();
+    await h.answer('yes');
+    await h.answer('yes');
+    expect(h.said()).toBe('Putting it in the thread…');
+    await h.answer('stop');
+    wrote();
+    await settle();
+    expect(h.did).toEqual(['write']);
+    expect(h.said()).toBe('Not sent. The draft that was in that thread is left as it was.');
     expect(h.store.proposal(row().id)!.state).toBe('ready');
   });
 
