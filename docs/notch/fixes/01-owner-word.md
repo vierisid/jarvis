@@ -164,6 +164,30 @@ command key with backspace in a text field on the desktop.
   - recipients are matched on the address only, so "send Anna Rossi the
     file" to "Anna Rossi <a.rossi@...>" is matched by "rossi", and
     "send Anna the file" to it is asked;
+  - recipient matching is on the name part of the address and ignores
+    the domain: anna@evil.example is covered by "send it to Anna" (and
+    annabel@... by "Anna", a prefix of four letters or more);
+  - "install X" covers the kind, not the package or its source: `npm
+    install vite evil-stealer`, `--registry http://...`, `pip install
+    git+https://...` are covered;
+  - "run the tests" covers every command in the turn (as coverage per kind
+    above);
+  - text pasted inside the owner's own sentence counts as his asking (the
+    reading of his sentence is his asking, and so is the small reader);
+  - a reply that names its recipients in the call is asked unless his
+    words name them (who wrote the thing is not known here); a reply by
+    the message's id goes;
+  - Enter or Space on a mail page is a send (what has focus there cannot be
+    read);
+  - decided by the coordinator, 27 November 2026: on a machine that cannot
+    look, Enter and typed line breaks go ahead while the window in front is
+    the app the turn opened (nothing else read, brought forward or worked
+    in since) and that app is no shell, terminal, script host, mail or chat
+    client, nor one that shows what others wrote; a whole-screen picture
+    taken then counts as that app's;
+  - not closed here, from before this branch: `browser_navigate` to an
+    address that carries what was read is not asked about (data can leave
+    by a page load after outside content);
   - keys: Win alone, Win+R, Cmd+Space and Alt+F2 open a run place, and an
     app named there (as `plainAppOpen` reads a name) is an app opened;
     Ctrl+Alt+T is a command; Enter alone on a page that is no chat, a
@@ -265,3 +289,13 @@ command key with backspace in a text field on the desktop.
   click". Not read: a send typed into a mail window and sent by a click on
   a nameless button; Enter on a web form that is no chat; the local
   browser's page title (only its address is kept).
+- Second security review (13 attacks held, new holes): done in "notch: an
+  installer is covered only as the program a command starts, and a setting
+  never where it runs something on change, nor by setx or netsh", "notch:
+  the system key by every name, Ctrl+Esc, the Run dialog in front and a
+  click on OK send a run place, Ctrl+M is Enter, Alt+S sends mail, and the
+  app the turn opened in front types freely where nothing can look",
+  "notch: a recipient is read from any field that says so and any address
+  outside what is sent, and a reply that names its recipients is held to
+  his words" and "notch: a sentence cut for the reading is covered by the
+  small reader, and the owner-to-confirm list grows".

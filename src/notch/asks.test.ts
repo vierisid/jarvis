@@ -2352,6 +2352,12 @@ describe('a sentence the fixed words miss is read once, before it runs', () => {
     expect(await covered('update Chrome', ['install'], 'intent')).toEqual(['install']);
   });
 
+  test('a sentence cut to fit the reading was not read whole: the small reader reads all of it', async () => {
+    const long = `${'please look at the numbers in the sheet and tell me what moved. '.repeat(12)}then send Leo the totals`;
+    expect(await covered(long, [])).toEqual(['send']);
+    expect(await covered(long.slice(-200), [])).toEqual([]);
+  });
+
   test('a reading never widens past the four kinds, a question keeps none of them, and a shown turn covers nothing whatever is read', async () => {
     expect(await covered('show me the new design and make it', ['screen', 'create', 'send', 'delete', 'pay'])).toEqual(['send']);
     for (const words of ['what did Leo send?', 'how do I install node', 'why did the build run twice?']) {

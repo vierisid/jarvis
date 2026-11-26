@@ -292,11 +292,16 @@ const asActs = (act: NotchIntent['act']): NotchSentenceAct[] => ((NOTCH_SENTENCE
  * intent would do, or null when it is none. The model proposed, and every
  * check here is the table's.
  */
+/** Whether a sentence was cut to fit the question, and so was not read whole. */
+export function intentReadCut(text: string): boolean {
+  return peerPlain(text, NOTCH_INTENT_READ_SAID_MAX + 1).length > NOTCH_INTENT_READ_SAID_MAX;
+}
+
 export function placeReading(reading: IntentReading, ask: IntentReadAsk): (NotchIntentHit & { intent: NotchIntent }) | null {
   if (reading.intent === 'none') return null;
   const question = plainQuestion(ask.text);
   // A sentence that was cut to fit the question was not read whole: nothing is made of a part of it.
-  if (peerPlain(ask.text, NOTCH_INTENT_READ_SAID_MAX + 1).length > NOTCH_INTENT_READ_SAID_MAX) return null;
+  if (intentReadCut(ask.text)) return null;
   if (reading.intent === NOTCH_INTENT_PEOPLE) {
     // Only when colleagues were offered: a sentence that names nobody here is a word for nobody. A plain
     // question is no word, question or job for them ("what did Leo say?"); it can still be a file of theirs

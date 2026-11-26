@@ -34,7 +34,7 @@ import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 import { pointsAtScreen, whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
 import type { NotchAsksFor, NotchIntent, NotchIntentHit, NotchSentenceAct } from './intents.ts';
-import { plainQuestion, type NotchRead } from './intent-read.ts';
+import { intentReadCut, plainQuestion, type NotchRead } from './intent-read.ts';
 import { runItRequest } from './teach.ts';
 
 /** How long the words that were heard stay on the notch before they are acted on. Esc in that time turns them away. */
@@ -576,7 +576,8 @@ export function ledgerDetail(row: NotchAskRow): NotchBlock[] {
  * and the deterministic reader decides as before.
  */
 export function sentenceAsks(text: string, asksFor: NotchAsksFor | null): readonly NotchSentenceAct[] | null {
-  if (!asksFor) return null;
+  // A sentence cut to fit the model's question was not read whole: the deterministic reader reads all of it.
+  if (!asksFor || intentReadCut(text)) return null;
   return plainQuestion(text) ? asksFor.acts.filter((act) => act === 'screen') : asksFor.acts;
 }
 
