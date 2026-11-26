@@ -23,7 +23,8 @@
 #   line     an offer is up on the notch: "Every day at 9:00, send me the news." with the key "make agent"
 #   dayone   day one is on its talking step, waiting to hear the person
 #   reply    the assistant has just asked "Shall I send it?" and the sentence is typed into that line as the reply
-#   spoken   said with the talk keys held, not typed
+#   spoken   said with the talk keys held, not typed. The owner writes with nobody here, so no name that was
+#            heard is ever read back ("Is that Anna Rossi?"): that step of the spoken path is not in this corpus.
 #   browser  a browser is in front: a window that says too little about itself, so it can only be looked at
 #   alone    no organisation: there is nobody whose Jarvis this one talks to
 
@@ -92,7 +93,9 @@ tell me when the build answers => turn
 get Sam's answer on the contract by Friday => standing: Chase one person for an answer.
 get me the answer to question five => turn
 chase Leo until he answers => standing: Chase one person for an answer.
-get the reply from support => standing: Chase one person for an answer.  ## wrong: turn ("support" is nobody to chase)
+# Not marked, not decided: "support" is taken as somebody to chase. The chase shows its own line first, so nothing
+# goes out, and whether a name the notch does not know may be chased is not settled.
+get the reply from support => standing: Chase one person for an answer.
 email Sam the numbers => read+turn
 reply to Anna that Friday works => read+turn
 # people
@@ -168,33 +171,33 @@ dov'è il pulsante esporta => point(where; list and picture of the window to the
 # A job was taught once. From then on "do it", "continue", "go on" mean that job, for good.
 # ---------------------------------------------------------------------------------------------------------------
 @ route job
-do it => teach: Did the job again.  ## wrong: teach, but a line first ("Do it again: saves the file?"): nothing is fresh and the job's window is not in front (owner decision 5)
+do it => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
 yes do it => turn
-do it. => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-do it again => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-do that tomorrow morning instead => teach: Did the job again.  ## wrong: turn (not the taught job)
-do this for all the files in downloads => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
-do it by email => teach: Did the job again.  ## wrong: turn (not the taught job)
-do them one at a time please => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+do it. => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+do it again => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+do that tomorrow morning instead => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
+do this for all the files in downloads => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+do it by email => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
+do them one at a time please => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job; the same capture as the rows the design names)
 yes send it => turn
 send it => turn
-continue => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-go on => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-keep going => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-carry on with the summary => teach: Did the job again.  ## wrong: turn (not the taught job; the same capture as the rows the design names)
-continue with the draft to Sam => teach: Did the job again.  ## wrong: turn (not the taught job)
+continue => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+go on => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+keep going => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+carry on with the summary => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job; the same capture as the rows the design names)
+continue with the draft to Sam => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
 go on, tell me more => turn
-finish it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-finish it by Friday => teach: Did the job again.  ## wrong: turn (not the taught job)
-run it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-run the same report as last week => teach: Did the job again.  ## wrong: turn (not the taught job)
+finish it => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+finish it by Friday => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
+run it => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+run the same report as last week => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
 # "repeat that" alone is not marked: the design does not say whether it is the job or the assistant's last answer.
-repeat that => teach: Did the job again.
-repeat that please, I did not hear => teach: Did the job again.  ## wrong: turn (not the taught job)
-take over => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-do the next one => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-do the rest => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
-do 3 more => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+repeat that => teach: Did the job again. (acts at once)
+repeat that please, I did not hear => teach: Did the job again. (acts at once)  ## wrong: turn (not the taught job)
+take over => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+do the next one => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+do the rest => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
+do 3 more => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
 undo => teach: Took back my last paste.
 done => turn
 ok => turn
@@ -202,23 +205,23 @@ fallo => turn  ## wrong: teach, a line first (read by the classifier; the same a
 continua => turn  ## wrong: teach, a line first (read by the classifier; the same as "continue")
 fallo di nuovo => turn  ## wrong: teach, a line first (read by the classifier; the same as "do it again")
 vai avanti => turn  ## wrong: teach, a line first (read by the classifier; the same as "go on")
-finisci il resto => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+finisci il resto => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
 
 # ---------------------------------------------------------------------------------------------------------------
 # The assistant asked "Shall I send it?". The reply is typed into that line. A job was taught once.
 # ---------------------------------------------------------------------------------------------------------------
 @ route job reply
-do it => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+do it => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
 yes do it => turn
-do it by email => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-do that tomorrow morning instead => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-continue => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-continue with the draft to Sam => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-go on => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+do it by email => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+do that tomorrow morning instead => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+continue => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+continue with the draft to Sam => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+go on => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
 go on, tell me more => turn
-finish it by Friday => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-run the same report as last week => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
-repeat that please, I did not hear => teach: Did the job again.  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+finish it by Friday => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+run the same report as last week => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
+repeat that please, I did not hear => teach: Did the job again. (acts at once)  ## wrong: turn (the answer to the assistant's question; the taught job is not replayed)
 yes send it => turn
 send it => turn
 no not now => turn
@@ -266,6 +269,10 @@ continue => mail: Write the reply again, as told.
 do it => turn
 tell Anna I'm late => mail: Write the reply again, as told.
 what did he ask for? => turn
+# Not marked, not decided: the draft's own key says "send", and rule 206 of docs/notch/README.md counts "send it" and
+# "do it" as a yes to the line that is up. Mail reads what is said over its own lines and takes neither (said.ts
+# leaves mail lines alone, on purpose), so both go to the assistant. Whether a mail may be sent by voice is the
+# owner's to say. A bare "yes" answers nothing by the same rule: that it then becomes a turn is not decided either.
 send it => turn
 yes => turn
 pause => mail: Write the reply again, as told.  ## wrong: pauses at once, with or without a model (a control word)
@@ -280,13 +287,14 @@ go ahead => saidLine: Said yes to the line that was up.
 make agent => saidLine: Said yes to the line that was up.
 not now => saidLine: Said no to the line that was up.
 make it Friday at ten => saidLine: Changed the line that was up: Friday at 10:00.
+# Not marked, not decided: a bare "yes" answers no line (rule 206), and today it goes to the assistant as a turn.
 yes => turn
 open the Friday report => turn
 settings => prefs: Show the settings.
 
 # The same offer, and a job was taught once: "do it" is the job, not the yes.
 @ route line job spoken
-do it => teach: Did the job again.  ## wrong: saidLine, the yes to the line that is up (what is up ranks before a command)
+do it => teach: Did the job again. (acts at once)  ## wrong: saidLine, the yes to the line that is up (what is up ranks before a command)
 yes do it => saidLine: Said yes to the line that was up.
 go ahead => saidLine: Said yes to the line that was up.
 
@@ -311,7 +319,7 @@ pause => turn  ## wrong: pauses at once, with or without a model (a control word
 yes do it => turn
 
 @ route job spoken
-do it => teach: Did the job again.  ## wrong: teach, but a line first: nothing is fresh and the job's window is not in front (owner decision 5)
+do it => teach: Did the job again. (acts at once)  ## wrong: teach: Did the job again. (a line first): nothing is fresh and the job's window is not in front (owner decision 5)
 
 # ---------------------------------------------------------------------------------------------------------------
 # A browser is in front: the window names nothing in it, so a picture of it is what goes to the model.
@@ -360,7 +368,7 @@ every evening send me a summary => day at 18:00 | send me a summary
 every night back up my notes => day at 21:00 | back up my notes
 every week send Sam the numbers => Monday at 9:00 | send Sam the numbers
 weekly review of my tasks please => Monday at 9:00 | review of my tasks please
-daily standup notes should go to the team => day at 9:00 | standup notes should go to the team
+daily standup notes should go to the team => day at 9:00 | standup notes should go to the team  ## wrong: no agent (says what should happen to notes; asks for no agent)
 every hour check my inbox => no agent
 every 5 minutes check the server => no agent
 every other day water the plants => no agent
@@ -378,8 +386,8 @@ Monday at 9:00 => Mon 9:00
 day at 9:00 => every day 9:00
 Friday at 16.30 => Fri 16:30
 monday at 9 => not read
-weekday at 9:00 => not read
-weekdays at 9:00 => not read
+weekday at 9:00 => not read  ## wrong: Monday to Friday 9:00 (weekday is a schedule of its own, and what is stored is read back)
+weekdays at 9:00 => not read  ## wrong: Monday to Friday 9:00 (weekday is a schedule of its own, and what is stored is read back)
 every Monday at 9:00 => not read
 Monday at 25:00 => not read
 morning at 6:00 => not read
@@ -410,7 +418,7 @@ monday morning => Monday - morning
 friday afternoon => Friday - afternoon
 tomorrow at noon => tomorrow 12:00 -
 10 thirty => - 10:30 -
-every weekday at 9 => - 9:00 -
+every weekday at 9 => - 9:00 -  ## wrong: Monday to Friday at 9:00 (weekday is read, not passed over)
 every morning at 6 => - 18:00 -  ## wrong: - 6:00 - ("morning" and "night" set the half of the day)
 night at 11 => - 11:00 -  ## wrong: - 23:00 - ("morning" and "night" set the half of the day)
 
@@ -420,7 +428,7 @@ night at 11 => - 11:00 -  ## wrong: - 23:00 - ("morning" and "night" set the hal
 month => Monday at 9:00  ## wrong: refused (a month is not a Monday)
 money at 9 => Monday at 9:00  ## wrong: refused
 sunset => Sunday at 9:00  ## wrong: refused
-weekday at 9 => refused
+weekday at 9 => refused  ## wrong: sent to the brain as typed, and read there as Monday to Friday at 9:00
 every morning at 6 => refused
 every 2 weeks => refused
 tue 14:30 => Tuesday at 14:30

@@ -10,17 +10,24 @@
  * that row, and no other.
  *
  * Nothing here is a stand-in for the deciding itself. The routers are the
- * product's own, made with `attachNotch...` and asked in the order of
- * ./real.ts (a test below reads that order out of the source, so the two
- * cannot drift). The sentence is typed into Home or said with the talk keys
- * and goes through the real ./asks.ts, and "where is" goes through the real
- * ./point.ts. Only the ends are stand-ins: no model, no network, no desktop
- * app, and what a router would do (`run`) is never done.
+ * product's own, made with `attachNotch...`, and which of them takes a
+ * sentence is decided by the product's own resolver: `notchSide` of
+ * ./real.ts, the one function the notch itself calls. Step C2 of the fix
+ * replaces the body of that function with the table of intents; this corpus
+ * keeps calling the product's resolver, whatever it is then, and never has a
+ * copy of the order. The sentence is typed into Home or said with the talk
+ * keys and goes through the real ./asks.ts, and "where is" goes through the
+ * real ./point.ts. Only the ends are stand-ins: no model, no network, no
+ * desktop app. What a router would do (`run`) is not done, with one
+ * exception: a taught job that is done again is let run against stand-in
+ * hands, so that the row can say whether it acted at once or showed a line
+ * first.
  *
- * To see what every row gives now, in the form of the file:
+ * To see what every row gives now, in the form of the file (it is printed,
+ * and every row is still checked):
  *   NOTCH_CORPUS_PRINT=1 bun test src/notch/intents-corpus.test.ts
  */
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -49,6 +56,7 @@ import { createNotchPoint, whereKind, whereQuestion } from './point.ts';
 import { attachNotchPrefs } from './prefs.ts';
 import type { NotchLine, NotchWord } from './protocol.ts';
 import { attachNotchPut } from './put.ts';
+import { notchSide, type NotchSideRouters } from './real.ts';
 import { attachNotchSaid, saidWhen, saidWords } from './said.ts';
 import { NotchSettings } from './settings.ts';
 import { attachNotchStanding } from './standing.ts';
@@ -60,9 +68,10 @@ const HERE = import.meta.dir;
 const CORPUS = join(HERE, 'intents-corpus.txt');
 const PRINT = process.env.NOTCH_CORPUS_PRINT === '1';
 
-/** The routers of ./real.ts, in the order its `side` asks them. */
-const CHAIN = ['dayOne', 'mail', 'put', 'teach', 'people', 'standing', 'agents', 'memory', 'calls', 'prefs', 'moves', 'canDo', 'saidLine'] as const;
-type Router = (typeof CHAIN)[number];
+/** The routers `notchSide` of ./real.ts chooses among. Their order is that function's own, and is not written here. */
+type Router = keyof NotchSideRouters;
+/** What the ledger says when a taught job is done again (./teach.ts): the one thing here that is let run. */
+const JOB_AGAIN = 'Did the job again.';
 
 /**
  * The states a row can be under. With none of them: nothing was ever taught,
@@ -195,7 +204,18 @@ async function world(contexts: ReadonlySet<Context>) {
     log: quiet,
   });
 
-  const hands: NotchJobHands = { act: async () => ({ done: true }) };
+  /** What was seen of the deciding: who the resolver said took the words, each time it was asked, and what was reached after it. */
+  const seen = {
+    sides: [] as { text: string; router: Router | null; did: string }[],
+    took: null as { text: string; router: Router; did: string } | null,
+    /** How often the model that reads words about people was really asked. */
+    asked: 0,
+    remembered: [] as string[],
+    point: [] as string[],
+    /** A taught job was let run, and how often the hands were then asked to do a step of it. */
+    ran: 0, hands: 0,
+  };
+  const hands: NotchJobHands = { act: async () => { seen.hands++; return { done: true }; } };
   const jobs = attachNotchJobs(inbox, { db, hands, log: quiet });
   const put = attachNotchPut({ inbox, jobs, hands, hold: quiet, log: quiet });
   const teach = attachNotchTeach({
@@ -204,7 +224,7 @@ async function world(contexts: ReadonlySet<Context>) {
     save: () => ({ ok: false, why: 'nothing is saved in this test' }) as never,
     forget: quiet,
     effect: () => ({ pays: false, deletes: false, missing: false }),
-    runSkill: async () => ({ end: { how: 'done' }, next: 1 }) as never,
+    runSkill: async () => { seen.hands++; return { end: { how: 'done' }, next: 1 } as never; },
     catcher: () => null,
   });
 
@@ -236,7 +256,7 @@ async function world(contexts: ReadonlySet<Context>) {
     people = attachNotchPeople({
       inbox, link, store: new PeerStore(db), openPage: async () => true, log: quiet, noClock: true,
       // The model that reads what the fixed words do not fit. Here it always says the words are for nobody.
-      think: async () => '{"kind":"none"}',
+      think: async () => { seen.asked++; return '{"kind":"none"}'; },
       time: { calendar: async () => null },
       onCall: () => false,
       chases: () => standing as never,
@@ -248,32 +268,28 @@ async function world(contexts: ReadonlySet<Context>) {
     stops.push(() => people?.stop());
   }
 
-  const routers: Record<Router, (text: string, how?: NotchAskHow) => { did: string; run(): void } | null> = {
-    dayOne: (text) => dayOne.route(text),
-    mail: (text, how) => mail.route(text, how),
-    put: (text) => put.route(text),
-    teach: (text) => teach.route(text),
-    people: (text) => people?.route(text) ?? null,
-    standing: (text) => standing.route(text),
-    agents: (text) => agents.route(text),
-    memory: (text) => memory.route(text),
-    calls: (text) => calls.route(text),
-    prefs: (text) => prefs.route(text),
-    moves: (text) => moves.route(text),
-    canDo: (text) => canDo.route(text),
-    saidLine: (text, how) => saidLine.route(text, how),
-  };
-
   // --- what was decided, as it is decided ---
-  const seen = { sides: [] as { text: string; router: Router | null; did: string }[], read: [] as string[], remembered: [] as string[], point: [] as string[] };
+  // Each router is handed to the product's resolver as it is, with a note taken of which one answered. What it
+  // would do is not done: the row says who took the words. A taught job done again is the exception (see above).
+  const noted = (router: Router, real: { route(text: string, how?: NotchAskHow): { did: string; run(): void } | null } | null) => (real ? {
+    route(text: string, how?: NotchAskHow) {
+      // Asked the way the resolver asked: with `how` only when it was given, and on the router itself.
+      const hit = how === undefined ? real.route(text) : real.route(text, how);
+      if (!hit) return null;
+      seen.took = { text, router, did: hit.did };
+      return { did: hit.did, run: router === 'teach' && hit.did === JOB_AGAIN ? () => { seen.ran++; hit.run(); } : quiet };
+    },
+  } : null);
+  const routers: NotchSideRouters = {
+    dayOne: noted('dayOne', dayOne), mail: noted('mail', mail), put: noted('put', put), teach: noted('teach', teach), people: noted('people', people),
+    standing: noted('standing', standing), agents: noted('agents', agents), memory: noted('memory', memory), calls: noted('calls', calls),
+    prefs: noted('prefs', prefs), moves: noted('moves', moves)!, canDo: noted('canDo', canDo)!, saidLine: noted('saidLine', saidLine)!,
+  };
   const side = (text: string, how?: NotchAskHow): { did: string; run(): void } | null => {
-    for (const router of CHAIN) {
-      const hit = routers[router](text, how);
-      // What it would do is never done here: the row says who took the words, and that is all.
-      if (hit) { seen.sides.push({ text, router, did: hit.did }); return { did: hit.did, run: quiet }; }
-    }
-    seen.sides.push({ text, router: null, did: '' });
-    return null;
+    seen.took = null;
+    const hit = notchSide(routers, text, how);
+    seen.sides.push({ text, router: hit ? seen.took!.router : null, did: hit?.did ?? '' });
+    return hit;
   };
   const front = contexts.has('browser') ? BROWSER_WINDOW : SHEET_WINDOW;
   const point = createNotchPoint({
@@ -296,7 +312,6 @@ async function world(contexts: ReadonlySet<Context>) {
     read: (text) => {
       const reading = people?.read(text) ?? null;
       if (!reading) return null;
-      seen.read.push(text);
       return reading.then((hit) => (hit ? { did: hit.did, run: quiet } : null));
     },
     keys: () => saidLine.keys(),
@@ -369,7 +384,7 @@ async function world(contexts: ReadonlySet<Context>) {
 
   /** What is done with a sentence, in one line. */
   const decide = async (sentence: string): Promise<string> => {
-    const before = { sides: seen.sides.length, turns: door.texts().length };
+    const before = { sides: seen.sides.length, turns: door.texts().length, asked: seen.asked };
     if (contexts.has('reply')) {
       fromPage({ type: 'answer', id: line()!.id, act: 'ask', text: sentence });
       await settle();
@@ -379,8 +394,16 @@ async function world(contexts: ReadonlySet<Context>) {
     const row = ledger.recent(1)[0];
     if (!row || row.heard !== sentence) throw new Error(`the sentence did not arrive: ${sentence}`);
     const first = seen.sides.slice(before.sides).find((one) => one.text === sentence);
-    const read = seen.read.includes(sentence) ? 'read+' : '';
+    // Only when the model was really asked for this sentence: a reading that was promised and never put to it is none.
+    const read = seen.asked > before.asked ? 'read+' : '';
     if (row.kind === 'notch') {
+      if (first?.router && seen.ran > 0) {
+        // A taught job done again: whether the hands were set to work with nothing asked, or a line came up first.
+        for (let round = 0; round < 4; round++) { await advance(50); await new Promise((resolve) => setTimeout(resolve, 0)); }
+        const up = line();
+        const how = seen.hands > 0 ? 'acts at once' : up && (up.kind === 'offer' || up.kind === 'ask') ? 'a line first' : 'nothing seen to happen';
+        return `${first.router}: ${first.did} (${how})`;
+      }
       if (first?.router) return `${first.router}: ${first.did}`;
       return `${read}people.read: ${row.did.join(' ')}`;
     }
@@ -417,7 +440,8 @@ function corpus(): { sections: Section[]; lines: string[] } {
     }
     const section = sections.at(-1);
     if (!section) throw new Error(`line ${at + 1}: a row before any section`);
-    const [body, wrong] = text.split(/\s+## wrong:\s*/);
+    const [body, wrong, more] = text.split(/\s+## wrong:\s*/);
+    if (more !== undefined) throw new Error(`line ${at + 1}: a row is marked wrong once`);
     const cut = body!.indexOf(' => ');
     if (cut < 0) throw new Error(`line ${at + 1}: a row is "sentence => what happens"`);
     section.rows.push({ n: at + 1, sentence: body!.slice(0, cut).trim(), today: body!.slice(cut + 4).trim(), wrong: wrong === undefined ? null : wrong.trim() });
@@ -467,22 +491,38 @@ const WHEN: Record<string, (text: string) => string> = {
 
 // --- the tests ---
 
+/** [rows, rows marked wrong] of each section of the file. */
+const ROWS: Record<string, [number, number]> = {
+  '@ route': [125, 23],
+  '@ route job': [34, 26],
+  '@ route job reply': [20, 10],
+  '@ route reply': [6, 0],
+  '@ route held': [8, 1],
+  '@ route draft spoken': [10, 1],
+  '@ route line spoken': [9, 0],
+  '@ route line job spoken': [3, 1],
+  '@ route dayone spoken': [4, 0],
+  '@ route spoken': [6, 1],
+  '@ route job spoken': [1, 1],
+  '@ route browser': [7, 4],
+  '@ route alone': [9, 0],
+  '@ when agent': [26, 8],
+  '@ when teach': [9, 2],
+  '@ when move': [10, 0],
+  '@ when said': [13, 4],
+  '@ when page-sched': [12, 4],
+  '@ when page-daytime': [4, 2],
+  '@ when page-day': [4, 2],
+  '@ when page-free': [2, 1],
+};
+const TOTALS = { routing: 242, routingWrong: 68, times: 80, timesWrong: 23 };
+
 const read = corpus();
 const printed = new Map<number, string>();
 const show = (row: Row, now: string): void => { printed.set(row.n, `${row.sentence} => ${now}${row.wrong === null ? '' : `  ## wrong: ${row.wrong}`}`); };
 
-describe('the order the routers are asked in', () => {
-  test('is the order of real.ts: the chain here is read against its source', () => {
-    const source = readFileSync(join(HERE, 'real.ts'), 'utf8');
-    const from = source.indexOf('side: (text, how) =>');
-    const to = source.indexOf('?? null,', from);
-    expect(from).toBeGreaterThan(0);
-    expect(to).toBeGreaterThan(from);
-    const code = source.slice(from, to).split('\n').map((one) => one.replace(/^\s*\/\/.*$/, '')).join('\n');
-    const asked = [...code.matchAll(/\b(\w+)\??\.(?:mail\.)?route\(/g)].map((match) => match[1]);
-    expect(asked).toEqual([...CHAIN]);
-  });
-});
+// Printed after everything was checked, and whether or not it held: what differs has failed above.
+afterAll(() => { if (PRINT) console.log(read.lines.map((line, at) => printed.get(at + 1) ?? line).join('\n')); });
 
 describe('what a sentence means today', () => {
   for (const section of read.sections.filter((one) => one.kind === 'route')) {
@@ -498,7 +538,7 @@ describe('what a sentence means today', () => {
         show(row, now);
         if (now !== row.today) differs.push(`line ${row.n}: ${JSON.stringify(row.sentence)}\n    the file says: ${row.today}\n    it gives now:  ${now}`);
       }
-      if (!PRINT) expect(differs).toEqual([]);
+      expect(differs).toEqual([]);
     });
   }
 });
@@ -514,7 +554,7 @@ describe('what a time is read as today', () => {
         show(row, now);
         if (now !== row.today) differs.push(`line ${row.n}: ${JSON.stringify(row.sentence)}\n    the file says: ${row.today}\n    it gives now:  ${now}`);
       }
-      if (!PRINT) expect(differs).toEqual([]);
+      expect(differs).toEqual([]);
     });
   }
 });
@@ -536,9 +576,14 @@ describe('the file itself', () => {
     }
   });
 
-  test('with NOTCH_CORPUS_PRINT=1 the file is printed as it would read now', () => {
-    if (!PRINT) return;
-    console.log(read.lines.map((line, at) => printed.get(at + 1) ?? line).join('\n'));
+  // A file that was cut short, or a row that was commented out, must not pass for the whole. These numbers are
+  // changed by hand, in the same commit as the rows: [rows, rows marked wrong] for each section.
+  test('has every row it had: the counts are pinned', () => {
+    const counted = Object.fromEntries(read.sections.map((section) =>
+      [`@ ${[section.kind, ...section.names].join(' ')}`, [section.rows.length, section.rows.filter((row) => row.wrong !== null).length]]));
+    expect(counted).toEqual(ROWS);
+    const total = (kind: Section['kind'], at: 0 | 1): number => read.sections.filter((one) => one.kind === kind).reduce((sum, one) => sum + ROWS[`@ ${[one.kind, ...one.names].join(' ')}`]![at], 0);
+    expect({ routing: total('route', 0), routingWrong: total('route', 1), times: total('when', 0), timesWrong: total('when', 1) }).toEqual(TOTALS);
   });
 });
 

@@ -90,10 +90,12 @@ the general turn.
 ## Status
 
 - C1 corpus: done in "notch: pin what every sentence means today in a corpus, wrong rows marked"
-  (src/notch/intents-corpus.test.ts, src/notch/intents-corpus.txt; 242 routing rows, 80 time values, 87 marked
-  wrong). Decision 5 rows are marked but cannot flip yet: the corpus sees who takes a sentence, not whether
-  it acts at once or shows a line. C2 adds that to the table, and the corpus should print it from then on.
-- C2 table: pending.
+  and "notch: the corpus asks the product's own resolver, and its row counts are pinned"
+  (src/notch/intents-corpus.test.ts, src/notch/intents-corpus.txt; 242 routing rows, 80 time values, 91 marked
+  wrong, counts pinned per section). The chain of real.ts is now one exported function, `notchSide`, that the
+  notch and the corpus both call: same routers, same order, same arguments. A taught job done again is let run
+  against stand-in hands, so its rows say "acts at once" today and can flip to "a line first" (decision 5).
+- C2 table: pending. It replaces the body of `notchSide`; the corpus keeps calling the product's resolver.
 - C3 precedence, reply rule, control words: pending.
 - C4 classifier: pending.
 - C5 one When: pending.
