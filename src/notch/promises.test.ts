@@ -11,6 +11,7 @@ import { CANCELLED_RESULT, CommitmentExecutor } from '../daemon/commitment-execu
 import { createCommitment, findCommitments, getCommitment } from '../vault/commitments.ts';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { attachNotchActions } from './actions.ts';
+import { attachNotchDev } from './dev.ts';
 import { NOTCH_FIXTURE_ORIGIN } from './fixtures.ts';
 import { notchPromiseItemId } from './promises.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -54,9 +55,7 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive'; /**
     approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
     promises: {
       executor,
-      create: (what, opts) => createCommitment(what, opts),
       kept: () => findCommitments({ status: 'completed' }),
-      appendFixtureLog: (line) => { log.push(line); },
     },
     // What the notch does is written down in the vault, and in the product's audit trail (./actions.ts).
     ...(options.noActions ? {} : { actions: { db: getDb(), audit: new AuditTrail() } }),
@@ -64,10 +63,15 @@ function harness(options: { page?: boolean; mode?: 'aggressive' | 'passive'; /**
     clock,
     log: () => {},
   });
+  // The fixed test items, as the daemon makes them while the demo gate is open (./dev.ts).
+  const fixtures = attachNotchDev(real, {
+    approvalManager: approvals,
+    promises: { executor, create: (what, opts) => createCommitment(what, opts), appendLog: (line) => { log.push(line); } },
+  });
   cleanup.push(() => { real.stop(); executor.stop(); });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    executor, real, approvals, log, line, fromPage, surface,
+    executor, real, fixtures, approvals, log, line, fromPage, surface,
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
     count: (): number => surface.current().count,
     /** The executor's own window running out. */
@@ -254,8 +258,8 @@ describe('when the brain or the notch was away', () => {
 describe('the promise fixture', () => {
   test('makes a real promise that only this code can make, and has the executor look at once', async () => {
     const h = harness();
-    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment', 'promise']);
-    const made = await h.real.fixtures.make('promise', { in: 60 });
+    expect(h.fixtures.kinds()).toEqual(['approval', 'payment', 'promise']);
+    const made = await h.fixtures.make('promise', { in: 60 });
     expect(made).toContain('in 60 seconds');
     expect(made).toContain('notch-fixture.log');
     const [row] = findCommitments({ status: 'pending' });
@@ -270,13 +274,14 @@ describe('the promise fixture', () => {
     const h = harness();
     const real = attachNotchReal(h.surface, {
       approvalManager: h.approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
-      promises: { executor: h.executor, create: (what, opts) => createCommitment(what, opts), kept: () => [], appendFixtureLog: () => {} },
+      promises: { executor: h.executor, kept: () => [] },
       lookMs: 3_600_000, log: () => {},
     });
+    const fixtures = attachNotchDev(real, { approvalManager: h.approvals, promises: { executor: h.executor, create: (what, opts) => createCommitment(what, opts), appendLog: () => {} } });
     cleanup.push(() => real.stop());
-    await real.fixtures.make('promise', { in: 300 });
+    await fixtures.make('promise', { in: 300 });
     await new Promise((r) => setTimeout(r, 1100));
-    await real.fixtures.make('promise', { in: 300 });
+    await fixtures.make('promise', { in: 300 });
     expect(findCommitments({ status: 'pending' })).toHaveLength(2);
   });
 
@@ -285,11 +290,11 @@ describe('the promise fixture', () => {
     const executor = new CommitmentExecutor('aggressive');
     const real = attachNotchReal(surface, {
       approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
-      promises: { executor, create: (what, opts) => createCommitment(what, opts), kept: () => [] },
+      promises: { executor, kept: () => [] },
       lookMs: 3_600_000, log: () => {},
     });
     cleanup.push(() => { real.stop(); executor.stop(); });
-    expect(real.fixtures.kinds()).toEqual(['approval', 'payment']);
+    expect(attachNotchDev(real, { approvalManager: new ApprovalManager() }).kinds()).toEqual(['approval', 'payment']);
   });
 });
 

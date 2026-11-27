@@ -16,6 +16,7 @@ import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import type { RawInteraction } from '../skills/recorder.ts';
 import { NOTCH_WATCH_EVENT } from './catch.ts';
 import { NOTCH_PLAIN_LINE_COLUMNS, notchApprovalSentence, notchApprovalWay } from './approvals.ts';
+import { attachNotchDev } from './dev.ts';
 import { NOTCH_FIXTURE_AGENT } from './fixtures.ts';
 import { NotchLedger } from './ledger.ts';
 import type { NotchAnswerAct, NotchLine, NotchToPage } from './protocol.ts';
@@ -65,18 +66,22 @@ function harness() {
     approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
     deny: (id) => applyApprovalDecision('deny', id, NOTCH_DECIDER, deps),
     withdraw: (id) => applyApprovalDecision('deny', id, SYSTEM_DECIDER, deps),
-    deliverApproval: (request) => { delivered.push(request.id); },
     openDashboard: (from) => { opened.push(from); },
-    approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
-    toolRegistry: () => registry,
     // The test looks by hand.
     lookMs: 3_600_000,
     log: () => {},
   });
   live = real;
+  // The fixed test items, as the daemon makes them while the demo gate is open (./dev.ts).
+  const fixtures = attachNotchDev(real, {
+    approvalManager: approvals,
+    deliverApproval: (request) => { delivered.push(request.id); },
+    approveAsDashboard: (id) => applyApprovalDecision('approve', id, 'dashboard', deps),
+    toolRegistry: () => registry,
+  });
   const line = (): NotchLine | null => surface.current().line;
   return {
-    approvals, deps, runs, real, delivered, opened, line,
+    approvals, deps, runs, real, fixtures, delivered, opened, line,
     said: (): string => (line()?.say ?? []).map((part) => (typeof part === 'string' ? part : 'em' in part ? part.em : '')).join(''),
     count: (): number => surface.current().count,
     async look(): Promise<void> { real.approvals.sync(); await settle(); },
@@ -91,8 +96,8 @@ function harness() {
 describe('the approval fixture, from the command to Today', () => {
   test('makes a real approval a key may answer, shows it where approvals are shown, and a yes runs it once', async () => {
     const h = harness();
-    expect(h.real.fixtures.kinds()).toEqual(['approval', 'payment', 'command', 'elsewhere']);
-    const made = await h.real.fixtures.make('approval', {});
+    expect(h.fixtures.kinds()).toEqual(['approval', 'payment', 'command', 'elsewhere']);
+    const made = await h.fixtures.make('approval', {});
     expect(made).toContain('An approval is waiting');
     const [request] = h.approvals.getPending();
     expect(request).toMatchObject({ agent_id: NOTCH_FIXTURE_AGENT, tool_name: 'get_system_info', action_category: 'read_data', execution_mode: 'deferred' });
@@ -121,7 +126,7 @@ describe('the approval fixture, from the command to Today', () => {
 
   test('the payment fixture is a payment to every surface, and approving it in the dashboard runs nothing', async () => {
     const h = harness();
-    await h.real.fixtures.make('payment', {});
+    await h.fixtures.make('payment', {});
     const [request] = h.approvals.getPending();
     expect(notchApprovalWay(request!)).toBe('payment');
     expect(approvalToast(request!).approvable).toBe(false);
@@ -143,19 +148,22 @@ describe('the approval fixture, from the command to Today', () => {
     const real = attachNotchReal(surface, {
       approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       openFailures: () => open,
-      recordFixtureFailure: () => { open.push({ key: 'k', headline: 'The notch test failed, and Jarvis cannot tell whether it took effect.' }); return open[0]!.headline; },
       lookMs: 3_600_000, log: () => {},
     });
     live = real;
-    expect(real.fixtures.kinds()).toEqual(['approval', 'payment', 'failure']);
-    expect(await real.fixtures.make('failure', {})).toContain('A test failure is in the list of open failures');
+    const fixtures = attachNotchDev(real, {
+      approvalManager: approvals,
+      recordFailure: () => { open.push({ key: 'k', headline: 'The notch test failed, and Jarvis cannot tell whether it took effect.' }); return open[0]!.headline; },
+    });
+    expect(fixtures.kinds()).toEqual(['approval', 'payment', 'failure']);
+    expect(await fixtures.make('failure', {})).toContain('A test failure is in the list of open failures');
     await settle();
     expect(surface.current().line).toMatchObject({ kind: 'say', mark: 'fail', say: ['The notch test failed, and Jarvis cannot tell whether it took effect.'] });
   });
 
   test('the command fixture files a real shell command the way the product does, and a key approves it: it runs once', async () => {
     const h = harness();
-    const made = await h.real.fixtures.make('command', {});
+    const made = await h.fixtures.make('command', {});
     expect(made).toContain('echo notch test');
     const [request] = h.approvals.getPending();
     expect(request).toMatchObject({ agent_id: NOTCH_FIXTURE_AGENT, tool_name: 'run_command', action_category: 'execute_command' });
@@ -194,22 +202,22 @@ describe('the approval fixture, from the command to Today', () => {
     const approvals = new ApprovalManager();
     const surface = new NotchSurface({ dispatchRPC: () => Promise.resolve({}), onEvent() {}, onSidecarDisconnected() {} }, () => {});
     const none = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
-    expect(none.fixtures.kinds()).toEqual(['approval', 'payment']);
+    expect(attachNotchDev(none, { approvalManager: approvals }).kinds()).toEqual(['approval', 'payment']);
     none.stop();
-    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }), toolRegistry: () => null, lookMs: 3_600_000, log: () => {} });
+    const early = attachNotchReal(surface, { approvalManager: approvals, approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }), lookMs: 3_600_000, log: () => {} });
     live = early;
-    await expect(early.fixtures.make('command', {})).rejects.toThrow('has not loaded its tools yet');
+    await expect(attachNotchDev(early, { approvalManager: approvals, toolRegistry: () => null }).make('command', {})).rejects.toThrow('has not loaded its tools yet');
     expect(approvals.getPending()).toEqual([]);
   });
 
   // Steps 2 and 7 of the hand test, on a brain whose dashboard cannot be reached.
   test('"elsewhere" decides the oldest fixture approval as a dashboard click does, and the notch\'s line leaves by itself', async () => {
     const h = harness();
-    await expect(h.real.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
-    await h.real.fixtures.make('approval', {});
+    await expect(h.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
+    await h.fixtures.make('approval', {});
     await h.look();
     expect(h.line()?.kind).toBe('offer');
-    expect(await h.real.fixtures.make('elsewhere', {})).toContain('the way a click on its dashboard card does');
+    expect(await h.fixtures.make('elsewhere', {})).toContain('the way a click on its dashboard card does');
     expect(h.runs).toEqual(['get_system_info']);
     expect(h.approvals.getHistory({ status: 'executed' })[0]).toMatchObject({ decided_by: 'dashboard' });
     await h.look();
@@ -219,40 +227,40 @@ describe('the approval fixture, from the command to Today', () => {
 
   test('"elsewhere" decides the approval the notch is showing, not an older one that waits in the count', async () => {
     const h = harness();
-    await h.real.fixtures.make('approval', {});
+    await h.fixtures.make('approval', {});
     await h.look();
     // Left alone: it goes back to the count.
     await h.answer('fold');
     await new Promise((r) => setTimeout(r, 5));
     // A second one arrives and speaks, as in the hand test.
-    await h.real.fixtures.make('approval', {});
+    await h.fixtures.make('approval', {});
     await h.look();
     const [older, newer] = [...h.approvals.getPending()].sort((a, b) => a.created_at - b.created_at);
     expect(h.real.inbox.showing()).toBe(h.real.approvals.itemId(newer!.id));
-    await h.real.fixtures.make('elsewhere', {});
+    await h.fixtures.make('elsewhere', {});
     expect(h.approvals.getRequest(newer!.id)!.status).toBe('executed');
     expect(h.approvals.getRequest(older!.id)!.status).toBe('pending');
     await h.look();
     expect(h.line()).toBeNull();
     expect(h.count()).toBe(1);
     // With nothing on the notch it takes the newest that waits.
-    await h.real.fixtures.make('elsewhere', {});
+    await h.fixtures.make('elsewhere', {});
     expect(h.approvals.getRequest(older!.id)!.status).toBe('executed');
   });
 
   test('"elsewhere" never touches the payment, or an approval that is not the fixture\'s own', async () => {
     const h = harness();
-    await h.real.fixtures.make('payment', {});
+    await h.fixtures.make('payment', {});
     h.approvals.createRequest({ agentId: 'someone-else', agentName: 'PA', toolName: 'get_system_info', toolArguments: {},
       actionCategory: 'read_data', urgency: 'normal', reason: 'r', context: '' });
-    await expect(h.real.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
+    await expect(h.fixtures.make('elsewhere', {})).rejects.toThrow('No fixture approval is waiting');
     expect(h.approvals.getPending()).toHaveLength(2);
     expect(h.runs).toEqual([]);
   });
 
   test('an unknown fixture is refused', async () => {
     const h = harness();
-    await expect(h.real.fixtures.make('toString', {})).rejects.toThrow('No fixture is called "toString"');
+    await expect(h.fixtures.make('toString', {})).rejects.toThrow('No fixture is called "toString"');
   });
 
   test('with nothing waiting and nothing done, yes at rest opens an empty Today', async () => {
@@ -1134,8 +1142,8 @@ describe('a notch that fails does not take the brain with it, and stop stops it 
     const made = clocks(() => attachNotchReal(surface, {
       approvalManager: new ApprovalManager(), approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
       promises: {
-        executor: { subscribe: () => () => { throw new ReferenceError('gone is not defined'); }, cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {} },
-        create: () => ({ id: 'p', when_due: null }), kept: () => [],
+        executor: { subscribe: () => () => { throw new ReferenceError('gone is not defined'); }, cancelExecution: () => false },
+        kept: () => [],
       },
       lookMs: 3_600_000, log: (line) => logs.push(line),
     }));

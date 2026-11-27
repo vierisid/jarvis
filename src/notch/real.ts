@@ -7,7 +7,6 @@
  * product's own objects and functions; nothing here reaches for them itself,
  * so this file can be read as the list of what the notch touches.
  */
-import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { ApprovalDecisionOutcome } from '../daemon/approval-decision.ts';
 import type { Database } from 'bun:sqlite';
@@ -24,9 +23,7 @@ import { notchLookFeature, type NotchLook, type NotchLookDeps, type NotchLookPor
 import { notchTalkFeature } from './talk.ts';
 import type { NotchTalk, NotchTalkDeps, NotchTalkPort } from './talk.ts';
 import type { NotchApprovalWhere, NotchApprovals } from './approvals.ts';
-import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-executor.ts';
-import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun } from './fixtures.ts';
-import type { NotchFixtures } from './fixtures.ts';
+import type { CommitmentEvent } from '../daemon/commitment-executor.ts';
 import { NotchInbox } from './inbox.ts';
 import { notchNewsFeature } from './news.ts';
 import type { NotchNews, NotchOpenFailure } from './news.ts';
@@ -66,7 +63,6 @@ import { notchMovesFeature, type NotchMoves } from './moves.ts';
 import { notchPrefsFeature, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
 import { notchDayOneFeature, type NotchDayOne, type NotchDayOneDeps } from './dayone.ts';
 import { notchCanDoFeature } from './cando.ts';
-import type { NotchPart } from './protocol.ts';
 import { notchSaidFeature } from './said.ts';
 import { whereQuestion } from './point.ts';
 import { createNotchIntentReader, type IntentReadPeople, type NotchIntentReader, type NotchIntentReaderDeps, type NotchRead } from './intent-read.ts';
@@ -113,12 +109,6 @@ export interface NotchRealDeps {
    * notch: the owner said nothing, and the audit must not say they said no.
    */
   withdraw(requestId: string): Promise<ApprovalDecisionOutcome>;
-  /** Approves as a click on the dashboard card does. Given only when fixtures may be made, and used by them only. */
-  approveAsDashboard?: (requestId: string) => Promise<ApprovalDecisionOutcome>;
-  /** The brain's own tools, once loaded. Used by the shell command fixture only, and given only when fixtures may be made. */
-  toolRegistry?: () => ToolRegistry | null | undefined;
-  /** Shows a new approval wherever approvals are shown. Used by the fixtures only. */
-  deliverApproval?: (request: ApprovalRequest) => Promise<void> | void;
   /** Opens the dashboard on the machine named, or on every machine showing the notch. */
   openDashboard?: (sidecarId: string | null) => void;
   /**
@@ -132,10 +122,7 @@ export interface NotchRealDeps {
     executor: {
       subscribe(listener: (event: CommitmentEvent) => void): () => void;
       cancelExecution(commitmentId: string): boolean;
-      checkAndAnnounce(): void;
-      setOriginRunner(origin: string, run: CommitmentRunner): void;
     };
-    create(what: string, options: { when_due: number; assigned_to: string; created_from: string }): { id: string; when_due: number | null };
     /** Promises that were kept, for Today. */
     kept(): { what: string; completed_at: number | null }[];
     /**
@@ -146,8 +133,6 @@ export interface NotchRealDeps {
     slipped?(since: number, until: number): { id: string; what: string }[];
     /** Opens those again, due at that moment. How many were moved. */
     move?(ids: string[], at: number): number;
-    /** Adds a line to the fixture promise's log. Given only when fixtures may be made. */
-    appendFixtureLog?: (line: string) => void;
   };
   /** How often to look for what is new. */
   lookMs?: number;
@@ -160,8 +145,6 @@ export interface NotchRealDeps {
    * task manager is made after the notch, so it may not be there yet.
    */
   onTaskEnded?: (listener: NotchNews['taskEnded']) => boolean;
-  /** Makes one test failure in the product's own failure list. Given only when fixtures may be made. */
-  recordFixtureFailure?: () => string;
   /** The product's pause: Esc twice pauses through it, and the notch shows its state whoever changed it. */
   emergency?: NotchPauseDeps['controller'];
   /**
@@ -308,7 +291,6 @@ export interface NotchReal {
   questions: NotchQuestions | null;
   /** Where suggestion toasts go while the notch is on: the count. */
   suggestions: NotchSuggestions;
-  fixtures: NotchFixtures;
   /** Instructions given on the notch, when the brain takes them. */
   asks: NotchAsks | null;
   /** Where the person is and whether Jarvis is looking, when a desktop app tells it. */
@@ -600,11 +582,6 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   const drop: NotchDrop | null = registry.add(notchDropFeature(deps.asks ? { gist: deps.gist } : undefined));
   const promises = deps.promises;
   registry.add(notchPromisesFeature(promises?.executor, actions));
-  // A fixture promise is kept by writing one line, not by a model turn.
-  const appendFixtureLog = promises?.appendFixtureLog;
-  if (promises && appendFixtureLog) {
-    promises.executor.setOriginRunner(NOTCH_FIXTURE_ORIGIN, notchFixturePromiseRun(appendFixtureLog));
-  }
   registry.add(notchPauseFeature(deps.emergency));
   const questions: NotchQuestions | null = registry.add(notchQuestionsFeature(deps.questions ? { ...deps.questions, openDashboard: deps.openDashboard, actions } : undefined));
   // Mail (pass 7), and what stands on it (pass 11): an eye kept on a person's answer, and a chase.
@@ -641,22 +618,6 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     // The task manager is made later in the daemon's start: it is asked for until it is there.
     onTaskEnded: deps.onTaskEnded,
   }));
-  const recordFixtureFailure = deps.recordFixtureFailure;
-  const fixtures = createNotchFixtures({
-    failure: recordFixtureFailure ? () => { const said = recordFixtureFailure(); news.sync(); return said; } : undefined,
-    approvalManager: deps.approvalManager,
-    approveAsDashboard: deps.approveAsDashboard,
-    toolRegistry: deps.toolRegistry,
-    approvalOnNotch: () => {
-      const showing = inbox.showing();
-      const prefix = approvals.itemId('');
-      return showing?.startsWith(prefix) ? showing.slice(prefix.length) : null;
-    },
-    deliverApproval: deps.deliverApproval,
-    promises: promises && appendFixtureLog
-      ? { create: promises.create, look: () => promises.executor.checkAndAnnounce() }
-      : undefined,
-  });
 
   const look = (): void => {
     try {
@@ -677,7 +638,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
 
   const suggestions = registry.must(notchSuggestionsFeature);
   return {
-    inbox, approvals, news, questions, suggestions, fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
+    inbox, approvals, news, questions, suggestions, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
     intents: () => registry.all.intents(),
     // A notch that was stopped tells the person nothing: what it would have said goes where it went before there was a notch.

@@ -256,6 +256,28 @@ After the review of step 5:
   reaches the asks after stop.
 - `registry.lend` and `registry.onStop` are gone: every part is a feature.
 
+What step 6 does:
+
+- The fixed test items are made by `attachNotchDev(real, given)` in
+  `src/notch/dev.ts`, beside the notch and not inside it. The daemon calls
+  it only while the demo gate is open, right after the notch is made, and
+  hands what it makes to the fixture route (`notchFixtures` in index.ts,
+  the one holder the type change forces).
+- `NotchRealDeps` lost `approveAsDashboard`, `toolRegistry`,
+  `deliverApproval`, `recordFixtureFailure`, `promises.appendFixtureLog`, and
+  what only the fixtures used of the promises: `create`,
+  `executor.checkAndAnnounce`, `executor.setOriginRunner`. `NotchReal` lost
+  `fixtures`.
+- Behaviour: none changed. With the gate shut the route had fixtures and
+  answered 404 at the gate; it now has none and answers the same. With
+  the gate open the same items are made from the same functions, and the
+  fixture promise's runner is set on the executor right after the notch is
+  made instead of during it, before anything can run.
+- The demo moments (`src/notch/demo.ts`) are made with the surface, before
+  the notch, and stay where they are: moving them is step 7's.
+- Tests that made fixtures through `attachNotchReal` make them through
+  `attachNotchDev` now (setup only, every assertion is the same).
+
 ## Owner decisions
 
 - 2026-11-26 (decision 8): step 0 lands alone first; a notch that fails to
@@ -283,7 +305,7 @@ After the review of step 5:
 - Step 3: done in "notch: moves, what it can do, memory, settings, what is
   said over a line, promises, the pause and suggestions are features"
 - Step 4: done in "notch: asking, the look, the drop, the jobs and the agents are features, and the registry gathers the words, Home's rows, Settings, today, undo and hello in one order" and "notch: review of step 4: talk is stopped with the notch, a making that fails after the drop is pinned, and the registry says when a feature is kept"
-- Step 5: done in "notch: mail, standing, soon, calls, around, the day, presence, where, noticing, day one and people are features, and real.ts is a list"
-- Step 6: pending
+- Step 5: done in "notch: mail, standing, soon, calls, around, the day, presence, where, noticing, day one and people are features, and real.ts is a list" and "notch: review of step 5: the quiet hours hold before presence, promises and connect are called on their objects, a stopped notch keeps no eye, talk ends its pretends and late words, and lend goes"
+- Step 6: done in "notch: the fixed test items are made beside the notch, only while the demo gate is open, and are no longer in what the notch is given or hands back"
 - Step 7: pending
 - Step 8: pending

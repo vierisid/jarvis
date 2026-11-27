@@ -169,9 +169,8 @@ function everything(given: Given = {}) {
           if (given.failAtPromises) throw new Error('the promises cannot be heard');
           promiseListeners.add(listener); return () => { promiseListeners.delete(listener); given.log?.('stop: promises'); };
         },
-        cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {},
+        cancelExecution: () => false,
       },
-      create: () => ({ id: 'p', when_due: null }),
       kept: () => kept,
     },
     questions: { pending: () => state.questions, get: (id: string) => state.questions.find((one) => one.id === id) ?? null, answer: () => ({ status: 200 }) } as never,

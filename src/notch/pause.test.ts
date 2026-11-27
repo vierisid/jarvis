@@ -50,7 +50,7 @@ function harness(options: { start?: 'paused' | 'killed' } = {}) {
     approvalManager: approvals,
     approve: async () => ({ status: 'already_decided' }), deny: async () => ({ status: 'already_decided' }), withdraw: async () => ({ status: 'already_decided' }),
     emergency: controller,
-    promises: { executor, create: (what, opts) => createCommitment(what, opts), kept: () => findCommitments({ status: 'completed' }) },
+    promises: { executor, kept: () => findCommitments({ status: 'completed' }) },
     lookMs: 3_600_000,
     log: () => {},
   });

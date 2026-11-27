@@ -168,7 +168,8 @@ import type { NotchDemo } from "../notch/demo.ts";
 import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
 import { notchMailBrowser, notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
-import { NOTCH_FIXTURE_LOG } from "../notch/fixtures.ts";
+import { NOTCH_FIXTURE_LOG, type NotchFixtures } from "../notch/fixtures.ts";
+import { attachNotchDev } from "../notch/dev.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { notchMoveSlipped, notchSlipped } from "./notch-slipped.ts";
 import { attachNotchReal } from "../notch/real.ts";
@@ -796,6 +797,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   let notchDemo: NotchDemo | null = null;
   // The real things on the notch: approvals and the rest (src/notch/real.ts).
   let notchReal: NotchReal | null = null;
+  // Its fixed test items, while the demo gate is open (src/notch/dev.ts).
+  let notchFixtures: NotchFixtures | null = null;
   /** The product's own switch for watching, as the notch's day one uses it. Null until it is there, and where there is none. */
   let notchSetWatching: ((on: boolean) => Promise<boolean>) | null = null;
   /** Completes the product's own first setup from the notch's day one. Null until what it starts can be started. */
@@ -4863,15 +4866,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // An instruction that ended with an approval unanswered: closed through the same function, as
         // the system. Nobody said no, and the audit does not say the owner did.
         withdraw: (requestId) => applyApprovalDecision('deny', requestId, SYSTEM_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
-        deliverApproval: (request) => approvalDelivery.deliver(request),
-        // For the hand test, demo gate only: the shell command fixture is
-        // filed against the brain's real run_command tool.
-        toolRegistry: notchDemoState === 'open' ? () => agentService.getOrchestrator().getToolRegistry() : undefined,
-        // For the hand test, demo gate only: decides one of the fixture's own
-        // approvals as a dashboard click would (src/notch/fixtures.ts).
-        approveAsDashboard: notchDemoState === 'open'
-          ? (requestId) => applyApprovalDecision('approve', requestId, DASHBOARD_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail })
-          : undefined,
         // Esc twice pauses through the same controller as the tray's Pause.
         emergency: emergencyController,
         // Where the person is, and whether the desktop app is looking (pass 6).
@@ -4904,27 +4898,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           });
           return true;
         },
-        recordFixtureFailure: notchDemoState === 'open'
-          ? () => {
-            const failure = projectFailure({ source: 'unknown', message: 'A test failure made by `jarvis notch fixture failure`. Nothing failed.' },
-              { label: 'The notch test', sideEffects: true }, { requestId: `notch-fixture-${Date.now()}` });
-            recordChatFailure(failure);
-            return failure.headline;
-          }
-          : undefined,
-        // Promises: the fuse before one is kept, Esc to cancel, and what came
-        // of it. A fixture promise (demo gate only) is kept by one line in a
-        // file inside the data directory, not by a model turn.
+        // Promises: the fuse before one is kept, Esc to cancel, and what came of it.
         promises: {
           executor,
-          create: (what, options) => createCommitment(what, options),
           kept: () => findCommitments({ status: 'completed' }),
           // What was due today and was not kept, and the way to move it: the evening line offers it.
           slipped: (since, until) => notchSlipped(since, until),
           move: (ids, at) => notchMoveSlipped(ids, at),
-          appendFixtureLog: notchDemoState === 'open'
-            ? (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line)
-            : undefined,
         },
         // Asking: typed in Home, or spoken while the talk keys are held. One
         // stored turn each, in the notch's own conversation; nothing spoken.
@@ -5099,6 +5079,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       });
       // What the brain stops on its way down (handleShutdown).
       holdNotch(notchReal);
+      // The fixed test items, for trying the notch by hand: demo gate only (src/notch/dev.ts). The shell
+      // command fixture is filed against the brain's real run_command tool; "elsewhere" decides one of the
+      // fixture's own approvals as a dashboard click would; a fixture promise is kept by one line in a file
+      // inside the data directory, not by a model turn.
+      notchFixtures = notchReal && notchDemoState === 'open' ? attachNotchDev(notchReal, {
+        approvalManager,
+        deliverApproval: (request) => approvalDelivery.deliver(request),
+        toolRegistry: () => agentService.getOrchestrator().getToolRegistry(),
+        approveAsDashboard: (requestId) => applyApprovalDecision('approve', requestId, DASHBOARD_DECIDER, { approvalManager, deferredExecutor, wsService, auditTrail }),
+        recordFailure: () => {
+          const failure = projectFailure({ source: 'unknown', message: 'A test failure made by `jarvis notch fixture failure`. Nothing failed.' },
+            { label: 'The notch test', sideEffects: true }, { requestId: `notch-fixture-${Date.now()}` });
+          recordChatFailure(failure);
+          return failure.headline;
+        },
+        promises: { executor, create: (what, options) => createCommitment(what, options), appendLog: (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line) },
+      }) : null;
       // Nothing answers what the engine asks of the person when there is no notch: then it is not started.
       if (peerSetupNow && notchReal) {
         // What the engine asks of the person goes to the link, and from there to the notch. Nothing else answers it.
@@ -6084,7 +6081,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...createApiRoutes(apiContext),
       // Absent unless the notch switch is on.
       ...notchRoutes(notchEnabled(), {
-        demo: notchDemo, fixtures: notchReal?.fixtures ?? null, pages: () => notchSurface?.listening() ?? 0,
+        demo: notchDemo, fixtures: notchFixtures, pages: () => notchSurface?.listening() ?? 0,
         // A file dropped on the notch's page arrives here, from the page itself.
         drop: (dropped) => notchReal?.drop?.take(dropped) ?? { taken: false },
         script: notchReal?.asks && notchReal.talk ? notchScriptDeps({
