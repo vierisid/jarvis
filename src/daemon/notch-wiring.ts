@@ -205,6 +205,8 @@ export interface NotchLate {
   workflowDepsNow: () => ManageWorkflowDeps | null;
   /** The part that gets the person into an organisation, for the brain's way down. */
   setPeerSetup(setup: PeerSetup): void;
+  /** What puts the real things on the notch. A test gives a stand-in; the brain gives none. */
+  attach?: typeof attachNotchReal;
 }
 
 /** The rest of the notch: once the approvals, the pause and the audit are there. */
@@ -212,6 +214,7 @@ export function startNotch(late: NotchLate): void {
   const {
     sidecarManager, agentService, wsService, getDb, dataDir, pebblePanelOrigin, notchDemoState, jarvisConfig, emergencyController,
     approvalManager, approvalDelivery, deferredExecutor, auditTrail, executor, googleAuthNow, bgAgentNow, workflowDepsNow, setPeerSetup,
+    attach = attachNotchReal,
   } = late;
   // With the notch on, Pause also holds the model loops: background work
   // makes no model call until Resume, instead of going round being told no
@@ -303,7 +306,7 @@ export function startNotch(late: NotchLate): void {
     // created, say), what was made of it is stopped again (src/notch/real.ts), what was set for it above is
     // put back, the dashboard says that the notch did not start, and the brain goes on without it.
     const notchPage = notchSurface;
-    notchReal = startNotchPart('the notch', () => attachNotchReal(notchPage, {
+    notchReal = startNotchPart('the notch', () => attach(notchPage, {
       busy: () => notchDemo?.running() != null,
       // What a file that arrived from somebody is, in one sentence: one small question to the model about that
       // one file. A PDF is read to text by the product's own reader, apart from the daemon and under a deadline.

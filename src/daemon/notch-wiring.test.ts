@@ -8,7 +8,7 @@
  * before anything is awaited, is held by the narrow check of handleShutdown at the end, and by the SIGTERM test
  * in ./notch-start.test.ts, which runs the real handler.
  */
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { EmergencyController, pauseIsHolding, setActiveEmergencyController, setPauseHoldsLoops } from '../authority/emergency.ts';
@@ -19,14 +19,8 @@ import { listUnreadDashboardNotifications } from '../vault/dashboard-notificatio
 import { notchFrontNow, setNotchFrontSource } from './notch-asks.ts';
 import { NOTCH_FAILED_NOTICE, holdNotch, stopNotch } from './notch-start.ts';
 
-// The real things on the notch, made by a stand-in when a test says so: the wiring around them is what is held here.
-const made = { fake: null as unknown };
-const real = await import('../notch/real.ts');
-mock.module('../notch/real.ts', () => ({
-  ...real,
-  attachNotchReal: (...args: Parameters<typeof real.attachNotchReal>) => (made.fake ? made.fake as ReturnType<typeof real.attachNotchReal> : real.attachNotchReal(...args)),
-}));
-const wiring = await import('./notch-wiring.ts');
+import * as wiring from './notch-wiring.ts';
+
 const { createNotch, notchIsUp, notchRefreshWhere, notchShowing, notchSuggestionsNow, notchTurnsReady, resetNotchWiring, startNotch, stopNotchFirst } = wiring;
 
 const realSwitch = process.env.JARVIS_NOTCH;
@@ -37,7 +31,6 @@ const paused = new EmergencyController();
 beforeEach(() => {
   initDatabase(':memory:', { quiet: true });
   resetNotchWiring();
-  made.fake = null;
   told.length = 0;
   printed.length = 0;
   // What a part that cannot be made prints, with its stack, is kept here and not on the test's output.
@@ -153,9 +146,10 @@ describe('the real things on the notch', () => {
     process.env.JARVIS_NOTCH = '1';
     createNotch(early(sidecars().manager));
     const stops: string[] = [];
-    made.fake = { stop() { stops.push('stopped'); }, where: { front: () => null, mayKeep: () => true } };
-    startNotch(late());
-    expect(wiring.notchReal).toBe(made.fake as never);
+    // The real things on the notch, made by a stand-in: the wiring around them is what is held here.
+    const fake = { stop() { stops.push('stopped'); }, where: { front: () => null, mayKeep: () => true } };
+    startNotch(late({ attach: () => fake }));
+    expect(wiring.notchReal).toBe(fake as never);
     expect(notchIsUp()).toBe(true);
     expect(holdsLoops()).toBe(true);
     expect(stopNotch()).toBe(true);
