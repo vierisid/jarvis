@@ -39,7 +39,7 @@ function item(over: Partial<NotchDecidable<string, string>> = {}, outcome: Notch
   const ran = { n: 0 };
   const it: NotchDecidable<string, string> = {
     asked: { seen: 'line', how: 'said' },
-    fuse: { say: ['Telling Leo…'], ms: 3000 },
+    fuse: { say: ['Telling Leo...'], ms: 3000 },
     act: async () => { ran.n++; return { outcome, result: 'acted' }; },
     entry,
     ...over,
@@ -85,7 +85,7 @@ describe('after a yes', () => {
 
   test('a letter goes only on a page that says it was seen: one that ran out without vouching is unseen', async () => {
     const h = harness();
-    const { it, ran } = item({ fuse: { say: ['Offering Tue 10:00…'], ms: 8000, letter: [{ kind: 'paper', lines: [['Hi Anna']] }] } });
+    const { it, ran } = item({ fuse: { say: ['Offering Tue 10:00...'], ms: 8000, letter: [{ kind: 'paper', lines: [['Hi Anna']] }] } });
     const played = playDecidable(h.stage, it, { actions: h.actions });
     await settle();
     expect(h.shown.at(-1)).toMatchObject({ kind: 'send', ms: 8000, blocks: [{ kind: 'paper' }] });
@@ -97,7 +97,7 @@ describe('after a yes', () => {
     expect(h.actions.since(0)).toEqual([]);
 
     const vouched = harness();
-    const second = item({ fuse: { say: ['Offering Tue 10:00…'], ms: 8000, letter: [{ kind: 'paper', lines: [['Hi Anna']] }] } });
+    const second = item({ fuse: { say: ['Offering Tue 10:00...'], ms: 8000, letter: [{ kind: 'paper', lines: [['Hi Anna']] }] } });
     const went = playDecidable(vouched.stage, second.it, { actions: vouched.actions });
     await settle();
     vouched.page('done', { seen: true });
@@ -248,7 +248,7 @@ describe('an earlier try that may have gone', () => {
 
 describe('something sent to somebody on a word', () => {
   const send = (go: () => Promise<{ ok: boolean; why?: string }>, how?: 'pick') => ({
-    say: ['Telling Leo…'], ms: 3000, back: ['Taken back. Nothing was sent.'], kind: 'people_tell' as const, what: 'Message to Leo', target: 'Leo', go, ...(how ? { how } : {}),
+    say: ['Telling Leo...'], ms: 3000, back: ['Taken back. Nothing was sent.'], kind: 'people_tell' as const, what: 'Message to Leo', target: 'Leo', go, ...(how ? { how } : {}),
   });
 
   test('goes past its fuse, and one entry says what came of it: a line broken while it went may have gone', async () => {
