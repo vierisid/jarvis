@@ -150,8 +150,18 @@ Still open (owner to confirm):
    "notch: a job that failed half way is done in part, nothing tried or never shown is not written, and taken back is the audit's last word",
    "notch: a reply that broke off while Send was pressed is pinned as may have gone, and so is whether an audit row says it ran"
    and "notch: a job a restart cut off may have happened, a found reply is written once, and a list that cannot be made does not stop the notch"
-9. pending
-10. pending
+9. done in "notch: one road after a yes, held, looked for, the fuse, the act and one entry, and a workflow's question goes on it"
+   (`playDecidable` in `src/notch/decide.ts`), "notch: the road for a send to somebody is held by its own tests"
+   and "notch: a job the catcher takes on a yes to the line of words a model read is written down as that yes"
+   (`NotchCatch.take` takes what was before the owner; it was always "said, nothing shown")
+10. done for approvals, mail reply and picked time, the chase's first mail and
+   a mail sent again on its "What now?", the call follow-up, and sends to
+   somebody's Jarvis: "notch: an approval said yes to on the notch goes the one road after a yes",
+   "notch: a reply and a picked time's letter go the one road after a yes, the fuse burnt inside the send",
+   "notch: a chase's first mail and a mail sent again on a yes go the one road after a yes",
+   "notch: a call's follow-up goes the one road after a yes, and a look ended by its stage is not read as not known"
+   and "notch: what is sent to somebody's Jarvis on a word goes the one road after a yes".
+   Promises and the files offered to somebody stay as they are (below).
 
 Steps 1, 2 and 5 were tightened after a second review in
 "notch: a mail that may have gone is looked for before every way of sending it again, across a hand-over and a wait".
@@ -168,7 +178,26 @@ Steps 1, 2 and 5 were tightened after a second review in
   and a write that failed half way would have been kept. Replaced by the
   mark.
 - Step 5: the fuse is burnt with `stage.fuse` directly. `playDecidable` is
-  step 9.
+  step 9, and the chase is on it since step 10.
+- Step 9: the design's adapter also owned the ask (`line()`, `exact()`,
+  `showable()`, `deny()`, `undo`). The asks differ in what can be changed on
+  them before the yes (a day, a tone, who it goes to, a place read while the
+  sheet is up), so each feature keeps its ask and its Esc on it. The road
+  starts at the yes: held, the look for a try that may have gone, the fuse
+  or the letter, asked again, the act, one entry. `safeToShow` was not
+  lifted: the show-whole rules stay as they were.
+- Step 9: a reply's fuse burns in the middle of its send, over the draft in
+  the thread. The act is handed the gate and burns it there (`inside`).
+- Step 10: promises are not on it. The fuse there is the executor's own
+  window, and the promise is kept whether or not anybody saw it: there is
+  no yes to stand on. A file offered to somebody keeps its own road too:
+  the file is kept on disk between the fuse and the send, which can fail
+  with nothing sent, and an offer to several writes one entry per person.
+- Step 10: a reply whose notch was stopped while its thread was asked a
+  last time, before "Putting it in the thread" could be shown, kept that
+  thread from the watcher until a restart. The thread
+  is let go now ("notch: a reply whose notch is stopped as it goes into the
+  thread lets the thread go").
 - Step 8: the design had `begin()` at the yes and `settle()` after, and at
   attach every entry left `going` became `unsure`. Nothing is written at
   the yes: one call, where what came of it is known. A brain that stops in
