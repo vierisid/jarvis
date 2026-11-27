@@ -8,6 +8,7 @@ import {
   NOTCH_AUTO_REPLY_MS, NOTCH_CHASE_FUSE_MS, NOTCH_CHASE_LOOK_FRESH_MS, NOTCH_CHASE_WAIT_MIN_MS, attachNotchStanding, chaseAutoReply, chaseBy, chaseDay, chaseMail, chaseRequest, chaseSubject, eyeRequest, mailAutoReply,
   type StandingMail, type StandingPerson,
 } from './standing.ts';
+import { NotchStage } from './stage.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
 import type { NotchSurfacePort } from './surface.ts';
 
@@ -130,7 +131,7 @@ function harness(options: {
     await settle();
   };
   return {
-    standing, sent, asked, eyes, logs, line, said, pass, speak, reply, inbox, actions,
+    standing, sent, asked, eyes, logs, line, said, pass, speak, reply, inbox, actions, db,
     fired: () => fired, looks: () => looks,
     arrives: (...threads: MailThread[]) => { read(threads); },
     arriving: (...threads: MailThread[]) => { arriving = threads; },
@@ -455,6 +456,30 @@ describe('until it is done', () => {
     expect(h.standing.counts().chases).toBe(1);
   });
 
+  // Fix 05: what would refuse a chase is asked again once its fuse has burnt out (`still`).
+  test('a second chase of the same person started while the first mail\'s fuse burns: the first is refused, and sends nothing', async () => {
+    const h = harness();
+    await h.speak("Get Sam's answer on the contract by Friday");
+    await h.reply('yes');
+    expect(h.line()).toMatchObject({ kind: 'send' });
+    // Meanwhile a chase of Sam is taken on somewhere else and goes first: on a stage of its own.
+    const other = h.standing.drafted({ name: 'Sam', address: SAM.address, thing: 'answer', about: 'the contract', day: 'Friday', steps: [], from: 'Leo' })!;
+    const shown: NotchLine[] = [];
+    const surface = { show: (line: NotchLine) => { shown.push(line); }, update: () => {}, current: () => ({ line: shown.at(-1) ?? null, count: 0 }) } as unknown as NotchSurface;
+    const stage = new NotchStage(surface, { setTimeout: () => 0, clearTimeout: () => {} }, 'other', { prefix: 'o' });
+    const begun = h.standing.begin(other, stage);
+    await settle();
+    stage.heard({ type: 'answer', id: shown.at(-1)!.id, act: 'done' } as never);
+    expect(await begun).toMatchObject({ ok: true });
+    expect(h.sent.length).toBe(1);
+    // The first fuse burns out: it is refused now, and nothing more goes, nor is written.
+    await h.reply('done');
+    expect(h.said()).toBe('I am already on that.');
+    expect(h.sent.length).toBe(1);
+    expect(h.standing.counts().chases).toBe(1);
+    expect(h.actions.since(0)).toHaveLength(1);
+  });
+
   test('a fuse nobody saw burn out sends nothing and starts nothing', async () => {
     const h = harness();
     await h.speak("Get Sam's answer on the contract by Friday");
@@ -514,6 +539,41 @@ describe('until it is done', () => {
       expect(h.sent.length).toBe(2);
       expect(h.sent[1]!.text).toContain('Following up on my note below.');
       expect(h.standing.chase(id)).toMatchObject({ state: 'on', nudges: 2, stuck: null });
+    });
+
+    // Fix 05: the answer comes while "send it" burns its fuse. The line that says so takes the notch, the
+    // fuse is never seen to burn out, and nothing goes.
+    test('the answer comes while "send it" burns its fuse: nothing is sent, and nothing is written', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      const written = h.actions.since(0).length;
+      await h.reply('yes');
+      expect(h.line()).toMatchObject({ kind: 'send' });
+      h.arrives(thread(SAM.address, h.now()));
+      await settle();
+      expect(h.said()).toBe('Done. Sam answered.');
+      await h.pass(NOTCH_CHASE_FUSE_MS + 5000);
+      expect(h.sent.length).toBe(1);
+      expect(h.standing.chase(id)).toMatchObject({ state: 'done' });
+      expect(h.actions.since(0)).toHaveLength(written);
+    });
+
+    // Fix 05: whether it is still stuck is asked again once the fuse has burnt out (`still`). Closed in a
+    // way that leaves its question up (another desktop, a brain sharing the vault): the fuse burns out on it.
+    test('closed while "send it" burns its fuse, its question still up: nothing is sent, and nothing is written', async () => {
+      const h = harness({ waitMs: 60_000 });
+      const id = await handedBack(h);
+      const written = h.actions.since(0).length;
+      await h.reply('yes');
+      expect(h.line()).toMatchObject({ kind: 'send' });
+      h.db.run("UPDATE notch_chases SET state = 'done' WHERE id = ?", [id]);
+      await h.reply('done');
+      expect(h.said()).toBe('That one is already closed.');
+      await h.pass(9000);
+      expect(h.sent.length).toBe(1);
+      expect(h.standing.chase(id)).toMatchObject({ state: 'done' });
+      expect(h.standing.chase(id)!.steps.some((step) => step.text.startsWith('You said'))).toBe(false);
+      expect(h.actions.since(0)).toHaveLength(written);
     });
 
     test('Esc in that fuse sends nothing, and the question is still there', async () => {
