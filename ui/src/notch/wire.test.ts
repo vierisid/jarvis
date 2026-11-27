@@ -875,6 +875,40 @@ describe('a value typed into a lit word', () => {
     expect(answers(w, 'word')).toEqual([]);
   });
 
+  test('while it waits for the brain the strip stays up, however long, and a yes answers nothing', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    // The brain hears it and answers, but its answers are slow to come back.
+    pc.down.fate = (m) => (m.type === 'ack' ? 'hold' : 'carry');
+    // The strip is opened, and what is typed in it a while later is taken by the yes keys (no key in the field).
+    pc.root.querySelector<HTMLElement>('.say .live')!.click();
+    w.clock.advance(5000);
+    const field = pc.root.querySelector<HTMLInputElement>('.pick input')!;
+    field.value = 'weekday at 9';
+    pc.key('yes');
+    expect(sentAnswers(pc, 'word')).toHaveLength(1);
+    w.clock.advance(1500);
+    expect(field.isConnected).toBe(true);
+    pc.key('yes');
+    expect(sentAnswers(pc, 'yes')).toEqual([]);
+  });
+
+  test('one that came too late for its line says so in the field', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    // The line goes in the brain, and this page does not hear of it.
+    pc.down.fate = (m) => (m.type === 'ack' ? 'carry' : 'lose');
+    w.brain.rest();
+    const field = type(pc, 'weekday at 9');
+    expect(field.isConnected).toBe(true);
+    expect(field.placeholder).toBe('That did not go in');
+    expect(answers(w, 'word')).toEqual([]);
+  });
+
   test('one that never reached the brain can be sent again as it stands', () => {
     const w = make();
     const pc = w.desk('pc');

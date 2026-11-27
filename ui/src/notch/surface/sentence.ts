@@ -63,6 +63,8 @@ export interface Sentence {
   heard(name: string, read: boolean): void;
   /** What was typed into the word `name` never reached the brain: Enter sends it again as it stands. */
   unheard(name: string): void;
+  /** What was typed into the word `name` came after its line had gone in the brain: the field says it did not go in. */
+  late(name: string): void;
   /** Forget an open strip without laying anything out: the line is being replaced. */
   reset(): void;
 }
@@ -193,7 +195,8 @@ export function createSentence(deps: SentenceDeps): Sentence {
   function armPick(): void {
     deps.cancel(pickTimer);
     const check = (): void => {
-      if (pick.matches(':hover') || pick.contains(document.activeElement)) { pickTimer = deps.after(1500, check); return; }
+      // Nor while what was typed in it waits for the brain: closed, a yes would answer the line with the word as it stood.
+      if (pick.matches(':hover') || pick.contains(document.activeElement) || waiting?.inp.isConnected) { pickTimer = deps.after(1500, check); return; }
       closePick();
     };
     pickTimer = deps.after(5200, check);
@@ -300,6 +303,15 @@ export function createSentence(deps: SentenceDeps): Sentence {
       deps.refused();
     },
     unheard(name) { if (waiting?.name === name) waiting = null; },
+    late(name) {
+      const was = waiting;
+      if (!was || was.name !== name || !was.inp.isConnected) return;
+      waiting = null;
+      was.inp.value = '';
+      was.inp.placeholder = 'That did not go in';
+      was.inp.classList.add('no');
+      deps.refused();
+    },
     reset() { commitTyped = null; waiting = null; deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
   };
 }

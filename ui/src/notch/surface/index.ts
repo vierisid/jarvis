@@ -209,7 +209,12 @@ export function createNotchSurface(
     },
     // It came for a line the brain no longer shows: this page is behind. It says how far it has read, and the
     // brain tells it the whole again if it sent more than that.
-    late: () => { if (alive && model.born) send({ type: 'at', seq: model.seq }); },
+    late: (given) => {
+      if (!alive) return;
+      // A typed value that came too late for its line did not go in: the field says so.
+      if (given.act === 'word' && given.word !== undefined && given.text !== undefined) sentence.late(given.word);
+      if (model.born) send({ type: 'at', seq: model.seq });
+    },
     // A value typed into a lit word was read by the brain, or could not be: the field that waits for it is told.
     heard: (given, unread) => { if (alive && given.act === 'word' && given.word !== undefined && given.text !== undefined) sentence.heard(given.word, !unread); },
   });
