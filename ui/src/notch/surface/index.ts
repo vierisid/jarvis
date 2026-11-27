@@ -201,7 +201,12 @@ export function createNotchSurface(
     send,
     timers,
     // The brain never said it has it: the line it held can be answered again, and the brain is asked what the notch shows.
-    lost: (given) => { if (alive) step(notchLost(model, given)); },
+    lost: (given) => {
+      if (!alive) return;
+      // A typed value given up on: the field that waited for it can send it again.
+      if (given.act === 'word' && given.word !== undefined && given.text !== undefined) sentence.unheard(given.word);
+      step(notchLost(model, given));
+    },
     // It came for a line the brain no longer shows: this page is behind. It says how far it has read, and the
     // brain tells it the whole again if it sent more than that.
     late: () => { if (alive && model.born) send({ type: 'at', seq: model.seq }); },

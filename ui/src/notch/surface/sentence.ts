@@ -61,6 +61,8 @@ export interface Sentence {
    * read. Not read: the field says so, empty, and stays for another try.
    */
   heard(name: string, read: boolean): void;
+  /** What was typed into the word `name` never reached the brain: Enter sends it again as it stands. */
+  unheard(name: string): void;
   /** Forget an open strip without laying anything out: the line is being replaced. */
   reset(): void;
 }
@@ -297,6 +299,7 @@ export function createSentence(deps: SentenceDeps): Sentence {
       was.inp.classList.add('no');
       deps.refused();
     },
+    unheard(name) { if (waiting?.name === name) waiting = null; },
     reset() { commitTyped = null; waiting = null; deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
   };
 }

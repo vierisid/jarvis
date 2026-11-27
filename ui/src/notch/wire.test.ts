@@ -875,6 +875,22 @@ describe('a value typed into a lit word', () => {
     expect(answers(w, 'word')).toEqual([]);
   });
 
+  test('one that never reached the brain can be sent again as it stands', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    pc.up.fate = (m) => (m.type === 'answer' ? 'lose' : 'carry');
+    type(pc, 'weekday at 9');
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS * (NOTCH_ANSWER_SENDS + 1));
+    expect(answers(w, 'word')).toEqual([]);
+    pc.up.fate = () => 'carry';
+    // Enter again, the same text: it was given up, and goes again.
+    type(pc, 'weekday at 9');
+    expect(answers(w, 'word')).toEqual([expect.objectContaining({ value: 'Monday to Friday at 9:00' })]);
+    expect(pc.text()).toContain('Every Monday to Friday at 9:00');
+  });
+
   test('a sentence typed into a word that takes one reaches the brain whole', () => {
     const w = make();
     const pc = w.desk('pc');
