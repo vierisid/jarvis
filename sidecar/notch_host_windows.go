@@ -48,10 +48,7 @@ type notchWindow struct {
 	hwnd       uintptr
 	backdrop   *notchBackdrop
 	dpi        int
-	loaded     atomic.Bool    // the page has loaded and may be shown
-	hidden     atomic.Bool    // hidden by the fullscreen rule
-	asking     atomic.Bool    // the page shows a question that waits for a yes or a no
-	hasFocus   atomic.Bool    // the page asked for the keyboard and has it
+	host       *notchHost     // loaded, hidden, asking, holding the keyboard (notch_host_ctl.go)
 	previousFg atomic.Uintptr // who had the keyboard before the page took it
 	outlineLog atomic.Int64   // unix ms of the last outline log line
 }
@@ -99,6 +96,8 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	x := notchTopCentre(screenW, width)
 
 	w := &notchWindow{hwnd: hwnd, dpi: int(dpi)}
+	// Out of sight, it takes no Esc and no yes (NotchService.setHidden).
+	w.host = newNotchHost(w, notch.setHidden)
 	backdrop, err := newNotchBackdrop(x, 0, width, height)
 	if err != nil {
 		// Without it the notch still works, with a hard edge.
@@ -129,6 +128,7 @@ func platformNotchTearDown(handle unsafe.Pointer) {
 	if w == nil {
 		return
 	}
+	w.host.Detach()
 	notchWin.CompareAndSwap(w, nil)
 	if w.backdrop != nil {
 		w.backdrop.destroy()
@@ -151,15 +151,9 @@ func platformNotchReveal(handle unsafe.Pointer) {
 	if w == nil {
 		return
 	}
-	w.loaded.Store(true)
-	// A page that has just loaded is asking nothing yet. (A page that was
-	// asking when it went away never said it had stopped.)
-	w.asking.Store(false)
-	// A page loaded again while the window is out of sight is told so anew.
-	notch.setHidden(w.hidden.Load())
-	if !w.hidden.Load() {
-		w.show()
-	}
+	// A page loaded again while the window is out of sight is told so anew,
+	// and a page that has just loaded is asking nothing yet.
+	w.host.Loaded()
 	log.Printf("[notch] page loaded, window shown without focus")
 }
 
@@ -172,19 +166,12 @@ func platformNotchAsking(handle unsafe.Pointer, asking bool) {
 	if w == nil {
 		return
 	}
-	if w.asking.Swap(asking) == asking || !asking {
-		return
-	}
-	if w.hidden.CompareAndSwap(true, false) {
-		notch.setHidden(false)
-		if w.loaded.Load() {
-			w.show()
-		}
-		log.Printf("[notch] shown again over a fullscreen video: it has a question that waits for an answer")
-	}
+	w.host.Asking(asking)
 }
 
-func (w *notchWindow) show() {
+// Show and Hide are the window's half of the rule (notchHostWindow); the
+// host decides when.
+func (w *notchWindow) Show() {
 	if w.backdrop != nil {
 		w.backdrop.setVisible(true)
 	}
@@ -192,14 +179,15 @@ func (w *notchWindow) show() {
 	procSetWindowPos.Call(w.hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate)
 }
 
-func (w *notchWindow) hide() {
+func (w *notchWindow) Hide() {
 	procShowWindow.Call(w.hwnd, notchSwHide)
 	if w.backdrop != nil {
 		w.backdrop.setVisible(false)
 	}
 }
 
-// watch applies the fullscreen rule twice a second, and notes in the log when
+// watch reads what the fullscreen rule needs twice a second and hands it to
+// the host (notch_host_ctl.go), and notes in the log when
 // the notch holds the keyboard without having asked for it: that is the fault
 // the window exists to avoid, so a test run should leave a trace of it.
 func (w *notchWindow) watch(done <-chan struct{}) {
@@ -256,6 +244,7 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 			program, class = notchForeground()
 			if notchIsCaptureOverlay(program) {
 				// A screen capture in progress: the notch stays as it was.
+				w.host.Tick(notchHostFacts{FullscreenInFront: true, CaptureOverlay: true})
 				continue
 			}
 		}
@@ -292,26 +281,17 @@ func (w *notchWindow) watch(done <-chan struct{}) {
 			video.reset()
 			looks = 0
 		}
-		hide := notchShouldHide(fullscreen, awake, playing, w.asking.Load())
-		if hide != w.hidden.Load() {
-			w.hidden.Store(hide)
-			// Out of sight, it takes no Esc and no yes (NotchService.setHidden).
-			notch.setHidden(hide)
-			if hide {
-				w.hide()
-				log.Printf("[notch] hidden: a video is playing in a fullscreen app (%s, window class %s)", program, class)
-			} else {
-				if w.loaded.Load() {
-					w.show()
-				}
-				log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v, video: %v)", fullscreen, awake, playing)
-			}
+		facts := notchHostFacts{FullscreenInFront: fullscreen, DisplayKeptAwake: awake, VideoPlaying: playing}
+		if changed, hidden := w.host.Tick(facts); changed && hidden {
+			log.Printf("[notch] hidden: a video is playing in a fullscreen app (%s, window class %s)", program, class)
+		} else if changed {
+			log.Printf("[notch] shown again (fullscreen app in front: %v, display kept awake: %v, video: %v)", fullscreen, awake, playing)
 		}
 		fg, _, _ := procGetForegroundWindow.Call()
 		if fg != 0 && fg != w.hwnd && !ownWindow(fg) {
 			lastOther = fg
 		}
-		holds := fg == w.hwnd && !w.hasFocus.Load()
+		holds := fg == w.hwnd && !w.host.HasFocus()
 		if holds {
 			// Windows gave the notch the keyboard without the page asking: a
 			// file was let go on it, or a click landed in a way that made it
@@ -600,22 +580,26 @@ func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts
 
 // platformNotchFocus takes the keyboard for the page, or gives it back to the
 // window that had it. It reports whether the notch has the keyboard afterwards.
+// A window nobody can see does not take the keyboard from the film: the host
+// refuses before the window is asked (notchHost.Focus).
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 	w := notchWindowFor(handle)
 	if w == nil {
 		return false
 	}
+	return w.host.Focus(take)
+}
+
+// Focus is the window's half of taking the keyboard and giving it back
+// (notchHostWindow). When it is asked to take it, the host already says the
+// notch holds it, so the watch does not hand it straight back.
+func (w *notchWindow) Focus(take bool) bool {
 	ex := getWindowLong(w.hwnd, gwlExStyle)
-	if take && w.hidden.Load() {
-		// A window nobody can see does not take the keyboard from the film.
-		return false
-	}
 	if take {
 		if fg, _, _ := procGetForegroundWindow.Call(); fg != 0 && fg != w.hwnd {
 			w.previousFg.Store(fg)
 		}
 		setWindowLong(w.hwnd, gwlExStyle, ex&^wsExNoActivate)
-		w.hasFocus.Store(true)
 		procSetForegroundWindow.Call(w.hwnd)
 		fg, _, _ := procGetForegroundWindow.Call()
 		got := fg == w.hwnd
@@ -623,12 +607,10 @@ func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
 		if !got {
 			// Windows refused. Go back to never taking it.
 			setWindowLong(w.hwnd, gwlExStyle, ex|wsExNoActivate)
-			w.hasFocus.Store(false)
 		}
 		return got
 	}
 	setWindowLong(w.hwnd, gwlExStyle, ex|wsExNoActivate)
-	w.hasFocus.Store(false)
 	previous := w.previousFg.Swap(0)
 	returned := false
 	if previous != 0 {

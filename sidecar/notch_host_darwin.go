@@ -28,8 +28,11 @@ package main
 //     refuses key status, so the window is re-classed to a small subclass that
 //     allows it and is not pushed below the menu bar.
 //   - Fullscreen video: hidden while the frontmost app has a window covering
-//     the whole display AND something holds a "keep the display awake"
-//     assertion, which is what a playing video does.
+//     the whole display AND that app keeps the display awake itself, which is
+//     what a playing video does, and not while the page asks a question. The
+//     window's timer only reads those two facts and hands them to Go
+//     (goNotchFacts); the rule is the one every platform uses
+//     (notch_host_ctl.go), and it shows and hides the window from there.
 
 /*
 #cgo CFLAGS: -x objective-c -fobjc-arc
@@ -41,16 +44,14 @@ package main
 #include <libproc.h>
 #import <objc/runtime.h>
 
-// Told whenever the window goes out of sight or comes back (notch.go,
-// notchHidden). It puts the word down and comes back at once.
-extern void goNotchHidden(int hidden);
+// Told what the window's timer sees, every 400 ms (notch_host_ctl.go,
+// notchFactsRelay). It puts the facts down and comes back at once.
+extern void goNotchFacts(int fullscreen, int awake);
 
 // One notch per process.
 static NSWindow* jarvis_notch_win = nil;
 static NSBezierPath* jarvis_notch_path = nil; // window points, origin top-left, y down
 static NSTimer* jarvis_notch_timer = nil;
-static BOOL jarvis_notch_loaded = NO;
-static BOOL jarvis_notch_hidden = NO;
 static NSRunningApplication* jarvis_notch_previous_app = nil;
 
 static void jarvis_notch_on_main(dispatch_block_t block) {
@@ -275,17 +276,11 @@ static void jarvis_notch_tick(BOOL checkFullscreen) {
             [win setFrame:want display:YES];
         }
     }
+    // On the Mac the app in front keeping the display awake itself is both
+    // "the display is kept awake" and "a video plays": Go decides.
     pid_t front = jarvis_notch_fullscreen_app_in_front();
-    BOOL hide = front > 0 && jarvis_notch_app_keeps_display_awake(front);
-    if (hide == jarvis_notch_hidden) return;
-    jarvis_notch_hidden = hide;
-    // Out of sight, it takes no Esc and no yes (NotchService.setHidden).
-    goNotchHidden(hide ? 1 : 0);
-    if (hide) {
-        [win orderOut:nil];
-    } else if (jarvis_notch_loaded) {
-        [win orderFrontRegardless];
-    }
+    BOOL awake = front > 0 && jarvis_notch_app_keeps_display_awake(front);
+    goNotchFacts(front > 0 ? 1 : 0, awake ? 1 : 0);
 }
 
 static void jarvis_notch_set_up(void* nswindow_ptr, int w, int h) {
@@ -294,9 +289,6 @@ static void jarvis_notch_set_up(void* nswindow_ptr, int w, int h) {
     jarvis_notch_on_main(^{
         jarvis_notch_win = win;
         jarvis_notch_path = nil;
-        jarvis_notch_loaded = NO;
-        jarvis_notch_hidden = NO;
-        goNotchHidden(0);
         jarvis_notch_previous_app = nil;
 
         [win setReleasedWhenClosed:NO];
@@ -342,20 +334,22 @@ static void jarvis_notch_tear_down(void) {
         jarvis_notch_win = nil;
         jarvis_notch_path = nil;
         jarvis_notch_previous_app = nil;
-        // No window is not a hidden window.
-        jarvis_notch_hidden = NO;
-        goNotchHidden(0);
     });
 }
 
-static void jarvis_notch_reveal(void* nswindow_ptr) {
-    if (!nswindow_ptr) return;
-    NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
-    jarvis_notch_on_main(^{
-        jarvis_notch_loaded = YES;
-        // A page loaded while the window is out of sight is told so anew.
-        goNotchHidden(jarvis_notch_hidden ? 1 : 0);
-        if (!jarvis_notch_hidden) [win orderFrontRegardless];
+// Shows the window without making it key, or orders it out. Always queued,
+// even on the main thread, never run in place: Go decides on more than one
+// thread, and a show done in place could overtake a hide queued before it.
+// The main queue runs them in the order they were asked.
+static void jarvis_notch_show(int show) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSWindow* win = jarvis_notch_win;
+        if (win == nil) return;
+        if (show) {
+            [win orderFrontRegardless];
+        } else {
+            [win orderOut:nil];
+        }
     });
 }
 
@@ -455,10 +449,10 @@ static int jarvis_notch_focus(void* nswindow_ptr, int take) {
     if (!nswindow_ptr) return 0;
     NSWindow* win = (__bridge NSWindow*)nswindow_ptr;
     __block int has = 0;
+    // A window nobody can see does not take the keyboard from the film, and
+    // making it key would bring it back over the film: Go refuses that before
+    // it asks (notchHost.Focus).
     dispatch_block_t work = ^{
-        // A window nobody can see does not take the keyboard from the film,
-        // and making it key would bring it back over the film.
-        if (take && jarvis_notch_hidden) return;
         if (take) {
             NSRunningApplication* front = [[NSWorkspace sharedWorkspace] frontmostApplication];
             if (front != nil && front.processIdentifier != [[NSProcessInfo processInfo] processIdentifier]) {
@@ -485,13 +479,43 @@ import "C"
 import (
 	"fmt"
 	"log"
+	"sync/atomic"
 	"unsafe"
 )
+
+// The notch's window rule (notch_host_ctl.go) for the one window there is.
+var notchMacHost atomic.Pointer[notchHost]
+
+// What the window's timer sees reaches the rule on a goroutine: the timer
+// runs on the main thread, which waits for nothing.
+var notchMacFacts = newNotchFactsRelay(func(f notchHostFacts) {
+	host := notchMacHost.Load()
+	if host == nil {
+		return
+	}
+	if changed, hidden := host.Tick(f); changed && hidden {
+		log.Printf("[notch] hidden: a video is playing in a fullscreen app")
+	} else if changed {
+		log.Printf("[notch] shown again (fullscreen app in front: %v, it keeps the display awake: %v)", f.FullscreenInFront, f.DisplayKeptAwake)
+	}
+})
+
+// notchMacWindow is the window's half of the rule (notchHostWindow).
+type notchMacWindow struct{ handle unsafe.Pointer }
+
+func (w notchMacWindow) Show() { C.jarvis_notch_show(1) }
+func (w notchMacWindow) Hide() { C.jarvis_notch_show(0) }
+func (w notchMacWindow) Focus(take bool) bool {
+	return C.jarvis_notch_focus(w.handle, boolToCInt(take)) == 1
+}
 
 func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 	if handle == nil {
 		return
 	}
+	// Before the window's timer starts, so its first facts find the rule.
+	// Out of sight, it takes no Esc and no yes (NotchService.setHidden).
+	notchMacHost.Store(newNotchHost(notchMacWindow{handle}, notch.setHidden))
 	C.jarvis_notch_set_up(handle, C.int(notchWindowW), C.int(notchWindowH))
 	log.Printf("[notch] window %dx%d at the top centre of the main display", notchWindowW, notchWindowH)
 	var dw, dh, top, left, right C.int
@@ -507,6 +531,9 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 }
 
 func platformNotchTearDown(handle unsafe.Pointer) {
+	if host := notchMacHost.Swap(nil); host != nil {
+		host.Detach()
+	}
 	C.jarvis_notch_tear_down()
 }
 
@@ -538,10 +565,12 @@ func platformNotchCursor(handle unsafe.Pointer) (int, int, bool, bool) {
 }
 
 func platformNotchReveal(handle unsafe.Pointer) {
-	if handle == nil {
+	host := notchMacHost.Load()
+	if handle == nil || host == nil {
 		return
 	}
-	C.jarvis_notch_reveal(handle)
+	// A page loaded while the window is out of sight is told so anew.
+	host.Loaded()
 	log.Printf("[notch] page loaded, window shown without focus")
 }
 
@@ -581,10 +610,15 @@ func platformNotchSetOutline(handle unsafe.Pointer, shapes [][]notchVertex, cuts
 	return nil
 }
 
-// On the Mac the fullscreen rule lives in the window's own code and does not
-// yet hear this: a question asked during a fullscreen video waits there until
-// the video ends. Written down in docs/notch/README.md as a limit.
-func platformNotchAsking(handle unsafe.Pointer, asking bool) {}
+// platformNotchAsking is the page saying whether it shows a question that
+// waits for an answer. A notch hidden for a fullscreen video comes back at
+// once for one, as on Windows; the next look of the timer hides it again
+// when the question is gone and the video still plays.
+func platformNotchAsking(handle unsafe.Pointer, asking bool) {
+	if host := notchMacHost.Load(); host != nil {
+		host.Asking(asking)
+	}
+}
 
 // platformNotchInputStalled holds the taps off while the main thread stands
 // still, and lets them go when it runs again (notch_pulse.go). All three taps
@@ -597,9 +631,12 @@ func platformNotchInputStalled(stalled bool) {
 	notchWatchTapHold(stalled)
 }
 
+// platformNotchFocus takes the keyboard for the page or gives it back. A
+// hidden window does not take it (notchHost.Focus).
 func platformNotchFocus(handle unsafe.Pointer, take bool) bool {
-	if handle == nil {
+	host := notchMacHost.Load()
+	if handle == nil || host == nil {
 		return false
 	}
-	return C.jarvis_notch_focus(handle, boolToCInt(take)) == 1
+	return host.Focus(take)
 }

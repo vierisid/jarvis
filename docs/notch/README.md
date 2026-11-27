@@ -3931,8 +3931,9 @@ machines with a code, "Tell Leo ...", "Ask Leo: Thursday or Friday?". It is dark
   itself, which is sometimes not what a person calls it.
 - Start menu names are in the language of Windows. "Settings" finds nothing
   on a Windows in Italian, where it is "Impostazioni".
-- On the Mac the notch does not yet come back over a fullscreen video for a
-  question.
+- On the Mac a question brings the notch back over a fullscreen video, as on
+  Windows, by the same rule (since 27 November 2026). Nobody has seen it on
+  a Mac yet.
 - Esc twice is heard only while the notch has something on it, because that
   is the only time Esc is taken from the app in front. To stop everything
   from rest: yes (which opens Home or starts a round), then Esc twice. Or

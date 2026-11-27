@@ -85,7 +85,14 @@ the shared seams.
    on the Mac the three taps are held off until it runs again. Afterwards
    the keyboard is asked what is down and only what differs is put right,
    so a hold that was not needed ends nobody's talking.
-4. Host controller: one `notchHost` owning loaded, hidden, asking, focus.
+4. Host controller: one `notchHost` (notch_host_ctl.go) owning loaded,
+   hidden, asking and holding the keyboard. A platform reads facts
+   (`notchHostFacts`: fullscreen app in front, display kept awake, video
+   playing, capture overlay) and offers Show, Hide and Focus; the host
+   decides and tells the service. Esc stays with the service and the pulse
+   (`takesEsc`), which hear only "hidden" from the host: one owner for Esc,
+   and step 5 adds the lease there. The Mac timer only reports facts through
+   `notchFactsRelay`; showing and hiding is always queued on the main thread.
 5. Esc lease on the sidecar side (the page side is point 7). The page half
    landed with protocol v2 (26 November 2026): the page renews
    `__notch_esc(true)` every 2 s while it wants Esc, says `false` once, and
@@ -109,8 +116,18 @@ the shared seams.
 - Mac notch behind its own switch until the checklist passes: NOT decided.
   Nothing is built for it. Until it is decided the Mac notch ships as it is,
   with steps 1 to 3 unproven by hand.
-- Still open: lease numbers (6 s / 2 s); a question bringing the Mac notch
-  back over a film; fixing the Mac paste difference now or with the act seam.
+- Still open: lease numbers (6 s / 2 s); fixing the Mac paste difference now
+  or with the act seam.
+- To confirm: a question brings the Mac notch back over a film (design open
+  decision 3, recommended yes). Built in step 4, so the Mac now does what
+  Windows does; README's limit line says so.
+- To confirm (step 4): the host does what it decides one caller at a time,
+  re-reading the state before it stops, so a question that arrives while
+  the watch is hiding the window is no longer lost (on notch/main Windows
+  could end hidden with a question up). The call that arrives meanwhile
+  returns at once and the show is done by the caller already at work.
+- To confirm (step 4): a window never shown is not hidden again (a film seen
+  before the page loads); nothing on screen differs.
 
 ## Status
 
@@ -141,7 +158,17 @@ the shared seams.
   thread with no COM set up); not seen again alone or in a later full run.
   Never run by a runner: whether windows-latest gives the window, pointer
   and hotkey tests a desktop.
-- Steps 4 to 8: pending.
+- Step 4, host controller: done in "notch: one window rule for Windows and
+  the Mac, and a question brings the Mac notch back over a film". First
+  pinned in "notch: the Windows window rule pinned as a table, on a copy of
+  today's code": the tables run against that copy and against `notchHost`,
+  and the counted run (shows, hides, tells) matches it step by step. The
+  source-text pin in desktop_wiring_test.go is gone. Proven on Linux (with
+  -race) and run on Windows from WSL (the tables, plus the screen and sound
+  reads); Windows vet and test build clean. Not seen by hand on Windows (try.sh:
+  film hides, question brings back, Esc leaves fullscreen, no keyboard while
+  hidden). The Mac code was never compiled; its wiring is held by a text test.
+- Steps 5 to 8: pending.
 
 ## Only a Mac can say (and one look on Windows)
 
@@ -165,8 +192,12 @@ Nothing below has been seen. The first four need no person, only the CI job.
 - By hand, on Windows as well as on the Mac: after start, sidecar.log says
   "the page answers when asked" (and never "nothing watches this page");
   and Esc still cancels a fuse 10 s after a sheet comes up.
+- Step 4 on a Mac: it compiles (the new `jarvis_notch_show`, `goNotchFacts`
+  export); a film hides the notch within about 400 ms; `fixture.sh approval`
+  during the film brings it back, and it hides again once answered; the
+  log says "hidden: a video is playing" and "shown again".
 - By hand: where-is ten times while circling the mouse and tapping Shift and
   Esc, with two waits left to time out (no freeze); a fullscreen film with a
-  sheet up (Esc leaves fullscreen, yes does nothing, a text field does not
-  bring the notch back); kill the WebKit content process with a sheet up
+  sheet up that asks nothing (Esc leaves fullscreen, yes does nothing, a text
+  field does not bring the notch back); kill the WebKit content process with a sheet up
   (Esc works elsewhere within about 6 s, and the log says why).

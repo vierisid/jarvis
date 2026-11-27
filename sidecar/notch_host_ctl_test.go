@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // The notch's window rule, as a table: what the person sees (is the window
@@ -349,5 +350,205 @@ func TestNotchHostThenHiddenNeverAsksTheSystem(t *testing.T) {
 	w.Focus(true)
 	if win.takes != 0 {
 		t.Fatalf("the system was asked %d times", win.takes)
+	}
+}
+
+// notchHostDriven drives the controller the way the platforms do.
+type notchHostDriven struct{ *notchHost }
+
+func (h notchHostDriven) Tick(seen notchSeen) {
+	// As the Windows watch reads them: the picture is only looked at when a
+	// fullscreen app is in front and the display is kept awake.
+	h.notchHost.Tick(notchHostFacts{
+		FullscreenInFront: seen.fullscreen,
+		DisplayKeptAwake:  seen.awake,
+		VideoPlaying:      seen.fullscreen && seen.awake && seen.playing,
+		CaptureOverlay:    seen.overlay,
+	})
+}
+
+// The same tables hold of the one controller both platforms now use.
+func TestNotchHostTablesHoldOfTheController(t *testing.T) {
+	notchHostRun(t, func(win *notchFakeWin, told *notchFakeTold) notchHostUnderTest {
+		return notchHostDriven{newNotchHost(win, told.tell)}
+	})
+}
+
+// A hidden notch never asks the system for the keyboard, on the controller
+// either.
+func TestNotchHostHiddenNeverAsksTheSystem(t *testing.T) {
+	win := &notchFakeWin{grants: true}
+	h := newNotchHost(win, (&notchFakeTold{}).tell)
+	h.Loaded()
+	h.Tick(notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true})
+	if h.Focus(true) || win.takes != 0 || h.HasFocus() {
+		t.Fatalf("hidden: asked the system %d times, holds the keyboard %v", win.takes, h.HasFocus())
+	}
+}
+
+// Beyond the tables, what both do to the window and the service, counted: a
+// page that loads again is told again and shown again (the window put back
+// on top), and nothing is done twice for a state that did not change.
+func TestNotchHostDoesWhatTodayDidNoMoreNoLess(t *testing.T) {
+	type counts struct{ shows, hides, told int }
+	run := func(h notchHostUnderTest, win *notchFakeWin, told *notchFakeTold) []counts {
+		var out []counts
+		note := func() {
+			win.mu.Lock()
+			told.mu.Lock()
+			out = append(out, counts{win.shows, win.hides, told.times})
+			told.mu.Unlock()
+			win.mu.Unlock()
+		}
+		for _, step := range []func(){
+			h.Loaded, h.Loaded,
+			func() { h.Tick(notchDesk) }, func() { h.Tick(notchFilm) }, func() { h.Tick(notchFilm) },
+			func() { h.Asking(true) }, func() { h.Asking(true) }, func() { h.Asking(false) },
+			func() { h.Tick(notchFilm) }, h.Loaded, func() { h.Tick(notchDesk) },
+			func() { h.Tick(notchCapture) }, func() { h.Tick(notchFilm) }, func() { h.Tick(notchCapture) },
+		} {
+			step()
+			note()
+		}
+		return out
+	}
+	win, told := &notchFakeWin{}, &notchFakeTold{}
+	then := run(&notchHostWindowsThen{win: win, tell: told.tell}, win, told)
+	win, told = &notchFakeWin{}, &notchFakeTold{}
+	now := run(notchHostDriven{newNotchHost(win, told.tell)}, win, told)
+	for i := range then {
+		if then[i] != now[i] {
+			t.Errorf("after step %d: shows, hides, told %+v; Windows then %+v", i, now[i], then[i])
+		}
+	}
+}
+
+// A film seen before the page has loaded: Windows hid a window nobody had
+// shown yet. The controller does not, and nothing on screen differs.
+func TestNotchHostDoesNotHideAWindowNeverShown(t *testing.T) {
+	win, told := &notchFakeWin{}, &notchFakeTold{}
+	h := newNotchHost(win, told.tell)
+	h.Tick(notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true})
+	if win.hides != 0 || win.visible || !told.last() {
+		t.Fatalf("hides %d, on screen %v, told hidden %v", win.hides, win.visible, told.last())
+	}
+}
+
+// A window whose Hide waits for its own thread while that thread calls into
+// the controller from the page: on Windows the watch's ShowWindow waits for
+// the window's thread, and that thread runs the page's __notch_asking. Every
+// call into the window checks the controller's lock is free. Nothing waits on
+// the other, and the window ends as the state says.
+type notchSlowWin struct {
+	notchFakeWin
+	host    *notchHost
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *notchSlowWin) Hide() {
+	_ = s.host.Hidden()
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.release
+	})
+	s.notchFakeWin.Hide()
+}
+
+func (s *notchSlowWin) Show() {
+	_ = s.host.Hidden()
+	s.notchFakeWin.Show()
+}
+
+func (s *notchSlowWin) Focus(take bool) bool {
+	_ = s.host.Hidden()
+	return s.notchFakeWin.Focus(take)
+}
+
+func TestNotchHostAQuestionDuringAHideIsNotLost(t *testing.T) {
+	win := &notchSlowWin{entered: make(chan struct{}), release: make(chan struct{})}
+	told := &notchFakeTold{}
+	h := newNotchHost(win, told.tell)
+	win.host = h
+	h.Loaded()
+	film := notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true}
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		h.Tick(film) // the watch, stuck inside Hide
+	}()
+	<-win.entered
+	asked := make(chan struct{})
+	go func() {
+		defer close(asked)
+		h.Asking(true) // the page, on the window's thread
+	}()
+	select {
+	case <-asked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the page's call waited for the watch's Hide: on Windows that is a deadlock")
+	}
+	close(win.release)
+	<-ticked
+	if !win.seen() || told.last() || h.Hidden() {
+		t.Fatalf("a question came during the hide: on screen %v, told hidden %v; want shown, not hidden", win.seen(), told.last())
+	}
+	win.mu.Lock()
+	win.grants = true
+	win.mu.Unlock()
+	if !h.Focus(true) {
+		t.Fatal("in sight for a question, the keyboard can be taken")
+	}
+}
+
+// Many threads at once, with the race detector watching: the window and the
+// service always end as the last state says.
+func TestNotchHostEndsAsTheStateSays(t *testing.T) {
+	film := notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true}
+	for round := 0; round < 50; round++ {
+		win, told := &notchFakeWin{}, &notchFakeTold{}
+		h := newNotchHost(win, told.tell)
+		h.Loaded()
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for i := 0; i < 50; i++ {
+					switch (g + i) % 4 {
+					case 0:
+						h.Tick(film)
+					case 1:
+						h.Tick(notchHostFacts{})
+					case 2:
+						h.Asking(true)
+					case 3:
+						h.Asking(false)
+					}
+				}
+			}(g)
+		}
+		wg.Wait()
+		hidden := h.Hidden()
+		if win.seen() == hidden || told.last() != hidden {
+			t.Fatalf("round %d: hidden %v, on screen %v, told hidden %v", round, hidden, win.seen(), told.last())
+		}
+	}
+}
+
+// After the window is gone nothing is told or shown, a page that loads again
+// included.
+func TestNotchHostTellsNothingAfterDetach(t *testing.T) {
+	win, told := &notchFakeWin{}, &notchFakeTold{}
+	h := newNotchHost(win, told.tell)
+	h.Loaded()
+	h.Detach()
+	before := told.times
+	h.Tick(notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true})
+	h.Asking(true)
+	h.Loaded()
+	if told.times != before || win.hides != 0 || win.shows != 1 || h.Focus(true) {
+		t.Fatalf("after detach: told %d more, hides %d, shows %d", told.times-before, win.hides, win.shows)
 	}
 }

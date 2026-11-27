@@ -325,46 +325,6 @@ func (n *NotchService) takesEsc() bool {
 	return n.escWanted && !n.hidden && !n.stalled
 }
 
-// notchHideRelay carries "the window is out of sight" from the thread that
-// shows and hides the window to the service, without that thread waiting for
-// anything. On a Mac that thread is the main thread, and the main thread
-// takes no lock it could be kept waiting on: it puts the word down here and
-// goes on. A goroutine picks up the last word put down and tells the service.
-// Only the last word counts, so two changes close together cannot arrive the
-// wrong way round.
-type notchHideRelay struct {
-	hidden atomic.Bool
-	wake   chan struct{}
-	once   sync.Once
-	tell   func(hidden bool)
-}
-
-func newNotchHideRelay(tell func(hidden bool)) *notchHideRelay {
-	return &notchHideRelay{wake: make(chan struct{}, 1), tell: tell}
-}
-
-// Report puts the word down. It never waits.
-func (r *notchHideRelay) Report(hidden bool) {
-	r.hidden.Store(hidden)
-	r.once.Do(func() {
-		go func() {
-			for range r.wake {
-				r.tell(r.hidden.Load())
-			}
-		}()
-	})
-	select {
-	case r.wake <- struct{}{}:
-	default:
-		// A word is already waiting to be picked up, and it is read when it
-		// is picked up: this one is the one that will be read.
-	}
-}
-
-// notchHidden is how a window that hides by itself, on a thread that must
-// not wait, says so (the Mac's: notch_host_darwin.go).
-var notchHidden = newNotchHideRelay(func(hidden bool) { notch.setHidden(hidden) })
-
 func (n *NotchService) isHidden() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()

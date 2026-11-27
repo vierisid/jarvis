@@ -625,70 +625,12 @@ func TestAStalledNotchWantsNoEsc(t *testing.T) {
 	}
 }
 
-// The window says "out of sight" on a thread that must not wait. The word is
-// put down at once, even while the service cannot be told, and the last word
-// is the one that counts.
-func TestNotchHideRelayNeverWaitsAndTheLastWordCounts(t *testing.T) {
-	gate := make(chan struct{})
-	var mu sync.Mutex
-	var heard []bool
-	r := newNotchHideRelay(func(hidden bool) {
-		<-gate
-		mu.Lock()
-		heard = append(heard, hidden)
-		mu.Unlock()
-	})
-	// Nobody can be told yet (the lock it needs is taken): putting the word
-	// down must come back all the same, however often.
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < 1000; i++ {
-			r.Report(i%2 == 0)
-		}
-		r.Report(true)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("putting the word down waited for the service")
-	}
-	close(gate)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		mu.Lock()
-		n := len(heard)
-		last := n > 0 && heard[n-1]
-		mu.Unlock()
-		if last {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the last word (hidden) never arrived: %v", heard)
-		}
-		time.Sleep(time.Millisecond)
-	}
-	// And the other way round.
-	r.Report(false)
-	deadline = time.Now().Add(2 * time.Second)
-	for {
-		mu.Lock()
-		last := heard[len(heard)-1]
-		mu.Unlock()
-		if !last {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("in sight again never arrived")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// On a Mac the window hides by itself, in its own code, and the service was
+// On a Mac the window hid by itself, in its own code, and the service was
 // never told: a hidden notch kept Esc from the film and took a yes for a
-// sheet nobody saw. Through the relay it is told, and then both rules hold as
-// they do on Windows.
+// sheet nobody saw. Now the window's timer only says what it sees, through
+// the relay, and the one rule (notchHost) hides it and tells the service;
+// both rules then hold as they do on Windows. A question brings it back, and
+// with it Esc and yes.
 func TestNotchAWindowThatHidesByItselfTakesNoEscAndNoYes(t *testing.T) {
 	svc := &NotchService{}
 	var said []notchKeyAction
@@ -701,13 +643,21 @@ func TestNotchAWindowThatHidesByItselfTakesNoEscAndNoYes(t *testing.T) {
 	}, nil)
 	svc.keys = kb
 	svc.wantEsc(true)
-	relay := newNotchHideRelay(svc.setHidden)
+	win := &notchFakeWin{grants: true}
+	host := newNotchHost(win, svc.setHidden)
+	host.Loaded()
+	// As goNotchFacts reports them: on the Mac the app in front keeping the
+	// display awake is also how a video is known.
+	relay := newNotchFactsRelay(func(f notchHostFacts) { host.Tick(f) })
+	mac := func(fullscreen, awake bool) notchHostFacts {
+		return notchHostFacts{FullscreenInFront: fullscreen, DisplayKeptAwake: awake, VideoPlaying: awake}
+	}
 	settle := func(hidden bool) {
 		t.Helper()
 		deadline := time.Now().Add(2 * time.Second)
-		for svc.isHidden() != hidden {
+		for svc.isHidden() != hidden || win.seen() == hidden {
 			if time.Now().After(deadline) {
-				t.Fatalf("the service never heard hidden=%v", hidden)
+				t.Fatalf("the service never heard hidden=%v (on screen %v)", hidden, win.seen())
 			}
 			time.Sleep(time.Millisecond)
 		}
@@ -719,7 +669,7 @@ func TestNotchAWindowThatHidesByItselfTakesNoEscAndNoYes(t *testing.T) {
 		kb.key(notchKeyModifiers, yes[0])
 		kb.key(notchKeyModifiers, 0)
 	}
-	relay.Report(true)
+	relay.Report(mac(true, true))
 	settle(true)
 	if kb.key(notchKeyEscDown, 0) {
 		t.Fatal("a hidden notch kept Esc from the film")
@@ -729,19 +679,81 @@ func TestNotchAWindowThatHidesByItselfTakesNoEscAndNoYes(t *testing.T) {
 	if len(said) != 0 {
 		t.Fatalf("a hidden notch took %v", said)
 	}
-	relay.Report(false)
+	if host.Focus(true) || win.takes != 0 {
+		t.Fatal("a hidden notch took the keyboard from the film")
+	}
+	// A question, as the page's __notch_asking says it: back over the film.
+	host.Asking(true)
+	settle(false)
+	if !kb.key(notchKeyEscDown, 0) {
+		t.Fatal("back for a question, Esc is the notch's again")
+	}
+	kb.key(notchKeyEscUp, 0)
+	tapYes()
+	if len(said) != 2 || said[0] != notchKeyEsc || said[1] != notchKeyYes {
+		t.Fatalf("back for a question, Esc and a yes are the notch's: %v", said)
+	}
+	// Answered, and the film still plays: the next look hides it.
+	host.Asking(false)
+	relay.Report(mac(true, true))
+	settle(true)
+	relay.Report(mac(false, false))
 	settle(false)
 	tapYes()
-	if len(said) != 1 || said[0] != notchKeyYes {
+	if len(said) != 3 || said[2] != notchKeyYes {
 		t.Fatalf("in sight again, a yes is a yes: %v", said)
 	}
 }
 
-// The Mac's window cannot be built here, so that it tells at all is held to
-// in its text, function by function: the timer that hides it says so, a
-// window that is set up, shown or taken down says what it is, and a hidden
-// one does not take the keyboard.
-func TestNotchMacWindowSaysWhenItHides(t *testing.T) {
+// Only the last facts count: a burst of readings ends on the last one, and
+// the relay never waits for the goroutine that applies them.
+func TestNotchFactsRelayKeepsOnlyTheLast(t *testing.T) {
+	var mu sync.Mutex
+	var last notchHostFacts
+	block := make(chan struct{})
+	relay := newNotchFactsRelay(func(f notchHostFacts) {
+		<-block
+		mu.Lock()
+		last = f
+		mu.Unlock()
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			relay.Report(notchHostFacts{FullscreenInFront: i%2 == 0, DisplayKeptAwake: true})
+		}
+		relay.Report(notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true, CaptureOverlay: true})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Report waited for the goroutine that applies the facts")
+	}
+	close(block)
+	want := notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true, CaptureOverlay: true}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		got := last
+		mu.Unlock()
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the last facts applied were %+v, want %+v", got, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// The Mac's window cannot be built here, so how it is wired to the one rule
+// is held to in its text: the timer only reports what it sees and never
+// shows or hides the window itself, showing and hiding are always queued on
+// the main thread (a show done in place could overtake a hide queued before
+// it), the page's question, its keyboard and its load go through the rule,
+// and the bridge only puts the facts down.
+func TestNotchMacWindowIsWiredToTheOneRule(t *testing.T) {
 	raw, err := os.ReadFile("notch_host_darwin.go")
 	if err != nil {
 		t.Fatal(err)
@@ -772,15 +784,29 @@ func TestNotchMacWindowSaysWhenItHides(t *testing.T) {
 		}
 		return strings.Join(strings.Fields(strings.Join(code, " ")), " ")
 	}
+	tick := body("void jarvis_notch_tick")
+	if !strings.Contains(tick, "goNotchFacts(front > 0 ? 1 : 0, awake ? 1 : 0);") {
+		t.Error("the window's timer no longer reports what it sees")
+	}
+	for _, own := range []string{"orderOut", "orderFront", "goNotchHidden"} {
+		if strings.Contains(tick, own) {
+			t.Errorf("the window's timer decides for itself again (%s)", own)
+		}
+	}
+	show := body("void jarvis_notch_show")
+	if !strings.Contains(show, "dispatch_async(dispatch_get_main_queue(), ^{") || strings.Contains(show, "isMainThread") {
+		t.Error("showing and hiding must always be queued, never done in place")
+	}
+	if strings.Contains(body("int jarvis_notch_focus"), "jarvis_notch_hidden") {
+		t.Error("the window decides about a hidden notch's keyboard again: that is notchHost.Focus")
+	}
 	for name, want := range map[string]string{
-		"void jarvis_notch_tick":      "jarvis_notch_hidden = hide; goNotchHidden(hide ? 1 : 0);",
-		"void jarvis_notch_set_up":    "jarvis_notch_hidden = NO; goNotchHidden(0);",
-		"void jarvis_notch_tear_down": "jarvis_notch_hidden = NO; goNotchHidden(0);",
-		"void jarvis_notch_reveal":    "goNotchHidden(jarvis_notch_hidden ? 1 : 0);",
-		"int jarvis_notch_focus":      "if (take && jarvis_notch_hidden) return;",
+		"platformNotchAsking": "host.Asking(asking)",
+		"platformNotchFocus":  "return host.Focus(take)",
+		"platformNotchReveal": "host.Loaded()",
+		"platformNotchSetUp":  "notchMacHost.Store(newNotchHost(notchMacWindow{handle}, notch.setHidden))",
 	} {
-		got := body(name)
-		if !strings.Contains(got, want) {
+		if !strings.Contains(goFunc(t, "notch_host_darwin.go", name), want) {
 			t.Errorf("%s no longer has: %s", name, want)
 		}
 	}
@@ -788,8 +814,8 @@ func TestNotchMacWindowSaysWhenItHides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(bridge), "notchHidden.Report(hidden != 0)") {
-		t.Fatal("the window's word no longer goes through the relay: on the main thread nothing else may be done with it")
+	if !strings.Contains(string(bridge), "notchMacFacts.Report(") {
+		t.Fatal("the timer's facts no longer go through the relay: on the main thread nothing else may be done with them")
 	}
 }
 

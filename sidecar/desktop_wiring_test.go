@@ -109,21 +109,9 @@ func TestWindowsReadsTheWindowAPersonMeansAndSaysWhyItIsEmpty(t *testing.T) {
 	}
 }
 
-func TestWindowsNotchComesBackForAQuestion(t *testing.T) {
-	asking := goFunc(t, "notch_host_windows.go", "platformNotchAsking")
-	before(t, "platformNotchAsking", asking, "w.show()", "w.asking.Swap(asking)", "w.hidden.CompareAndSwap(true, false)")
-	host, err := os.ReadFile("notch_host_windows.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(host), "notchShouldHide(fullscreen, awake, playing, w.asking.Load())") {
-		t.Error("the fullscreen rule must hear whether a question is waiting")
-	}
-	reveal := goFunc(t, "notch_host_windows.go", "platformNotchReveal")
-	if !strings.Contains(reveal, "w.asking.Store(false)") {
-		t.Error("a page that has just loaded is asking nothing")
-	}
-}
+// The notch's window rule (hidden for a film, back for a question, no
+// keyboard while hidden) is no longer read here: it is notchHost, held to by
+// the tables of notch_host_ctl_test.go.
 
 func TestWindowsLaunchKeepsOnePathWholeAndAsksTheStartMenuInGo(t *testing.T) {
 	launch := goFunc(t, "desktop_windows.go", "handleLaunchApp")

@@ -7,12 +7,17 @@ package main
 
 import "C"
 
-// goNotchHidden is the window saying it went out of sight behind a fullscreen
-// video, or came back. It is called on the main thread, from the window's
-// timer, so it only puts the word down (notchHidden, notch.go) and takes no
-// lock: the service is told on a goroutine.
+// goNotchFacts is the window's timer saying what it sees: whether the app in
+// front covers the display, and whether that app keeps the display awake
+// itself (on the Mac that is also how a playing video is known). It is called
+// on the main thread, so it only puts the facts down (notchFactsRelay) and
+// takes no lock: the rule is applied on a goroutine.
 //
-//export goNotchHidden
-func goNotchHidden(hidden C.int) {
-	notchHidden.Report(hidden != 0)
+//export goNotchFacts
+func goNotchFacts(fullscreen, awake C.int) {
+	notchMacFacts.Report(notchHostFacts{
+		FullscreenInFront: fullscreen != 0,
+		DisplayKeptAwake:  awake != 0,
+		VideoPlaying:      awake != 0,
+	})
 }
