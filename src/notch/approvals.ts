@@ -561,7 +561,7 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
   }
 
   /** What the yes came to once its fuse burnt: a payment after all, a decision that broke, or the decision. */
-  type Decided = { paying: true } | { broke: true } | { outcome: ApprovalDecisionOutcome };
+  type Decided = { paying: true } | { broke: true } | { outcome: ApprovalDecisionOutcome } | { unread: Extract<ApprovalDecisionOutcome, { status: 'approved' }> };
 
   /**
    * The yes was given on the line or the sheet: the fuse, the decision, and the one entry of what came of
@@ -580,22 +580,29 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
         act: async () => {
           // Whatever road led here: what lands on a payment is not approved on the notch.
           if (paying.has(requestId)) return { outcome: null, result: { paying: true } };
+          let outcome: ApprovalDecisionOutcome;
           try {
-            const outcome = await deps.approve(requestId);
-            if (outcome.status !== 'approved') return { outcome: null, result: { outcome } };
+            outcome = await deps.approve(requestId);
+          } catch (error) {
+            log(`[notch] an approval could not be decided: ${error instanceof Error ? error.message : String(error)}`);
+            return { outcome: null, result: { broke: true } };
+          }
+          if (outcome.status !== 'approved') return { outcome: null, result: { outcome } };
+          try {
             // Run by whoever waited for the answer, what came of it is not known here: it was handed on.
             const came = outcome.error ? 'failed' : outcome.executed ? executionState(outcome.request) : 'handed';
             return { outcome: came === 'handed' ? 'handed' : came === 'committed' ? 'done' : came === 'unknown' ? 'unsure' : 'not_done', result: { outcome } };
           } catch (error) {
-            log(`[notch] an approval could not be decided: ${error instanceof Error ? error.message : String(error)}`);
-            return { outcome: null, result: { broke: true } };
+            // It was approved: what came of it could not be read, and that is not "it did not go through".
+            log(`[notch] what came of an approval could not be read: ${error instanceof Error ? error.name : 'error'}`);
+            return { outcome: 'unsure', result: { unread: outcome } };
           }
         },
         // The yes, with what was before the owner when it was given. The approval and its receipt are the
         // product's own record, and so is its audit: nothing is written there from here.
         entry: (outcome, asked, result) => ({
           kind: 'approval', ref: `approval:${requestId}`, approvalId: requestId, what: yes.what, asked, outcome,
-          target: (result && 'outcome' in result && result.outcome.status === 'approved' ? result.outcome.request?.tool_name : null) ?? null,
+          target: (result && 'unread' in result ? result.unread.request?.tool_name : result && 'outcome' in result && result.outcome.status === 'approved' ? result.outcome.request?.tool_name : null) ?? null,
         }),
       }, deps);
       if (played.took === 'undo') return 'undo';
@@ -617,6 +624,10 @@ export function attachNotchApprovals(inbox: NotchInbox, deps: NotchApprovalDeps)
     if ('broke' in decided) {
       await stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' });
       return 'waits';
+    }
+    if ('unread' in decided) {
+      await stage.say(['Approved, but I cannot tell whether it happened. Check before asking again.'], 3600, { mood: 'worried', mark: 'fail' });
+      return 'settled';
     }
     const outcome = decided.outcome;
 

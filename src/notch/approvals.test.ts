@@ -33,7 +33,7 @@ function config(): AuthorityConfig {
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
 }
 
-function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; where?: (request: ApprovalRequest) => Promise<NotchApprovalWhere | null>; mine?: (id: string) => boolean; now?: () => number } = {}) {
+function harness(options: { page?: boolean; denyFails?: boolean; describe?: (request: ApprovalRequest) => Promise<string | null>; where?: (request: ApprovalRequest) => Promise<NotchApprovalWhere | null>; mine?: (id: string) => boolean; now?: () => number; approved?: (outcome: Awaited<ReturnType<typeof applyApprovalDecision>>) => Awaited<ReturnType<typeof applyApprovalDecision>> } = {}) {
   // The product side.
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
@@ -80,7 +80,7 @@ function harness(options: { page?: boolean; denyFails?: boolean; describe?: (req
   const notch = attachNotchApprovals(inbox, {
     actions,
     approvalManager: approvals,
-    approve: (id) => applyApprovalDecision('approve', id, NOTCH_DECIDER, deps),
+    approve: async (id) => { const outcome = await applyApprovalDecision('approve', id, NOTCH_DECIDER, deps); return options.approved ? options.approved(outcome) : outcome; },
     deny: (id) => (options.denyFails ? Promise.reject(new Error('database is locked')) : applyApprovalDecision('deny', id, NOTCH_DECIDER, deps)),
     openDashboard: (from) => { opened.push(from); },
     log: (line) => logs.push(line),
@@ -871,6 +871,21 @@ describe('what is written down of a yes to an approval', () => {
     expect(h.audit.queryEntries()).toHaveLength(1);
     // Today has its row from the approval: the list adds no second one.
     expect(h.actions.today(0)).toEqual([]);
+  });
+
+  // The try held the decision and the reading of what came of it: a reading that broke told the owner
+  // "That did not go through. It still waits." of an approval that had gone through and run.
+  test('approved and run, but what came of it cannot be read: it is not called "did not go through"', async () => {
+    const h = harness({ approved: (outcome) => (outcome.status === 'approved' ? { ...outcome, request: undefined as never } : outcome) });
+    const req = h.ask();
+    await h.sync();
+    await h.answer('yes');
+    await h.answer('done');
+    expect(h.runs).toHaveLength(1);
+    expect(h.approvals.getRequest(req.id)!.status).not.toBe('pending');
+    expect(h.said()).toBe('Approved, but I cannot tell whether it happened. Check before asking again.');
+    expect(entries(h)).toMatchObject([{ kind: 'approval', outcome: 'unsure', ref: `approval:${req.id}` }]);
+    expect(h.logs.some((line) => line.includes('an approval could not be decided'))).toBe(false);
   });
 
   test('on a sheet, the entry says it was a sheet, in the words that were on it', async () => {
