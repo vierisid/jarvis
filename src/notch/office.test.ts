@@ -266,7 +266,8 @@ describe('settings', () => {
   test('a pair that computer refuses is refused here: the word goes back, why is said beside it, and it shakes', async () => {
     const h = prefs({ refuse: 'Talk and yes cannot be the same two keys.' });
     await h.speak('settings');
-    await h.reply('word', { word: 'talk', value: 'Win + Alt' });
+    // One of the pairs offered (a value that is none of them is the brain's to refuse, below).
+    await h.reply('word', { word: 'talk', value: 'Ctrl + Alt' });
     expect(rowText(h.rows()[0]!)).toBe('Talk: Hold Ctrl + Win and speak.');
     expect(h.rows()[0]!.small).toBe('Talk and yes cannot be the same two keys.');
     expect(h.acts()).toContainEqual({ gesture: 'shake' });
@@ -275,9 +276,11 @@ describe('settings', () => {
   test('words that are not two keys never reach that computer', async () => {
     const h = prefs();
     await h.speak('settings');
+    // None of the pairs offered: the brain reads it as typed, cannot, and the settings never hear of it
+    // (docs/notch/fixes/07-page-renderer.md, review of steps 5 and 6).
     await h.reply('word', { word: 'talk', value: 'the space bar' });
     expect(h.did).toEqual([]);
-    expect(h.rows()[0]!.small).toBe('That is not two of the keys.');
+    expect(rowText(h.rows()[0]!)).toBe('Talk: Hold Ctrl + Win and speak.');
   });
 
   test('its sounds are switched on at once, and are kept', async () => {
