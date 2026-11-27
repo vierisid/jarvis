@@ -852,7 +852,17 @@ jobs:
           # exact count, so tests can be added without editing this.
           floor=850
           names="$RUNNER_TEMP/sidecar-windows-tests.txt"
-          go test -list . . | grep '^Test' > "$names" || true
+          # A package that does not compile fails here, under its own name,
+          # not later as a skip entry that "matches no test".
+          if ! go test -list . . > "$names.all"; then
+            echo "::error::go test -list failed: the package or its tests do not compile"
+            exit 1
+          fi
+          tr -d '\r' < "$names.all" | grep '^Test' > "$names" || true
+          if [ ! -s "$names" ]; then
+            echo "::error::go test -list named no tests"
+            exit 1
+          fi
           for s in "${skips[@]}"; do
             if ! grep -Eq "^($s)\$" "$names"; then
               echo "::error::skip entry '$s' matches no test"
