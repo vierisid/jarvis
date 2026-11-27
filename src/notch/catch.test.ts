@@ -148,6 +148,18 @@ describe('catching a job the person does twice by hand', () => {
     expect(h.actions.since(0)).toMatchObject([{ kind: 'job_rounds', outcome: 'done', seen: 'nothing', how: 'said' }]);
   });
 
+  // Fix 05: words a model read put a line first, and the yes on it is what the job is written down as.
+  test('taken over on a yes to the line of words a model read, it is written down as that yes', async () => {
+    const h = harness({ left: 6 });
+    h.row(0);
+    h.row(1);
+    await settle();
+    expect(await h.catcher.take(2, { seen: 'line', how: 'key' })).toBe('started');
+    await h.answer(8);
+    await settle();
+    expect(h.actions.since(0)).toMatchObject([{ kind: 'job_rounds', outcome: 'done', seen: 'line', how: 'key' }]);
+  });
+
   test('a third row done by hand while the offer is up moves the start on with it', async () => {
     const h = harness({ left: 3 });
     h.row(0);

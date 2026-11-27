@@ -71,8 +71,10 @@ export interface NotchCatch {
    * from. `nothing`: there is, and nothing is left of it. `how-many`: it
    * cannot tell how many are left, so a number is needed. `unseen`: the rows
    * cannot be seen well enough to go on by itself. `busy`: another job runs.
+   * `asked`: what was before the owner and how they said it, as the job is
+   * written down (./actions.ts). Not given: said in words, nothing shown.
    */
-  take(count: number | null): Promise<'started' | 'none' | 'nothing' | 'how-many' | 'unseen' | 'busy'>;
+  take(count: number | null, asked?: NotchActionAsked): Promise<'started' | 'none' | 'nothing' | 'how-many' | 'unseen' | 'busy'>;
   /** Forgets what was seen: a job of Jarvis's own ran, or a teaching began. */
   reset(): void;
   stop(): void;
@@ -288,7 +290,7 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
       }
       return null;
     },
-    async take(count) {
+    async take(count, asked = { seen: 'nothing', how: 'said' }) {
       for (const sidecarId of [...seen.keys()]) {
         const rounds = current(sidecarId);
         if (!rounds) continue;
@@ -302,8 +304,8 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
         const sure = await sureRounds(rounds, deps.hands);
         if (!sure) return 'unseen';
         if (offer) { deps.inbox.remove('catch'); offer = null; home(); }
-        // Asked for in words, with no line of its own.
-        return run(sure, n, { seen: 'nothing', how: 'said' }) ? 'started' : 'busy';
+        // Asked for in words with no line of its own, unless the words were read and their line was said yes to (`asked`).
+        return run(sure, n, asked) ? 'started' : 'busy';
       }
       return 'none';
     },

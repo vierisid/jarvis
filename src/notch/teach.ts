@@ -827,7 +827,7 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
       return;
     }
     // A job begun by hand and not shown: the catcher has it.
-    const took = await deps.catcher?.()?.take(count);
+    const took = await deps.catcher?.()?.take(count, how);
     if (took === 'started') return;
     if (took === 'nothing') { tell(['Nothing is left to do there.'], 'look'); return; }
     if (took === 'how-many') { tell(['Tell me how many: "do the next nine".']); return; }

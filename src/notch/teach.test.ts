@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { attachNotchActions } from './actions.ts';
 import { Database } from 'bun:sqlite';
 import type { RawInteraction } from '../skills/recorder.ts';
+import type { NotchCatch } from './catch.ts';
 import { NotchInbox } from './inbox.ts';
 import { attachNotchJobs, type NotchActResult, type NotchJobEnd, type NotchJobHands } from './jobs.ts';
 import type { NotchLine, NotchPart, NotchToPage } from './protocol.ts';
@@ -160,6 +161,8 @@ function harness(options: {
   left?: number | null; effect?: Partial<NotchSkillEffect>; start?: { ok: false; why: string }; describe?: string | null; save?: NotchSaved; rows?: 'unseen'; byPlace?: boolean; window?: 'gone';
   /** The window that is in front. Not given: none is. 'lost': the machine was asked and never answered. 'off': no machine to ask. */
   front?: { app: string; win: WatchWin } | 'lost' | 'off'; paused?: () => boolean;
+  /** A job begun by hand and not shown: what has it (./catch.ts). */
+  catcher?: NotchCatch;
 } = {}) {
   let toSurface: (sidecarId: string, event: { event_type: string; payload: unknown }) => void = () => {};
   const pushed: NotchToPage[] = [];
@@ -222,6 +225,7 @@ function harness(options: {
     count: options.left === undefined ? undefined : async () => options.left ?? null,
     byPlace: options.byPlace === undefined ? undefined : () => options.byPlace!,
     paused: options.paused,
+    ...(options.catcher ? { catcher: () => options.catcher! } : {}),
   });
   const line = (): NotchLine | null => surface.current().line;
   const said = (): string => text(line()?.say);
@@ -627,6 +631,38 @@ describe('a shown job is done again where it was done', () => {
     await settle();
     expect(h.said()).toBe('Done. 2 steps.');
     expect(h.actions.since(0)).toMatchObject([{ kind: 'job_skill', outcome: 'done', seen: 'line', how: 'key' }]);
+  });
+
+  // Fix 05: a job begun by hand and never shown is the catcher's. Asked for in words a model read, its line
+  // was put and said yes to, and the catcher wrote it down as said with nothing shown.
+  test('asked for in words a model read, a job the catcher has is handed the yes on its line', async () => {
+    const took: unknown[][] = [];
+    const catcher: NotchCatch = {
+      last: () => ({}) as ReturnType<NotchCatch['last']>,
+      take: async (...args) => { took.push(args); return 'started'; },
+      reset() {}, stop() {},
+    };
+    const h = harness({ catcher });
+    const intent = h.teach.intents().find((one) => one.id === 'teach.run')!;
+    intent.match('do the rest', { source: 'typed', at: 0, read: true })!.run();
+    await settle();
+    expect(h.said()).toBe('Go on with what you began?');
+    expect(took).toEqual([]);
+    await h.reply('yes');
+    await settle();
+    expect(took).toEqual([[null, { seen: 'line', how: 'key' }]]);
+  });
+
+  test('asked for by the fixed words, a job the catcher has is handed "said, nothing shown"', async () => {
+    const took: unknown[][] = [];
+    const catcher: NotchCatch = {
+      last: () => ({}) as ReturnType<NotchCatch['last']>,
+      take: async (...args) => { took.push(args); return 'started'; },
+      reset() {}, stop() {},
+    };
+    const h = harness({ catcher });
+    await h.say('do the rest');
+    expect(took).toEqual([[null, { seen: 'nothing', how: 'said' }]]);
   });
 
   // The owner's first "run it", 16 November 2026: a job shown in a sheet in a
