@@ -567,6 +567,20 @@ describe('the words the notch acts on itself, put together', () => {
     expect(commands.lastIndexOf('standing')).toBeLessThan(commands.indexOf('agents'));
   });
 
+  test('a part that was not given what it is made from, or that leans on one that is not there, is absent and says nothing', () => {
+    const combos: Given['without'][] = [
+      ['mail'], ['day'], ['day.around'], ['where'], ['asks'], ['peers'], ['calls'], ['notice'], ['standing'], ['dayOne'], ['emergency'],
+      ['mail', 'day'], ['asks', 'where'], ['day', 'calls', 'notice'],
+      ['office', 'day', 'openDashboard', 'where', 'mail', 'standing', 'agents', 'calls', 'peers', 'notice', 'jobs', 'dayOne', 'promises', 'emergency', 'questions', 'asks'],
+    ];
+    for (const without of combos) {
+      const said: string[] = [];
+      const w = everything({ without, notchLog: (line) => said.push(line) });
+      expect([without, said.filter((line) => /was not made|asked for|has no place|could not be made/.test(line))]).toEqual([without, []]);
+      w.real.stop();
+    }
+  });
+
   test('a part that is not there hands over nothing', () => {
     const w = everything({ without: ['mail', 'peers', 'calls', 'dayOne', 'emergency'] });
     expect([...new Set(w.real.intents().map((one) => one.feature))].sort()).toEqual(['agents', 'canDo', 'memory', 'moves', 'prefs', 'put', 'said', 'teach']);
@@ -645,26 +659,27 @@ describe('stop, with every part given', () => {
     const parts = order.filter((line) => !line.startsWith('clock: '));
     // What is on the notch ends before any part is stopped.
     expect(parts[0]).toBe('stop: inbox');
-    // The promises and the pause only stop hearing: which of the two goes first is not pinned.
-    expect(parts.slice(1, 3).sort()).toEqual(['stop: promises', 'stop: the pause no longer heard']);
-    // The features from the last made to the first (fix 02, step 4: asking, the look, the drop, the jobs and
-    // the agents are features now), then the parts that are not features yet, in the order they always had.
-    expect(parts.slice(3)).toEqual([
+    // Then every part, as each is a feature now (fix 02, step 5): from the last made to the first. The promises
+    // and the pause only stop hearing, made one after the other: which of the two goes first is not pinned.
+    const quiet = ['stop: promises', 'stop: the pause no longer heard'];
+    const at = parts.indexOf('stop: mail') + 1;
+    expect(parts.slice(at, at + 2).sort()).toEqual(quiet);
+    expect(parts.slice(1).filter((line) => !quiet.includes(line))).toEqual([
+      'stop: day one',
+      'stop: notice',
+      'stop: around',
+      'stop: mail',
       'stop: drop',
       'stop: look',
       'stop: asks',
+      'stop: people',
       'stop: agents',
       'stop: put',
       'stop: teach',
       'stop: catcher',
       'stop: jobs',
-      'stop: people',
-      'stop: day one',
       'stop: where',
-      'stop: mail',
       'stop: presence',
-      'stop: around',
-      'stop: notice',
     ]);
   });
 

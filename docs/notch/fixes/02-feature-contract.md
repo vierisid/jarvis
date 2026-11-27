@@ -205,8 +205,41 @@ What step 4 does, and what it proved:
   reaches day one.
 - `talk` is a feature. Its stop (added after the review) lets go of what the
   desktop apps say of the keys and clears the limits of open recordings: the
-  port has no way to take a listener back, so the listener asks first. The scheduler's
-  `skipWhileRunning` stays off: every clock runs as it did.
+  port has no way to take a listener back, so the listener asks first. The
+  scheduler's `skipWhileRunning` stays off: every clock runs as it did.
+
+What step 5 does, and what it proved:
+
+- Mail, standing, soon, calls, around, day, presence, where, notice, day one
+  and people are features, each defined at the foot of its own module
+  (`notchMailFeature` in mail/attach.ts, and so on). The attach bodies are
+  untouched: a definition wraps the attach function and hands it what
+  `real.ts` used to. Nothing is lent any more and no part is stopped by
+  hand; `lend` and `onStop` stay in the registry, unused by `real.ts`.
+- `real.ts` is a list: the settings, the quiet hours, the inbox, the
+  approvals, Today and the look for approvals are still made there (the
+  core every part stands on), then one `registry.add` per feature.
+- Presence is made right after the inbox instead of before it. The inbox
+  asks it whether a line may come up; until it is made (the same
+  synchronous making) the inbox has no presence to ask and may speak. Its
+  calm goes to `ctx.inbox.calmed()`, so the `calmed` holder is gone.
+- Eye claims: `ctx.eye(on)` claims one of the notch's eyes for the feature
+  that calls it. The eye is citron while any feature claims it. Standing
+  and calls claim it; the surface is told at each claim, as before.
+- `ctx.surface` adds `setWhere` and `setPark`, the where's and the
+  around's; `attachNotchWhere` and `attachNotchAround` take only what they
+  use.
+- What a part leans on is in `wants`, never `needs`, with a null check: a
+  brain without mail, the day, a desktop app, asking or the peers makes
+  the same parts as before and logs no new line. `real-wiring.test.ts`
+  holds that over fifteen combinations.
+- Behaviour that changed, after stop only: every part is stopped from the
+  last made to the first: day one, noticing, around, calls, standing,
+  mail, the promises and the pause, drop, look, asks, people, agents, put,
+  teach, catch, jobs, where, presence (the day and soon have no stop). As in step 4, no stop calls another part synchronously.
+- Known limits kept: calls hear the product's pause through a subscription
+  that is never taken back (it was so before); the surface's own page
+  listeners are not removed.
 
 ## Owner decisions
 
@@ -234,8 +267,8 @@ What step 4 does, and what it proved:
   two"
 - Step 3: done in "notch: moves, what it can do, memory, settings, what is
   said over a line, promises, the pause and suggestions are features"
-- Step 4: done in "notch: asking, the look, the drop, the jobs and the agents are features, and the registry gathers the words, Home's rows, Settings, today, undo and hello in one order"
-- Step 5: pending
+- Step 4: done in "notch: asking, the look, the drop, the jobs and the agents are features, and the registry gathers the words, Home's rows, Settings, today, undo and hello in one order" and "notch: review of step 4: talk is stopped with the notch, a making that fails after the drop is pinned, and the registry says when a feature is kept"
+- Step 5: done in "notch: mail, standing, soon, calls, around, the day, presence, where, noticing, day one and people are features, and real.ts is a list"
 - Step 6: pending
 - Step 7: pending
 - Step 8: pending

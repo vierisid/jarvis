@@ -54,6 +54,7 @@ import { playDecidable } from './decide.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
@@ -1012,6 +1013,55 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
       live = null;
       if (call?.open) void deps.listen(call.sidecarId, { on: false, id: legId(call), far: false }).catch(() => {});
       try { deps.eye?.(false); } catch { /* nothing depends on it */ }
+    },
+  };
+}
+
+/** What listening to a call is made from, of the product. */
+export interface NotchCallsGiven extends Pick<NotchCallDeps, 'listen' | 'stt' | 'think'> {
+  db: Database;
+  port: NotchCallPort;
+  noClock?: boolean;
+  actions?: NotchActions | null;
+  /** The product's pause, heard while a call is listened to. */
+  onPause?: NotchCallDeps['onPause'];
+}
+
+/**
+ * Listening to a call (./call.ts) as a feature of the notch (./feature.ts): its words, its row in Home and in
+ * Settings, and the clock that clears old calls. A call has to be known to be on: without the day's part that
+ * hears it (`around`, given or not) and the settings it is absent, and nothing is said. While a call is
+ * listened to, it claims one of the notch's eyes.
+ */
+export function notchCallsFeature(given: NotchCallsGiven | undefined): NotchFeatureDef<'calls'> {
+  return {
+    id: 'calls',
+    wants: ['mail'],
+    make(ctx) {
+      const settings = ctx.settings;
+      if (!given || !settings) return null;
+      const layer = ctx.use('mail');
+      const api = attachNotchCalls(given.port, {
+        inbox: ctx.inbox, db: given.db, settings, actions: given.actions, log: ctx.log,
+        listen: given.listen, stt: given.stt, think: given.think,
+        // The follow-up goes the way a chase's mail goes: in the thread with that person, or as a new mail.
+        mail: layer ? { find: (who) => layer.standing.find(who), send: (plan) => layer.standing.send(plan), went: (plan, since) => layer.standing.went(plan, since), owner: () => layer.standing.owner() } : undefined,
+        paused: () => ctx.paused(),
+        onPause: given.onPause,
+        eye: (on) => ctx.eye(on),
+        now: ctx.now,
+      });
+      api.sweep();
+      return {
+        api,
+        ticks: given.noClock ? [] : [{ name: 'clearing old calls', everyMs: 3_600_000, run: () => api.sweep() }],
+        intents: () => api.intents(),
+        homeRows: () => api.rows(),
+        open: async (stage, row) => { if (row !== 'calls') return false; await api.open(stage, row); return true; },
+        settingsRows: () => [api.settingsRow()],
+        setWord: (name, value) => api.setWord(name, value),
+        stop: () => api.stop(),
+      };
     },
   };
 }

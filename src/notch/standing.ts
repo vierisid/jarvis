@@ -37,6 +37,7 @@ import type { Database } from 'bun:sqlite';
 import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import { playDecidable } from './decide.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -1328,5 +1329,44 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     blocks: (chase) => chaseBlocks(chase),
     begin: (chase, stage) => beginChase(chase, stage),
     stop() { stopped = true; },
+  };
+}
+
+/**
+ * Standing things (pass 11) as a feature of the notch (./feature.ts): an eye kept on a person's answer, and a
+ * chase until it is in. It stands on mail: without the mail layer it is absent, and nothing is said. While
+ * something is watched for, it claims one of the notch's eyes.
+ */
+export function notchStandingFeature(given: { db: Database; chaseWaitMs?: number; noClock?: boolean; actions?: NotchActions | null } | undefined): NotchFeatureDef<'standing'> {
+  return {
+    id: 'standing',
+    wants: ['mail', 'around'],
+    make(ctx) {
+      const mail = ctx.use('mail');
+      if (!given || !mail) return null;
+      const log = ctx.log;
+      const api = attachNotchStanding({
+        inbox: ctx.inbox, db: given.db, mail: mail.standing, paused: () => ctx.paused(), actions: given.actions, log,
+        // Without a connection a follow-up that is due is held, and goes out when the connection is back.
+        offline: () => { const around = ctx.use('around'); return around ? !around.online() : false; },
+        eye: (on) => ctx.eye(on),
+        fired: () => ctx.surface.act({ gesture: 'pop' }),
+        ...(given.chaseWaitMs ? { waitMs: given.chaseWaitMs } : {}),
+      });
+      return {
+        api,
+        // Its own catch and its own words in the log, as it always had; the scheduler's guard is around it as well.
+        ticks: given.noClock ? [] : [{
+          name: "a chase's step", everyMs: NOTCH_STANDING_TICK_MS,
+          run: () => { void api.tick().catch((error) => log(`[notch] a chase's step failed: ${error instanceof Error ? error.message : String(error)}`)); },
+        }],
+        intents: () => api.intents(),
+        homeRows: () => api.rows(),
+        open: async (stage, row) => { if (row !== 'eyes' && row !== 'chases') return false; await api.open(stage, row); return true; },
+        done: (since) => api.done(since),
+        undo: (row) => api.undo(row),
+        stop: () => api.stop(),
+      };
+    },
   };
 }

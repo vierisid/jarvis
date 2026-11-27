@@ -19,6 +19,7 @@
  * still in yesterday.
  */
 import type { NotchSettings } from './settings.ts';
+import type { NotchFeatureDef } from './feature.ts';
 
 /** How long hands have to be still for the person to count as away. */
 export const NOTCH_AWAY_MS = 20 * 60 * 1000;
@@ -147,3 +148,30 @@ export class NotchPresence {
     }
   }
 }
+
+/**
+ * Whether the person is there (pass 8), as a feature of the notch (./feature.ts). Made right after the inbox,
+ * which asks it whether a line may come up. Its hands being back reach the asks, and leaving, coming back and
+ * the first time today reach the lines of the day; both are made after it and asked for when it happens.
+ * Absent on a brain that was not given where to keep the settings.
+ */
+export const notchPresenceFeature: NotchFeatureDef<'presence'> = {
+  id: 'presence',
+  wants: ['asks', 'day'],
+  make(ctx) {
+    const settings = ctx.settings;
+    if (!settings) return null;
+    const api = new NotchPresence({
+      settings,
+      calm: () => ctx.inbox.calmed(),
+      hands: () => ctx.use('asks')?.handsOn(),
+      left: (at) => ctx.use('day')?.left(at),
+      back: (away) => { void ctx.use('day')?.back(away); },
+      morning: (away) => ctx.use('day')?.morning(away),
+      now: ctx.now,
+      clock: ctx.clock,
+      log: ctx.log,
+    });
+    return { api, stop: () => api.stop() };
+  },
+};

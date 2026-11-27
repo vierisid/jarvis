@@ -65,6 +65,7 @@
  * is over.
  */
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchMapNode, NotchMapSource, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
@@ -864,5 +865,53 @@ export function attachNotchDayOne(deps: NotchDayOneDeps): NotchDayOne {
     step: stepNow,
     around,
     stop() { stopped = true; cardOff(); },
+  };
+}
+
+/** What day one is made from, of the product. */
+export interface NotchDayOneGiven extends Pick<NotchDayOneDeps, 'fresh' | 'name' | 'model' | 'voice' | 'watching' | 'told' | 'around' | 'system' | 'installed' | 'isWhere'> {
+  /** Whether "where is" is answered by pointing at it. */
+  canPoint: boolean;
+  /** Takes the person to where Gmail is connected. */
+  connect?: (id: string, sidecarId: string | null) => void | Promise<void>;
+}
+
+/**
+ * Day one (pass 12) as a feature of the notch (./feature.ts): the first five minutes, on a brain that was
+ * never set up, and again whenever it is asked for. Made last: it leans on the look, the drop, the mail layer
+ * and the way to a sign-in. A page that comes up is its cue. Without the settings or the asks it is absent.
+ */
+export function notchDayOneFeature(given: NotchDayOneGiven | undefined): NotchFeatureDef<'dayOne'> {
+  return {
+    id: 'dayOne',
+    wants: ['asks', 'look', 'drop', 'where', 'canDo', 'mail'],
+    make(ctx) {
+      const settings = ctx.settings;
+      if (!given || !settings || !ctx.use('asks')) return null;
+      const { canPoint, connect, ...rest } = given;
+      const where = ctx.use('where');
+      const layer = ctx.use('mail');
+      const api = attachNotchDayOne({
+        inbox: ctx.inbox, settings, clock: ctx.clock, log: ctx.log,
+        ...rest,
+        canLook: () => ctx.use('look') !== null,
+        canDrop: () => ctx.use('drop') !== null,
+        canPoint: () => canPoint,
+        onDesktop: where ? () => where.onDesktop() : undefined,
+        canDo: (stage, more) => ctx.use('canDo')!.open(stage, more),
+        mail: layer && connect ? {
+          reached: () => layer.reached(),
+          open: async (sidecarId) => { await connect('gmail', sidecarId); },
+        } : undefined,
+        paused: () => ctx.paused(),
+      });
+      return {
+        api,
+        intents: () => api.intents(),
+        // A notch has come up: on a brain that is due it, day one begins a moment later.
+        hello: () => api.cameUp(),
+        stop: () => api.stop(),
+      };
+    },
   };
 }

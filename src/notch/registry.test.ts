@@ -21,6 +21,7 @@ function world(more: { noInbox?: boolean; order?: Partial<NotchOrder> } = {}) {
   const started: Started[] = [];
   const order: string[] = [];
   const logs: string[] = [];
+  const eyes: boolean[] = [];
   globalThis.setInterval = ((fn: () => void, ms: number) => {
     const one: Started = { fn, ms, cleared: false, unrefed: false, handle: null };
     one.handle = { unref() { one.unrefed = true; } };
@@ -33,12 +34,12 @@ function world(more: { noInbox?: boolean; order?: Partial<NotchOrder> } = {}) {
   }) as typeof clearInterval;
   const state = { paused: false };
   const registry = createNotchRegistry({
-    surface: { name: 'the surface' } as never, settings: null, now: () => 42, log: (line) => logs.push(line), paused: () => state.paused,
+    surface: { name: 'the surface', setEye(on: boolean) { eyes.push(on); } } as never, settings: null, now: () => 42, log: (line) => logs.push(line), paused: () => state.paused,
     order: more.order,
   });
   const inbox = { stop() { order.push('inbox stopped'); } };
   if (!more.noInbox) registry.setInbox(inbox as never);
-  return { registry, started, order, logs, state, inbox };
+  return { registry, started, order, logs, state, inbox, eyes };
 }
 
 /** A stand-in feature under a real id. What it is made of is the test's own. */
@@ -192,7 +193,7 @@ describe('making a feature', () => {
     }));
     expect(made).toEqual(api('moves'));
     expect(w.registry.use('moves') as unknown).toBe(made);
-    expect(seen).toEqual({ surface: { name: 'the surface' }, inbox: w.inbox, settings: null, now: 42, paused: false });
+    expect(seen).toEqual({ surface: { name: 'the surface', setEye: expect.any(Function) }, inbox: w.inbox, settings: null, now: 42, paused: false });
     expect(w.started.map((one) => one.ms)).toEqual([700]);
   });
 
@@ -305,6 +306,24 @@ describe('making a feature', () => {
     }
     // A part that is lent is refused the same way.
     expect(() => w.registry.lend('where', () => null, { homeRows: () => [] })).toThrow('[notch] where gives homeRows, and has no place in the order of homeRows');
+  });
+});
+
+describe('the eye', () => {
+  test('it is citron while any feature claims it, and each claim is its own feature\'s: one letting go leaves the other\'s', () => {
+    const w = world();
+    let standing: (on: boolean) => void = () => {};
+    let calls: (on: boolean) => void = () => {};
+    w.registry.add(feature('standing', (ctx) => { standing = (on) => ctx.eye(on); return { api: api('standing') }; }));
+    w.registry.add(feature('calls', (ctx) => { calls = (on) => ctx.eye(on); return { api: api('calls') }; }));
+    standing(true);
+    calls(true);
+    standing(false);
+    // A second word of the same is told again, as the parts used to tell it.
+    calls(true);
+    calls(false);
+    standing(false);
+    expect(w.eyes).toEqual([true, true, true, true, false, false]);
   });
 });
 

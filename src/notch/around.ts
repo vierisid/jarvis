@@ -15,6 +15,7 @@
  * be known, and nothing is said about a connection that cannot be known.
  */
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchClock, NotchStage } from './stage.ts';
 import { realNotchClock } from './stage.ts';
@@ -92,7 +93,7 @@ export interface NotchAround {
 const em = (text: string): NotchPart => ({ em: text });
 const HOLD = 'call';
 
-export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port: NotchAroundPort, deps: NotchAroundDeps = {}): NotchAround {
+export function attachNotchAround(surface: Pick<NotchSurface, 'act' | 'resting' | 'setPark'>, inbox: NotchInbox, port: NotchAroundPort, deps: NotchAroundDeps = {}): NotchAround {
   const clock = deps.clock ?? realNotchClock;
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((line: string) => console.log(line));
@@ -296,6 +297,38 @@ export function attachNotchAround(surface: NotchSurface, inbox: NotchInbox, port
       stopped = true;
       for (const timer of [starting, ending, longest, parking, saying, goingOffline]) if (timer) clock.clearTimeout(timer);
       if (inCall) { inCall = false; surface.setPark(0); if (holding) inbox.release(HOLD); holding = false; }
+    },
+  };
+}
+
+/**
+ * Calls and the connection (pass 8) as a feature of the notch (./feature.ts): a call that is on, what is held
+ * during it, and a connection that was lost and is back. Absent on a brain no desktop app tells it to, or
+ * without the settings.
+ */
+export function notchAroundFeature(port: NotchAroundPort | undefined): NotchFeatureDef<'around'> {
+  return {
+    id: 'around',
+    wants: ['soon', 'calls', 'mail', 'standing'],
+    make(ctx) {
+      if (!port || !ctx.settings) return null;
+      const calls = ctx.use('calls');
+      const api = attachNotchAround(ctx.surface, ctx.inbox, port, {
+        meetingNow: () => ctx.use('soon')?.meetingNow() ?? false,
+        asleep: () => ctx.paused(),
+        listen: calls ? {
+          offer: (stage, sidecarId) => calls.offer(stage, sidecarId), ended: () => calls.ended(),
+          // For Home's row on a call: whether it is listened to, and the way to have it listened to after all.
+          listening: () => calls.listening(), can: () => calls.can(), start: (stage, sidecarId) => calls.start(stage, sidecarId),
+        } : undefined,
+        // What could not be read while there was no connection is read now, and the follow-ups that were
+        // held go out: how many went is what "Back online" says.
+        backOnline: () => { void ctx.use('mail')?.look('glance'); return ctx.use('standing')?.released() ?? 0; },
+        clock: ctx.clock,
+        now: ctx.now,
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
     },
   };
 }

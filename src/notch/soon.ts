@@ -25,6 +25,8 @@
  * and says what changed when they are back (./day.ts asks it).
  */
 import type { NotchInbox, NotchItem } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
+import { notchBeforeNotes } from './before.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 
@@ -193,5 +195,34 @@ export function attachNotchSoon(inbox: NotchInbox, deps: NotchSoonDeps): NotchSo
     },
     meetingNow: () => { const at = now(); return meetings.some((meeting) => meeting.start <= at && at < meeting.end); },
     ahead: () => meetings.filter((meeting) => meeting.start > now()),
+  };
+}
+
+/**
+ * Meetings coming up (pass 8) as a feature of the notch (./feature.ts): the calendar as a source, read the way
+ * the mail layer reads it. Its clock is the day's (./day.ts). Absent without the mail layer or the settings.
+ * `facts`: what is remembered about somebody, for the notes before a call.
+ */
+export function notchSoonFeature(given: { facts?: (about: string) => { about: string; text: string }[] } | undefined): NotchFeatureDef<'soon'> {
+  return {
+    id: 'soon',
+    wants: ['mail', 'calls'],
+    make(ctx) {
+      const layer = ctx.use('mail');
+      if (!given || !ctx.settings || !layer) return null;
+      const facts = given.facts;
+      const api = attachNotchSoon(ctx.inbox, {
+        calendar: (from, to) => layer.calendar(from, to), now: ctx.now, log: ctx.log,
+        // Before a call: what is held about the one other person it is with. From the calls that were
+        // written down, the mail that was waited on, and what is remembered. Nothing is fetched or asked.
+        notes: (meeting) => notchBeforeNotes(meeting, {
+          people: () => layer.store.people(),
+          calls: () => (ctx.use('calls')?.store.recent(20) ?? []).flatMap((call) => (call.notes ? [{ at: call.startedAt, with: call.notes.with, summary: call.notes.summary, actions: call.notes.actions }] : [])),
+          mail: (address) => layer.store.withPerson(address).map((row) => ({ at: row.messageAt, about: row.about, subject: row.subject, state: row.state })),
+          facts: facts ? (about) => facts(about).map((fact) => ({ text: `${fact.about} ${fact.text}`.trim() })) : undefined,
+        }),
+      });
+      return { api };
+    },
   };
 }

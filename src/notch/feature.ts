@@ -37,6 +37,7 @@ import type { NotchAsks } from './asks.ts';
 import type { NotchCatch } from './catch.ts';
 import type { NotchCalls } from './call.ts';
 import type { NotchCanDo } from './cando.ts';
+import type { NotchDay } from './day.ts';
 import type { NotchDayOne } from './dayone.ts';
 import type { NotchDrop } from './drop.ts';
 import type { NotchInbox } from './inbox.ts';
@@ -49,12 +50,14 @@ import type { NotchMoves } from './moves.ts';
 import type { NotchNews } from './news.ts';
 import type { NotchNotice } from './notice.ts';
 import type { NotchPeople } from './people.ts';
+import type { NotchPresence } from './presence.ts';
 import type { NotchPrefs } from './prefs.ts';
 import type { NotchBlock, NotchButton, NotchPart } from './protocol.ts';
 import type { NotchPutter } from './put.ts';
 import type { NotchQuestions } from './questions.ts';
 import type { NotchSaidLine } from './said.ts';
 import type { NotchSettings } from './settings.ts';
+import type { NotchSoon } from './soon.ts';
 import type { NotchStanding } from './standing.ts';
 import type { NotchClock, NotchStage } from './stage.ts';
 import type { NotchSuggestions } from './suggestions.ts';
@@ -68,11 +71,10 @@ import type { NotchWhere } from './where.ts';
 export type NotchNoApi = Readonly<Record<string, never>>;
 
 /**
- * Every part another may ask for by its id, and what it gets.
- *
- * The first group are features. The second are parts `real.ts` still makes by
- * hand and lends under their id (`NotchRegistry.lend`), so that a feature
- * that leans on one reads the same whether or not it has been moved yet.
+ * Every part another may ask for by its id, and what it gets. All of them are
+ * features. A part that is made by hand can still be lent under an id
+ * (`NotchRegistry.lend`), so that a feature that leans on it reads the same
+ * whether or not it is a feature.
  */
 export interface NotchApis {
   questions: NotchQuestions;
@@ -94,15 +96,17 @@ export interface NotchApis {
   look: NotchLook;
   talk: NotchTalk;
   drop: NotchDrop;
-
+  presence: NotchPresence;
   where: NotchWhere;
   mail: NotchMailLayer;
+  standing: NotchStanding;
+  soon: NotchSoon;
   calls: NotchCalls;
+  around: NotchAround;
+  day: NotchDay;
   notice: NotchNotice;
   dayOne: NotchDayOne;
   people: NotchPeople;
-  standing: NotchStanding;
-  around: NotchAround;
 }
 
 export type NotchFeatureId = keyof NotchApis;
@@ -131,9 +135,12 @@ export interface NotchTick extends NotchTickOptions {
  * that are read off it. Not the whole surface: what is shown goes through the
  * inbox, and a page's messages are the inbox's to hear. The one exception is
  * a file dragged over the notch (`onDrag`, with the mouth it opens and the
- * gulp that swallows it), which is the drop's own (./drop.ts).
+ * gulp that swallows it), which is the drop's own (./drop.ts). What the
+ * notch says it sees (`setWhere`) and what it holds during a call
+ * (`setPark`) are the where's and the around's. The eye is not here: it is
+ * claimed (`NotchContext.eye`).
  */
-export type NotchFeatureSurface = Pick<NotchSurface, 'resting' | 'current' | 'setSound' | 'onStop' | 'setFace' | 'act' | 'gulp' | 'setMouth' | 'onDrag'>;
+export type NotchFeatureSurface = Pick<NotchSurface, 'resting' | 'current' | 'setSound' | 'onStop' | 'setFace' | 'act' | 'gulp' | 'setMouth' | 'onDrag' | 'setWhere' | 'setPark'>;
 
 /**
  * What a feature may give to what the registry gathers, each where `NOTCH_ORDER` puts it. A part that is not a
@@ -230,6 +237,11 @@ export interface NotchContext {
   use<K extends NotchFeatureId>(id: K): NotchApis[K] | null;
   /** What every part gives, gathered: asked when it is needed, so what a part made later gives is there. */
   all: NotchAll;
+  /**
+   * Claims one of the notch's eyes for this feature, or lets go of it. The eye is citron while any feature
+   * claims it (something is watched for, a call is listened to), and resting when none does.
+   */
+  eye(on: boolean): void;
 }
 
 export interface NotchFeatureDef<K extends NotchFeatureId> {

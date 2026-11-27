@@ -18,6 +18,7 @@
 import type { Database } from 'bun:sqlite';
 import type { NotchActions } from '../actions.ts';
 import type { NotchInbox } from '../inbox.ts';
+import type { NotchFeatureDef } from '../feature.ts';
 import type { StandingMail } from '../standing.ts';
 import { firstWay } from '../ways.ts';
 import type { MailBrowser } from './browser.ts';
@@ -305,5 +306,21 @@ export function attachMailLayer(inbox: NotchInbox, deps: NotchMailLayerDeps): No
       },
     },
     stop: () => { if (first) clearTimeout(first); for (const timer of timers) clearInterval(timer); },
+  };
+}
+
+/**
+ * Mail (pass 7) as a feature of the notch (./feature.ts): Jarvis looks at the mailbox by itself, prepares a
+ * reply where a person is waiting, and puts it on the notch. Its words are the prepared replies' own. Absent on
+ * a brain that was not given the mailbox.
+ */
+export function notchMailFeature(given: (Omit<NotchMailLayerDeps, 'paused' | 'log' | 'actions'> & { actions?: NotchActions | null }) | undefined): NotchFeatureDef<'mail'> {
+  return {
+    id: 'mail',
+    make(ctx) {
+      if (!given) return null;
+      const api = attachMailLayer(ctx.inbox, { ...given, paused: () => ctx.paused(), log: ctx.log });
+      return { api, intents: () => api.mail.intents(), stop: () => api.stop() };
+    },
   };
 }

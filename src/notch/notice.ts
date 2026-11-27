@@ -46,6 +46,8 @@
  */
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
+import type { NotchQuiet } from './quiet.ts';
 import { NOTCH_POINT_RULER, pointAim, pointBox, pointBoxRect, pointCloseUp, pointNames, pointPicture, pointWindow, type PointMessage, type PointSeen } from './point.ts';
 import { notchDayOf } from './presence.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -432,5 +434,56 @@ export function attachNotchNotice(deps: NotchNoticeDeps): NotchNotice {
 
     looksToday: () => looks,
     stop() { stopped = true; },
+  };
+}
+
+/** What noticing is made from, of the product. */
+export interface NotchNoticeGiven extends Pick<NotchNoticeDeps, 'see' | 'read' | 'think' | 'mark' | 'unmark'> {
+  noClock?: boolean;
+  /** The person's quiet hours: nothing is looked at in them. */
+  quiet?: NotchQuiet | null;
+}
+
+/**
+ * Noticing (./notice.ts) as a feature of the notch (./feature.ts): in the window the person is in, one thing
+ * offered, when their hands rest. A yes runs an instruction, and what is in front is the part that knows where
+ * the person is: without the settings, that part or the asks it is absent, and nothing is said.
+ */
+export function notchNoticeFeature(given: NotchNoticeGiven | undefined): NotchFeatureDef<'notice'> {
+  return {
+    id: 'notice',
+    wants: ['where', 'asks', 'presence', 'around'],
+    make(ctx) {
+      const settings = ctx.settings;
+      const where = ctx.use('where');
+      if (!given || !settings || !where || !ctx.use('asks')) return null;
+      const { log, surface } = ctx;
+      const quiet = given.quiet;
+      const api = attachNotchNotice({
+        inbox: ctx.inbox, settings, log,
+        // The bare desktop is no window of a program: there is nothing in it to do for them.
+        front: () => (where.onDesktop() === true ? null : where.front()),
+        still: () => where.still(),
+        // Where nothing could be said, nothing is looked at: asleep, away, the quiet hours, a call.
+        maySpeak: () => !ctx.paused() && !(ctx.use('presence')?.isAway() ?? false) && !(quiet?.now() ?? false) && !(ctx.use('around')?.onCall() ?? false),
+        busy: () => surface.current().line !== null,
+        see: given.see, read: given.read, think: given.think,
+        // It points before it speaks: a mark over the thing, and the notch leans toward it.
+        mark: given.mark, unmark: given.unmark,
+        toward: (aim) => surface.act({ lip: 'reach', aim }),
+        run: (text) => { ctx.use('asks')?.offered(text); },
+        now: ctx.now,
+      });
+      return {
+        api,
+        ticks: given.noClock ? [] : [{
+          name: 'noticing', everyMs: 2000,
+          run: () => { void api.tick().catch((error) => log(`[notch] noticing failed: ${error instanceof Error ? error.message : String(error)}`)); },
+        }],
+        settingsRows: () => [api.settingsRow()],
+        setWord: (name, value) => api.setWord(name, value),
+        stop: () => api.stop(),
+      };
+    },
   };
 }

@@ -89,6 +89,8 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   /** What each part gives, by its id: a feature's own members, or what was lent with a part while that part is there. */
   const gives = new Map<NotchFeatureId, () => NotchGives | null>();
   const order: NotchOrder = { says: [], homeRows: [], settingsRows: [], done: [], undo: [], hello: [], ...deps.order };
+  /** The features that claim the eye now. Told to the surface at every claim, as the parts used to tell it. */
+  const eyes = new Set<NotchFeatureId>();
 
   /**
    * Throws for a part that gives something and has no place for it in that kind's order. A part that is lent is
@@ -195,6 +197,10 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     const named = new Set<NotchFeatureId>([...(def.needs ?? []), ...(def.wants ?? [])]);
     const ctx: NotchContext = {
       surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every, all,
+      eye: (on) => {
+        if (on) eyes.add(def.id); else eyes.delete(def.id);
+        deps.surface.setEye(eyes.size > 0);
+      },
       use: (id) => {
         if (!named.has(id)) throw new Error(`[notch] ${def.id} asked for ${id}, which is not in its needs or wants`);
         return use(id);

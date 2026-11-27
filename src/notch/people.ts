@@ -58,6 +58,7 @@
  */
 import { notchAskedHow, notchSentOutcome, type NotchActionAsked, type NotchActionHow, type NotchActionKind, type NotchActions } from './actions.ts';
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import { attachNotchPeopleFiles, isFileNote } from './people-files.ts';
 import type { PeerFileFound } from './people-files.ts';
 import { attachNotchPeopleTime, isTimeNote, peerTimeMinutes } from './people-time.ts';
@@ -2716,5 +2717,58 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     sendFile(to, file) { const one = person(to); if (!files || !one) return false; files.send(one, file); return true; },
     filesIdle: () => files?.idle() ?? Promise.resolve(),
     stop() { if (timer) clearInterval(timer); if (followTimer) clearTimeout(followTimer); },
+  };
+}
+
+/** What the organisation is made from, of the product (./real.ts, `NotchRealDeps['peers']`). */
+export interface NotchPeopleGiven extends Pick<NotchPeopleDeps, 'link' | 'store' | 'openPage' | 'work' | 'setup' | 'think'> {
+  files?: Omit<NonNullable<NotchPeopleDeps['files']>, 'arrived'>;
+  noClock?: boolean;
+  actions?: NotchActions | null;
+}
+
+/**
+ * The organisation, the people whose Jarvises this one may talk to (./people.ts), as a feature of the notch
+ * (./feature.ts): its words, its rows in Home, and its own clock. Only with the engine's switch on. What it
+ * leans on is made after it, and asked for when it is needed.
+ */
+export function notchPeopleFeature(given: NotchPeopleGiven | undefined): NotchFeatureDef<'people'> {
+  return {
+    id: 'people',
+    wants: ['mail', 'around', 'standing', 'agents', 'put', 'drop'],
+    make(ctx) {
+      if (!given) return null;
+      const api = attachNotchPeople({
+        inbox: ctx.inbox, link: given.link, store: given.store, openPage: given.openPage, log: ctx.log, actions: given.actions,
+        ...(given.work ? { work: given.work } : {}),
+        ...(given.setup ? { setup: given.setup } : {}),
+        ...(given.think ? { think: given.think } : {}),
+        // A time that is free for two people: the owner's calendar, read the way the mail layer reads it.
+        time: { calendar: (from: number, to: number) => { const mail = ctx.use('mail'); return mail ? mail.calendar(from, to) : Promise.resolve(null); } },
+        // On a call what arrives is held, and whoever sent it is told.
+        onCall: () => ctx.use('around')?.onCall() ?? false,
+        // The owner's chases, for a job that changes hands.
+        chases: () => ctx.use('standing'),
+        // The owner's agents, to send one to somebody, and to make one that somebody sent and the owner took on.
+        agents: { list: () => ctx.use('agents')?.list() ?? [], take: (sentence: string) => ctx.use('agents')?.take(sentence) ?? false },
+        // What was last circled and is still held, for "send this to Leo".
+        look: () => { const held = ctx.use('put')?.held() ?? null; return held ? { what: held.what, rows: held.rows, app: held.app } : null; },
+        // A file that arrived is held by the notch like one that was dropped on it, with the same card.
+        ...(given.files ? { files: { ...given.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => ctx.use('drop')?.arrived(file) ?? false } } : {}),
+        ...(given.noClock ? { noClock: true } : {}),
+      });
+      return {
+        api,
+        intents: () => api.intents(),
+        homeRows: () => api.rows(),
+        open: async (stage, row) => {
+          if (row === 'people') await api.open(stage);
+          else if (row === 'people-server') await api.server(stage);
+          else return false;
+          return true;
+        },
+        stop: () => api.stop(),
+      };
+    },
   };
 }

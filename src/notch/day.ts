@@ -23,6 +23,8 @@
  * speak up again after it, and are one step away in Home.
  */
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
+import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
 import { notchDayOf } from './presence.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
@@ -308,6 +310,59 @@ export function attachNotchDay(inbox: NotchInbox, deps: NotchDayDeps): NotchDay 
       // said the next morning as "Today: 5 things done", counted from yesterday.
       inbox.add(line('evening', 'rest', () => (notchDayOf(now()) === today ? notchEveningLine(deps.done(start.getTime(), now()), deps.waiting()) : null),
         { mood: 'sleepy', said: () => deps.settings.set(EVENING, today, now()), before: move }));
+    },
+  };
+}
+
+/** What the lines of the day are given of the product and of Today (./today.ts). */
+export interface NotchDayGiven extends Pick<NotchDayDeps, 'done' | 'slipped' | 'overnight'> {
+  /** Without the clock of the day. */
+  noClock?: boolean;
+}
+
+/**
+ * The shape of the day (pass 8) as a feature of the notch (./feature.ts): the morning, the evening, "while you
+ * were away", and a meeting said ten minutes before, on one clock. Absent without the settings.
+ */
+export function notchDayFeature(given: NotchDayGiven | undefined): NotchFeatureDef<'day'> {
+  return {
+    id: 'day',
+    wants: ['mail', 'soon', 'presence'],
+    make(ctx) {
+      const settings = ctx.settings;
+      if (!given || !settings) return null;
+      const { inbox, log } = ctx;
+      const layer = ctx.use('mail');
+      const soon = ctx.use('soon');
+      const lines = new Set(['morning', 'evening', 'back', NOTCH_MAIL_ITEM]);
+      const api = attachNotchDay(inbox, {
+        settings,
+        done: given.done,
+        // What needs the person: everything in the count that is not one of these lines or a meeting, and every reply that is drafted.
+        waiting: () => inbox.waiting().filter((item) => !lines.has(item.id) && !item.id.startsWith('soon:')).length + (layer?.store.ready().length ?? 0),
+        away: () => ctx.use('presence')?.isAway() ?? false,
+        morningSaid: () => ctx.use('presence')?.morningSaid(),
+        // What was promised for today and not kept: the evening offers to move it.
+        slipped: given.slipped,
+        // What the morning line opens: the receipts of the night, with Undo where a thing can be taken back.
+        overnight: given.overnight,
+        mail: layer ? { newSince: (at) => layer.mail.newSince(at), told: () => layer.mail.told(), open: (stage) => layer.mail.open(stage) } : undefined,
+        calendar: soon ? { ahead: () => soon.ahead(), look: () => soon.look() } : undefined,
+        now: ctx.now,
+        log,
+      });
+      // Every half minute: what is ten minutes away. Every minute: the evening line, and anything that waited
+      // for the quiet hours to end. Every five minutes: the calendar itself, so that a meeting made a
+      // quarter of an hour ahead is still said ten minutes before.
+      let ticks = 0;
+      const tick = (): void => {
+        ticks++;
+        if (ctx.paused()) return;
+        soon?.tick();
+        if (ticks % 2 === 0) { api.tick(); inbox.calmed(); }
+        if (ticks % 10 === 2) void soon?.look().catch((error) => log(`[notch] the calendar could not be looked at: ${error instanceof Error ? error.message : String(error)}`));
+      };
+      return { api, ticks: given.noClock ? [] : [{ name: 'the clock of the day', everyMs: 30_000, run: tick }] };
     },
   };
 }

@@ -24,6 +24,7 @@
  * "What I see" sheet and goes nowhere else from here.
  */
 import type { NotchInbox } from './inbox.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import { notchIconUrl } from './protocol.ts';
 import type { NotchBlock, NotchMood, NotchPart, NotchWhereApp } from './protocol.ts';
 import { NotchStageEnded, type NotchStage } from './stage.ts';
@@ -195,7 +196,7 @@ export function parseNotchWhere(payload: unknown): Omit<Seen, 'icon'> & { iconKe
   };
 }
 
-export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port: NotchWherePort, deps: NotchWhereDeps): NotchWhere {
+export function attachNotchWhere(surface: Pick<NotchSurface, 'act' | 'setFace' | 'setWhere'>, inbox: NotchInbox, port: NotchWherePort, deps: NotchWhereDeps): NotchWhere {
   const log = deps.log ?? ((line: string) => console.log(line));
   const seen = new Map<string, Seen>();
   /** Icons by the key the desktop app gave them, as data URLs. */
@@ -423,5 +424,38 @@ export function attachNotchWhere(surface: NotchSurface, inbox: NotchInbox, port:
       return now?.app ? whereIsDesktop(now.app, now.title) : null;
     },
     stop() { stopped = true; },
+  };
+}
+
+/** What the part that knows where the person is is given of the product. */
+export interface NotchWhereGiven extends Pick<NotchWhereDeps, 'watching' | 'openEyes'> {
+  port: NotchWherePort;
+  /** The product's pause: a "go to sleep" from the sheet pauses through it. */
+  sleep?: () => void;
+}
+
+/**
+ * Where the person is, and whether Jarvis is looking (pass 6), as a feature of the notch (./feature.ts). Made
+ * before the asks and the pause, which both show what it knows. Absent on a brain no desktop app tells it to.
+ */
+export function notchWhereFeature(given: NotchWhereGiven | undefined): NotchFeatureDef<'where'> {
+  return {
+    id: 'where',
+    wants: ['mail', 'presence'],
+    make(ctx) {
+      if (!given) return null;
+      const api = attachNotchWhere(ctx.surface, ctx.inbox, given.port, {
+        asleep: () => ctx.paused(),
+        sleep: () => given.sleep?.(),
+        watching: given.watching,
+        openEyes: given.openEyes,
+        // Coming to Gmail is where a prepared reply speaks up (pass 7).
+        arrived: (site) => ctx.use('mail')?.arrived(site),
+        // Their hands: still, away, back, the first time today (pass 8).
+        hands: (still) => ctx.use('presence')?.hands(still),
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
+    },
   };
 }
