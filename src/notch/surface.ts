@@ -16,7 +16,7 @@ import {
   NOTCH_ANSWERS_KEPT, NOTCH_BIRTHS, NOTCH_FOLD_GRACE_MS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_HOLDS_MS, NOTCH_PROTOCOL_VERSION,
   notchAfter, notchRuled, notchRules, notchWhereApp, parseNotchFromPage, parseNotchToPage,
 } from './protocol.ts';
-import { notchReadTyped, notchSetWord, notchWordEdit, notchWordIn } from './words.ts';
+import { notchReadWord, notchSetWord, notchWordEdit, notchWordIn } from './words.ts';
 import type {
   NotchBirth, NotchBlock, NotchEdit, NotchEffect, NotchFromPage, NotchLine, NotchMood, NotchMouth, NotchPart, NotchToPage, NotchWhereApp,
 } from './protocol.ts';
@@ -481,8 +481,15 @@ export class NotchSurface {
     const took = line !== null && line.id === message.id && !(settles && this.held !== null);
     // A value typed into a lit word is read here, by the one reader (./words.ts), before the page is told it
     // was had: what cannot be read is said on the `ack`, and the word keeps its value.
-    const typed = took && line !== null && message.act === 'word' && message.word !== undefined && message.value === undefined && message.text !== undefined;
-    const read = typed && line ? notchReadTyped(line, message.word!, message.text!) : null;
+    // A `value` that is none of the word's options was not stepped to: it is read as if it were typed (a page
+    // that read it itself, or one that is wrong), and is not put among the options unread.
+    const named = took && line !== null && message.act === 'word' && message.word !== undefined;
+    const lit = named && line ? notchWordIn(line, message.word!) : null;
+    const asTyped = !named ? undefined
+      : message.value === undefined ? message.text
+      : lit && !lit.options.includes(message.value) ? message.value : undefined;
+    const typed = asTyped !== undefined;
+    const read = typed && lit ? notchReadWord(lit, asTyped) : null;
     const unread = typed && read === null;
     if (message.n !== undefined) {
       // The same answer again (its `ack` was lost, or was slow): it was taken, or found late, when it first
@@ -512,15 +519,15 @@ export class NotchSurface {
     }
     let said = message;
     if (message.act === 'word' && message.word !== undefined && (message.value !== undefined || typed)) {
-      const value = message.value ?? read;
+      const value = typed ? read : message.value!;
       if (value !== null) {
-        const was = notchWordIn(line, message.word)?.value;
         notchSetWord(line, message.word, value);
         if (typed) {
           // Whoever waits on the line hears the value as it was read, with what was typed beside it.
-          said = { ...message, value };
-          // Every page draws the word as it was read: the one it was typed on draws nothing of its own.
-          if (value !== was) this.push({ type: 'patch', edit: notchWordEdit(line, message.word) });
+          said = { ...message, value, text: asTyped };
+          // Every page draws the word as it was read, the one it was typed on too and also when it reads as it
+          // stood: that page draws nothing of its own, and a yes there answers the line as the brain holds it.
+          this.push({ type: 'patch', edit: notchWordEdit(line, message.word) });
         }
       }
       // A hand was on it a moment ago: it is given its time again, a line's time, as the page used to give it.

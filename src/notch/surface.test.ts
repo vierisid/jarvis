@@ -136,6 +136,34 @@ describe('what the notch is showing lives in the brain', () => {
     expect(chase.say[1]).toEqual({ word: { name: 'tone', value: 'politely', options: ['politely', 'firmly'] } });
   });
 
+  test('a value that is none of the word\'s options is read as typed: unread, it changes nothing and joins no options', () => {
+    const h = harness();
+    const heard: string[] = [];
+    h.surface.onAnswer((answer) => heard.push(`${answer.act}:${answer.value ?? ''}`));
+    const sched: NotchLine = { id: 'c1', kind: 'offer', yes: 'go', say: ['Every ', { word: { name: 'when', value: 'Monday at 9:00', options: ['Monday at 9:00', 'Friday at 9:00'], read: 'sched' } }] };
+    h.hello('pc');
+    h.surface.show(sched);
+    h.say('pc', { type: 'answer', n: 1, id: 'c1', act: 'word', word: 'when', value: 'month' });
+    expect(h.pushed.at(-1)!.message).toEqual({ type: 'ack', n: 1, took: true, unread: true });
+    h.say('pc', { type: 'answer', n: 2, id: 'c1', act: 'word', word: 'when', value: 'Friday at 9:00' });
+    h.say('pc', { type: 'answer', n: 3, id: 'c1', act: 'word', word: 'when', value: 'weekday at 9' });
+    expect(heard).toEqual(['word:Friday at 9:00', 'word:Monday to Friday at 9:00']);
+    h.gone('pc');
+    h.hello('pc');
+    const state = h.pushed.at(-1)!.message as Extract<NotchToPage, { type: 'state' }>;
+    expect(state.line!.say[1]).toEqual({ word: { name: 'when', value: 'Monday to Friday at 9:00', options: ['Monday at 9:00', 'Friday at 9:00', 'Monday to Friday at 9:00'], read: 'sched' } });
+  });
+
+  test('a typed value read as the word already stood is still drawn again on the page that typed it', () => {
+    const h = harness();
+    const sched: NotchLine = { id: 'c1', kind: 'offer', yes: 'go', say: ['Every ', { word: { name: 'when', value: 'Monday at 9:00', options: ['Monday at 9:00'], read: 'sched' } }] };
+    h.hello('pc');
+    h.surface.show(sched);
+    const before = h.pushed.length;
+    h.say('pc', { type: 'answer', n: 1, id: 'c1', act: 'word', word: 'when', text: 'mon 9' });
+    expect(h.pushed.slice(before).map((one) => [one.to, one.message.type])).toEqual([['pc', 'ack'], ['pc', 'patch']]);
+  });
+
   test('a lit word inside a sheet is found too', () => {
     const h = harness();
     const sheet: NotchLine = {
