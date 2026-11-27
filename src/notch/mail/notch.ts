@@ -70,7 +70,8 @@
  * The reply speaks up by itself in one place for now: when the owner comes to
  * Gmail. Everywhere else it joins the count.
  */
-import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from '../actions.ts';
+import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from '../actions.ts';
+import { playDecidable } from '../decide.ts';
 import { NOTCH_NAME } from '../name.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from '../inbox.ts';
 import type { NotchBlock, NotchPart } from '../protocol.ts';
@@ -78,7 +79,7 @@ import { saidOption } from '../said.ts';
 import { NotchStageEnded, type NotchStage } from '../stage.ts';
 import type { Mailbox, MailReplyPlan } from './mailbox.ts';
 import type { MailCalendarEvent } from './proposer.ts';
-import { sendMail } from './send.ts';
+import { sendMail, type MailSendEnd } from './send.ts';
 import { MAIL_SLOT_LEAST_AHEAD_MS, mailSlotFree, mailSlotWords, type MailRowSlot } from './slots.ts';
 import type { MailProposalRow, MailStore, MailTone } from './store.ts';
 import { mailFirstName, type MailPerson } from './thread.ts';
@@ -544,87 +545,83 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
     // enough to send again: it was the only guard, and a thread that could not be read let a
     // second send through. The mailbox is asked for the reply as it was sent.
     const before = maybeSent.get(id);
-    if (before) {
-      const looking = stage.id();
-      stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
-      const there = await mailbox.went({ to: row.to[0]?.address ?? row.who.address, thread: row.thread, subject: row.subject, text: before.text }, before.since).catch(() => null);
-      if (there === true) {
-        maybeSent.delete(id);
-        store.move(id, 'ready', 'sent', now());
-        // The entry that said it may have gone says that it went: no second one. With none written down (its
-        // write had failed), it is written now, as what this yes found.
-        deps.actions?.settle(`mail:${id}`, 'done', {
-          otherwise: {
-            kind: offering ? 'mail_slot' : 'mail_reply', outcome: 'done', asked,
-            what: `${offering ? `Offer of ${offering} to` : 'Reply to'} ${who}: ${row.subject}`, target: row.to.map((person) => person.address).join(', '),
-          },
-        });
-        log('[notch] a reply that may have gone had gone: it is not sent again');
-        await stage.say(['It had gone: it is in the thread. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
-        return 'settled';
-      }
-      if (there === null) {
-        await stage.say(['I cannot see whether it went the first time, so I am not sending it again. Look in the thread first.'], 5200, { mood: 'careful', src: 'mail' });
-        return 'waits';
-      }
-    }
     // The reply as it goes: what is asked after it went is asked about this one.
     const going = row;
-    /** Written down once what came of the yes is known: one entry for this reply, changed if it is tried again. */
-    const noted = (outcome: NotchActionOutcome): void => {
-      deps.actions?.record({
-        kind: offering ? 'mail_slot' : 'mail_reply', ref: `mail:${id}`, outcome, asked,
-        what: `${offering ? `Offer of ${offering} to` : 'Reply to'} ${who}: ${going.subject}`, target: going.to.map((person) => person.address).join(', '),
-      });
-    };
+    /** This reply as it is written down: one entry, changed if it is tried again or found to have gone. */
+    const entry = (outcome: NotchActionOutcome, written: NotchActionAsked): NotchActionEntry => ({
+      kind: offering ? 'mail_slot' : 'mail_reply', ref: `mail:${id}`, outcome, asked: written,
+      what: `${offering ? `Offer of ${offering} to` : 'Reply to'} ${who}: ${going.subject}`, target: going.to.map((person) => person.address).join(', '),
+    });
     const plan: MailReplyPlan = { thread: going.thread, to: going.to.map((person) => person.address), cc: going.cc.map((person) => person.address), text: going.draft };
-    watch.hold(id);
-    // Said at once: the tab may be in the middle of a look, and the yes must not seem to have gone nowhere.
-    const putting = stage.id();
-    // Before the letter of a picked time the notch must be in sight: where it hides behind a video, it comes back for this line already.
-    stage.put({ id: putting, kind: 'work', say: ['Putting it in the thread…'], steps: 0, done: 0, src: 'mail', ...(offering ? { asks: true } : {}) });
+    /** Whether the thread is kept from the watcher: from the moment the reply goes in, until what came of it is said. */
+    let holding = false;
     // The line shows "esc stop", and it means it. Nobody listened: Esc dimmed the line, and "Sending to…" came
     // all the same a few seconds later. An Esc here ends it before anything is sent.
     let stopped = false;
-    stage.answer(putting, ['stop']).then(() => { stopped = true; }, () => {});
-    /** How the fuse ended: only a fuse that was seen to burn out lets the reply go. */
-    let went = 'lost' as 'done' | 'undo' | 'unseen' | 'lost';
     /**
      * `back`: a picked time was taken back. The line with the times comes up again, once the thread is let go.
      * `open`: its letter was not seen under the fuse by a page that was there. It is opened as a draft.
      */
     const ended = await (async (): Promise<NotchItemEnd | 'back' | 'open'> => {
     try {
-      // The one way a mail is sent in a thread (./send.ts): written, the fuse, Send, and the look.
-      const end = await sendMail(mailbox, plan, {
-        stopped: () => stopped,
-        gate: async () => {
-          // A picked time: the letter is on the notch for as long as the fuse burns, with the time lit.
-          // It is the first and only time the owner sees it before it goes, so the fuse is longer, and
-          // only a page that says it drew the letter and showed its end lets it go (`NotchStage.letter`).
-          went = offering
-            ? await stage.letter(['Offering ', em(offering), ` to ${who}…`], MAIL_SLOT_FUSE_MS, mailSlotBlocks(going), { src: 'mail' })
-            : await stage.fuse(['Sending to ', em(who), '…'], MAIL_FUSE_MS, { src: 'mail' });
-          return went === 'done';
-        },
-        // A reply is called sent when it is the last word in its thread: Gmail's word alone is not it.
-        trust: 'thread',
-        // What the owner read and said yes to stays in their drafts when it does not go, and is said to be there.
-        leftover: 'keep',
-        asks: MAIL_SENT_LOOKS,
-        waitMs: MAIL_SENT_LOOK_MS,
-        // A stage that ends between two looks fails this wait, and the looking ends there (./send.ts).
-        wait: (ms) => stage.wait(ms),
-        now,
-      }).catch((error: unknown) => {
+      // The road after a yes (./decide.ts): the look for a reply that may have gone, then the one way a
+      // mail is sent in a thread (./send.ts), written, the fuse, Send, and the look, with the fuse burnt
+      // in its middle. Written down once the yes stands: the fuse was seen to burn out. Then whatever came
+      // of it is, sent, not sent, or may have gone. A yes that was taken back (Esc), or a fuse nobody saw to
+      // its end, decided nothing and did nothing: nothing is written.
+      const played = await playDecidable<never, MailSendEnd>(stage, {
+        asked: { seen: asked.seen, how: asked.how },
+        // A picked time: the letter is on the notch for as long as the fuse burns, with the time lit.
+        // It is the first and only time the owner sees it before it goes, so the fuse is longer, and
+        // only a page that says it drew the letter and showed its end lets it go (`NotchStage.letter`).
+        fuse: offering
+          ? { say: ['Offering ', em(offering), ` to ${who}…`], ms: MAIL_SLOT_FUSE_MS, letter: mailSlotBlocks(going), extras: { src: 'mail' } }
+          : { say: ['Sending to ', em(who), '…'], ms: MAIL_FUSE_MS, extras: { src: 'mail' } },
+        look: before ? { went: () => mailbox.went({ to: row!.to[0]?.address ?? row!.who.address, thread: row!.thread, subject: row!.subject, text: before.text }, before.since).catch(() => null) } : null,
+        inside: true,
         // It broke off past a fuse that was seen to burn out: Send may have been pressed, so it may have gone.
-        if (went === 'done') noted('unsure');
-        throw error;
-      });
-      // Written down once the yes stands: the fuse was seen to burn out. Then whatever came of it is, sent,
-      // not sent, or may have gone. A yes that was taken back (Esc), or a fuse nobody saw to its end, decided
-      // nothing and did nothing: nothing is written.
-      if (went === 'done') noted(end.state === 'sent' ? 'done' : end.state === 'unsure' ? 'unsure' : 'not_done');
+        broke: 'unsure',
+        act: async (gate) => {
+          watch.hold(id);
+          holding = true;
+          // Said at once: the tab may be in the middle of a look, and the yes must not seem to have gone nowhere.
+          const putting = stage.id();
+          // Before the letter of a picked time the notch must be in sight: where it hides behind a video, it comes back for this line already.
+          stage.put({ id: putting, kind: 'work', say: ['Putting it in the thread…'], steps: 0, done: 0, src: 'mail', ...(offering ? { asks: true } : {}) });
+          stage.answer(putting, ['stop']).then(() => { stopped = true; }, () => {});
+          const end = await sendMail(mailbox, plan, {
+            stopped: () => stopped,
+            gate,
+            // A reply is called sent when it is the last word in its thread: Gmail's word alone is not it.
+            trust: 'thread',
+            // What the owner read and said yes to stays in their drafts when it does not go, and is said to be there.
+            leftover: 'keep',
+            asks: MAIL_SENT_LOOKS,
+            waitMs: MAIL_SENT_LOOK_MS,
+            // A stage that ends between two looks fails this wait, and the looking ends there (./send.ts).
+            wait: (ms) => stage.wait(ms),
+            now,
+          });
+          return { outcome: end.state === 'sent' ? 'done' : end.state === 'unsure' ? 'unsure' : 'not_done', result: end };
+        },
+        entry,
+      }, deps);
+      if (played.took === 'found') {
+        maybeSent.delete(id);
+        store.move(id, 'ready', 'sent', now());
+        log('[notch] a reply that may have gone had gone: it is not sent again');
+        await stage.say(['It had gone: it is in the thread. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
+        return 'settled';
+      }
+      if (played.took === 'unknown') {
+        await stage.say(['I cannot see whether it went the first time, so I am not sending it again. Look in the thread first.'], 5200, { mood: 'careful', src: 'mail' });
+        return 'waits';
+      }
+      // Nothing else ends the road of a reply before its act: the gate is burnt inside it.
+      if (played.took !== 'acted') return 'waits';
+      /** How the fuse ended: only a fuse that was seen to burn out let the reply go. */
+      const went = played.fuse;
+      const end = played.result;
       if (end.state === 'not_sent' && end.at === 'stopped') {
         // Written down before anything is said: it holds whatever takes the notch now.
         if (offering) tookBack.add(id);
@@ -721,7 +718,7 @@ export function attachNotchMail(inbox: NotchInbox, deps: NotchMailDeps): NotchMa
       }
       return 'settled';
     } finally {
-      watch.release(id);
+      if (holding) watch.release(id);
     }
     })();
     // Esc took the pick back, and nothing else: the owner is where they were, on the line with the times.
