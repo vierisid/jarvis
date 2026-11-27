@@ -106,9 +106,9 @@ Each of these is how it is built now, and one line to change.
   Italian asks "Keep an eye on ...?" first, where "tell me when Sam replies" keeps it at once.
 - C5: a schedule that cannot be read ("every 2 weeks ...") goes to the assistant as a turn and no line says the
   notch could not keep it. A lit word typed as no time keeps its value, and since C6 the page says it was not read.
-- C6: "tomorrow" or "today" typed into a schedule is refused (the page made it every day); a day typed with a time
-  into a word that holds a day is refused (the page dropped the time); a value read from what was typed is drawn
-  on every desktop that shows the line. The rest is in docs/notch/fixes/07-page-renderer.md, steps 5 and 6.
+- C6: "tomorrow" or "today" typed into a schedule is refused (the page made it every day); a value read from what
+  was typed is drawn on every desktop that shows the line. The rest is in docs/notch/fixes/07-page-renderer.md,
+  steps 5 and 6.
 
 
 ## What C1 found that the design had wrong or did not have
@@ -198,5 +198,9 @@ Each of these is how it is built now, and one line to change.
   there by the one reader, and one it cannot read is refused on the page", built once with point 7 step 6. The
   page's readers moved to src/notch/words.ts; a day and a time go through ./when.ts. The 9 page rows lost their
   mark (sections renamed word-sched, word-daytime, word-day, word-free); no row in the corpus is marked wrong now.
-  One unmarked row changed, to the reading rule 262 gives: "every morning at 6" in a schedule is "day at 6:00"
-  (the page refused it). Protocol: additive in version 2 (`text` on a word answer, `unread` on the `ack`).
+  Protocol: additive in version 2 (`text` on a word answer, `unread` on the `ack`). After review, in "notch: a
+  typed time means what it meant on the page, read by a typed-word mode of the one reader, but for whole-word days
+  and weekday": when.ts's rules for a sentence are not the page's ("6:30" was 18:30, "7" was 7:00), so a typed value
+  is read by `whenTyped` in ./when.ts, with the page's meanings and only the two the design asked for changed. No
+  unmarked row changes now ("every morning at 6" is refused as it was); 20 rows were added for the hour rules,
+  "next friday", "at 9 on mon", "wed 25", "noon", "evening", today and tomorrow, and a day with a time.

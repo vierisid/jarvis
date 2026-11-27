@@ -206,7 +206,28 @@ as opaque JSON under the same 64 KB limit.
   draw the line again after a word.
 - The page does not shake and keep the old value at once: the field waits
   for the `ack`, then closes (read) or empties and says "I did not get that"
-  (unread). A yes meanwhile is taken by the field and answers nothing.
+  (unread). A yes meanwhile is taken by the field and answers nothing, and
+  the strip does not close by itself while it waits.
+- Review of steps 5 and 6 (27 November 2026), what it changed:
+  - A send whose paper was still folding away drew its fuse on a notch that
+    had been put to rest (or retired) meanwhile. Resting now voids the
+    drawing, and the fuse is lit only for the line that is still up.
+  - The design's "readers.ts moved to words.ts, times through when.ts" read
+    typed times by when.ts's rules for sentences, which differ from the
+    page's: "6:30" became 18:30 (a schedule 12 hours off), "7" 7:00, "next
+    friday" nothing. A typed-word mode of the one reader (`whenTyped`)
+    keeps the page's meanings, with only the design's two changes
+    (whole-word days, "weekday"). "every morning at 6" is refused again,
+    and "monday at 9" into a day is Monday again.
+  - A stepped `value` that is none of the word's options is read as typed.
+  - Every typed reading is drawn again on the page that typed it, also when
+    it reads as the word stood. Chosen over refreshing the words of the same
+    line from a `state`: that would undo on screen a stepped word whose
+    answer is still on its way. A patch that is lost is still found by the
+    gap and the `at` beat, and the `state` that follows keeps the line as
+    the page has it: the old word can then stay on screen while the brain
+    holds the new one, until the line is drawn again.
+  - A typed answer that came after its line had gone says so in the field.
 
 ## Owner to confirm (steps 5 and 6)
 
@@ -214,12 +235,10 @@ Each is how it is built now, and one line to change.
 
 - A word typed into a schedule as "tomorrow" or "today" is refused. The page
   made it "day at 9:00", every day.
-- A day typed with a time into a word that holds a day ("monday at 9") is
-  refused. The page kept the day and dropped the time.
-- "every morning at 6" typed into a schedule is "day at 6:00". The page
-  refused it (the corpus row was not marked; it follows rule 262).
 - A value read from what was typed is drawn on every desktop that shows the
   line, not only on the one it was typed on.
+- A typed value that reaches the brain after its line had gone empties the
+  field, which says "That did not go in".
 - A typed value is drawn one round trip later (the brain reads it); on a slow
   remote brain the field stays up for that moment.
 - What was typed into a word that takes anything keeps `<`, `>`, `"`, `&` and
@@ -249,4 +268,5 @@ Open, none of them needed for steps 1 to 3:
 - Step 4 (protocol v2): done in "notch: protocol v2: what the notch is apart from what it does once, numbered, answers acknowledged and taken once, a fold the brain owns, and a page of another version refused"
 - Review of step 4: done in "notch: review of protocol v2: a decided fuse offers no undo, the first answer that holds a line stands, answers name their run of the brain, a late yes beats the fold, and a page nobody knows keeps no Esc"
 - Step 5 (reducer): done in "notch page: what the page holds and decides is a model with no screen and no clock, drawn by its own part and fed by one reading of the keys"
-- Step 6 (typed values, with point 3 C6): done in "notch: a value typed into a lit word goes to the brain as it was typed, is read there by the one reader, and one it cannot read is refused on the page"
+- Step 6 (typed values, with point 3 C6): done in "notch: a value typed into a lit word goes to the brain as it was typed, is read there by the one reader, and one it cannot read is refused on the page" and "notch page: a typed value whose answer never reached the brain can be sent again as it stands"
+- Review of steps 5 and 6: done in "notch page: a send put to rest while its paper folds away draws nothing after", "notch: a typed time means what it meant on the page, read by a typed-word mode of the one reader, but for whole-word days and weekday", "notch: a word value that is none of its options is read as typed, and every typed reading is drawn again on the page that typed it" and "notch page: a word's strip stays up while what was typed waits for the brain, and one that came too late says it did not go in"

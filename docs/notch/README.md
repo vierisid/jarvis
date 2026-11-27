@@ -3780,16 +3780,27 @@ other.
     English, with readers of its own: "month" became Monday, "sunset"
     Sunday, "money at 9" Monday at nine, and `Tell R&D "x < 5"` was sent as
     `Tell RD x 5`. Now the brain reads it with the word's options, their
-    other ways of saying them, and for a day or a time the one reader of a
-    time (rule 262), which reads a value whole or not at all: "weekday at
-    9" in a schedule is "Monday to Friday at 9:00", "every morning at 6" is
-    "day at 6:00". What it read is drawn on every desktop that shows the
-    line, and whoever waits on the line hears the value as it was read. What
-    it cannot read changes nothing and is heard of by nobody: the `ack` says
+    other ways of saying them, and for a day or a time the typed-word mode
+    of the one reader of a time (`whenTyped` in rule 262's
+    `src/notch/when.ts`). It keeps the page's old meanings with two changes:
+    a day is a whole word ("month", "sunset", "saturn" are refused), and
+    "weekday" in a schedule is "Monday to Friday at 9:00". A bare hour from
+    one to seven is still the afternoon ("7" is 19:00), an hour with its
+    minutes is as written ("6:30" is 6:30), "next friday" is Friday, the
+    time beside a day typed into a word that holds a day is dropped, and
+    "noon", "evening" and "every morning at 6" are refused, as they were.
+    "Today" and "tomorrow" in a schedule are refused (the page made them
+    every day). A value a page sends as stepped that is none of the word's
+    options is read as if it were typed. What it read is drawn again on
+    every desktop that shows the line, the one it was typed on too, and
+    whoever waits on the line hears the value as it was read. What it
+    cannot read changes nothing and is heard of by nobody: the `ack` says
     `unread`, the field empties and says "I did not get that", and stays for
-    another try. Until the brain has said, a yes is taken by the field and
-    answers nothing, so a line is never answered with the word as it stood.
-    A sentence typed into a word that takes one is kept as it was typed.
+    another try. One that came after its line had gone says "That did not
+    go in". Until the brain has said, the strip stays up and a yes is taken
+    by the field and answers nothing, so a line is never answered with the
+    word as it stood. A sentence typed into a word that takes one is kept
+    as it was typed.
 
 What is not done, or not proven:
 
