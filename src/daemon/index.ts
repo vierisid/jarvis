@@ -166,7 +166,7 @@ import { notchTurnNote } from "./notch-asks.ts";
 
 import { notchAgentRung } from "./notch-agents.ts";
 import { notchEnabled } from "../notch/switch.ts";
-import { createNotch, notchApiRoutes, notchReal, setNotchAttachments, setNotchFinishSetup, setNotchSetWatching, setNotchTurnStore, startNotch, stopNotchFirst } from "./notch-wiring.ts";
+import { createNotch, notchApiRoutes, notchIsUp, notchRefreshWhere, notchShowing, notchSuggestionsNow, notchTurnsReady, setNotchAttachments, setNotchFinishSetup, setNotchSetWatching, startNotch, stopNotchFirst } from "./notch-wiring.ts";
 import { PeerSetup } from "../peers/setup.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -2239,7 +2239,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!nextEnabled) closeSwitchedOffWorkflowCards();
         void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(nextEnabled, isDesktopEnabled())).catch(() => {});
         void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(nextEnabled, isDesktopEnabled())));
-        notchReal?.where?.refresh();
+        notchRefreshWhere();
         console.log(`[notch] watching was switched ${nextEnabled ? 'on' : 'off'} from the notch`);
         return nextEnabled && isDesktopEnabled();
       });
@@ -2278,7 +2278,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // the spoken answer must not wait on other machines.
           void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(nextEnabled, isDesktopEnabled())));
           // The notch's eyes follow the switch: closed while it is off.
-          notchReal?.where?.refresh();
+          notchRefreshWhere();
           const ack = seeing
             ? "Awareness back on. I can see your screen again."
             : nextEnabled
@@ -4770,7 +4770,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Not awaited: appliers run in one serialized queue, and a sidecar RPC can take 30s to give up.
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
       void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())));
-      notchReal?.where?.refresh();
+      notchRefreshWhere();
     });
     // desktop (#905): Settings writes it at run time (POST /api/config/desktop,
     // #1159). Tools, captures and the prompt read the switch live; what is
@@ -4785,7 +4785,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // follow desktop.enabled too (#1159).
       void pushPebbleBlinded(pebbleBlindDeps, pebbleBlinded(cfg.awareness?.enabled !== false, isDesktopEnabled()));
       void pushObserverPause(pebbleBlindDeps, asleepPause(observerPause(cfg.awareness?.enabled !== false, isDesktopEnabled())));
-      notchReal?.where?.refresh();
+      notchRefreshWhere();
     });
     // voice: resolveRealtimeVoice reads live config per call, so the dashboard
     // needs no applier, but a connected pebble keeps the realtime verdict it
@@ -4905,7 +4905,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // "done": a toast for the same thing would ask twice. The ids are
         // still marked as told, so a notch that goes away does not release
         // a backlog of toasts.
-        const notchTells = notchReal?.showing() === true;
+        const notchTells = notchShowing();
         for (const req of approvalManager.getPending()) {
           if (notifiedApprovalIds.has(req.id)) continue;
           // Held while screen awareness is off (#1314 follow-up): not shown,
@@ -5125,8 +5125,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     });
     // Instructions given on the notch run as turns of this same store. What
     // the last run left open is closed now, and answers nobody closed come back.
-    setNotchTurnStore(briefChatTransport);
-    notchReal?.asks?.resume();
+    notchTurnsReady(briefChatTransport);
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     setNotchAttachments(briefAttachments);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
@@ -5136,7 +5135,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // joins the count and is said when the person asks what waits. Only the
     // two toast senders and the proactive voice are swapped. The dashboard
     // card, the chat line and every other toast are as they were.
-    const notchSuggestions = notchReal?.suggestions;
+    const notchSuggestions = notchSuggestionsNow();
     const awarenessDelivery = new AwarenessDeliveryPolicy({
       sockets: notchSuggestions ? {
         broadcastAwarenessEvent: (event) => wsService.broadcastAwarenessEvent(event),
@@ -6067,7 +6066,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The notch's fixture promise needs no model: it is kept by its own
       // runner. With the demo gate open the executor runs for those alone.
       // Nothing else is announced or run, because nothing here could run it.
-      if (notchReal && notchDemoState === 'open') {
+      if (notchIsUp() && notchDemoState === 'open') {
         executor.start();
         console.warn('[notch] setup is not complete, so the promise executor is running for notch fixture promises only');
       }

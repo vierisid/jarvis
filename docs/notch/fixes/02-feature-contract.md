@@ -104,7 +104,7 @@ Known limits of step 0, left for later steps:
 - After a failed start the person has neither notch nor pebble: the desktop
   app is still told `notch: true` and its pebble is closed, because those
   gates read the switch, not whether the notch was made.
-- The daemon's wiring is pinned by a test that reads the source of
+- (Gone with step 7.) The daemon's wiring is pinned by a test that reads the source of
   `index.ts`. It is replaced by a real test when the wiring moves (step 7).
 - `talk`, the approvals' timeouts, the hello listener of day one and the
   listeners on the surface port are still not removed by stop. With the inbox
@@ -278,6 +278,42 @@ What step 6 does:
 - Tests that made fixtures through `attachNotchReal` make them through
   `attachNotchDev` now (setup only, every assertion is the same).
 
+After the review of step 6: the test items are made through
+`startNotchPart` (a throw leaves the brain and the notch up, and the
+dashboard says the test items are missing), and only with the gate open
+(`notchDevFor`, held by `dev.test.ts`); `notchMaySpeak` holds the quiet
+hours with no presence; a talk stopped while a look's files are fetched
+claims no dropped file; prefs calls `connect` on the back office.
+
+What step 7 does:
+
+- `src/daemon/notch-wiring.ts` holds the notch's part of the brain's start,
+  moved as it was (first commit): the surface and the demo
+  (`createNotch`), the peer parts, `attachNotchReal` with its deps literal,
+  the test items and the peer setup (`startNotch`), the notch's routes
+  (`notchApiRoutes`), the stop on the way down (`stopNotchFirst`), the
+  dashboard notice, and the holders. The only changes inside the moved
+  text: `googleAuth`, `bgAgent` and the workflow deps, which index.ts sets
+  again later, are asked for through getters, and the peer setup is handed
+  back through `setPeerSetup`.
+- The holders are module variables of notch-wiring.ts; index.ts reads none
+  of them now. The hooks (second commit): `notchIsUp`, `notchShowing`,
+  `notchSuggestionsNow`, `notchRefreshWhere`, `notchTurnsReady`, and the
+  setters for what index.ts makes for the notch (`setNotchAttachments`,
+  `setNotchSetWatching`, `setNotchFinishSetup`). The front source and the
+  capture guard are set inside `startNotch`, as before.
+- Order on the way down is unchanged: `stopNotchFirst` is where the stop
+  was, before the first `await`, with the commitment executor beside it.
+- The test that read the source of index.ts is gone. In its place,
+  `notch-wiring.test.ts` holds by what they do: nothing made with the switch
+  off, a surface or a making that throws leaves the brain up and tells the
+  dashboard once, the hooks answer as if there were no notch, and the way
+  down stops the notch first and the executor with it. The SIGTERM test
+  of `notch-start.test.ts` still runs the real handler.
+- Known limits: the holders are module state, so a second `startDaemon` in
+  one process would share them (none does). A making that fails puts back
+  the owner-word probe, not the front probe (as before).
+
 ## Owner decisions
 
 - 2026-11-26 (decision 8): step 0 lands alone first; a notch that fails to
@@ -306,6 +342,6 @@ What step 6 does:
   said over a line, promises, the pause and suggestions are features"
 - Step 4: done in "notch: asking, the look, the drop, the jobs and the agents are features, and the registry gathers the words, Home's rows, Settings, today, undo and hello in one order" and "notch: review of step 4: talk is stopped with the notch, a making that fails after the drop is pinned, and the registry says when a feature is kept"
 - Step 5: done in "notch: mail, standing, soon, calls, around, the day, presence, where, noticing, day one and people are features, and real.ts is a list" and "notch: review of step 5: the quiet hours hold before presence, promises and connect are called on their objects, a stopped notch keeps no eye, talk ends its pretends and late words, and lend goes"
-- Step 6: done in "notch: the fixed test items are made beside the notch, only while the demo gate is open, and are no longer in what the notch is given or hands back"
-- Step 7: pending
+- Step 6: done in "notch: review of step 6: the test items are made through the guard and only with the gate open, the quiet hours hold without presence, a stopped talk claims no dropped file, and prefs calls connect on the back office" and in "notch: the fixed test items are made beside the notch, only while the demo gate is open, and are no longer in what the notch is given or hands back"
+- Step 7: done in "daemon: the notch's part of the brain's start moves as it was into notch-wiring.ts, and the test that read index.ts is a test of what it does" and "daemon: what the rest of the brain asks of the notch goes through hooks of notch-wiring.ts"
 - Step 8: pending

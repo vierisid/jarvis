@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { listUnreadDashboardNotifications } from '../vault/dashboard-notifications.ts';
 import { NOTCH_FAILED_NOTICE, holdNotch, stopNotch } from './notch-start.ts';
-import { createNotch, notchReal, notchSurface, startNotch, stopNotchFirst } from './notch-wiring.ts';
+import { createNotch, notchIsUp, notchReal, notchRefreshWhere, notchShowing, notchSuggestionsNow, notchSurface, notchTurnStore, notchTurnsReady, startNotch, stopNotchFirst } from './notch-wiring.ts';
 
 const realSwitch = process.env.JARVIS_NOTCH;
 beforeEach(() => { initDatabase(':memory:', { quiet: true }); });
@@ -101,5 +101,16 @@ describe('the way down', () => {
     order.length = 0;
     stopNotchFirst(() => order.push('executor'));
     expect(order).toEqual([]);
+  });
+});
+
+describe('what the rest of the brain asks of the notch', () => {
+  test('with no notch each answers as if there were none, and the turn store is still kept for when there is one', () => {
+    expect(notchReal).toBeNull();
+    expect([notchIsUp(), notchShowing(), notchSuggestionsNow()]).toEqual([false, false, null]);
+    expect(() => notchRefreshWhere()).not.toThrow();
+    const store = { name: 'the turn store' } as never;
+    notchTurnsReady(store);
+    expect(notchTurnStore).toBe(store);
   });
 });

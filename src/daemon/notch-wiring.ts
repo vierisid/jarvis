@@ -97,8 +97,26 @@ export let notchSetWatching: ((on: boolean) => Promise<boolean>) | null = null;
 /** Completes the product's own first setup from the notch's day one. Null until what it starts can be started. */
 export let notchFinishSetup: (() => Promise<void>) | null = null;
 
+// What the rest of the brain asks of the notch: each answers as if there were none when there is none.
+
+/** Whether the notch was made. */
+export function notchIsUp(): boolean { return notchReal !== null; }
+/** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
+export function notchShowing(): boolean { return notchReal?.showing() === true; }
+/** Where suggestion toasts go while the notch is on: the count. Null without a notch. */
+export function notchSuggestionsNow(): NotchReal['suggestions'] | null { return notchReal?.suggestions ?? null; }
+/** Watching, or what may be watched, changed: the notch's eyes follow. */
+export function notchRefreshWhere(): void { notchReal?.where?.refresh(); }
+/**
+ * The turn store for instructions given on the notch is there. What the last run left open is closed now, and
+ * answers nobody closed come back.
+ */
+export function notchTurnsReady(store: BriefChatTransport): void {
+  notchTurnStore = store;
+  notchReal?.asks?.resume();
+}
+
 /** Sets what the brain makes elsewhere for the notch, as it is made. */
-export function setNotchTurnStore(store: BriefChatTransport | null): void { notchTurnStore = store; }
 export function setNotchAttachments(attachments: BriefAttachmentProvider | null): void { notchAttachments = attachments; }
 export function setNotchSetWatching(set: ((on: boolean) => Promise<boolean>) | null): void { notchSetWatching = set; }
 export function setNotchFinishSetup(finish: (() => Promise<void>) | null): void { notchFinishSetup = finish; }
