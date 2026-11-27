@@ -44,6 +44,7 @@ var (
 	tProcGetModuleHandleW  = testKernel32.NewProc("GetModuleHandleW")
 	tProcSetLayeredAttrs   = testUser32.NewProc("SetLayeredWindowAttributes")
 	tProcGetCursorPos      = testUser32.NewProc("GetCursorPos")
+	tProcGetWindowRect     = testUser32.NewProc("GetWindowRect")
 )
 
 type testWndClassEx struct {
@@ -322,15 +323,24 @@ func TestUIAPointerCheckRefusesACoveredElementWithoutMovingThePointer(t *testing
 //
 // The test window belongs to this process, so the last look under the
 // pointer (pointerPress) takes it for one of Jarvis's own windows and presses
-// nothing. That refusal comes only after the first check let the click
-// through and the pointer was moved, so it is a pass here; a real target is
-// never in the sidecar's own process.
+// nothing. That refusal, with the pointer at the button's centre, is what
+// shows the first check let the click through; a real target is never in
+// the sidecar's own process.
 func TestUIAPointerCheckIgnoresAClickThroughOverlay(t *testing.T) {
 	d := openTestDialog(t)
 	sendID := idOf(t, snapshotIDs(t), "101")
 	d.coverDialog(t, true)
-	if err := actOn(sendID, "double_click"); err != nil && !strings.Contains(err.Error(), "one of Jarvis's own windows came up") {
-		t.Fatalf("a click-through overlay refused the click: %v", err)
+	err := actOn(sendID, "double_click")
+	if err == nil || !strings.Contains(err.Error(), "one of Jarvis's own windows came up") {
+		t.Fatalf("got %v, want the click let through to the last look, which refuses the test's own window", err)
+	}
+	var r [4]int32 // left, top, right, bottom
+	if ok, _, _ := tProcGetWindowRect.Call(d.button, uintptr(unsafe.Pointer(&r))); ok == 0 {
+		t.Fatal("GetWindowRect failed")
+	}
+	want := [2]int32{(r[0] + r[2]) / 2, (r[1] + r[3]) / 2}
+	if got := cursorPos(); got[0] < want[0]-1 || got[0] > want[0]+1 || got[1] < want[1]-1 || got[1] > want[1]+1 {
+		t.Errorf("the pointer is at %v, want the button's centre %v", got, want)
 	}
 }
 
