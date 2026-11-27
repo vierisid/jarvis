@@ -122,11 +122,14 @@ func TestNonDarwinReportsNoApplicablePermissions(t *testing.T) {
 
 // The one openable pane off macOS. Windows has no readable status for it, so
 // the row exists purely to carry the link - losing the grant mode would lose
-// the row.
+// the row. macOS asks for the microphone with its own prompt.
 func TestWindowsMicrophoneKeepsItsPane(t *testing.T) {
 	want := grantNone
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		want = grantPane
+	case "darwin":
+		want = grantPrompt
 	}
 	if got := setupPermissionGrant("microphone"); got != want {
 		t.Errorf("microphone grant on %s = %q, want %q", runtime.GOOS, got, want)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,6 +56,16 @@ func TestParseEnrollDeepLink(t *testing.T) {
 func TestEnrollDeepLinkSocketRoundTrip(t *testing.T) {
 	orig := configDir
 	configDir = t.TempDir()
+	if runtime.GOOS == "darwin" {
+		// t.TempDir() on macOS is deep under /var/folders, and with enroll.sock
+		// it passes the 104-byte limit of a unix socket path: bind refuses it.
+		dir, err := os.MkdirTemp("/tmp", "jx")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		configDir = dir
+	}
 	defer func() { configDir = orig }()
 
 	got := make(chan string, 2)
