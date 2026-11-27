@@ -131,7 +131,17 @@ the shared seams.
 - macOS go test in CI: done in "ci: the sidecar's tests run on macOS", with
   a job limit in "ci: the macOS sidecar job has a limit". Never run by a
   runner.
-- Steps 4 to 8 and the Windows half of step 9: pending.
+- Windows half of step 9: done in "ci: the Windows sidecar job runs the
+  root package with a skip list", after "sidecar: six tests that assumed
+  Linux hold on Windows". Skip list: the Chromium tests (run on linux),
+  two launch_app tests that start /bin/sleep, one that reads
+  /etc/localtime. Run on a Windows 11 desktop: 923 tests, 9 listed, 905
+  pass, 9 skip themselves, 0 fail. One other run died with an access
+  violation inside SHGetFileInfo (exeIconPNG, notch_where_windows.go, on a
+  thread with no COM set up); not seen again alone or in a later full run.
+  Never run by a runner: whether windows-latest gives the window, pointer
+  and hotkey tests a desktop.
+- Steps 4 to 8: pending.
 
 ## Only a Mac can say (and one look on Windows)
 
