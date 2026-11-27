@@ -29,7 +29,8 @@
  * the count and comes round again.
  */
 import type { HumanRequest, InputField } from '../workflows/runtime/human-input-contract.ts';
-import { notchAskedHow, type NotchActionHow, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionHow, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import { playDecidable } from './decide.ts';
 import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
@@ -113,31 +114,38 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
   };
 
   /** An answer given from the notch, as it is written down (./actions.ts): which question of which workflow, and the answer. */
-  const noted = (request: HumanRequest, gave: string, how: NotchActionHow, outcome: NotchActionOutcome, fuse?: number): void => {
-    deps.actions?.record({
-      kind: 'question', outcome, what: `${gave}: ${oneLine(request.title)}`, target: request.workflowName || null,
-      asked: { seen: 'line', how, ...(fuse ? { fuseMs: fuse } : {}) },
-    });
-  };
+  const entry = (request: HumanRequest, gave: string, asked: NotchActionAsked, outcome: NotchActionOutcome): NotchActionEntry => ({
+    kind: 'question', outcome, what: `${gave}: ${oneLine(request.title)}`, target: request.workflowName || null, asked,
+  });
 
   async function send(request: HumanRequest, stage: NotchStage, said: NotchPart[], input: { decision: 'approve' | 'submit'; answers?: Record<string, unknown> }, gave: string, how: NotchActionHow): Promise<NotchItemEnd | 'again'> {
     const id = itemId(request);
     answering.add(id);
     try {
-      const fuse = await stage.fuse(said, fuseMs, { mood: 'work', who: request.workflowName || undefined });
-      if (fuse === 'undo') return 'again';
-      if (fuse === 'lost') return 'waits';
-      let result: { status: number; error?: string };
-      try {
-        result = deps.answer(request.id, { ...input, generation: request.generation ?? 0 });
-      } catch (error) {
-        log(`[notch] a workflow question could not be answered: ${error instanceof Error ? error.message : String(error)}`);
-        noted(request, gave, how, 'not_done', fuseMs);
+      // The fuse, the answer, and the one entry of what came of it (./decide.ts).
+      const decided = await playDecidable(stage, {
+        asked: { seen: 'line', how },
+        fuse: { say: said, ms: fuseMs, extras: { mood: 'work', who: request.workflowName || undefined } },
+        act: async () => {
+          let result: { status: number; error?: string };
+          try {
+            result = deps.answer(request.id, { ...input, generation: request.generation ?? 0 });
+          } catch (error) {
+            log(`[notch] a workflow question could not be answered: ${error instanceof Error ? error.message : String(error)}`);
+            return { outcome: 'not_done', result: null };
+          }
+          // Answered somewhere else a moment before (409, 404): this answer did nothing, and is not written down.
+          return { outcome: result.status === 409 || result.status === 404 ? null : result.status === 200 ? 'done' : 'not_done', result };
+        },
+        entry: (outcome, asked) => entry(request, gave, asked, outcome),
+      }, deps);
+      if (decided.took === 'undo') return 'again';
+      if (decided.took !== 'acted') return 'waits';
+      const result = decided.result;
+      if (!result) {
         await stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' });
         return 'waits';
       }
-      // Answered somewhere else a moment before (409, 404): this answer did nothing, and is not written down.
-      if (result.status !== 409 && result.status !== 404) noted(request, gave, how, result.status === 200 ? 'done' : 'not_done', fuseMs);
       if (result.status === 200) {
         await stage.say(['Answered. The workflow goes on.'], 2000, { mood: 'happy', mark: 'check' });
         return 'settled';
@@ -164,7 +172,7 @@ export function attachNotchQuestions(inbox: NotchInbox, deps: NotchQuestionDeps)
       return stage.say(['That did not go through. It still waits.'], 2600, { mood: 'sorry', mark: 'fail' }).then(() => 'waits' as const);
     }
     // Esc on its line was the no, with no fuse: a rejection that was taken is something the workflow acts on.
-    if (result.status === 200) noted(request, 'Rejected', 'key', 'done');
+    if (result.status === 200) deps.actions?.record(entry(request, 'Rejected', { seen: 'line', how: 'key' }, 'done'));
     // Rejected here, or already answered somewhere else: it no longer waits.
     if (result.status === 200 || result.status === 409 || result.status === 404) {
       stage.surface.act({ gesture: 'shake' });
