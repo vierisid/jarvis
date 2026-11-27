@@ -69,7 +69,8 @@ import { chaseWhat } from './standing.ts';
 import type { MailCalendarEvent } from './mail/proposer.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
-import type { NotchStage } from './stage.ts';
+import type { NotchLineExtras, NotchStage } from './stage.ts';
+import { playSend } from './decide.ts';
 import { NotchStageEnded } from './stage.ts';
 import { peerLoginName } from '../peers/host.ts';
 import { ENGINE_TARGET_SAID, peerServerAddress } from '../peers/install.ts';
@@ -425,9 +426,18 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
    * (./actions.ts). The line under the fuse is what the owner had before them. What they said or typed
    * started it, unless `how` says it was a pick. Never the words that went.
    */
-  const noted = (kind: NotchActionKind, to: string, what: string, sent: { ok: boolean; why?: string }, how: NotchActionHow = 'said'): void => {
-    deps.actions?.record({ kind, what, target: to, asked: { seen: 'line', how, fuseMs: NOTCH_PEOPLE_FUSE_MS }, outcome: notchSentOutcome(sent) });
-  };
+  async function sendOn<T extends { ok: boolean; why?: string }>(
+    stage: NotchStage,
+    line: { say: NotchPart[]; extras?: NotchLineExtras; back: NotchPart[]; kind: NotchActionKind; to: string; what: string; how?: NotchActionHow },
+    going: () => Promise<T>,
+  ): Promise<T | null> {
+    // The road after a yes (./decide.ts): the fuse, the send, and the one entry of what came of it.
+    return playSend(stage, {
+      say: line.say, ms: NOTCH_PEOPLE_FUSE_MS, extras: line.extras ?? { mood: 'work' }, back: line.back,
+      kind: line.kind, what: line.what, target: line.to, ...(line.how ? { how: line.how } : {}),
+      go: () => meanwhile(stage, ['Sending…'], going()),
+    }, deps);
+  }
 
   const times = attachNotchPeopleTime({
     inbox, link, store, person, log, now, actions: deps.actions,
@@ -1187,12 +1197,12 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     inbox.present('people-tell', async (stage) => {
       // Their own words: all of them go, and the line shows where they begin.
       // The dots say that it is on its way. Words that end a sentence themselves ("How are you?", "Call me.") stand as they are.
-      const went = await stage.fuse(['Telling ', em(to.name), ': ', beginning(words, NOTCH_PEOPLE_GOING_MAX), ...(words.length > NOTCH_PEOPLE_GOING_MAX || /[.!?…]$/.test(words) ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
       // Nobody saw the line burn: what nobody may have seen does not go out.
-      if (went === 'lost') return;
-      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, words));
-      noted('people_tell', to.name, `Message to ${to.name}`, sent);
+      const sent = await sendOn(stage, {
+        say: ['Telling ', em(to.name), ': ', beginning(words, NOTCH_PEOPLE_GOING_MAX), ...(words.length > NOTCH_PEOPLE_GOING_MAX || /[.!?…]$/.test(words) ? [] : ['…'])],
+        back: ['Taken back. Nothing was sent.'], kind: 'people_tell', to: to.name, what: `Message to ${to.name}`,
+      }, () => link.tell(to.id, words));
+      if (!sent) return;
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words });
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1203,11 +1213,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     const question = /[?]$/.test(asked) ? asked : `${asked.replace(/[.!\s]+$/, '')}?`;
     const options = peopleOptions(question).slice(0, PEER_OPTIONS_MAX);
     inbox.present('people-ask', async (stage) => {
-      const went = await stage.fuse(['Asking ', em(to.name), ': ', beginning(question, NOTCH_PEOPLE_GOING_MAX), ' Answers: ', em(options.join(', ')), '.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
-      if (went === 'lost') return;
-      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(question, { kind: 'ask', options })));
-      noted('people_ask', to.name, `Question to ${to.name}`, sent);
+      const sent = await sendOn(stage, {
+        say: ['Asking ', em(to.name), ': ', beginning(question, NOTCH_PEOPLE_GOING_MAX), ' Answers: ', em(options.join(', ')), '.'],
+        back: ['Taken back. Nothing was asked.'], kind: 'people_ask', to: to.name, what: `Question to ${to.name}`,
+      }, () => link.tell(to.id, peerNoteText(question, { kind: 'ask', options })));
+      if (!sent) return;
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'ask', words: question, options, ...(firstId ? { again: firstId } : {}) });
       await stage.say(firstId ? ['Asked again.'] : sent.delivered ? ['Asked ', em(to.name), '. I will tell you the answer.'] : ['Asked. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1383,13 +1393,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     inbox.present('people-agent', async (stage) => {
       const sentence = peerPlain(agent.sentence, PEER_AGENT_SENTENCE_MAX + 1);
       if (sentence.length > PEER_AGENT_SENTENCE_MAX) { await stage.say([em(agent.name), ' is made from a sentence too long to send. Say it to ', em(to.name), ' instead.'], 3800, { mood: 'sorry' }); return; }
-      const went = await stage.fuse(['Sending ', em(agent.name), ' to ', em(to.name), ': ', beginning(sentence, 80), ...(sentence.length > 80 ? [] : ['…'])], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
-      if (went === 'lost') return;
       const id = crypto.randomUUID();
       // The sentence is for a contact who is not on a Pillow: they read it, and can say it to their own assistant.
-      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(`An agent of mine, ${agent.name}: ${sentence}`, { kind: 'agent', id, name: agent.name, sentence })));
-      noted('people_agent', to.name, `Agent ${agent.name} sent to ${to.name}`, sent);
+      const sent = await sendOn(stage, {
+        say: ['Sending ', em(agent.name), ' to ', em(to.name), ': ', beginning(sentence, 80), ...(sentence.length > 80 ? [] : ['…'])],
+        back: ['Taken back. Nothing was sent.'], kind: 'people_agent', to: to.name, what: `Agent ${agent.name} sent to ${to.name}`,
+      }, () => link.tell(to.id, peerNoteText(`An agent of mine, ${agent.name}: ${sentence}`, { kind: 'agent', id, name: agent.name, sentence })));
+      if (!sent) return;
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.setMeta(`agent-out:${id}`, JSON.stringify({ peer: to.id, name: agent.name }));
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you whether ', em(to.name), ' takes ', agent.name, ' on.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 3000, { mark: 'check' });
@@ -1488,11 +1498,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
       // What goes is what was read, whole. Too much to be read on the other notch is not cut: it is said.
       if (!text || !what) { await stage.say(['I could not read what you circled. Show me again.'], 3400, { mood: 'sorry' }); return; }
       if (text.length > NOTCH_PEOPLE_TEXT_MAX) { await stage.say(['That is more than I can show ', em(to.name), ' in one go. Circle less of it.'], 3800, { mood: 'sorry' }); return; }
-      const went = await stage.fuse(['Showing ', em(to.name), ' what you circled', ...(app ? [' in ', app] : []), ': ', em(what), '…'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
-      if (went === 'lost') return;
-      const sent = await meanwhile(stage, ['Sending…'], link.tell(to.id, peerNoteText(text, { kind: 'look', what, app })));
-      noted('people_share', to.name, `Showed ${to.name} what was circled${app ? ` in ${app}` : ''}`, sent);
+      const sent = await sendOn(stage, {
+        say: ['Showing ', em(to.name), ' what you circled', ...(app ? [' in ', app] : []), ': ', em(what), '…'],
+        back: ['Taken back. Nothing was sent.'], kind: 'people_share', to: to.name, what: `Showed ${to.name} what was circled${app ? ` in ${app}` : ''}`,
+      }, () => link.tell(to.id, peerNoteText(text, { kind: 'look', what, app })));
+      if (!sent) return;
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.sent({ id: sent.id, to: to.id, kind: 'tell', words: what });
       await stage.say(sent.delivered ? ['Sent to ', em(to.name), '. I will tell you when it is seen.'] : ['Sent. It waits until ', em(`${to.name}'s`), ` ${NOTCH_NAME} is on.`], 2800, { mark: 'check' });
@@ -1625,11 +1635,11 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
     inbox.present('people-request', async (stage) => {
       const shown = beginning(words, NOTCH_PEOPLE_GOING_MAX);
       // A thing to be done there: they say yes to it, and then see every step of it on their own screen.
-      const went = await stage.fuse(['Asking ', em(theirs), ': ', /[.?!…]$/.test(shown) ? shown : `${shown}.`, ' ', em(to.name), peerAsksToDo(words) ? ' must say yes there, and watches.' : ' must say yes there.'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
-      if (went === 'lost') return;
-      const sent = await meanwhile(stage, ['Sending…'], link.ask(to.id, words.slice(0, 120), words));
-      noted('people_request', to.name, `Request to ${theirs}`, sent);
+      const sent = await sendOn(stage, {
+        say: ['Asking ', em(theirs), ': ', /[.?!…]$/.test(shown) ? shown : `${shown}.`, ' ', em(to.name), peerAsksToDo(words) ? ' must say yes there, and watches.' : ' must say yes there.'],
+        back: ['Taken back. Nothing was asked.'], kind: 'people_request', to: to.name, what: `Request to ${theirs}`,
+      }, () => link.ask(to.id, words.slice(0, 120), words));
+      if (!sent) return;
       if (!sent.ok) { await stage.say(sorry(sent), 3400, { mood: 'sorry' }); return; }
       store.request({ id: sent.id, dir: 'out', peer: to.id, words });
       following();
@@ -1955,12 +1965,13 @@ export function attachNotchPeople(deps: NotchPeopleDeps): NotchPeople {
         if (!pick) return 'waits';
         // It goes to another person, so it has the window to take it back, like anything that does: a pick
         // can be a slip of the hand, and one said aloud can be a word that was never said.
-        const went = await stage.fuse(['Telling ', em(from.name), ': ', em(pick), '…'], NOTCH_PEOPLE_FUSE_MS, { mood: 'work', who: from.name });
-        if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return 'waits'; }
-        if (went === 'lost') return 'waits';
-        const sent = await meanwhile(stage, ['Sending…'], link.tell(item.from, peerNoteText(pick, { kind: 'answer', pick }), { replyTo: item.id }));
+        const chosen = pick;
         // The pick was made on the line with their question.
-        noted('people_answer', from.name, `Answer to a question from ${from.name}`, sent, 'pick');
+        const sent = await sendOn(stage, {
+          say: ['Telling ', em(from.name), ': ', em(chosen), '…'], extras: { mood: 'work', who: from.name },
+          back: ['Taken back. Nothing was sent.'], kind: 'people_answer', to: from.name, what: `Answer to a question from ${from.name}`, how: 'pick',
+        }, () => link.tell(item.from, peerNoteText(chosen, { kind: 'answer', pick: chosen }), { replyTo: item.id }));
+        if (!sent) return 'waits';
         if (!sent.ok) { await stage.say(['I could not tell ', em(from.name), ' now. It waits for you.'], 3200, { mood: 'sorry' }); return 'waits'; }
         store.done(item.id);
         void link.seen(item.id);

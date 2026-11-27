@@ -29,7 +29,8 @@
  *     step. It arrives as text and is shown as text.
  *   - An answer counts only from the one the job was handed to.
  */
-import { notchSentOutcome, type NotchActions } from './actions.ts';
+import type { NotchActions } from './actions.ts';
+import { playSend } from './decide.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -114,15 +115,17 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
     inbox.present('people-job', async (stage) => {
       const open = names().map((key) => (key.startsWith('job-out:') ? read<Given>(key) : null)).find((one) => one?.chase === chase.id);
       if (open) { await stage.say(open.state === 'taken' ? [em(deps.person(open.peer)?.name ?? 'Somebody'), ' already has ', em(what), '.'] : ['I have offered it already. It has not been taken yet.'], 3200); return; }
-      const went = await stage.fuse(['Handing ', em(what), ' to ', em(to.name), ', with its history…'], NOTCH_JOB_FUSE_MS, { mood: 'work', who: to.name });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was handed over.'], 2000); return; }
-      if (went === 'lost') return;
       const id = crypto.randomUUID();
-      // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
-      const told = await link.tell(to.id, peerNoteText(
-        `Can you take this over from me: getting ${what}${chase.about ? ` on ${chase.about}` : ''} by ${chase.day}?`,
-        { kind: 'job', id, name: chase.name, address: chase.address, thing: chase.thing, about: chase.about, day: chase.day, steps: history(chase) }));
-      deps.actions?.record({ kind: 'people_job', what: `Offered ${to.name} to take over getting ${what}, with its history`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_JOB_FUSE_MS }, outcome: notchSentOutcome(told) });
+      // The road after a yes (./decide.ts): the fuse, the send, and the one entry of what came of it.
+      const told = await playSend(stage, {
+        say: ['Handing ', em(what), ' to ', em(to.name), ', with its history…'], ms: NOTCH_JOB_FUSE_MS, extras: { mood: 'work', who: to.name },
+        back: ['Taken back. Nothing was handed over.'], kind: 'people_job', what: `Offered ${to.name} to take over getting ${what}, with its history`, target: to.name,
+        // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
+        go: () => link.tell(to.id, peerNoteText(
+          `Can you take this over from me: getting ${what}${chase.about ? ` on ${chase.about}` : ''} by ${chase.day}?`,
+          { kind: 'job', id, name: chase.name, address: chase.address, thing: chase.thing, about: chase.about, day: chase.day, steps: history(chase) })),
+      }, deps);
+      if (!told) return;
       if (!told.ok) { await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
       keep(`job-out:${id}`, { peer: to.id, chase: chase.id, what, state: 'offered' });
       log('[notch] a job was offered to somebody, with its history');
@@ -135,11 +138,12 @@ export function attachNotchPeopleJobs(deps: NotchPeopleJobsDeps): NotchPeopleJob
     const to = mine ? deps.person(mine.peer) : null;
     inbox.present('people-job', async (stage) => {
       if (!mine || !to || mine.state !== 'taken') { await stage.say(['That one is not with anybody. Nothing to take back.'], 2800); return; }
-      const went = await stage.fuse(['Asking ', em(to.name), ' for ', em(mine.what), ' back…'], NOTCH_JOB_FUSE_MS, { mood: 'work', who: to.name });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
-      if (went === 'lost') return;
-      const told = await link.tell(to.id, peerNoteText(`Can I have ${mine.what} back?`, { kind: 'job-back', of: job }));
-      deps.actions?.record({ kind: 'people_job', what: `Asked ${to.name} for ${mine.what} back`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_JOB_FUSE_MS }, outcome: notchSentOutcome(told) });
+      const told = await playSend(stage, {
+        say: ['Asking ', em(to.name), ' for ', em(mine.what), ' back…'], ms: NOTCH_JOB_FUSE_MS, extras: { mood: 'work', who: to.name },
+        back: ['Taken back. Nothing was asked.'], kind: 'people_job', what: `Asked ${to.name} for ${mine.what} back`, target: to.name,
+        go: () => link.tell(to.id, peerNoteText(`Can I have ${mine.what} back?`, { kind: 'job-back', of: job })),
+      }, deps);
+      if (!told) return;
       if (!told.ok) { await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
       keep(`job-out:${job}`, { ...mine, asked: true });
       await stage.say(['Asked ', em(to.name), '. I will tell you what ', em(to.name), ' says.'], 2800, { mark: 'check', who: to.name });

@@ -32,7 +32,7 @@
  * a gate that was seen to burn out lets it go, and only then is anything
  * written down.
  */
-import type { NotchActionAsked, NotchActionEntry, NotchActionOutcome, NotchActions } from './actions.ts';
+import { notchSentOutcome, type NotchActionAsked, type NotchActionEntry, type NotchActionHow, type NotchActionKind, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
 import { NotchStageEnded, type NotchLineExtras, type NotchStage } from './stage.ts';
 
@@ -135,4 +135,32 @@ export async function playDecidable<H, R>(stage: NotchStage, item: NotchDecidabl
   // Written down once the yes stands: the fuse was seen to burn out. Then whatever came of it is.
   if (fuse === 'done' && acted.outcome !== null) deps.actions?.record(item.entry(acted.outcome, asked, acted.result));
   return { took: 'acted', fuse, result: acted.result };
+}
+
+/**
+ * Something sent to another person's Jarvis on the owner's word (./people.ts and the parts it is made of):
+ * the line under its fuse is all the owner sees, and what they said or typed (or a pick, `how`) started
+ * it. Taken back, `back` is said. Comes back with what the send said, or null when nothing went: taken
+ * back, or nobody saw the fuse burn out. One entry says what came of it (`notchSentOutcome`).
+ */
+export async function playSend<T extends { ok: boolean; why?: string }>(
+  stage: NotchStage,
+  send: {
+    say: NotchPart[]; ms: number; extras?: NotchLineExtras; back: NotchPart[];
+    kind: NotchActionKind; what: string; target: string; how?: NotchActionHow;
+    go(): Promise<T>;
+  },
+  deps: NotchDecideDeps = {},
+): Promise<T | null> {
+  const played = await playDecidable<never, T>(stage, {
+    asked: { seen: 'line', how: send.how ?? 'said' },
+    fuse: { say: send.say, ms: send.ms, ...(send.extras ? { extras: send.extras } : {}) },
+    act: async () => {
+      const sent = await send.go();
+      return { outcome: notchSentOutcome(sent), result: sent };
+    },
+    entry: (outcome, asked) => ({ kind: send.kind, what: send.what, target: send.target, asked, outcome }),
+  }, deps);
+  if (played.took === 'undo') { await stage.say(send.back, 2000); return null; }
+  return played.took === 'acted' ? played.result : null;
 }

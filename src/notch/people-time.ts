@@ -34,6 +34,7 @@
  *   - Each side says a time in its own clock.
  */
 import { notchAskedHow, notchSentOutcome, type NotchActions } from './actions.ts';
+import { playSend } from './decide.ts';
 import type { NotchInbox } from './inbox.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchPart } from './protocol.ts';
@@ -151,21 +152,27 @@ export function attachNotchPeopleTime(deps: NotchPeopleTimeDeps): NotchPeopleTim
       if (!mine) { await stage.say(['I cannot read your calendar right now. Say a time, and I ask ', em(to.name), ' for it.'], 4200, { mood: 'sorry' }); return; }
       if (mine.length === 0) { await stage.say([`You have no free ${minutes === 60 ? 'hour' : 'half hour'} in the next seven days.`], 3600); return; }
       // Their own asking is the yes. What leaves is when they are free, and nothing else: said, with a moment to take it back.
-      const went = await stage.fuse(['Comparing calendars with ', em(theirs(to)), ". Neither of you sees the other's."], NOTCH_TIME_FUSE_MS, { mood: 'think', who: to.name });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2000); return; }
-      if (went === 'lost') return;
       const id = crypto.randomUUID();
       const sent = mine.slice(0, PEER_TIME_FREE_MAX);
-      compared.set(id, { peer: to.id, minutes, free: sent });
-      const answer = new Promise<{ fits: number[]; blind: boolean } | null>((resolve) => {
-        waiting.set(id, resolve);
-        const timer = setTimeout(() => resolve(null), deps.waitMs ?? NOTCH_TIME_WAIT_MS);
-        (timer as { unref?: () => void }).unref?.();
-      });
-      // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
-      const told = await link.tell(to.id, peerNoteText(`When are we both free for ${length(minutes)} in the next days? I asked from my ${NOTCH_NAME}.`, { kind: 'time-ask', id, minutes, free: sent.map((at) => Math.round(at / MINUTE)) }));
+      /** The answer, waited for from the moment the times go. */
+      let answer: Promise<{ fits: number[]; blind: boolean } | null> = Promise.resolve(null);
+      // The road after a yes (./decide.ts): the fuse, the send, and the one entry of what came of it.
       // What left: when the owner is free, and nothing else of the calendar.
-      deps.actions?.record({ kind: 'people_time', what: `Sent ${theirs(to)} your free times, to find one for both`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_TIME_FUSE_MS }, outcome: notchSentOutcome(told) });
+      const told = await playSend(stage, {
+        say: ['Comparing calendars with ', em(theirs(to)), ". Neither of you sees the other's."], ms: NOTCH_TIME_FUSE_MS, extras: { mood: 'think', who: to.name },
+        back: ['Taken back. Nothing was sent.'], kind: 'people_time', what: `Sent ${theirs(to)} your free times, to find one for both`, target: to.name,
+        go: () => {
+          compared.set(id, { peer: to.id, minutes, free: sent });
+          answer = new Promise((resolve) => {
+            waiting.set(id, resolve);
+            const timer = setTimeout(() => resolve(null), deps.waitMs ?? NOTCH_TIME_WAIT_MS);
+            (timer as { unref?: () => void }).unref?.();
+          });
+          // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
+          return link.tell(to.id, peerNoteText(`When are we both free for ${length(minutes)} in the next days? I asked from my ${NOTCH_NAME}.`, { kind: 'time-ask', id, minutes, free: sent.map((at) => Math.round(at / MINUTE)) }));
+        },
+      }, deps);
+      if (!told) return;
       if (!told.ok) { waiting.delete(id); compared.delete(id); await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
       const wait = stage.id();
       stage.put({ id: wait, kind: 'work', say: ['Waiting for ', em(theirs(to)), '…'], steps: 0, done: 0, mood: 'work', who: to.name });
@@ -197,12 +204,13 @@ export function attachNotchPeopleTime(deps: NotchPeopleTimeDeps): NotchPeopleTim
 
   /** Asks the other person for one time. */
   async function want(stage: NotchStage, to: PeerPerson, minutes: number, at: number, rest: number[], only: boolean): Promise<void> {
-    const went = await stage.fuse(['Asking ', em(to.name), ` for ${length(minutes)}, `, em(says(at)), only ? ', the one time free for both…' : '…'], NOTCH_TIME_FUSE_MS, { mood: 'work', who: to.name });
-    if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
-    if (went === 'lost') return;
     const id = crypto.randomUUID();
-    const told = await link.tell(to.id, peerNoteText(`Can we take ${length(minutes)} on ${says(at)} (my time)? I asked from my ${NOTCH_NAME}.`, { kind: 'time-want', id, at: Math.round(at / MINUTE), minutes }));
-    deps.actions?.record({ kind: 'people_time', what: `Asked ${to.name} for ${length(minutes)} on ${says(at)}`, target: to.name, asked: { seen: 'line', how: 'pick', fuseMs: NOTCH_TIME_FUSE_MS }, outcome: notchSentOutcome(told) });
+    const told = await playSend(stage, {
+      say: ['Asking ', em(to.name), ` for ${length(minutes)}, `, em(says(at)), only ? ', the one time free for both…' : '…'], ms: NOTCH_TIME_FUSE_MS, extras: { mood: 'work', who: to.name },
+      back: ['Taken back. Nothing was asked.'], kind: 'people_time', what: `Asked ${to.name} for ${length(minutes)} on ${says(at)}`, target: to.name, how: 'pick',
+      go: () => link.tell(to.id, peerNoteText(`Can we take ${length(minutes)} on ${says(at)} (my time)? I asked from my ${NOTCH_NAME}.`, { kind: 'time-want', id, at: Math.round(at / MINUTE), minutes })),
+    }, deps);
+    if (!told) return;
     if (!told.ok) { await stage.say(sorry(told.why), 3400, { mood: 'sorry' }); return; }
     remember(id, { peer: to.id, at, minutes, rest });
     await stage.say(told.delivered ? ['Asked ', em(to.name), '. I will tell you what ', em(to.name), ' says.'] : ['Asked. It waits until ', em(theirs(to)), ' is on.'], 2800, { mark: 'check', who: to.name });

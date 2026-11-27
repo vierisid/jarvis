@@ -82,6 +82,7 @@ import { notchSentOutcome, type NotchActions } from './actions.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { playSend } from './decide.ts';
 import type { NotchInbox } from './inbox.ts';
 import { NOTCH_NAME } from './name.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
@@ -392,13 +393,15 @@ export function attachNotchPeopleFiles(deps: NotchPeopleFilesDeps): NotchPeopleF
   function want(to: PeerPerson, what: string): void {
     const theirs = `${to.name}'s ${NOTCH_NAME}`;
     inbox.present('people-want', async (stage) => {
-      const went = await stage.fuse(['Asking ', em(theirs), ' for ', em(what), '. ', em(to.name), ' must say yes there.'], NOTCH_FILE_FUSE_MS, { mood: 'work' });
-      if (went === 'undo') { await stage.say(['Taken back. Nothing was asked.'], 2000); return; }
-      if (went === 'lost') return;
       const id = crypto.randomUUID();
-      // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
-      const sent = await link.tell(to.id, peerNoteText(`Can you send me a file: ${what}? I asked from my ${NOTCH_NAME}.`, { kind: 'file-want', id, what }));
-      deps.actions?.record({ kind: 'people_file_ask', what: `Asked ${theirs} for a file: ${what}`, target: to.name, asked: { seen: 'line', how: 'said', fuseMs: NOTCH_FILE_FUSE_MS }, outcome: notchSentOutcome(sent) });
+      // The road after a yes (./decide.ts): the fuse, the send, and the one entry of what came of it.
+      const sent = await playSend(stage, {
+        say: ['Asking ', em(theirs), ' for ', em(what), '. ', em(to.name), ' must say yes there.'], ms: NOTCH_FILE_FUSE_MS, extras: { mood: 'work' },
+        back: ['Taken back. Nothing was asked.'], kind: 'people_file_ask', what: `Asked ${theirs} for a file: ${what}`, target: to.name,
+        // The sentence is for a contact who is not on a Pillow: they read it, and answer in their own words.
+        go: () => link.tell(to.id, peerNoteText(`Can you send me a file: ${what}? I asked from my ${NOTCH_NAME}.`, { kind: 'file-want', id, what })),
+      }, deps);
+      if (!sent) return;
       if (!sent.ok) {
         await stage.say(sent.why === 'signed_out' ? ['You are signed out. It was not asked.'] : sent.why === 'offline' || sent.why === 'down' ? ['I have no line to the others now. It was not asked.'] : ['That could not be asked.'], 3400, { mood: 'sorry' });
         return;
