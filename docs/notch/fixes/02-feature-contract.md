@@ -310,9 +310,16 @@ What step 7 does:
   dashboard once, the hooks answer as if there were no notch, and the way
   down stops the notch first and the executor with it. The SIGTERM test
   of `notch-start.test.ts` still runs the real handler.
+- After the review of step 7, the same file also holds: a failed making
+  puts back Pause, the owner-word probes, the front source and the capture
+  guard; with the switch off Pause is put back to off; a notch that is made
+  (a stand-in for `attachNotchReal`) is held for the way down; and a narrow
+  check of `handleShutdown` alone holds that `stopNotchFirst` comes before
+  its first `await`. Each fails under its mutant (holdNotch removed, the
+  stop moved below an await, the undo removed, the Pause line removed).
+  `resetNotchWiring` puts the holders back between tests.
 - Known limits: the holders are module state, so a second `startDaemon` in
-  one process would share them (none does). A making that fails puts back
-  the owner-word probe, not the front probe (as before).
+  one process would share them (none does).
 
 ## Owner decisions
 

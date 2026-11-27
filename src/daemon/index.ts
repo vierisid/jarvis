@@ -163,7 +163,6 @@ import { initNotchDemoGate } from "../notch/demo-gate.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
 import { notchTurnNote } from "./notch-asks.ts";
-
 import { notchAgentRung } from "./notch-agents.ts";
 import { notchEnabled } from "../notch/switch.ts";
 import { createNotch, notchApiRoutes, notchIsUp, notchRefreshWhere, notchShowing, notchSuggestionsNow, notchTurnsReady, setNotchAttachments, setNotchFinishSetup, setNotchSetWatching, startNotch, stopNotchFirst } from "./notch-wiring.ts";

@@ -14,7 +14,7 @@
  * message and makes no surface), `startNotch` only puts Pause back to its
  * meaning with the switch off, and the routes are absent.
  */
-import type { BriefAttachmentProvider } from '../brief/attachments';
+import type { BriefAttachmentProvider } from '../brief/attachments.ts';
 import { appendFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -123,6 +123,13 @@ export function setNotchFinishSetup(finish: (() => Promise<void>) | null): void 
 
 /** A notch that could not be started is said on the dashboard: kept for the one that opens next, and shown at once in one that is open. */
 let notchNotice: (message: string) => void = (message) => notchDashboardNotice(message);
+
+/** For tests: what the notch holds, as before the brain's start, or with the notch given. */
+export function resetNotchWiring(held: { real?: NotchReal | null } = {}): void {
+  notchTurnStore = null; notchAttachments = null; notchSurface = null; notchDemo = null; notchReal = held.real ?? null; notchFixtures = null;
+  notchSetWatching = null; notchFinishSetup = null;
+  notchNotice = (message) => notchDashboardNotice(message);
+}
 
 export interface NotchEarly {
   sidecarManager: SidecarManager;

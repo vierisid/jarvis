@@ -748,6 +748,11 @@ export function setOwnerWordProbe(next: OwnerWordProbe | null): void {
   if (next === null) frontProbe = null;
 }
 
+/** Whether the machine can be asked what a click lands on, and which window a key goes to. */
+export function ownerWordProbes(): { press: boolean; front: boolean } {
+  return { press: probe !== null, front: frontProbe !== null };
+}
+
 /**
  * Asks the machine which window a key press or typed text goes to: its
  * program and title (`element_id` given: the window of that element). The

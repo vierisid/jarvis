@@ -201,6 +201,10 @@ let frontSource: () => { name: string; site: string } | null = () => null;
 export function setNotchFrontSource(source: (() => { name: string; site: string } | null) | null): void {
   frontSource = source ?? (() => null);
 }
+/** What the notch says is in front now, as the turn note reads it. */
+export function notchFrontNow(): { name: string; site: string } | null {
+  return frontSource();
+}
 
 /**
  * Which app the owner is in, said to the agent so that "how do I start
