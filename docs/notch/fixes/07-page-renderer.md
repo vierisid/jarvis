@@ -184,6 +184,47 @@ as opaque JSON under the same 64 KB limit.
 - Messages keep their order through the desktop app: `rest` to the other
   desktop is sent before the next `show`, and must arrive before it.
 
+## What steps 5 and 6 proved wrong in the design, or left out
+
+- Step 5 is `core.ts` (the model and every rule the page applies, no DOM, no
+  timers), `render.ts` and `input.ts`, as designed. `index.ts` is about 450
+  lines, not 150: the Esc, hand and `at` timers, the outline and the
+  failed-draw restore stay there. The model is a value; the joining code
+  holds the one variable and the one wake timer (`notchWakeAt`).
+- "The tests stop sleeping" was not done: the contract tests already run on a
+  test clock where they matter, and none had to change for step 5. The new
+  table tests are `core.test.ts`.
+- What only the page can see (a sheet's end on screen, the text in a field,
+  whether a letter was in sight) is handed to the model with each input, and
+  looked at only when the model reads it: looking at a sheet's end marks it
+  seen, and did so before only on a yes.
+- Step 6 is additive in version 2, no version change: a typed value is
+  `word` with `text` (no `value`), and the `ack` carries `unread: true` when
+  the brain could not read it. An older page never sends `text`; an older
+  brain takes such an answer as a word that changed to nothing. The brain
+  pushes the edited line to every page, since a feature does not always
+  draw the line again after a word.
+- The page does not shake and keep the old value at once: the field waits
+  for the `ack`, then closes (read) or empties and says "I did not get that"
+  (unread). A yes meanwhile is taken by the field and answers nothing.
+
+## Owner to confirm (steps 5 and 6)
+
+Each is how it is built now, and one line to change.
+
+- A word typed into a schedule as "tomorrow" or "today" is refused. The page
+  made it "day at 9:00", every day.
+- A day typed with a time into a word that holds a day ("monday at 9") is
+  refused. The page kept the day and dropped the time.
+- "every morning at 6" typed into a schedule is "day at 6:00". The page
+  refused it (the corpus row was not marked; it follows rule 262).
+- A value read from what was typed is drawn on every desktop that shows the
+  line, not only on the one it was typed on.
+- A typed value is drawn one round trip later (the brain reads it); on a slow
+  remote brain the field stays up for that moment.
+- What was typed into a word that takes anything keeps `<`, `>`, `"`, `&` and
+  backticks. The page drew text as text, and so does the brain's mail.
+
 ## Owner decisions
 
 Open, none of them needed for steps 1 to 3:
@@ -207,5 +248,5 @@ Open, none of them needed for steps 1 to 3:
 - Review of steps 1 to 3: done in "notch: review of point 7: a fuse nobody could read is not vouched for, an answered line stays answered, and the hello has a real cap"
 - Step 4 (protocol v2): done in "notch: protocol v2: what the notch is apart from what it does once, numbered, answers acknowledged and taken once, a fold the brain owns, and a page of another version refused"
 - Review of step 4: done in "notch: review of protocol v2: a decided fuse offers no undo, the first answer that holds a line stands, answers name their run of the brain, a late yes beats the fold, and a page nobody knows keeps no Esc"
-- Step 5 (reducer): pending
-- Step 6 (typed values): pending
+- Step 5 (reducer): done in "notch page: what the page holds and decides is a model with no screen and no clock, drawn by its own part and fed by one reading of the keys"
+- Step 6 (typed values, with point 3 C6): done in "notch: a value typed into a lit word goes to the brain as it was typed, is read there by the one reader, and one it cannot read is refused on the page"

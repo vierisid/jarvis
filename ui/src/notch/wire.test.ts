@@ -207,12 +207,14 @@ describe('the brain and the page over a pipe that loses, copies and reorders', (
       { type: 'patch', seq: 4, edit: { id: 'w', done: 2, away: 'none' } },
       { type: 'effect', seq: 5, gesture: 'wink', lip: 'reach', aim: 0.25, body: 'nod', kick: -100, edge: 'carry', side: 'right', mood: 'happy', birth: 'eye', gulp: true },
       { type: 'ack', n: 7, took: false },
+      { type: 'ack', n: 8, took: true, unread: true },
       { type: 'refuse', v: NOTCH_PROTOCOL_VERSION },
     ];
     for (const message of toPage) expect(readNotchToPage(JSON.parse(JSON.stringify(message)))).toEqual({ message });
     const fromPage: NotchFromPage[] = [
       { type: 'hello', v: NOTCH_PROTOCOL_VERSION, page: 'p1' }, { type: 'answer', n: 1, id: 'o1', act: 'yes', since: 400 },
-      { type: 'answer', n: 2, id: 'f', act: 'done', seen: true, since: 5000 }, { type: 'hand', id: 'o1', on: true }, { type: 'at', seq: 4 },
+      { type: 'answer', n: 2, id: 'f', act: 'done', seen: true, since: 5000 }, { type: 'answer', n: 3, id: 'w', act: 'word', word: 'when', text: 'Tell R&D "x < 5"' },
+      { type: 'hand', id: 'o1', on: true }, { type: 'at', seq: 4 },
       { type: 'open' }, { type: 'stop' }, { type: 'drag', state: 'lost' }, { type: 'signed-out' },
     ];
     for (const message of fromPage) expect(parseNotchFromPage(JSON.parse(JSON.stringify(message)))).toEqual(message);
@@ -802,5 +804,90 @@ describe('what the review of step 4 found', () => {
     w.brain.show(offer('n1', { say: ['New run line'], fold: 0 } as Partial<NotchLine>));
     w.clock.advance(60_000 + 3000);
     expect(pc.text()).toContain('New run line');
+  });
+});
+
+describe('a value typed into a lit word', () => {
+  const schedule = (): NotchLine => offer('a1', {
+    say: ['Every ', { word: { name: 'when', value: 'Monday at 9:00', options: ['Monday at 9:00'], label: 'Schedule', read: 'sched' } }, ', send me the news.'], fold: 0,
+  } as Partial<NotchLine>);
+  /** Opens the word's field on a desk and types `text` into it, then Enter. */
+  const type = (desk: Desk, text: string): HTMLInputElement => {
+    if (!desk.root.querySelector('.pick input')) desk.root.querySelector<HTMLElement>('.say .live')!.click();
+    const field = desk.root.querySelector<HTMLInputElement>('.pick input')!;
+    field.value = text;
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    return field;
+  };
+
+  test('goes to the brain as it was typed, and what the brain read is drawn on every desktop', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    const mac = w.desk('mac');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    type(pc, 'weekday at 9');
+    expect(sentAnswers(pc, 'word')).toEqual([expect.objectContaining({ word: 'when', text: 'weekday at 9' })]);
+    expect(sentAnswers(pc, 'word')[0]).not.toHaveProperty('value');
+    // Whoever waits on the line hears it as it was read, with what was typed beside it.
+    expect(answers(w, 'word')).toEqual([expect.objectContaining({ word: 'when', value: 'Monday to Friday at 9:00', text: 'weekday at 9' })]);
+    expect(pc.root.querySelector('.pick input')).toBeNull();
+    expect(pc.text()).toContain('Every Monday to Friday at 9:00');
+    expect(mac.text()).toContain('Every Monday to Friday at 9:00');
+  });
+
+  test('one the brain cannot read changes nothing and is heard of by nobody: the field says so and stays', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    // "month" was Monday on the page; "sunset" Sunday.
+    for (const text of ['month', 'sunset']) {
+      const field = type(pc, text);
+      expect(field.isConnected).toBe(true);
+      expect(field.placeholder).toBe('I did not get that');
+      expect(field.classList.contains('no')).toBe(true);
+    }
+    expect(sentAnswers(pc, 'word').map((answer) => answer.text)).toEqual(['month', 'sunset']);
+    expect(answers(w, 'word')).toEqual([]);
+    expect(pc.text()).toContain('Every Monday at 9:00');
+    // A yes now is a yes to the line as it stands.
+    pc.root.querySelector<HTMLInputElement>('.pick input')!.value = '';
+    pc.key('yes');
+    expect(answers(w, 'yes')).toHaveLength(1);
+  });
+
+  test('a refusal whose ack was lost is told again with the answer sent again', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show(schedule());
+    w.clock.advance(400);
+    let lose = 1;
+    pc.down.fate = (m) => (m.type === 'ack' && lose-- > 0 ? 'lose' : 'carry');
+    const field = type(pc, 'month');
+    expect(field.placeholder).not.toBe('I did not get that');
+    // While the brain has not said, a yes is taken by the field: the line is not answered with the word as it was.
+    pc.key('yes');
+    expect(sentAnswers(pc, 'yes')).toEqual([]);
+    w.clock.advance(NOTCH_ANSWER_AGAIN_MS);
+    expect(sentAnswers(pc, 'word')).toHaveLength(2);
+    expect(field.placeholder).toBe('I did not get that');
+    expect(answers(w, 'word')).toEqual([]);
+  });
+
+  test('a sentence typed into a word that takes one reaches the brain whole', () => {
+    const w = make();
+    const pc = w.desk('pc');
+    w.brain.show({
+      id: 'd', kind: 'sheet', say: ['Reply to ', { em: 'Sam' }], yes: 'send', stay: true,
+      blocks: [{ kind: 'row', lead: 'Tell me', say: [{ word: { name: 'told', value: 'tell me', options: ['say no'], label: 'Tell', free: true, long: true } }] }],
+    } as NotchLine);
+    w.clock.advance(400);
+    pc.root.querySelector<HTMLElement>('.sheet .live')!.click();
+    const field = pc.root.querySelector<HTMLInputElement>('.pick input')!;
+    field.value = 'Tell R&D "x < 5"';
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(answers(w, 'word')).toEqual([expect.objectContaining({ word: 'told', value: 'Tell R&D "x < 5"' })]);
+    expect(pc.root.querySelector('.sheet')?.textContent).toContain('Tell R&D "x < 5"');
   });
 });

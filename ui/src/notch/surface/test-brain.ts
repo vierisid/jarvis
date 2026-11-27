@@ -7,7 +7,10 @@
  * a `patch` or an `effect`, numbered in a row, a line with its rules written
  * into it by the brain's own `notchRuled`), so that everything a test tells
  * the page goes through the page's reader as on a desktop. And it does to
- * the page's answers what the brain does: it says `ack` to each, at once.
+ * the page's answers what the brain does: it says `ack` to each, at once,
+ * and reads a value typed into a lit word with the brain's own reader
+ * (src/notch/words.ts): what it read is drawn by a `patch`, and what it
+ * could not read is said on the `ack`.
  *
  * What the test is handed of what the page said is the answer as the person
  * gave it: without its number, its timing and the run of the brain it answers, and without the page's own
@@ -17,7 +20,8 @@
  * turns the acknowledging off with `acks`.
  */
 import { NOTCH_PROTOCOL_VERSION, notchRuled } from '../../../../src/notch/protocol.ts';
-import type { NotchFromPage, NotchLine } from '../../../../src/notch/protocol.ts';
+import type { NotchEdit, NotchFromPage, NotchLine } from '../../../../src/notch/protocol.ts';
+import { notchReadTyped, notchSetWord, notchWordEdit } from '../../../../src/notch/words.ts';
 import type { NotchSurface, NotchSurfaceOptions } from './index.ts';
 
 /** What a test tells the page: one of the plain words below, or a message as it is. */
@@ -100,6 +104,18 @@ export function scripted(
   return (root, send, options) => {
     const brain = scriptedBrain();
     const wire: NotchFromPage[] = [];
+    /** The line this brain last put up, as it holds it: a typed word is read against it. */
+    let up: NotchLine | null = null;
+    const keep = (message: unknown): void => {
+      if (typeof message !== 'object' || message === null) return;
+      const m = message as { type?: unknown; line?: unknown } & Partial<NotchEdit>;
+      if ((m.type === 'show' || m.type === 'state') && m.line !== undefined) up = m.line ? structuredClone(ruled(m.line)) as NotchLine : null;
+      else if (m.type === 'rest') up = null;
+      else if (m.type === 'update' && up && m.id === up.id) {
+        if (m.say) up.say = structuredClone(m.say);
+        if (m.blocks && 'blocks' in up) (up as { blocks: unknown }).blocks = structuredClone(m.blocks);
+      }
+    };
     // eslint-disable-next-line prefer-const
     let page: ScriptedSurface;
     const real = create(root, (message) => {
@@ -108,7 +124,14 @@ export function scripted(
       if (message.type !== 'answer') { send(message); return; }
       const { n, since: _since, brain: _brain, ...said } = message;
       send(said);
-      if (page.acks && n !== undefined) real.receive({ type: 'ack', n, took: true });
+      const typed = message.act === 'word' && message.word !== undefined && message.text !== undefined && message.value === undefined;
+      const line = up && up.id === message.id ? up : null;
+      const read = typed && line ? notchReadTyped(line, message.word!, message.text!) : null;
+      if (page.acks && n !== undefined) real.receive({ type: 'ack', n, took: true, ...(typed && read === null ? { unread: true } : {}) });
+      if (typed && line && read !== null) {
+        notchSetWord(line, message.word!, read);
+        for (const each of brain.messages({ type: 'update', ...notchWordEdit(line, message.word!) })) real.receive(each as never);
+      }
     }, options);
     page = {
       ...real,
@@ -118,6 +141,7 @@ export function scripted(
       seq: brain.seq,
       raw: (message) => real.receive(message as never),
       receive(message) {
+        keep(message);
         brain.name = page.brain;
         for (const each of brain.messages(message)) real.receive(each as never);
       },

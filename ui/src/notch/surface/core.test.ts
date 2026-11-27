@@ -205,6 +205,20 @@ describe('what the person did', () => {
     expect(done.out).toEqual([]);
   });
 
+  test('a value typed into a word is said as it was typed, for the brain to read, and the word stays as it was', () => {
+    const line: NotchLine = { id: 'w', kind: 'offer', yes: 'go', say: ['Every ', { word: { name: 'when', value: 'Monday at 9:00', options: ['Monday at 9:00'], read: 'sched' } }] };
+    const model = upAt(line);
+    const typed = notchInput(model, { kind: 'word', name: 'when', value: 'Tell R&D "x < 5"', typed: true }, 2000);
+    expect(answers(typed.out)).toEqual([{ type: 'answer', id: 'w', act: 'word', word: 'when', text: 'Tell R&D "x < 5"', since: 1000, brain: BRAIN }]);
+    expect(typed.model.line).toBe(model.line);
+  });
+
+  test('an ack says whether a typed value was read', () => {
+    const model = notchMessage(notchPageStart(), state(null)).model;
+    expect(notchMessage(model, { type: 'ack', n: 3, took: true, unread: true }).out).toEqual([{ do: 'ack', n: 3, took: true, unread: true }]);
+    expect(notchMessage(model, { type: 'ack', n: 3, took: true, unread: 'yes' }).out).toEqual([{ do: 'ack', n: 3, took: true }]);
+  });
+
   test('notchWithWord adds a value that is not an option, and leaves a line without the word as it is', () => {
     const line: NotchLine = { id: 'w', kind: 'offer', say: [{ word: { name: 'when', value: 'Friday', options: ['Friday'] } }] };
     const next = notchWithWord(line, 'when', 'Monday');

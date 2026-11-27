@@ -39,7 +39,7 @@ import type { RawInteraction } from '../skills/recorder.ts';
 import { PeerLink } from '../peers/link.ts';
 import { PeerStore } from '../peers/store.ts';
 import { FakeEngine, FakeServer } from '../peers/testing/fake-engines.ts';
-import { READ as PAGE_READ, readLive } from '../../ui/src/notch/surface/readers.ts';
+import { NOTCH_WORD_READ, notchReadWord } from './words.ts';
 import { agentSentence, attachNotchAgents } from './agents.ts';
 import { attachNotchAsks, type NotchAskHow, type NotchSided, type NotchTurnDoor } from './asks.ts';
 import { attachNotchCalls } from './call.ts';
@@ -613,7 +613,7 @@ function corpus(): { sections: Section[]; lines: string[] } {
 const WHEN_NOW = new Date(2026, 10, 18, 10, 0, 0).getTime();
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const two = (n: number): string => String(n).padStart(2, '0');
-const pageWord = (value: string): NotchWord => ({ name: 'when', value, options: [value] });
+const litWord = (value: string): NotchWord => ({ name: 'when', value, options: [value] });
 
 /** Each reader of a time there is today, by the name a section of the file calls it. */
 const WHEN: Record<string, (text: string) => string> = {
@@ -639,12 +639,12 @@ const WHEN: Record<string, (text: string) => string> = {
     const read = saidWhen(saidWords(text));
     return [read.day ?? '-', read.time ?? '-', read.part ?? '-'].join(' ');
   },
-  // What the page makes of a value typed into a lit word, before the brain sees it (ui/src/notch/surface/readers.ts).
-  'page-sched': (text) => PAGE_READ.sched(text, pageWord('Monday at 9:00')) ?? 'refused',
-  'page-daytime': (text) => PAGE_READ.dayTime(text, pageWord('Thursday at 10:00')) ?? 'refused',
-  'page-day': (text) => PAGE_READ.day(text, pageWord('Friday')) ?? 'refused',
-  // A sentence typed into a word that takes one ("tell me" on a mail draft), as the page hands it on.
-  'page-free': (text) => readLive({ name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], free: true, long: true }, text) ?? 'refused',
+  // What the brain makes of a value typed into a lit word: the page sends it as it was typed (./words.ts).
+  'word-sched': (text) => NOTCH_WORD_READ.sched(text, litWord('Monday at 9:00')) ?? 'refused',
+  'word-daytime': (text) => NOTCH_WORD_READ.dayTime(text, litWord('Thursday at 10:00')) ?? 'refused',
+  'word-day': (text) => NOTCH_WORD_READ.day(text, litWord('Friday')) ?? 'refused',
+  // A sentence typed into a word that takes one ("tell me" on a mail draft), as the brain reads it.
+  'word-free': (text) => notchReadWord({ name: 'told', value: 'tell me', options: ['say no', 'say yes', 'ask for more time'], free: true, long: true }, text) ?? 'refused',
 };
 
 // --- the tests ---
@@ -676,12 +676,12 @@ const ROWS: Record<string, [number, number]> = {
   '@ when teach': [13, 0],
   '@ when move': [12, 0],
   '@ when said': [16, 0],
-  '@ when page-sched': [12, 4],
-  '@ when page-daytime': [4, 2],
-  '@ when page-day': [4, 2],
-  '@ when page-free': [2, 1],
+  '@ when word-sched': [12, 0],
+  '@ when word-daytime': [4, 0],
+  '@ when word-day': [4, 0],
+  '@ when word-free': [2, 0],
 };
-const TOTALS = { routing: 317, routingWrong: 0, times: 98, timesWrong: 9 };
+const TOTALS = { routing: 317, routingWrong: 0, times: 98, timesWrong: 0 };
 
 const read = corpus();
 /** For every routing row, the intents that matched its sentence when it was decided, the one that took it first. */
@@ -740,7 +740,8 @@ describe('what a time is read as today', () => {
 describe('the file itself', () => {
   test('a row that is marked wrong says what is meant, and that is not what happens today', () => {
     const marked = read.sections.flatMap((section) => section.rows.filter((row) => row.wrong !== null));
-    expect(marked.length).toBeGreaterThan(0);
+    // As many as are pinned. Since the page stopped reading typed values (C6) there are none left.
+    expect(marked.length).toBe(TOTALS.routingWrong + TOTALS.timesWrong);
     for (const row of marked) {
       expect([row.n, row.wrong === '']).toEqual([row.n, false]);
       expect([row.n, row.wrong === row.today]).toEqual([row.n, false]);

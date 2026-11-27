@@ -120,6 +120,7 @@ export function createNotchRender(root: HTMLElement, options: NotchRenderOptions
       eyes.gaze(r.left + r.width / 2, r.top + 8);
       hooks.input({ kind: 'word', name: word.name, value });
     },
+    typed: (word: NotchWord, text: string) => { hooks.input({ kind: 'word', name: word.name, value: text, typed: true }); },
     refused: () => { eyes.gesture('shake'); sounds.sfx('no'); },
     focus: (take) => hooks.focus(take),
     after: (ms, fn) => timers.after(ms, fn),

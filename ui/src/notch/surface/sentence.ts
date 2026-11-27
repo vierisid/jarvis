@@ -3,13 +3,14 @@
  * about, keycaps, and lit words. A lit word is one the person can change: a
  * click moves it to its next option, a drag or the wheel scrubs through them,
  * and a strip under the line shows them all with a field to type another.
- * What was typed is read by the readers; what is not understood is refused.
+ * What was typed is sent as it was typed, and read by the brain
+ * (src/notch/words.ts): it draws the word as it read it, or says it read
+ * nothing, and then the field says so and stays.
  */
 import { NOTCH_WORD_LONG_MAX } from '../../../../src/notch/protocol.ts';
 import type { NotchPart, NotchWord } from '../../../../src/notch/protocol.ts';
 import { btn, el } from './dom.ts';
 import { KEYN, duo } from './hints.ts';
-import { readLive } from './readers.ts';
 
 /** The sentence as plain text, as it would be read out. */
 export function partsText(parts: readonly NotchPart[]): string {
@@ -28,9 +29,11 @@ export interface SentenceDeps {
   sheet: HTMLElement;
   /** Lay the notch out again, quickly: a word changed its width. */
   refit(): void;
-  /** A lit word was changed by the person. */
+  /** A lit word was changed by the person, to one of its options. */
   changed(word: NotchWord, value: string, button: HTMLElement): void;
-  /** A typed value was refused. */
+  /** Something was typed into a lit word's field, for the brain to read. */
+  typed(word: NotchWord, text: string): void;
+  /** A typed value was not read. */
   refused(): void;
   /** Ask for the keyboard (true) or give it back (false). */
   focus(take: boolean): void;
@@ -52,6 +55,12 @@ export interface Sentence {
   typed(): boolean;
   /** Takes what is typed in the open field, as Enter does. */
   commit(): void;
+  /**
+   * The brain read what was typed into the word `name`, or (`read` false)
+   * could not. Read: the strip closes, and the word comes back drawn as it was
+   * read. Not read: the field says so, empty, and stays for another try.
+   */
+  heard(name: string, read: boolean): void;
   /** Forget an open strip without laying anything out: the line is being replaced. */
   reset(): void;
 }
@@ -158,6 +167,8 @@ export function createSentence(deps: SentenceDeps): Sentence {
 
   /** What Enter in the open field does. */
   let commitTyped: (() => void) | null = null;
+  /** The field whose value waits for the brain to read it, and the word it is for. */
+  let waiting: { name: string; inp: HTMLInputElement; text: string } | null = null;
   /** Whether a field is losing the keyboard to another field of the notch. */
   const staysOnNotch = (e: FocusEvent): boolean => {
     const to = e.relatedTarget;
@@ -166,6 +177,7 @@ export function createSentence(deps: SentenceDeps): Sentence {
 
   function closePick(): void {
     commitTyped = null;
+    waiting = null;
     deps.cancel(pickTimer);
     const had = pick.firstChild;
     const typing = pick.contains(document.activeElement);
@@ -216,18 +228,14 @@ export function createSentence(deps: SentenceDeps): Sentence {
       // focused while what was typed went to the app in front.)
       inp.addEventListener('blur', (e) => { if (inp.isConnected && !staysOnNotch(e)) deps.focus(false); });
       const enter = (): void => {
-        if (!inp.value.trim()) { closePick(); return; }
-        const got = readLive(L, inp.value);
-        if (got == null) {
-          inp.value = '';
-          inp.placeholder = 'I did not get that';
-          inp.classList.add('no');
-          deps.refused();
-          return;
-        }
-        if (!L.options.includes(got)) L.options = [...L.options, got];
-        setLive(b, got);
-        closePick();
+        // As it was typed: trimmed, and no longer than the field takes. What it means is the brain's to read.
+        const text = inp.value.trim().slice(0, inp.maxLength);
+        if (!text) { closePick(); return; }
+        // Sent once: the brain is reading it. Typed again, it is sent again.
+        if (waiting?.inp === inp && waiting.text === text) return;
+        waiting = { name: L.name, inp, text };
+        inp.classList.remove('no');
+        deps.typed(L, text);
       };
       commitTyped = enter;
       inp.addEventListener('keydown', (e) => {
@@ -274,9 +282,21 @@ export function createSentence(deps: SentenceDeps): Sentence {
     wordOf: (button) => (button ? words.get(button) : undefined),
     picking: () => !!pick.firstChild,
     /** Something is typed in the open field and not yet taken. */
+    // Also while what was typed waits for the brain to read it: a yes then is taken by the field, and does
+    // nothing (it is sent once). A yes in that moment would answer the line with the word as it was.
     typed: () => !!pick.querySelector('input')?.value.trim(),
     /** Takes what is typed in the open field, as Enter does. */
     commit() { commitTyped?.(); },
-    reset() { commitTyped = null; deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
+    heard(name, read) {
+      const was = waiting;
+      if (!was || was.name !== name || !was.inp.isConnected) return;
+      waiting = null;
+      if (read) { closePick(); return; }
+      was.inp.value = '';
+      was.inp.placeholder = 'I did not get that';
+      was.inp.classList.add('no');
+      deps.refused();
+    },
+    reset() { commitTyped = null; waiting = null; deps.cancel(pickTimer); pick.replaceChildren(); pickHome(); },
   };
 }

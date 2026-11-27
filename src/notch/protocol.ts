@@ -555,8 +555,11 @@ export type NotchToPage =
    * The brain has the answer numbered `n`. `took`: it was about the line on
    * the notch and was taken (now, or when it first came). Not `took`: it came
    * for a line that is no longer there. Either way the page stops sending it.
+   * `unread`: it was a value typed into a lit word (`text`), and the brain
+   * could not read it. The word keeps its value; the page says it was not
+   * read and keeps the field. A page that knows nothing of it passes it over.
    */
-  | { type: 'ack'; n: number; took: boolean }
+  | { type: 'ack'; n: number; took: boolean; unread?: true }
   /**
    * The brain does not count this page as one that listens, and takes no
    * answer from it. `v` is the version the brain speaks: a page of another
@@ -574,7 +577,9 @@ export type NotchToPage =
  *   pick    chose `option` (position `index`) of the choices
  *   button  pressed the sheet button `button`, in the row `row` if it has one
  *   go      opened the sheet row `row`
- *   word    changed the lit word `word` to `value`
+ *   word    changed the lit word `word` to `value`, one of its options; or typed
+ *           `text` into it, which the brain reads (./words.ts) and answers
+ *           with the value it read, or with `unread` on the `ack`
  *   ask     sent `text` from the text field
  *   stop    asked a piece of work to stop
  *   undo    took a send back inside its window
@@ -1068,7 +1073,8 @@ function readToPage(m: Raw): NotchRead {
   }
   if (m.type === 'ack') {
     if (!whole(m.n, 1) || typeof m.took !== 'boolean') unread();
-    return { message: { type: 'ack', n: m.n as number, took: m.took as boolean } };
+    // Only the word itself counts, as with `seen`.
+    return { message: { type: 'ack', n: m.n as number, took: m.took as boolean, ...(m.unread === true ? { unread: true as const } : {}) } };
   }
   if (m.type === 'refuse') return { message: { type: 'refuse', v: whole(m.v, 1) ? m.v : unread() } };
   return whole(m.seq, 0) ? { message: null, why: 'unknown', seq: m.seq } : { message: null, why: 'unknown' };

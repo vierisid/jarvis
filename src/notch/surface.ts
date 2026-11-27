@@ -16,6 +16,7 @@ import {
   NOTCH_ANSWERS_KEPT, NOTCH_BIRTHS, NOTCH_FOLD_GRACE_MS, NOTCH_FOLD_HELD_MS, NOTCH_FOLD_MS, NOTCH_HAND_HOLDS_MS, NOTCH_PROTOCOL_VERSION,
   notchAfter, notchRuled, notchRules, notchWhereApp, parseNotchFromPage, parseNotchToPage,
 } from './protocol.ts';
+import { notchReadTyped, notchSetWord, notchWordEdit, notchWordIn } from './words.ts';
 import type {
   NotchBirth, NotchBlock, NotchEdit, NotchEffect, NotchFromPage, NotchLine, NotchMood, NotchMouth, NotchPart, NotchToPage, NotchWhereApp,
 } from './protocol.ts';
@@ -63,7 +64,13 @@ type Unnumbered = Numbered extends infer M ? (M extends Numbered ? Omit<M, 'seq'
 interface NotchFold { id: string; ms: number; from: number | null; timer: unknown }
 
 /** What the brain remembers of one page's answers: which loading of the page it is, and which numbers it has had. */
-interface NotchHeard { page: string; took: Map<number, boolean>; floor: number }
+interface NotchHeard {
+  page: string;
+  took: Map<number, boolean>;
+  floor: number;
+  /** The numbers of typed values that could not be read: told again with `unread`, as they were told first. */
+  unread?: Set<number>;
+}
 
 /** A name for one run of the brain, or one loading of a page. */
 export function notchRunName(): string {
@@ -472,23 +479,30 @@ export class NotchSurface {
     // was done): the first that was taken stands.
     const settles = rules?.after[message.act] !== undefined;
     const took = line !== null && line.id === message.id && !(settles && this.held !== null);
+    // A value typed into a lit word is read here, by the one reader (./words.ts), before the page is told it
+    // was had: what cannot be read is said on the `ack`, and the word keeps its value.
+    const typed = took && line !== null && message.act === 'word' && message.word !== undefined && message.value === undefined && message.text !== undefined;
+    const read = typed && line ? notchReadTyped(line, message.word!, message.text!) : null;
+    const unread = typed && read === null;
     if (message.n !== undefined) {
       // The same answer again (its `ack` was lost, or was slow): it was taken, or found late, when it first
       // came. It is told the same again and is not taken a second time. A number older than all that are
       // remembered was dealt with long ago.
       const before = heard.took.get(message.n);
       if (before !== undefined || message.n <= heard.floor) {
-        this.tell(sidecarId, { type: 'ack', n: message.n, took: before ?? true });
+        this.tell(sidecarId, { type: 'ack', n: message.n, took: before ?? true, ...(heard.unread?.has(message.n) ? { unread: true as const } : {}) });
         return;
       }
       heard.took.set(message.n, took);
+      if (unread) (heard.unread ??= new Set()).add(message.n);
       if (heard.took.size > NOTCH_ANSWERS_KEPT) {
         const oldest = heard.took.keys().next().value as number;
         heard.took.delete(oldest);
+        heard.unread?.delete(oldest);
         heard.floor = Math.max(heard.floor, oldest);
       }
       // Before anybody hears of it: whoever does may throw, and the page would send it again for nothing.
-      this.tell(sidecarId, { type: 'ack', n: message.n, took });
+      this.tell(sidecarId, { type: 'ack', n: message.n, took, ...(unread ? { unread: true as const } : {}) });
     }
     if (!line || !took) {
       // The page gave a second answer to a line that holds the first: it is told the line as it stands,
@@ -496,14 +510,27 @@ export class NotchSurface {
       if (line && line.id === message.id && this.pages.has(sidecarId)) this.push({ type: 'patch', line: this.lineNow() }, sidecarId);
       return;
     }
-    if (message.act === 'word' && message.word !== undefined && message.value !== undefined) {
-      setWord(line, message.word, message.value);
+    let said = message;
+    if (message.act === 'word' && message.word !== undefined && (message.value !== undefined || typed)) {
+      const value = message.value ?? read;
+      if (value !== null) {
+        const was = notchWordIn(line, message.word)?.value;
+        notchSetWord(line, message.word, value);
+        if (typed) {
+          // Whoever waits on the line hears the value as it was read, with what was typed beside it.
+          said = { ...message, value };
+          // Every page draws the word as it was read: the one it was typed on draws nothing of its own.
+          if (value !== was) this.push({ type: 'patch', edit: notchWordEdit(line, message.word) });
+        }
+      }
       // A hand was on it a moment ago: it is given its time again, a line's time, as the page used to give it.
       if (this.fold?.id === line.id) {
         this.fold.ms = NOTCH_FOLD_MS;
         if (this.fold.from !== null) this.fold.from = this.now();
         this.armFold();
       }
+      // Not read: nothing changed, and nothing is made of it.
+      if (value === null) return;
     }
     const after = notchRules(line);
     // The page holds a line that came by itself shut for its first moment. It says how long after drawing
@@ -537,7 +564,7 @@ export class NotchSurface {
         if (other !== sidecarId) this.push({ type: 'patch', line: null }, other);
       }
     }
-    const answer: NotchAnswer = message.n === undefined ? message : { ...message, key: `${sidecarId}\n${heard.page}\n${message.n}` };
+    const answer: NotchAnswer = said.n === undefined ? said : { ...said, key: `${sidecarId}\n${heard.page}\n${said.n}` };
     for (const listener of this.answerListeners) listener(answer, sidecarId);
   }
 
@@ -666,22 +693,4 @@ export class NotchSurface {
 export function notchBirthAfter(last: unknown, random: () => number = Math.random): NotchBirth {
   const others = NOTCH_BIRTHS.filter((birth) => birth !== last);
   return others[Math.min(others.length - 1, Math.max(0, Math.floor(random() * others.length)))]!;
-}
-
-/** Sets a lit word's value wherever it stands in the line. */
-function setWord(line: NotchLine, name: string, value: string): void {
-  const inParts = (parts: NotchPart[] | undefined): void => {
-    for (const part of parts ?? []) {
-      if (typeof part === 'object' && 'word' in part && part.word.name === name) part.word.value = value;
-    }
-  };
-  inParts(line.say);
-  const blocks: NotchBlock[] = line.kind === 'sheet' || line.kind === 'ask' ? line.blocks : [];
-  for (const block of blocks) {
-    if (block.kind === 'row' || block.kind === 'note') inParts(block.say);
-    if (block.kind === 'paper') {
-      inParts(block.to);
-      for (const paperLine of block.lines) inParts(paperLine);
-    }
-  }
 }

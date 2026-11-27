@@ -205,6 +205,8 @@ export function createNotchSurface(
     // It came for a line the brain no longer shows: this page is behind. It says how far it has read, and the
     // brain tells it the whole again if it sent more than that.
     late: () => { if (alive && model.born) send({ type: 'at', seq: model.seq }); },
+    // A value typed into a lit word was read by the brain, or could not be: the field that waits for it is told.
+    heard: (given, unread) => { if (alive && given.act === 'word' && given.word !== undefined && given.text !== undefined) sentence.heard(given.word, !unread); },
   });
 
   // A hand on the line: the pointer is on the notch (as the desktop app tells it too: hover does not reach a
@@ -395,7 +397,7 @@ export function createNotchSurface(
       case 'birth': edge.birth(out.born, () => {}); return;
       case 'park': edge.park(out.park); return;
       case 'mouth': render.mouth(out.mouth, out.whole); return;
-      case 'ack': answers.ack(out.n, out.took); return;
+      case 'ack': answers.ack(out.n, out.took, out.unread); return;
       case 'clearAnswers': answers.clear(); return;
       case 'outOfStep': outOfStep(out.what, out.refused); return;
       case 'version': for (const listener of versionListeners) listener(out.v); return;

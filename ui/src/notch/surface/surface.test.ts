@@ -117,7 +117,7 @@ describe('a lit word', () => {
     expect(sent).toEqual([{ type: 'answer', id: 'w1', act: 'word', word: 'tone', value: 'firmly' }]);
   });
 
-  test('a typed value is read, and one that means nothing is refused without a word to the brain', () => {
+  test('a typed value goes to the brain as it was typed and comes back as read; one the brain cannot read is refused, and the field stays', () => {
     show(chase);
     $('.say .live')!.click();
     $('.say .live')!.click();
@@ -128,12 +128,17 @@ describe('a lit word', () => {
       field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
     };
     type('xyzzy');
-    expect(sent).toEqual([]);
+    expect(sent).toEqual([{ type: 'answer', id: 'w1', act: 'word', word: 'tone', text: 'xyzzy' }]);
     expect(field.classList.contains('no')).toBe(true);
     expect(field.placeholder).toBe('I did not get that');
+    expect(field.isConnected).toBe(true);
+    expect($('.say .live')?.textContent).toBe('politely');
+    sent.length = 0;
     type('be tough');
-    expect(sent).toEqual([{ type: 'answer', id: 'w1', act: 'word', word: 'tone', value: 'firmly' }]);
+    expect(sent).toEqual([{ type: 'answer', id: 'w1', act: 'word', word: 'tone', text: 'be tough' }]);
     expect($('.pick')?.childElementCount).toBe(0);
+    // Drawn as the brain read it.
+    expect($('.say .live')?.textContent).toBe('firmly');
   });
 
   test('the sentence read out carries the word as it stands', () => {
@@ -1155,7 +1160,7 @@ describe('typing into a word of a line (the hardening audit)', () => {
     field.value = 'decline, we are full until January';
     surface.key('yes');
     // What was typed is what is told, and no yes was given for the old reply.
-    expect(sent).toEqual([{ type: 'answer', id: 'd', act: 'word', word: 'told', value: 'decline, we are full until January' }]);
+    expect(sent).toEqual([{ type: 'answer', id: 'd', act: 'word', word: 'told', text: 'decline, we are full until January' }]);
     // With nothing typed a yes is a yes.
     surface.key('yes');
     expect(sent.at(-1)).toEqual({ type: 'answer', id: 'd', act: 'yes' });

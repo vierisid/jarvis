@@ -133,7 +133,8 @@ export type NotchPageOut =
   | { do: 'birth'; born: NotchBirth }
   | { do: 'park'; park: number }
   | { do: 'mouth'; mouth: NotchMouth; whole: boolean }
-  | { do: 'ack'; n: number; took: boolean }
+  /** The brain has the answer `n`. `unread`: a typed value it could not read. */
+  | { do: 'ack'; n: number; took: boolean; unread?: boolean }
   | { do: 'clearAnswers' }
   | { do: 'outOfStep'; what: string; refused?: boolean }
   | { do: 'version'; v: number }
@@ -310,8 +311,12 @@ export type NotchPageInput =
   | { kind: 'field-esc' }
   | { kind: 'button'; button: string; row?: string }
   | { kind: 'go'; row: string }
-  /** A lit word was changed to `value`. */
-  | { kind: 'word'; name: string; value: string }
+  /**
+   * A lit word was changed to `value`, one of its options. `typed`: the
+   * person typed `value` into it, and it is the brain's to read: the word
+   * stays as it is until the brain says what it read.
+   */
+  | { kind: 'word'; name: string; value: string; typed?: boolean }
   /** A click on the resting notch. */
   | { kind: 'open' };
 
@@ -446,10 +451,10 @@ export function notchInput(model: NotchPageModel, input: NotchPageInput, now: nu
       return open(model) ? { model, out: answer(model, 'go', now, { row: input.row }) } : none;
     case 'word': {
       // The word stands as it was changed, whether or not the line can still be answered: drawn again, it is drawn so.
-      const next = model.line ? { ...model, line: notchWithWord(model.line, input.name, input.value) } : model;
+      const next = model.line && !input.typed ? { ...model, line: notchWithWord(model.line, input.name, input.value) } : model;
       // The brain gives an offer its time again when a word of it is changed.
       if (!open(model)) return { model: next, out: [] };
-      return { model: next, out: answer(next, 'word', now, { word: input.name, value: input.value }) };
+      return { model: next, out: answer(next, 'word', now, input.typed ? { word: input.name, text: input.value } : { word: input.name, value: input.value }) };
     }
     case 'open':
       return facts.resting && model.born && facts.shown ? { model, out: [{ do: 'send', message: { type: 'open' } }] } : none;
@@ -511,7 +516,7 @@ export function notchMessage(model: NotchPageModel, raw: unknown, still = false)
   const message = read.message;
   switch (message.type) {
     case 'ack':
-      return { model, out: [{ do: 'ack', n: message.n, took: message.took }] };
+      return { model, out: [{ do: 'ack', n: message.n, took: message.took, ...(message.unread ? { unread: true } : {}) }] };
     case 'refuse':
       // The brain takes nothing from this page. In another version: see above. In this one, it only does not
       // know the page (it started again, or the connection did): it is told hello.

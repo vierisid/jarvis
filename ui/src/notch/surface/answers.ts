@@ -29,8 +29,8 @@ export interface NotchAnswers {
    * the brain takes the first that reached it, and tells the page so.
    */
   say(answer: Omit<NotchPageAnswer, 'n'>, once?: boolean): void;
-  /** The brain has the answer numbered `n`. */
-  ack(n: number, took: boolean): void;
+  /** The brain has the answer numbered `n`. `unread`: it was a typed value, and the brain could not read it. */
+  ack(n: number, took: boolean, unread?: boolean): void;
   /** A line is drawn anew: an answer to it is a new answer again. */
   fresh(): void;
   /** How many answers wait for the brain. */
@@ -50,6 +50,8 @@ export function createNotchAnswers(options: {
   lost: (answer: NotchPageAnswer) => void;
   /** The brain has it, and it came for a line that was no longer on the notch. */
   late: (answer: NotchPageAnswer) => void;
+  /** The brain has it, for the line on the notch. `unread`: a value typed into a lit word that it could not read. */
+  heard?: (answer: NotchPageAnswer, unread: boolean) => void;
 }): NotchAnswers {
   const { send, timers } = options;
   let last = 0;
@@ -106,12 +108,13 @@ export function createNotchAnswers(options: {
       wait(n, entry);
       send(entry.answer);
     },
-    ack(n, took) {
+    ack(n, took, unread = false) {
       const entry = waiting.get(n);
       if (!entry) return;
       timers.cancel(entry.timer);
       waiting.delete(n);
       if (!took) options.late(entry.answer);
+      else options.heard?.(entry.answer, unread);
     },
     fresh() {
       // One line's settling answers are remembered at a time: the line before it is gone from the notch.

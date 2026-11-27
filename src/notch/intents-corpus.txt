@@ -600,14 +600,16 @@ every 2 weeks at 9 => - - -
 morning at 6pm => - - -
 at 7 => - 19:00 -
 
-# What the page makes of a value typed into a lit word, before the brain sees it (ui readers.ts). The word that
-# is changed says "Monday at 9:00" (sched), "Thursday at 10:00" (daytime), "Friday" (day).
-@ when page-sched
-month => Monday at 9:00  ## wrong: refused (a month is not a Monday)
-money at 9 => Monday at 9:00  ## wrong: refused
-sunset => Sunday at 9:00  ## wrong: refused
-weekday at 9 => refused  ## wrong: sent to the brain as typed, and read there as Monday to Friday at 9:00
-every morning at 6 => refused
+# What the brain makes of a value typed into a lit word (src/notch/words.ts). The page sends it as it was typed; it
+# used to read it itself. The word that is changed says "Monday at 9:00" (sched), "Thursday at 10:00" (daytime),
+# "Friday" (day). A time is read by the one reader (./when.ts): whole, or refused.
+@ when word-sched
+month => refused
+money at 9 => refused
+sunset => refused
+weekday at 9 => Monday to Friday at 9:00
+# The page refused it: "morning" was no word of its own. Every morning is every day, at 6:00 (./when.ts).
+every morning at 6 => day at 6:00
 every 2 weeks => refused
 tue 14:30 => Tuesday at 14:30
 friday at 6pm => Friday at 18:00
@@ -616,20 +618,20 @@ sat => Saturday at 9:00
 day at 9:00 => day at 9:00
 march => refused
 
-@ when page-daytime
-month => Monday at 10:00  ## wrong: refused (a month is not a Monday)
+@ when word-daytime
+month => refused
 tomorrow at 6 => tomorrow at 18:00
 fri 10 => Friday at 10:00
-satisfied => Saturday at 10:00  ## wrong: refused
+satisfied => refused
 
-@ when page-day
-month => Monday  ## wrong: refused (a month is not a Monday)
+@ when word-day
+month => refused
 monday => Monday
 tmrw => tomorrow
-saturn => Saturday  ## wrong: refused
+saturn => refused
 
-# A sentence typed into a word that takes one ("tell me" on a draft): the page takes characters out of it.
-@ when page-free
-Tell R&D "x < 5" => Tell RD x 5  ## wrong: Tell R&D "x < 5" (the raw text goes to the brain as it was typed)
+# A sentence typed into a word that takes one ("tell me" on a draft): it is kept as it was typed.
+@ when word-free
+Tell R&D "x < 5" => Tell R&D "x < 5"
 decline it, we are full until January => decline it, we are full until January
 

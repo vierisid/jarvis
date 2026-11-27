@@ -3705,8 +3705,8 @@ other.
     line keeps the time it had. Nobody is told in a line that the time was
     not read: the sentence's turn is the outcome (the design's
     recommendation, "hand on, never rewrite"), and a value typed into a lit
-    word that is none leaves the word as it was, with no word said, until
-    the page hands over what was typed and shows the brain's refusal (C6). Several days are one schedule ("every
+    word that is none leaves the word as it was, and the page says the
+    word was not read (rule 269). Several days are one schedule ("every
     Monday and Friday at 9", "every week on Friday"). What the notch wrote
     itself is read as written: "day at 6:00" on a line, on an agent's card
     or in a sentence somebody sent is six in the morning, where a bare six
@@ -3773,6 +3773,23 @@ other.
     door (`src/daemon/notch-asks.ts`) and stops there: the check of what the
     owner's words cover (docs/notch/fixes/01-owner-word.md) takes it from
     that place.
+269. **A value typed into a lit word is read by the brain** (27 November
+    2026, `src/notch/words.ts`). The page sends what was typed as it was
+    typed: trimmed, and no longer than the field takes (28 characters, 200
+    for a word that takes a sentence). It used to read it itself, in
+    English, with readers of its own: "month" became Monday, "sunset"
+    Sunday, "money at 9" Monday at nine, and `Tell R&D "x < 5"` was sent as
+    `Tell RD x 5`. Now the brain reads it with the word's options, their
+    other ways of saying them, and for a day or a time the one reader of a
+    time (rule 262), which reads a value whole or not at all: "weekday at
+    9" in a schedule is "Monday to Friday at 9:00", "every morning at 6" is
+    "day at 6:00". What it read is drawn on every desktop that shows the
+    line, and whoever waits on the line hears the value as it was read. What
+    it cannot read changes nothing and is heard of by nobody: the `ack` says
+    `unread`, the field empties and says "I did not get that", and stays for
+    another try. Until the brain has said, a yes is taken by the field and
+    answers nothing, so a line is never answered with the word as it stood.
+    A sentence typed into a word that takes one is kept as it was typed.
 
 What is not done, or not proven:
 
@@ -3800,9 +3817,6 @@ What is not done, or not proven:
   runs as an instruction, as "every hour check my inbox" always did.
   Whether the notch should say "I cannot keep that one" and make nothing
   is the owner's to say.
-- **The page still reads a typed value before the brain sees it.** "Month"
-  typed into a schedule is still Monday there. The page handing over what
-  was typed, for the one reader to read, is a later step.
 
 ## Your organisation
 
@@ -4093,9 +4107,9 @@ thing is on the notch at a time; a new line replaces it.
 | brain | `state {v, brain, seq, line, count, born, face, where, eye, sound, park, mouth}` | Everything the notch is, at once. `brain` names this run of the brain |
 | brain | `patch {seq, line?, edit?, count?, face?, where?, eye?, sound?, park?, mouth?}` | A change to what the notch is: `line` puts a line on it in place of whatever is there, `line: null` is back to the eyes, `edit {id, ...}` changes the line that is up (steps done, a new sentence, words heard, a sheet's content, and `away` when that changes it). Only what is named changes |
 | brain | `effect {seq, ...}` | Something done once: a passing mood, a gesture, the lip (with `aim`), the body, a `kick`, the edge (with `side`), a birth, the gulp after a drop. Not remembered: a page that was not there never does it |
-| brain | `ack {n, took}` | The brain has the answer numbered `n`. `took: false`: it came for a line that is no longer there |
+| brain | `ack {n, took, unread?}` | The brain has the answer numbered `n`. `took: false`: it came for a line that is no longer there. `unread: true` (since 27 November 2026): it was a value typed into a lit word and the brain could not read it |
 | brain | `refuse {v}` | The brain takes nothing from this page: it speaks version `v`, or it does not know this page on this connection |
-| page | `answer {n, id, act, since, brain, ...}` | What the person did with the line `id`, numbered, with how many ms after the line was drawn and the run of the brain whose line it is |
+| page | `answer {n, id, act, since, brain, ...}` | What the person did with the line `id`, numbered, with how many ms after the line was drawn and the run of the brain whose line it is. A lit word stepped to one of its options is `word` with `value`; a value typed into it is `word` with `text`, as it was typed (since 27 November 2026) |
 | page | `hand {id, on}` | A hand is on the offer `id` (the pointer, a field being typed in, a word's choices open), or no longer |
 | page | `at {seq}` | The number of the last numbered message this page read |
 | page | `open` | A click on the resting notch, or yes with nothing on it |
@@ -4254,6 +4268,15 @@ answered. A page that draws its own line again (the keys of the machine
 changed) goes on by its own count. A `state` from another run of the brain
 (`brain` changed) is another line whatever its name, and the page forgets
 what it was still sending to the run before.
+
+Since 27 November 2026 the page is three parts (`ui/src/notch/surface/`):
+`core.ts` holds what the page knows and decides, with no screen and no
+clock (the line that is up and whether it was answered, how far it has
+read, when a result or a fuse runs out, what each key, click and press
+comes to on each kind of line, and the one "too soon" guard over the
+brain's `gate`); `render.ts` draws it; `input.ts` reads the page's own keys,
+clicks and wheel. `index.ts` joins them, with the one timer the model asks
+for. Nothing of what the page shows or says changed with it.
 
 ### The lease on Esc
 
