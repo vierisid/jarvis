@@ -90,7 +90,11 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   const gives = new Map<NotchFeatureId, () => NotchGives | null>();
   const order: NotchOrder = { says: [], homeRows: [], settingsRows: [], done: [], undo: [], hello: [], ...deps.order };
 
-  /** Refused before anything of it is kept: a part that gives something and has no place for it in that kind's order. */
+  /**
+   * Throws for a part that gives something and has no place for it in that kind's order. A part that is lent is
+   * refused before it is kept. A feature is asked after it was made and kept, so it is stopped with the rest
+   * when the making then fails.
+   */
   function placed(id: NotchFeatureId, given: NotchGives): void {
     for (const member of Object.keys(NOTCH_GIVES_IN) as (keyof NotchGives)[]) {
       if (given[member] === undefined) continue;
@@ -198,7 +202,8 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     };
     const feature = def.make(ctx);
     if (!feature) return null;
-    // From here it is stopped with the rest, whatever fails after this.
+    // From here it is stopped with the rest, whatever fails after this: one that gives something it has no
+    // place for is kept here first, so that the throw of `placed` leaves nothing of it running.
     features.push({ id: def.id, feature });
     placed(def.id, feature);
     gives.set(def.id, () => feature);
@@ -216,7 +221,7 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
       if (features.some((one) => one.id === id) || lent.has(id)) throw new Error(`[notch] ${id} is there already`);
       if (given) placed(id, given);
       lent.set(id, get);
-      if (given) gives.set(id, () => (get() === null ? null : given));
+      if (given) gives.set(id, () => (get() == null ? null : given));
     },
     add,
     must(def) {

@@ -56,9 +56,8 @@ const text = (parts: unknown): string => (Array.isArray(parts) ? parts : []).map
 type Started = { fn: () => void; ms: number; cleared: boolean; unrefed: boolean; handle: unknown };
 
 /** Every interval started while `run` runs: how often, whether it may keep the process alive, whether it was cleared since. None runs by the clock. */
-function clocks<T>(run: () => T, cleared?: (one: Started) => void): { out: T; started: Started[] } {
+function clocks<T>(run: () => T, cleared?: (one: Started) => void, started: Started[] = []): { out: T; started: Started[] } {
   const realSet = globalThis.setInterval;
-  const started: Started[] = [];
   globalThis.setInterval = ((fn: () => void, ms: number) => {
     const one: Started = { fn, ms, cleared: false, unrefed: false, handle: null };
     one.handle = { unref() { one.unrefed = true; } };
@@ -82,6 +81,12 @@ interface Given {
   without?: (keyof NotchRealDeps | 'office.connections' | 'office.keys' | 'day.around')[];
   /** With the clocks of the parts that have a switch for them. */
   ticking?: boolean;
+  /** What the notch itself writes in its log. */
+  notchLog?: (line: string) => void;
+  /** The promises throw when they are first listened to: the making fails there, after the drop is made. */
+  failAtPromises?: boolean;
+  /** Filled before the notch is made, so that a test can look at them when the making throws. */
+  seen?: { started?: Started[]; surface?: NotchSurface; talk?: (sidecarId: string, event: { event_type: string; payload: unknown }) => void; cleared?: Map<unknown, number> };
   /** Called when an interval is cleared, and when a part is told to stop. */
   log?: (line: string) => void;
   /** What is already so when the notch is made. */
@@ -160,7 +165,10 @@ function everything(given: Given = {}) {
     } as never,
     promises: {
       executor: {
-        subscribe(listener) { promiseListeners.add(listener); return () => { promiseListeners.delete(listener); given.log?.('stop: promises'); }; },
+        subscribe(listener) {
+          if (given.failAtPromises) throw new Error('the promises cannot be heard');
+          promiseListeners.add(listener); return () => { promiseListeners.delete(listener); given.log?.('stop: promises'); };
+        },
         cancelExecution: () => false, checkAndAnnounce() {}, setOriginRunner() {},
       },
       create: () => ({ id: 'p', when_due: null }),
@@ -169,7 +177,7 @@ function everything(given: Given = {}) {
     questions: { pending: () => state.questions, get: (id: string) => state.questions.find((one) => one.id === id) ?? null, answer: () => ({ status: 200 }) } as never,
     openFailures: () => state.failures,
     onTaskEnded: (listener) => { state.tasks.asked++; if (state.tasks.there) state.tasks.hear = listener; return state.tasks.there; },
-    asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent() {} }, stt: () => null, look: { port: { onEvent() {} } as never } },
+    asks: { db, turns: () => null, modelReady: () => true, talkPort: { onEvent(listener) { if (given.seen) given.seen.talk = listener; } }, stt: () => null, look: { port: { onEvent() {} } as never } },
     where: { port: { onEvent() {}, dispatchRPC: async () => ({}) } },
     mail: { db, tab: () => null, think: async () => '', noClock } as never,
     standing: { noClock },
@@ -220,7 +228,7 @@ function everything(given: Given = {}) {
     },
     clock,
     lookMs: 3_600_000,
-    log: () => {},
+    log: (line) => given.notchLog?.(line),
   };
   const deps = { ...all } as Record<string, unknown>;
   for (const name of without) {
@@ -230,7 +238,9 @@ function everything(given: Given = {}) {
     else delete deps[name];
   }
   given.before?.(state);
-  const made = clocks(() => attachNotchReal(surface, deps as unknown as NotchRealDeps), (one) => given.log?.(`clock: ${one.ms}`));
+  const started: Started[] = [];
+  if (given.seen) { given.seen.started = started; given.seen.surface = surface; }
+  const made = clocks(() => attachNotchReal(surface, deps as unknown as NotchRealDeps), (one) => given.log?.(`clock: ${one.ms}`), started);
   const real = made.out;
   live = real;
   const line = (): NotchLine | null => surface.current().line;
@@ -656,6 +666,25 @@ describe('stop, with every part given', () => {
       'stop: around',
       'stop: notice',
     ]);
+  });
+
+  test('a making that fails after the drop stops what was made, each once, and the throw goes on', () => {
+    const seen: NonNullable<Given['seen']> = {};
+    const order: string[] = [];
+    const said: string[] = [];
+    expect(() => everything({ ticking: true, failAtPromises: true, seen, log: (line) => order.push(line), notchLog: (line) => said.push(line) })).toThrow('the promises cannot be heard');
+    const started = seen.started!;
+    // The clocks of the parts made by then: the shown jobs, the agents, the people, the instructions' own.
+    expect(started.map((one) => one.ms).sort((a, b) => a - b)).toEqual([30_000, NOTCH_AGENT_TICK_MS, NOTCH_PEOPLE_TICK_MS, 60_000].sort((a, b) => a - b));
+    // Every one is cleared, and each once: the instructions' own clock by asking's stop, the rest before it.
+    expect(started.filter((one) => !one.cleared)).toEqual([]);
+    expect(order.filter((line) => line.startsWith('clock: '))).toHaveLength(started.length);
+    // The drop no longer hears a file dragged over the notch.
+    expect((seen.surface as unknown as { dragListeners: Set<unknown> }).dragListeners.size).toBe(0);
+    // The talk keys are no longer heard: what the desktop app says of them reaches nothing.
+    said.length = 0;
+    seen.talk!('pc', { event_type: 'notch.talk', payload: { phase: 'refused', reason: 'muted' } });
+    expect(said).toEqual([]);
   });
 
   /** A chase whose next step is due now. */

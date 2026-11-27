@@ -30,6 +30,21 @@ function harness(stt: NotchTalkDeps['stt'] = () => ({ transcribe: async () => 's
 }
 
 describe('a recording from the desktop app', () => {
+  test('after stop nothing the desktop app says of the keys is heard, and a recording that was open is not dropped by its limit', async () => {
+    const h = harness();
+    h.event({ phase: 'start', talk_id: 'a1' });
+    h.talk.stop();
+    expect(h.talk.open('pc')).toBe(false);
+    h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500 }, true);
+    h.event({ phase: 'start', talk_id: 'a2' });
+    h.event({ phase: 'refused', reason: 'muted' });
+    h.disconnect();
+    // Past the open recording's limit (40 ms here).
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await settle();
+    expect(h.calls).toEqual(['listen pc:a1']);
+  });
+
   test('start, then end with enough speech: the words reach the instruction with that id', async () => {
     const h = harness();
     h.event({ phase: 'start', talk_id: 'a1' });

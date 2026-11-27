@@ -151,6 +151,11 @@ export interface NotchTalk {
    * recording in which nothing was caught.
    */
   pretend(words: string | null): void;
+  /**
+   * Stops hearing the desktop apps: what they say of the keys is let go from here, the limits that wait for a
+   * recording's end are cleared, and nothing new is asked. What was already being made into words ends as it would.
+   */
+  stop(): void;
 }
 
 /** Raw 16-bit PCM in the smallest WAV there is, which is what the providers take. */
@@ -242,7 +247,9 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     if (looked(sidecarId, talkKey)) deps.look!.alone(sidecarId);
     since.delete(talkKey);
   };
-  port.onSidecarDisconnected?.((sidecarId) => { lost(sidecarId, 'its desktop app disconnected'); });
+  /** Stopped with the notch: the port has no way to take a listener back, so each listener asks this first. */
+  let stopped = false;
+  port.onSidecarDisconnected?.((sidecarId) => { if (!stopped) lost(sidecarId, 'its desktop app disconnected'); });
   const key = (sidecarId: string, talkId: string): string => `${sidecarId}:${talkId}`;
 
   /** Whether what came back is one of the lines written for audio with no words in it. */
@@ -274,7 +281,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   }
 
   port.onEvent((sidecarId, event) => {
-    if (event.event_type !== NOTCH_TALK_EVENT) return;
+    if (stopped || event.event_type !== NOTCH_TALK_EVENT) return;
     const payload = (typeof event.payload === 'object' && event.payload !== null ? event.payload : {}) as Record<string, unknown>;
     const phase = payload.phase;
     if (phase === 'refused') {
@@ -353,13 +360,19 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
         }, 250);
       }, 700);
     },
+    stop() {
+      stopped = true;
+      for (const limit of limits.values()) clearTimeout(limit);
+      limits.clear();
+      open.clear();
+    },
   };
 }
 
 /**
  * Talking to the notch with the talk keys held, as a feature of the notch (./feature.ts). What is said while a
  * dropped file waits for its question is about that file: the words take it. Without the asks it is absent.
- * It has nothing to stop: what the desktop app says of the keys is heard until the brain ends.
+ * Stopped with the notch: what the desktop apps say of the keys is not heard after it.
  */
 export function notchTalkFeature(given: { port: NotchTalkPort; stt: NotchTalkDeps['stt'] } | undefined): NotchFeatureDef<'talk'> {
   return {
@@ -368,7 +381,8 @@ export function notchTalkFeature(given: { port: NotchTalkPort; stt: NotchTalkDep
     make(ctx) {
       const asks = ctx.use('asks');
       if (!given || !asks) return null;
-      return { api: attachNotchTalk(given.port, { asks, stt: given.stt, look: ctx.use('look') ?? undefined, held: () => ctx.use('drop')?.claim() ?? [], log: ctx.log }) };
+      const api = attachNotchTalk(given.port, { asks, stt: given.stt, look: ctx.use('look') ?? undefined, held: () => ctx.use('drop')?.claim() ?? [], log: ctx.log });
+      return { api, stop: () => api.stop() };
     },
   };
 }

@@ -189,6 +189,9 @@ What step 4 does, and what it proved:
 - `ctx.all` is what is gathered, for the parts that show Home and Settings
   and route (asks, prefs). Prefs reads the rows of noticing and calls from
   it instead of asking those two parts by name.
+  A word changed in Settings is now offered to noticing before calls (it was
+  calls first); their words are disjoint (`notice`; `calls`, `callside`), so
+  nothing can tell.
 - Not gathered, on purpose: the rows of a call that is on, the prepared
   replies, what is seen and the jobs that were shown stand above the
   gathered rows in places of their own in `asks.ts`, with what their open
@@ -200,7 +203,9 @@ What step 4 does, and what it proved:
   before); a stop runs synchronously and no stop calls another part, so
   nothing can see the order. And a page that comes up after stop no longer
   reaches day one.
-- `talk` is a feature with nothing to stop. The scheduler's
+- `talk` is a feature. Its stop (added after the review) lets go of what the
+  desktop apps say of the keys and clears the limits of open recordings: the
+  port has no way to take a listener back, so the listener asks first. The scheduler's
   `skipWhileRunning` stays off: every clock runs as it did.
 
 ## Owner decisions
