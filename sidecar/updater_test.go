@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,11 @@ func newFakeUpdater(t *testing.T, running string, mode update.Mode) *fakeUpdater
 		return nil
 	}
 	u.verifyPM = func(string) error { return nil }
-	u.moveAside = moveRunningExeAside
+	// The real moveRunningExeAside renames u.exe on Windows (elsewhere it
+	// does nothing). u.exe here is a made-up path, so on Windows the real one
+	// failed every package-manager update before the package manager ran.
+	// The tests that care how a move aside goes set their own.
+	u.moveAside = func(string) (func() error, error) { return func() error { return nil }, nil }
 	u.verBin = func(string) (string, error) { return "", errors.New("unset") }
 	u.now = time.Now
 	u.markPending = func(string, string, string) error { return nil }
@@ -463,8 +468,13 @@ func TestUpdaterPackageManagerFailureGivesCommand(t *testing.T) {
 	if s.Phase != updatePhaseFailed || !strings.Contains(s.Error, "EACCES") {
 		t.Fatalf("state = %+v, want failed with the npm error", s)
 	}
-	if s.ManualCommand != "npm install -g @usejarvis/sidecar@0.10.0" {
-		t.Errorf("manual command = %q", s.ManualCommand)
+	want := "npm install -g @usejarvis/sidecar@0.10.0"
+	if runtime.GOOS == "windows" {
+		// Windows keeps the running exe locked inside the package tree.
+		want = "Quit Jarvis first, then run: " + want
+	}
+	if s.ManualCommand != want {
+		t.Errorf("manual command = %q, want %q", s.ManualCommand, want)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

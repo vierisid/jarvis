@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -63,6 +64,10 @@ func TestSaveConfigRestrictsPermissions(t *testing.T) {
 
 	if err := SaveConfig(&cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		// Go reports 0777 and 0666 for any writable directory and file there.
+		t.Skip("POSIX modes do not apply")
 	}
 
 	dirInfo, err := os.Stat(configDir)

@@ -20,8 +20,8 @@ import (
 // else on the machine is read, focused or clicked. Every action used is
 // get_value, which moves no pointer and takes no focus.
 //
-// Not in the sidecar-test-windows CI pattern (.github/workflows/test.yml) yet;
-// run with `go test -run 'TestUIAReadBack' .` on Windows. findWindowByPid
+// Run by the sidecar-test-windows CI job (.github/workflows/test.yml) with the
+// rest of the package; alone with `go test -run 'TestUIA' .`. findWindowByPid
 // takes the first top-level window of this process, so these assume the test
 // window is the only visible one -- keep that in mind before running them
 // beside tests that leave a window open.
@@ -318,12 +318,18 @@ func TestUIAPointerCheckRefusesACoveredElementWithoutMovingThePointer(t *testing
 // A window drawn on top that the mouse passes through takes no click, so it
 // must not cause a refusal: that would refuse every click wherever a GPU
 // overlay, a screen recorder or this sidecar's own pebble is drawn. This one
-// does click -- the test window's own button.
+// gets past the check before the pointer moves.
+//
+// The test window belongs to this process, so the last look under the
+// pointer (pointerPress) takes it for one of Jarvis's own windows and presses
+// nothing. That refusal comes only after the first check let the click
+// through and the pointer was moved, so it is a pass here; a real target is
+// never in the sidecar's own process.
 func TestUIAPointerCheckIgnoresAClickThroughOverlay(t *testing.T) {
 	d := openTestDialog(t)
 	sendID := idOf(t, snapshotIDs(t), "101")
 	d.coverDialog(t, true)
-	if err := actOn(sendID, "double_click"); err != nil {
+	if err := actOn(sendID, "double_click"); err != nil && !strings.Contains(err.Error(), "one of Jarvis's own windows came up") {
 		t.Fatalf("a click-through overlay refused the click: %v", err)
 	}
 }

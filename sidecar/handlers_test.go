@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -27,9 +28,14 @@ func TestRunCommand(t *testing.T) {
 		if m["exit_code"] != 0 {
 			t.Errorf("expected exit_code 0, got %v", m["exit_code"])
 		}
+		// cmd.exe ends its echo with CRLF, and the output is handed back as is.
+		want := "hello\n"
+		if runtime.GOOS == "windows" {
+			want = "hello\r\n"
+		}
 		stdout := m["stdout"].(string)
-		if stdout != "hello\n" {
-			t.Errorf("expected 'hello\\n', got %q", stdout)
+		if stdout != want {
+			t.Errorf("expected %q, got %q", want, stdout)
 		}
 	})
 
