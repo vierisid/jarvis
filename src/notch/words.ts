@@ -16,7 +16,7 @@
  */
 import type { NotchBlock, NotchEdit, NotchLine, NotchPart, NotchWord } from './protocol.ts';
 import { NOTCH_WORD_LONG_MAX } from './protocol.ts';
-import { WHEN_DAY_NAMES, readWhen, sayWhen, type NotchWhen } from './when.ts';
+import { WHEN_DAY_NAMES, sayWhen, whenTyped, type WhenTyped } from './when.ts';
 
 /** The most a word that holds a word or two may hold. */
 export const NOTCH_WORD_MAX = 28;
@@ -24,42 +24,40 @@ export const NOTCH_WORD_MAX = 28;
 /** The most of a typed value that is read: what the page's field takes. */
 export const notchWordMax = (word: Pick<NotchWord, 'long'>): number => (word.long ? NOTCH_WORD_LONG_MAX : NOTCH_WORD_MAX);
 
-/** A time read whole, or null: the text as it is, or else the first of `tries` (the text with what it left out filled in) that reads. */
-function whenOf(text: string, ...tries: string[]): NotchWhen | null {
-  for (const one of [text, ...tries]) {
-    const read = readWhen(one);
-    if (read) return read;
-  }
-  return null;
-}
-
-/** What was typed, without a leading "at" or "on": "at 6" is the hour, "on friday" the day. "Tmrw" is tomorrow, as the page always read it. */
-const bare = (text: string): string => text.replace(/\btmrw\b/gi, 'tomorrow').replace(/^\s*(?:at|on)\s+/i, '');
+/** A day as the page always said it: the day of the week, today or tomorrow, or null. */
+const dayOf = (when: WhenTyped): string | null =>
+  (when.days?.length === 1 ? WHEN_DAY_NAMES[when.days[0]!]! : when.days ? null : when.rel);
+const clock = (hour: number, minute: number): string => `${hour}:${String(minute).padStart(2, '0')}`;
 
 type Reader = (text: string, word: NotchWord) => string | null;
 
-/** One reader per kind of value a lit word can hold. Each returns the value as Jarvis says it, or null. */
+/**
+ * One reader per kind of value a lit word can hold. Each returns the value as
+ * Jarvis says it, or null. A day and a time are read by the typed-word mode of
+ * the one reader of a time (./when.ts, `whenTyped`), with the page's old rules.
+ */
 export const NOTCH_WORD_READ: Record<NonNullable<NotchWord['read']>, Reader> = {
-  // A day: one day of the week, today or tomorrow. A time beside it is not read into a day.
+  // A day: one day of the week, today or tomorrow. A time beside it is dropped, as it always was.
   day: (text) => {
-    const when = whenOf(`${bare(text)} at 9:00`);
-    if (!when) return null;
-    if (when.rel === 'today' || when.rel === 'tomorrow') return when.rel;
-    return !when.rel && when.days.length === 1 ? WHEN_DAY_NAMES[when.days[0]!]! : null;
+    const when = whenTyped(text);
+    return when ? dayOf(when) : null;
   },
   // One moment: a day and a time. What was not said of it stays as the word had it ("fri" keeps the hour).
   dayTime: (text, word) => {
-    const [day = '', hour = '9:00'] = word.value.split(' at ');
-    const when = whenOf(bare(text), `${bare(text)} at ${hour}`, `${day} at ${bare(text)}`);
-    if (!when || when.rel === 'next week' || (!when.rel && when.days.length !== 1)) return null;
-    return sayWhen(when);
+    const when = whenTyped(text);
+    if (!when || (when.days && when.days.length !== 1)) return null;
+    const day = dayOf(when);
+    if (!day && when.hour === null) return null;
+    const [was = '', at] = word.value.split(' at ');
+    return `${day ?? was} at ${when.hour !== null ? clock(when.hour, when.minute) : at ?? '9:00'}`;
   },
   // A schedule: the days of the week it is on, and a time. A day alone is at nine; an hour alone is every day.
   sched: (text) => {
-    const when = whenOf(bare(text), `${bare(text)} at 9:00`, `day at ${bare(text)}`);
-    // Today, tomorrow and next week are not days of the week: no schedule is on them.
-    if (!when || when.rel || when.days.length === 0) return null;
-    return sayWhen(when);
+    const when = whenTyped(text);
+    if (!when || (!when.days && !when.rel && when.hour === null)) return null;
+    // Today and tomorrow are not days of the week: no schedule is on them (the page made them every day).
+    if (!when.days && when.rel) return null;
+    return sayWhen({ days: when.days ?? [0, 1, 2, 3, 4, 5, 6], hour: when.hour ?? 9, minute: when.hour === null ? 0 : when.minute });
   },
   days: (text) => {
     const m = text.match(/\d{1,3}/);

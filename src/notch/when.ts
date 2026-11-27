@@ -451,6 +451,63 @@ export function readSchedule(text: string, options: WhenOptions = {}): { when: N
   return { when: { days, hour, minute, ...(guessed ? { guessed: true as const } : {}) }, rest };
 }
 
+// --- a value typed into a lit word ---
+
+/** The words a typed value may hold besides a day and a time, as the page always let them stand. */
+const TYPED_FILL = new Set(['at', 'on', 'every', 'day', 'next', 'this', 'h', 'am', 'pm', 'today', 'tomorrow', 'tmrw']);
+const TYPED_TOKEN = /^(?:\d+(?:[:.h]\d+)?(?:am|pm)?)$/;
+
+/** What a value typed into a lit word says: the days, today or tomorrow, and the time, each when it was said. */
+export interface WhenTyped {
+  /** The day of the week that was said, or Monday to Friday for "weekday". */
+  days: number[] | null;
+  rel: 'today' | 'tomorrow' | null;
+  hour: number | null;
+  minute: number;
+}
+
+/**
+ * A value typed into a lit word (./words.ts), read by the rules the page
+ * read it by before it handed what was typed to the brain (27 November
+ * 2026), with two changes the review asked for: a day is a whole word
+ * ("month" is no Monday, "sunset" no Sunday), and "weekday" is Monday to
+ * Friday. Null when a word of it is no day, no time and none of the small
+ * words around them ("noon", "evening", "every morning at 6" are refused,
+ * as they were). The rest is as it was: the first day of the week, in the
+ * order of the week, then today, then tomorrow; the first number for the
+ * time, a bare hour from one to seven with no minutes the afternoon ("7" is
+ * 19:00, "6:30" is 6:30), and a number that is no time ("wed 25") is no
+ * time, the day still read.
+ */
+export function whenTyped(text: string): WhenTyped | null {
+  const low = text.toLowerCase();
+  const words = low.split(/[\s,]+/).filter(Boolean);
+  if (words.length === 0) return null;
+  let weekdays = false;
+  const named = new Set<number>();
+  for (const word of words) {
+    if (word in DAY_AT) named.add(DAY_AT[word]!);
+    else if (word === 'weekday' || word === 'weekdays') weekdays = true;
+    else if (!TYPED_FILL.has(word) && !TYPED_TOKEN.test(word)) return null;
+  }
+  // The first day in the order of the week, from Monday, as the page found it.
+  const first = [1, 2, 3, 4, 5, 6, 0].find((day) => named.has(day));
+  const days = first !== undefined ? [first] : weekdays ? WEEKDAYS : null;
+  const rel = words.includes('today') ? 'today' : words.includes('tomorrow') || words.includes('tmrw') ? 'tomorrow' : null;
+  const m = low.match(/\b(\d{1,2})(?:[:.h](\d{2}))?\s*(am|pm)?\b/);
+  let hour: number | null = null;
+  let minute = 0;
+  if (m) {
+    let h = Number(m[1]);
+    const mi = Number(m[2] ?? 0);
+    if (m[3] === 'pm' && h < 12) h += 12;
+    if (m[3] === 'am' && h === 12) h = 0;
+    if (!m[3] && !m[2] && h >= 1 && h <= 7) h += 12;
+    if (h < 24 && mi < 60) { hour = h; minute = mi; }
+  }
+  return { days, rel, hour, minute };
+}
+
 // --- saying it, and counting it ---
 
 /** The days as the notch says them: "day", "Monday", "Monday to Friday", "Monday and Friday", "Monday, Wednesday and Friday". */

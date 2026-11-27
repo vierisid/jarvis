@@ -54,14 +54,23 @@ describe('what a typed value means for a lit word', () => {
     expect(notchReadWord(day, 'soonish')).toBeNull();
   });
 
-  test('a word that only begins like a day is no day: the one reader of a time reads it whole or not at all', () => {
+  test('a word that only begins like a day is no day, and "weekday" is Monday to Friday', () => {
     const at = word({ value: 'Monday at 9:00', read: 'sched' });
-    for (const text of ['month', 'money at 9', 'sunset', 'saturn', 'satisfied', 'wedding', 'march', 'every 2 weeks', 'tomorrow']) {
+    for (const text of ['month', 'money at 9', 'sunset', 'saturn', 'satisfied', 'wedding', 'march', 'every 2 weeks', 'tomorrow', 'noon', 'evening', 'every morning at 6']) {
       expect([text, NOTCH_WORD_READ.sched(text, at)]).toEqual([text, null]);
     }
     expect(NOTCH_WORD_READ.sched('weekday at 9', at)).toBe('Monday to Friday at 9:00');
-    expect(NOTCH_WORD_READ.sched('every morning at 6', at)).toBe('day at 6:00');
     expect(NOTCH_WORD_READ.sched('6', at)).toBe('day at 18:00');
+  });
+
+  test('otherwise a typed time means what it meant on the page: a bare 1 to 7 is the afternoon, an hour with minutes is as written', () => {
+    const at = word({ value: 'Monday at 9:00', read: 'sched' });
+    const read: Record<string, string> = {
+      '7': 'day at 19:00', 'at 7': 'day at 19:00', 'tue 7': 'Tuesday at 19:00', 'mon 6.30': 'Monday at 6:30', '6:30': 'day at 6:30',
+      'next friday': 'Friday at 9:00', 'at 9 on mon': 'Monday at 9:00', 'wed 25': 'Wednesday at 9:00',
+    };
+    for (const [text, value] of Object.entries(read)) expect([text, NOTCH_WORD_READ.sched(text, at)]).toEqual([text, value]);
+    expect(NOTCH_WORD_READ.day('monday at 9', word({ value: 'Friday', read: 'day' }))).toBe('Monday');
     expect(NOTCH_WORD_READ.sched('sat', at)).toBe('Saturday at 9:00');
   });
 });

@@ -602,33 +602,58 @@ at 7 => - 19:00 -
 
 # What the brain makes of a value typed into a lit word (src/notch/words.ts). The page sends it as it was typed; it
 # used to read it itself. The word that is changed says "Monday at 9:00" (sched), "Thursday at 10:00" (daytime),
-# "Friday" (day). A time is read by the one reader (./when.ts): whole, or refused.
+# "Friday" (day). A time is read by the typed-word mode of the one reader (./when.ts, `whenTyped`): the page's
+# old rules, but a day is a whole word and "weekday" is Monday to Friday. A bare 1 to 7 is the afternoon.
 @ when word-sched
 month => refused
 money at 9 => refused
 sunset => refused
 weekday at 9 => Monday to Friday at 9:00
-# The page refused it: "morning" was no word of its own. Every morning is every day, at 6:00 (./when.ts).
-every morning at 6 => day at 6:00
+# "Morning", "noon" and "evening" are no words of a typed value, as on the page.
+every morning at 6 => refused
+noon => refused
+evening => refused
 every 2 weeks => refused
 tue 14:30 => Tuesday at 14:30
 friday at 6pm => Friday at 18:00
 6 => day at 18:00
+7 => day at 19:00
+at 7 => day at 19:00
+tue 7 => Tuesday at 19:00
+# With its minutes an hour is as written: six thirty in the morning.
+mon 6.30 => Monday at 6:30
+6:30 => day at 6:30
+next friday => Friday at 9:00
+at 9 on mon => Monday at 9:00
+# A number that is no time is no time; the day is still read.
+wed 25 => Wednesday at 9:00
 sat => Saturday at 9:00
 day at 9:00 => day at 9:00
 march => refused
+# Not days of the week (the page made them every day; the owner to confirm).
+tomorrow => refused
+today => refused
 
 @ when word-daytime
 month => refused
 tomorrow at 6 => tomorrow at 18:00
 fri 10 => Friday at 10:00
 satisfied => refused
+7 => Thursday at 19:00
+mon 6.30 => Monday at 6:30
+next friday => Friday at 10:00
+at 9 on mon => Monday at 9:00
+wed 25 => Wednesday at 10:00
+weekday at 9 => refused
 
 @ when word-day
 month => refused
 monday => Monday
 tmrw => tomorrow
 saturn => refused
+next friday => Friday
+# The time beside a day is dropped, as it always was.
+monday at 9 => Monday
 
 # A sentence typed into a word that takes one ("tell me" on a draft): it is kept as it was typed.
 @ when word-free

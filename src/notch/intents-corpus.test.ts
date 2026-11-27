@@ -676,12 +676,12 @@ const ROWS: Record<string, [number, number]> = {
   '@ when teach': [13, 0],
   '@ when move': [12, 0],
   '@ when said': [16, 0],
-  '@ when word-sched': [12, 0],
-  '@ when word-daytime': [4, 0],
-  '@ when word-day': [4, 0],
+  '@ when word-sched': [24, 0],
+  '@ when word-daytime': [10, 0],
+  '@ when word-day': [6, 0],
   '@ when word-free': [2, 0],
 };
-const TOTALS = { routing: 317, routingWrong: 0, times: 98, timesWrong: 0 };
+const TOTALS = { routing: 317, routingWrong: 0, times: 118, timesWrong: 0 };
 
 const read = corpus();
 /** For every routing row, the intents that matched its sentence when it was decided, the one that took it first. */
