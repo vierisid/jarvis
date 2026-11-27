@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { attachNotchActions, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome } from './actions.ts';
-import { playDecidable, type NotchDecidable } from './decide.ts';
+import { playDecidable, playSend, type NotchDecidable } from './decide.ts';
 import { NotchStage, NotchStageEnded, type NotchClock } from './stage.ts';
 import type { NotchSurface } from './surface.ts';
 import type { NotchLine } from './protocol.ts';
@@ -242,6 +242,44 @@ describe('an earlier try that may have gone', () => {
     const h = harness();
     const { it } = item({ look: { went: async () => true }, still: () => 'closed' });
     expect(await playDecidable(h.stage, it, { actions: h.actions })).toEqual({ took: 'held', held: 'closed' });
+    expect(h.actions.since(0)).toEqual([]);
+  });
+});
+
+describe('something sent to somebody on a word', () => {
+  const send = (go: () => Promise<{ ok: boolean; why?: string }>, how?: 'pick') => ({
+    say: ['Telling Leo…'], ms: 3000, back: ['Taken back. Nothing was sent.'], kind: 'people_tell' as const, what: 'Message to Leo', target: 'Leo', go, ...(how ? { how } : {}),
+  });
+
+  test('goes past its fuse, and one entry says what came of it: a line broken while it went may have gone', async () => {
+    for (const [answer, outcome] of [[{ ok: true }, 'done'], [{ ok: false, why: 'down' }, 'not_done'], [{ ok: false, why: 'unknown' }, 'unsure']] as const) {
+      const h = harness();
+      const played = playSend(h.stage, send(async () => answer, 'pick'), { actions: h.actions });
+      await settle();
+      h.page('done');
+      expect(await played).toEqual(answer);
+      expect(h.actions.since(0)).toMatchObject([{ kind: 'people_tell', outcome, seen: 'line', how: 'pick', fuseMs: 3000, target: 'Leo' }]);
+    }
+  });
+
+  test('taken back, it says so and nothing goes; nobody saw it, nothing is said and nothing goes', async () => {
+    const h = harness();
+    let went = 0;
+    const back = playSend(h.stage, send(async () => { went++; return { ok: true }; }), { actions: h.actions });
+    await settle();
+    h.page('undo');
+    await settle();
+    expect(h.shown.at(-1)).toMatchObject({ kind: 'say', say: ['Taken back. Nothing was sent.'] });
+    h.advance(5000);
+    expect(await back).toBeNull();
+
+    const lost = playSend(h.stage, send(async () => { went++; return { ok: true }; }), { actions: h.actions });
+    await settle();
+    const before = h.shown.length;
+    h.advance(3000 + 1500);
+    expect(await lost).toBeNull();
+    expect(h.shown.length).toBe(before);
+    expect(went).toBe(0);
     expect(h.actions.since(0)).toEqual([]);
   });
 });
