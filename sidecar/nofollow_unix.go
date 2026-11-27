@@ -2,8 +2,14 @@
 
 package main
 
-import "syscall"
+import (
+	"os"
+	"syscall"
+)
 
-// oNoFollow makes os.OpenFile fail with ELOOP if the target is a symlink,
-// so secret writes cannot be redirected to attacker-planted symlinks.
-const oNoFollow = syscall.O_NOFOLLOW
+// openNoFollow opens path like os.OpenFile, but fails with ELOOP if path is
+// a symlink, so secret writes cannot be redirected to attacker-planted
+// symlinks.
+func openNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag|syscall.O_NOFOLLOW, perm)
+}

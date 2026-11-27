@@ -306,9 +306,10 @@ func SaveConfig(cfg *SidecarConfig) error {
 	if err != nil {
 		return err
 	}
-	// O_NOFOLLOW prevents a hostile symlink at configFile from redirecting
-	// the write to an unrelated target (e.g. ~/.bash_history).
-	f, err := os.OpenFile(configFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|oNoFollow, 0600)
+	// A hostile symlink at configFile must not redirect the write to an
+	// unrelated target (e.g. ~/.bash_history): O_NOFOLLOW off Windows, a
+	// link check on Windows, which has no such flag.
+	f, err := openNoFollow(configFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
