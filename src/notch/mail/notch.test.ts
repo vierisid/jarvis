@@ -2114,6 +2114,26 @@ describe('what is written down of a reply (the list of what the notch did)', () 
     expect(entries(h)).toEqual([]);
   });
 
+  // Fix 05, step 10: the thread was kept from the watcher, and the line that follows threw on the ended
+  // stage before the part that lets it go. No mail of that thread was read until a restart.
+  test('the notch is stopped while the thread is asked a last time: nothing is written, and the thread is let go', async () => {
+    let tell: (still: boolean | null) => void = () => {};
+    const options: { stillWaitsWhen?: Promise<boolean | null> } = {};
+    const h = harness([row()], options);
+    await h.arrive();
+    await h.answer('yes');
+    // The last ask of the thread, after the yes on the draft, is the one that is slow to answer.
+    options.stillWaitsWhen = new Promise((resolve) => { tell = resolve; });
+    await h.answer('yes');
+    expect(h.held).toEqual([]);
+    h.inbox.stop();
+    tell(true);
+    await settle();
+    expect(h.did).toEqual([]);
+    expect(h.held.filter((one) => one.startsWith('hold')).length).toBe(h.held.filter((one) => one.startsWith('release')).length);
+    expect(entries(h)).toEqual([]);
+  });
+
   test('the yes stood and the page would not press Send: one entry, not done', async () => {
     const h = harness([row()], { steps: { send: { ok: false, why: 'no Send button', pressed: false } } });
     await h.arrive();
