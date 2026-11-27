@@ -35,6 +35,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import { playDecidable } from './decide.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { MailThread } from './mail/thread.ts';
 import type { NotchBlock, NotchPart, NotchWord } from './protocol.ts';
@@ -722,11 +723,14 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
     return there;
   }
 
-  /** The mail that may have gone had gone: it is counted as sent, and the chase goes on. */
-  function counted(chase: NotchChase): void {
+  /**
+   * The mail that may have gone had gone: it is counted as sent, and the chase goes on. `settled`: the
+   * entry has been changed already, by the road after a yes (./decide.ts).
+   */
+  function counted(chase: NotchChase, settled = false): void {
     const opening = chase.nudges === 0;
     // The entry that said it may have gone says that it went: no second one.
-    deps.actions?.settle(mailEntry(chase, chase.nudges, 'done').ref!, 'done', { otherwise: mailEntry(chase, chase.nudges, 'done') });
+    if (!settled) deps.actions?.settle(mailEntry(chase, chase.nudges, 'done').ref!, 'done', { otherwise: mailEntry(chase, chase.nudges, 'done') });
     // The yes that would have sent it again is spent on finding it: the next mail goes by the clock.
     yesTo.delete(chase.id);
     chase.state = 'on'; chase.nudges++; chase.nextAt = now() + waitOf(chase); chase.unsure = null;
@@ -799,26 +803,30 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
    * yes was pressed, with no way to take it back.
    */
   async function beginChase(chase: NotchChase, stage: NotchStage): Promise<Started & { ok: boolean; took?: 'undo' | 'lost' }> {
-    // What would refuse it is said now, not after a fuse that could send nothing.
-    const refused = cannotStart(chase);
-    if (refused) return { ...refused, ok: false };
-    // The yes that was just given, on the sheet with both mails: read before the fuse answers.
-    const asked: NotchActionAsked = { seen: 'sheet', how: notchAskedHow(stage), fuseMs: NOTCH_CHASE_FUSE_MS };
-    const went = await stage.fuse(['Sending ', em(first(chase.name)), ' the first mail…'], NOTCH_CHASE_FUSE_MS, { src: 'mail' });
-    if (went === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 2600, extras: {} };
-    if (went === 'lost') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
-    yesTo.set(chase.id, asked);
-    const said = await startChase(chase);
-    yesTo.delete(chase.id);
+    // The fuse, the first mail, and the one entry of what came of it (./decide.ts). What would refuse it
+    // is said before the fuse, not after one that could send nothing, and asked again once it has burnt.
+    const played = await playDecidable<Started, Awaited<ReturnType<typeof sendNudge>>>(stage, {
+      // The yes that was just given, on the sheet with both mails: read before the fuse answers.
+      asked: { seen: 'sheet', how: notchAskedHow(stage) },
+      fuse: { say: ['Sending ', em(first(chase.name)), ' the first mail…'], ms: NOTCH_CHASE_FUSE_MS, extras: { src: 'mail' } },
+      held: () => cannotStart(chase),
+      still: () => cannotStart(chase),
+      act: async () => {
+        chase.createdAt = now();
+        const sent = await sendNudge(chase);
+        return { outcome: sent.ok ? 'done' : sent.unsure ? 'unsure' : 'not_done', result: sent };
+      },
+      entry: (outcome, asked) => ({ ...mailEntry(chase, 0, outcome), asked }),
+    }, deps);
+    if (played.took === 'held') return { ...played.held, ok: false };
+    if (played.took === 'undo') return { ok: false, took: 'undo', parts: ['Taken back. Nothing was sent.'], ms: 2600, extras: {} };
+    if (played.took !== 'acted') return { ok: false, took: 'lost', parts: [], ms: 0, extras: {} };
+    const said = startChase(chase, played.result);
     return { ...said, ok: store.chase(chase.id) !== null };
   }
 
-  async function startChase(chase: NotchChase): Promise<Started> {
-    const refused = cannotStart(chase);
-    if (refused) return refused;
-    chase.createdAt = now();
-    const sent = await sendNudge(chase);
-    noted(chase, sent.ok ? 'done' : sent.unsure ? 'unsure' : 'not_done');
+  /** The first mail of a chase was sent, or tried: the chase starts, or is kept stuck on a mail that may have gone. */
+  function startChase(chase: NotchChase, sent: Awaited<ReturnType<typeof sendNudge>>): Started {
     if (!sent.ok && sent.unsure) {
       // Send was pressed and nothing confirmed it. It was said "I could not send it. Nothing was
       // started", and the same words then went a second time. The chase is kept, stuck on that
@@ -959,39 +967,45 @@ export function attachNotchStanding(deps: NotchStandingDeps): NotchStanding {
           return 'settled';
         }
         if (picked === 'send') {
-          // Nothing is sent while everything is stopped, and no fuse burns for a mail that cannot go.
-          if (deps.paused?.()) { await stage.say(STOPPED, 3200, { mood: 'careful' }); return 'waits'; }
-          if (unsure) {
-            // It may have gone the first time. The mailbox is asked before anything is sent again:
-            // a mail that is there is counted, and is not sent twice.
-            const looking = stage.id();
-            stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
-            const there = await wentAlready(fresh);
-            const now_ = store.chase(chase.id);
-            if (!now_ || now_.state !== 'stuck') { await stage.say(['That one is already closed.'], 2400); return 'settled'; }
-            if (there === true) {
-              counted(now_);
-              await stage.say(['It had gone: it is in your mail. I did not send it again. Still on it.'], 4200, { mark: 'check' });
-              return 'settled';
-            }
-            if (there === null) {
-              await stage.say(['I cannot see whether it went, so I am not sending it again. Look in your mail, or ask me again in a moment.'], 5200, { mood: 'careful' });
-              return 'waits';
-            }
+          const closed = (): 'closed' | null => (store.chase(chase.id)?.state === 'stuck' ? null : 'closed');
+          // The road after a yes (./decide.ts). Nothing is sent while everything is stopped, and no fuse
+          // burns for a mail that cannot go. It may have gone the first time: the mailbox is asked before
+          // anything is sent again, and a mail that is there is counted, and is not sent twice. Then a fuse
+          // burns, and Esc takes it back (README 22): "Try again" had none.
+          const played = await playDecidable<'paused' | 'closed', null>(stage, {
+            asked: { seen: 'sheet', how: yesHow },
+            fuse: { say: ['Sending ', em(name), ` ${which}…`], ms: NOTCH_CHASE_FUSE_MS, extras: { src: 'mail' } },
+            held: () => (deps.paused?.() ? 'paused' : null),
+            look: unsure ? { went: () => wentAlready(fresh) } : null,
+            still: closed,
+            act: async () => {
+              const still = store.chase(chase.id)!;
+              still.state = 'on'; still.nextAt = now();
+              step(still, why.kind === 'send' ? 'You said: try again.' : `You said: send ${which}.`);
+              store.putChase(still);
+              // The mail goes on this yes: it was on the sheet, and the fuse burnt out.
+              yesTo.set(still.id, { seen: 'sheet', how: yesHow, fuseMs: NOTCH_CHASE_FUSE_MS });
+              // It goes by the same step as any mail of a chase: the mailbox is looked at first, and one that
+              // cannot go asks again. What came of it is written down there, where it is known.
+              void tick();
+              return { outcome: null, result: null };
+            },
+            // Found, the mail that may have gone is the entry that says so: by the clock, or on an earlier yes.
+            entry: (outcome) => mailEntry(fresh, fresh.nudges, outcome),
+          }, deps);
+          if (played.took === 'held' && played.held === 'paused') { await stage.say(STOPPED, 3200, { mood: 'careful' }); return 'waits'; }
+          if (played.took === 'held') { await stage.say(['That one is already closed.'], 2400); return 'settled'; }
+          if (played.took === 'found') {
+            counted(store.chase(chase.id)!, true);
+            await stage.say(['It had gone: it is in your mail. I did not send it again. Still on it.'], 4200, { mark: 'check' });
+            return 'settled';
           }
-          // A yes to a mail: a fuse burns first, and Esc takes it back (README 22). "Try again" had none.
-          const went = await stage.fuse(['Sending ', em(name), ` ${which}…`], NOTCH_CHASE_FUSE_MS, { src: 'mail' });
-          if (went === 'lost') return 'waits';
-          if (went === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2600); return 'waits'; }
-          const still = store.chase(chase.id);
-          if (!still || still.state !== 'stuck') { await stage.say(['That one is already closed.'], 2400); return 'settled'; }
-          still.state = 'on'; still.nextAt = now();
-          step(still, why.kind === 'send' ? 'You said: try again.' : `You said: send ${which}.`);
-          store.putChase(still);
-          // The mail goes on this yes: it was on the sheet, and the fuse burnt out.
-          yesTo.set(still.id, { seen: 'sheet', how: yesHow, fuseMs: NOTCH_CHASE_FUSE_MS });
-          // It goes by the same step as any mail of a chase: the mailbox is looked at first, and one that cannot go asks again.
-          void tick();
+          if (played.took === 'unknown') {
+            await stage.say(['I cannot see whether it went, so I am not sending it again. Look in your mail, or ask me again in a moment.'], 5200, { mood: 'careful' });
+            return 'waits';
+          }
+          if (played.took === 'undo') { await stage.say(['Taken back. Nothing was sent.'], 2600); return 'waits'; }
+          if (played.took !== 'acted') return 'waits';
           await stage.say(['Sending it. I will come back if it does not go.'], 2800);
           return 'settled';
         }
