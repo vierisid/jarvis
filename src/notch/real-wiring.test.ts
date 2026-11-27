@@ -32,7 +32,7 @@ import { NOTCH_FAILURE_LOOK_MS, type NotchNews, type NotchOpenFailure } from './
 import { NOTCH_PEOPLE_TICK_MS } from './people.ts';
 import type { NotchBlock, NotchLine } from './protocol.ts';
 import { NOTCH_QUESTION_LOOK_MS } from './questions.ts';
-import { NOTCH_ORDER, attachNotchReal, notchIntents, type NotchReal, type NotchRealDeps, type NotchSideRouters } from './real.ts';
+import { NOTCH_ORDER, attachNotchReal, notchIntents, notchMaySpeak, type NotchReal, type NotchRealDeps, type NotchSideRouters } from './real.ts';
 import { NOTCH_STANDING_TICK_MS, NotchStandingStore } from './standing.ts';
 import { NOTCH_CALL_AFTER_MS } from './around.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -548,6 +548,18 @@ describe('a page comes up', () => {
     w.real.stop();
     w.fromPage({ type: 'hello', v: 2 }, 'laptop');
     expect(heard).toEqual(['day one']);
+  });
+});
+
+describe('whether a line nobody asked for may come up', () => {
+  test('the quiet hours hold it back, also before the part that knows whether the person is there is made', () => {
+    const quiet = (on: boolean) => ({ now: () => on });
+    const there = (still: boolean, away: boolean) => ({ still: () => still, isAway: () => away });
+    expect([
+      notchMaySpeak(null, quiet(false)), notchMaySpeak(null, quiet(true)),
+      notchMaySpeak(there(true, false), quiet(false)), notchMaySpeak(there(true, false), quiet(true)),
+      notchMaySpeak(there(false, false), quiet(false)), notchMaySpeak(there(true, true), quiet(false)),
+    ]).toEqual([true, false, true, false, false, false]);
   });
 });
 

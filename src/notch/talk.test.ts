@@ -60,6 +60,30 @@ describe('a recording from the desktop app', () => {
     }
   });
 
+  test('stopped while the look of the same hold is being fetched: the dropped files are not claimed, and nothing is asked', async () => {
+    const calls: string[] = [];
+    let onEvent: (sidecarId: string, event: { event_type: string; payload: unknown; binary?: unknown }) => void = () => {};
+    let files: (found: null) => void = () => {};
+    const talk = attachNotchTalk({ onEvent: (listener) => { onEvent = listener; } }, {
+      asks: {
+        listen: (id) => { calls.push(`listen ${id}`); return id; }, released: () => true,
+        words: (id) => { calls.push(`words ${id}`); }, nothing: (id) => { calls.push(`nothing ${id}`); }, dropped: () => {}, tell: () => {},
+      },
+      stt: () => ({ transcribe: async () => 'what is this' }),
+      look: { during: () => true, alone: () => {}, files: () => new Promise((resolve) => { files = resolve; }) },
+      held: () => { calls.push('held claimed'); return []; },
+      log: () => {},
+    });
+    const pcm = Buffer.alloc(16_000 * 2, 1).toString('base64');
+    onEvent('pc', { event_type: NOTCH_TALK_EVENT, payload: { phase: 'start', talk_id: 'a1' } });
+    onEvent('pc', { event_type: NOTCH_TALK_EVENT, payload: { phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500 }, binary: { type: 'inline', data: pcm } });
+    await settle();
+    talk.stop();
+    files(null);
+    await settle();
+    expect(calls).toEqual(['listen pc:a1']);
+  });
+
   test('what is pretended stops with the notch: neither its release nor its words come after stop', async () => {
     const h = harness();
     h.talk.pretend('send Leo the numbers');

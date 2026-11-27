@@ -230,11 +230,12 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     if (withLook) {
       try { seen = (await deps.look!.files(sidecarId)) ?? []; } catch { seen = []; }
     }
+    // Stopped while the look's files were fetched: the dropped files stay where they are, and nothing is asked.
+    if (stopped) return;
     let dropped: NotchAskFile[] = [];
     try { dropped = deps.held?.() ?? []; } catch { dropped = []; }
     // The files that were handed over first: they were given on purpose. Then as much of the look as a turn may carry.
     const files = [...dropped, ...seen].slice(0, ATTACHMENT_LIMITS.perTurn);
-    if (stopped) return;
     deps.asks.words(talkKey, said, { ...(cut ? { cut: true } : {}), ...(files.length ? { files } : {}) });
   };
   const closed = (sidecarId: string): void => {

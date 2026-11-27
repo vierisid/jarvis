@@ -11,6 +11,7 @@ import type { ApprovalRequest } from '../authority/approval.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { CommitmentRunner } from '../daemon/commitment-executor.ts';
 import { NOTCH_FIXTURE_ORIGIN, createNotchFixtures, notchFixturePromiseRun, type NotchFixtureDeps, type NotchFixtures } from './fixtures.ts';
+import type { NotchDemoGateState } from './demo-gate.ts';
 import type { NotchReal } from './real.ts';
 
 /** What the test items are made from, of the product. */
@@ -56,4 +57,13 @@ export function attachNotchDev(real: Pick<NotchReal, 'inbox' | 'approvals' | 'ne
     deliverApproval: given.deliverApproval,
     promises: promises ? { create: promises.create, look: () => promises.executor.checkAndAnnounce() } : undefined,
   });
+}
+
+/**
+ * The fixed test items, only while the demo gate is open and there is a notch: null otherwise, and then what
+ * they are made from is not even asked for.
+ */
+export function notchDevFor(gate: NotchDemoGateState, real: Pick<NotchReal, 'inbox' | 'approvals' | 'news'> | null, given: () => NotchDevGiven): NotchFixtures | null {
+  if (gate !== 'open' || !real) return null;
+  return attachNotchDev(real, given());
 }

@@ -169,11 +169,11 @@ import { NOTCH_DEMO_PATH, initNotchDemoGate } from "../notch/demo-gate.ts";
 import { NOTCH_PAGE_PATH, notchRoutes } from "../notch/routes.ts";
 import { notchMailBrowser, notchMailLayerDeps, notchStudyDeps } from "./notch-mail-browser.ts";
 import { NOTCH_FIXTURE_LOG, type NotchFixtures } from "../notch/fixtures.ts";
-import { attachNotchDev } from "../notch/dev.ts";
+import { notchDevFor } from "../notch/dev.ts";
 import { createCommitment, findCommitments } from "../vault/commitments.ts";
 import { notchMoveSlipped, notchSlipped } from "./notch-slipped.ts";
 import { attachNotchReal } from "../notch/real.ts";
-import { NOTCH_FAILED_NOTICE, NOTCH_PEOPLE_FAILED_NOTICE, holdNotch, notchDashboardNotice, startNotchPart, stopNotch } from "./notch-start.ts";
+import { NOTCH_DEV_FAILED_NOTICE, NOTCH_FAILED_NOTICE, NOTCH_PEOPLE_FAILED_NOTICE, holdNotch, notchDashboardNotice, startNotchPart, stopNotch } from "./notch-start.ts";
 import { setOwnerWordProbe } from "../authority/owner-word.ts";
 import { notchSilent } from "../notch/silence.ts";
 import { initScriptedModelGate } from "../llm/scripted.ts";
@@ -5083,7 +5083,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // command fixture is filed against the brain's real run_command tool; "elsewhere" decides one of the
       // fixture's own approvals as a dashboard click would; a fixture promise is kept by one line in a file
       // inside the data directory, not by a model turn.
-      notchFixtures = notchReal && notchDemoState === 'open' ? attachNotchDev(notchReal, {
+      // Made through the same guard as the rest: a throw here leaves the brain, and the notch, up.
+      notchFixtures = startNotchPart('the test items of the notch', () => notchDevFor(notchDemoState, notchReal, () => ({
         approvalManager,
         deliverApproval: (request) => approvalDelivery.deliver(request),
         toolRegistry: () => agentService.getOrchestrator().getToolRegistry(),
@@ -5095,7 +5096,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           return failure.headline;
         },
         promises: { executor, create: (what, options) => createCommitment(what, options), appendLog: (line) => appendFileSync(path.join(dataDir, NOTCH_FIXTURE_LOG), line) },
-      }) : null;
+      })), { say: NOTCH_DEV_FAILED_NOTICE, notice: notchNotice });
       // Nothing answers what the engine asks of the person when there is no notch: then it is not started.
       if (peerSetupNow && notchReal) {
         // What the engine asks of the person goes to the link, and from there to the notch. Nothing else answers it.

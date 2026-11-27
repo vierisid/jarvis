@@ -430,6 +430,15 @@ export function notchRead(parts: NotchReadParts, text: string, how?: NotchAskHow
 }
 
 /**
+ * Whether a line nobody asked for may come up now: only in a still moment, not to an empty chair, and never in
+ * the quiet hours. Without the part that knows whether the person is there (before it is made) their hands
+ * hold nothing back, and the quiet hours still do.
+ */
+export function notchMaySpeak(presence: Pick<NotchPresence, 'still' | 'isAway'> | null, quiet: Pick<NotchQuiet, 'now'>): boolean {
+  return (!presence || (presence.still() && !presence.isAway())) && !quiet.now();
+}
+
+/**
  * Puts the real things on the notch. When a part cannot be made, what was made
  * before it is stopped again and the throw goes on to whoever asked: nothing
  * is left looking at a window or a mailbox for a notch that is not there.
@@ -492,7 +501,7 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     home: (stage) => { const asks = registry.use('asks'); return asks ? asks.home(stage) : today(stage); },
     // Only in a still moment, not to an empty chair, and never in the quiet hours. The part that knows whether
     // the person is there is made right after this, whenever there are settings; the quiet hours hold either way.
-    ...(quiet ? { maySpeak: () => { const presence = registry.use('presence'); return (!presence || (presence.still() && !presence.isAway())) && !quiet.now(); } } : {}),
+    ...(quiet ? { maySpeak: () => notchMaySpeak(registry.use('presence'), quiet) } : {}),
     // Replies that were seen wait in Home, not in the count: with any of them there, a round has not been everything.
     elsewhere: () => (registry.use('mail')?.store.ready().length ?? 0) > 0,
   });
@@ -540,7 +549,9 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   // Words that a shown job could mean are that job's, and are not read as a new value for the line.
   registry.must(notchSaidFeature({ jobWords: (text) => teach?.begins(text) ?? false }));
   const prefs: NotchPrefs | null = registry.add(notchPrefsFeature({
-    keys: office?.keys, voice: office?.voice, connections: office?.connections, connect: office?.connect,
+    keys: office?.keys, voice: office?.voice, connections: office?.connections,
+    // Called on the back office, as day one's is.
+    connect: office?.connect ? (id, sidecarId) => office.connect!(id, sidecarId) : undefined,
     openPage: office?.openPage, openDashboard: deps.openDashboard,
     dayOne: deps.dayOne !== undefined,
   }));

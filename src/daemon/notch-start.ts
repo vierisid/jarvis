@@ -20,6 +20,11 @@ export const NOTCH_PEOPLE_FAILED_NOTICE = '**The notch started without other peo
   + 'The part that talks to other people\'s Jarvises could not be started, so nothing is sent to them or taken from them. '
   + 'Restart Jarvis to try again; the log says what went wrong.';
 
+/** What it says when the notch's test items (demo gate only) could not be made. */
+export const NOTCH_DEV_FAILED_NOTICE = '**The notch started without its test items**\n'
+  + 'The fixed test items of the demo gate could not be made, so `jarvis notch fixture` finds none. '
+  + 'Restart Jarvis to try again; the log says what went wrong.';
+
 export interface NotchPartDeps {
   /** What the dashboard is told when this part cannot be made. */
   say: string;
