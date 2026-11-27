@@ -34,7 +34,7 @@
  */
 import type { NotchActionAsked, NotchActionEntry, NotchActionOutcome, NotchActions } from './actions.ts';
 import type { NotchBlock, NotchPart } from './protocol.ts';
-import type { NotchLineExtras, NotchStage } from './stage.ts';
+import { NotchStageEnded, type NotchLineExtras, type NotchStage } from './stage.ts';
 
 /** How a fuse ended: seen to burn out, taken back, burnt out over a letter nobody vouched for, or nobody said. */
 export type NotchFuseEnd = 'done' | 'undo' | 'unseen' | 'lost';
@@ -100,7 +100,8 @@ export async function playDecidable<H, R>(stage: NotchStage, item: NotchDecidabl
   if (held !== null) return { took: 'held', held };
   if (item.look) {
     stage.put({ id: stage.id(), kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
-    const there = await item.look.went().catch(() => null);
+    // A look that breaks says nothing about whether it went. A stage that ended ends this too.
+    const there = await item.look.went().catch((error: unknown) => { if (error instanceof NotchStageEnded) throw error; return null; });
     const after = item.still?.() ?? null;
     if (after !== null) return { took: 'held', held: after };
     if (there === true) {

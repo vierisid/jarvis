@@ -49,7 +49,8 @@
  *     watched for.
  */
 import type { Database } from 'bun:sqlite';
-import { notchAskedHow, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import { notchAskedHow, type NotchActionAsked, type NotchActionEntry, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import { playDecidable } from './decide.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchInbox } from './inbox.ts';
@@ -690,10 +691,10 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
         // How the yes that was just given was given: read before the fuse answers.
         const yesHow = notchAskedHow(stage);
         /** This follow-up as it is written down (./actions.ts): one entry for the call's mail, changed if it is sent again. */
-        const entry = (outcome: NotchActionOutcome): NotchActionEntry => ({
+        const entry = (outcome: NotchActionOutcome, asked: NotchActionAsked): NotchActionEntry => ({
           kind: 'call_followup', ref: `call:${id}`, outcome, what: `Follow-up of a call to ${whom()}`,
           target: [notes.to!.address, ...(notes.also ?? []).map((one) => one.address)].join(', '),
-          asked: { seen: 'sheet', how: yesHow, fuseMs: NOTCH_CALL_FUSE_MS },
+          asked,
         });
         const also = (notes.also ?? []).map((one) => one.address);
         const plan = {
@@ -706,39 +707,42 @@ export function attachNotchCalls(port: NotchCallPort, deps: NotchCallDeps): Notc
           delete notes.unsureText;
           store.set(id, { notes });
         };
-        if (notes.unsureSince) {
+        const mail = deps.mail;
+        const since = notes.unsureSince;
+        // The fuse, the send, and the one entry of what came of it (./decide.ts).
+        const decided = await playDecidable(stage, {
+          asked: { seen: 'sheet', how: yesHow },
+          fuse: { say: ['Sending to ', em(whom()), '…'], ms: NOTCH_CALL_FUSE_MS, extras: { src: 'mail' } },
           // The last try pressed Send and nothing confirmed it. Before it is sent again the mailbox
           // is asked whether it went: one that is there is counted, and is not sent twice.
-          const looking = stage.id();
-          stage.put({ id: looking, kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
-          let there: boolean | null = null;
-          try { there = (await deps.mail.went?.({ ...plan, text: notes.unsureText ?? plan.text }, notes.unsureSince)) ?? null; } catch (error) { if (error instanceof NotchStageEnded) throw error; }
-          if (there === true) {
-            await gone();
-            // The entry that said it may have gone says that it went: no second one.
-            deps.actions?.settle(`call:${id}`, 'done', { otherwise: entry('done') });
-            log('[notch] a call\'s follow-up that may have gone had gone: it is not sent again');
-            await stage.say(['It had gone: it is in your mail. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
-            return;
-          }
-          if (there === null) {
-            await stage.say(['I cannot see whether it went, so I am not sending it again. Look in your mail first.'], 5200, { mood: 'careful' });
-            return;
-          }
+          look: since ? { went: async () => (await mail.went?.({ ...plan, text: notes.unsureText ?? plan.text }, since)) ?? null } : null,
+          act: async () => {
+            const before = now();
+            let sent: { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number };
+            try {
+              sent = await mail.send(plan);
+            } catch (error) {
+              if (error instanceof NotchStageEnded) throw error;
+              // Not known how far it got before it threw: it may have gone, and that is how it is read.
+              sent = { ok: false, why: 'the mailbox did not answer' };
+            }
+            // The fuse was seen to burn out, and this is what came of it.
+            return { outcome: sent.ok ? 'done' : sent.pressed !== false ? 'unsure' : 'not_done', result: { sent, before } };
+          },
+          entry,
+        }, deps);
+        if (decided.took === 'found') {
+          await gone();
+          log('[notch] a call\'s follow-up that may have gone had gone: it is not sent again');
+          await stage.say(['It had gone: it is in your mail. I did not send it again.'], 3800, { mood: 'happy', mark: 'check', src: 'mail' });
+          return;
         }
-        const went = await stage.fuse(['Sending to ', em(whom()), '…'], NOTCH_CALL_FUSE_MS, { src: 'mail' });
-        if (went !== 'done') { if (went === 'undo') await stage.say(['Not sent. It is kept with the call.'], 3000); return; }
-        const before = now();
-        let sent: { ok: true } | { ok: false; why: string; pressed?: boolean; since?: number };
-        try {
-          sent = await deps.mail.send(plan);
-        } catch (error) {
-          if (error instanceof NotchStageEnded) throw error;
-          // Not known how far it got before it threw: it may have gone, and that is how it is read.
-          sent = { ok: false, why: 'the mailbox did not answer' };
+        if (decided.took === 'unknown') {
+          await stage.say(['I cannot see whether it went, so I am not sending it again. Look in your mail first.'], 5200, { mood: 'careful' });
+          return;
         }
-        // The fuse was seen to burn out, and this is what came of it.
-        deps.actions?.record(entry(sent.ok ? 'done' : sent.pressed !== false ? 'unsure' : 'not_done'));
+        if (decided.took !== 'acted') { if (decided.took === 'undo') await stage.say(['Not sent. It is kept with the call.'], 3000); return; }
+        const { sent, before } = decided.result;
         if (!sent.ok && sent.pressed !== false) {
           // Send was pressed, or it is not known that it was not: it may have gone. It was said "I
           // could not send it", and the next yes sent it a second time.

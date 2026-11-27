@@ -221,6 +221,13 @@ describe('an earlier try that may have gone', () => {
     }
   });
 
+  test('a stage that ends while it is looked for ends the road there: it is not read as "not known"', async () => {
+    const h = harness();
+    const { it, ran } = item({ look: { went: async () => { throw new NotchStageEnded(); } } });
+    await expect(playDecidable(h.stage, it, { actions: h.actions })).rejects.toBeInstanceOf(NotchStageEnded);
+    expect(ran.n).toBe(0);
+  });
+
   test('not there: the fuse burns and it goes as any other', async () => {
     const h = harness();
     const { it, ran } = item({ look: { went: async () => false } });
