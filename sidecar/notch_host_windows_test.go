@@ -82,3 +82,51 @@ func TestNotchReadsThePointerAndTheProgramsPlayingSound(t *testing.T) {
 		t.Fatalf("asking which programs play sound took %v", took)
 	}
 }
+
+// The page's calls on Windows reach the one rule: a window with no real
+// handle (every Win32 call on it does nothing) driven through the same entry
+// points the web view's bindings use.
+func TestWindowsNotchPageCallsGoThroughTheHost(t *testing.T) {
+	prev := notchWin.Load()
+	defer notchWin.Store(prev)
+	var told []bool
+	w := &notchWindow{}
+	w.host = newNotchHost(w, func(hidden bool) { told = append(told, hidden) })
+	notchWin.Store(w)
+	film := notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true}
+
+	platformNotchReveal(nil)
+	if len(told) != 1 || told[0] {
+		t.Fatalf("a page that loads is told it can be seen: %v", told)
+	}
+	w.host.Tick(film)
+	if !w.host.Hidden() || !told[len(told)-1] {
+		t.Fatalf("a film hides it: hidden %v, told %v", w.host.Hidden(), told)
+	}
+	if platformNotchFocus(nil, true) || w.host.HasFocus() {
+		t.Fatal("a hidden notch took the keyboard")
+	}
+	platformNotchAsking(nil, true)
+	if w.host.Hidden() || told[len(told)-1] {
+		t.Fatalf("a question brings it back: hidden %v, told %v", w.host.Hidden(), told)
+	}
+	platformNotchAsking(nil, false)
+	w.host.Tick(film)
+	if !w.host.Hidden() {
+		t.Fatal("answered, the film takes it again")
+	}
+	// A page that loads again is told anew.
+	n := len(told)
+	platformNotchReveal(nil)
+	if len(told) != n+1 || !told[n] {
+		t.Fatalf("a page loaded behind a film is told it is hidden: %v", told[n:])
+	}
+	platformNotchTearDown(nil)
+	if notchWin.Load() != nil {
+		t.Fatal("the window is still known after tear-down")
+	}
+	w.host.Tick(notchHostFacts{})
+	if len(told) != n+1 {
+		t.Fatalf("told after tear-down: %v", told[n+1:])
+	}
+}

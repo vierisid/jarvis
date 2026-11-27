@@ -54,6 +54,10 @@ type notchHostWindow interface {
 type notchHost struct {
 	win  notchHostWindow
 	tell func(hidden bool) // the service hears whether the window is out of sight
+	// Held across each tell, and by Detach: once Detach has returned the
+	// service hears nothing more from this window. Taken before mu, never
+	// after it.
+	tellMu sync.Mutex
 
 	mu       sync.Mutex
 	loaded   bool
@@ -146,18 +150,36 @@ func (h *notchHost) Focus(take bool) bool {
 		return false
 	}
 	if !take {
-		h.hasFocus.Store(false)
+		// The window first (on Windows: it stops taking the keyboard), then
+		// the word, as notch/main had it.
 		h.win.Focus(false)
+		h.hasFocus.Store(false)
 		return false
 	}
 	// Held before the system is asked: the platform's watch gives back a
 	// keyboard the notch has without having asked for it.
 	h.hasFocus.Store(true)
-	got := h.win.Focus(true)
-	if !got {
+	if !h.win.Focus(true) {
 		h.hasFocus.Store(false)
+		return false
 	}
-	return got
+	// A film may have hidden the window while the system was asked. Taking
+	// the keyboard can bring a window on screen (the Mac's
+	// makeKeyAndOrderFront), so a window hidden meanwhile gives the keyboard
+	// back and is hidden again: out of sight it holds nothing.
+	h.mu.Lock()
+	late := h.hidden || h.detached
+	if late && !h.detached {
+		h.shown = true
+	}
+	h.mu.Unlock()
+	if !late {
+		return true
+	}
+	h.win.Focus(false)
+	h.hasFocus.Store(false)
+	h.settle()
+	return false
 }
 
 // HasFocus is whether the page asked for the keyboard and has it.
@@ -172,10 +194,14 @@ func (h *notchHost) Hidden() bool {
 
 // Detach is the window going away. Nothing it is told afterwards moves
 // anything: the service has already forgotten it (NotchService.detachPage).
+// It waits for a tell already under way, so after it returns the service
+// hears nothing more from this window.
 func (h *notchHost) Detach() {
+	h.tellMu.Lock()
 	h.mu.Lock()
 	h.detached = true
 	h.mu.Unlock()
+	h.tellMu.Unlock()
 }
 
 // settle makes the window and the service agree with the state. The window
@@ -203,7 +229,14 @@ func (h *notchHost) settle() {
 		h.told, h.shown = hidden, show
 		h.mu.Unlock()
 		if tell {
-			h.tell(hidden)
+			h.tellMu.Lock()
+			h.mu.Lock()
+			gone := h.detached
+			h.mu.Unlock()
+			if !gone {
+				h.tell(hidden)
+			}
+			h.tellMu.Unlock()
 		}
 		if move && show {
 			h.win.Show()

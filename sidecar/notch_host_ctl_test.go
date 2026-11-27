@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,9 +30,21 @@ type notchFakeWin struct {
 	grants bool
 	takes  int
 	gives  int
+	// Called first in every call ("show", "hide", "take", "give"), with no
+	// lock of the fake held, so a test can look at the host at that moment.
+	// For "give" it stands for the moment Windows changes the window's
+	// style, which notch/main did before it cleared hasFocus.
+	on func(what string)
+}
+
+func (f *notchFakeWin) at(what string) {
+	if f.on != nil {
+		f.on(what)
+	}
 }
 
 func (f *notchFakeWin) Show() {
+	f.at("show")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.visible = true
@@ -38,6 +52,7 @@ func (f *notchFakeWin) Show() {
 }
 
 func (f *notchFakeWin) Hide() {
+	f.at("hide")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.visible = false
@@ -45,6 +60,11 @@ func (f *notchFakeWin) Hide() {
 }
 
 func (f *notchFakeWin) Focus(take bool) bool {
+	if take {
+		f.at("take")
+	} else {
+		f.at("give")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if take {
@@ -175,8 +195,10 @@ func (w *notchHostWindowsThen) Focus(take bool) bool {
 		}
 		return got
 	}
-	w.hasFocus.Store(false)
+	// notch/main: the window style first (the fake's "give"), then
+	// hasFocus, then the keyboard back to who had it.
 	w.win.Focus(false)
+	w.hasFocus.Store(false)
 	return false
 }
 
@@ -550,5 +572,210 @@ func TestNotchHostTellsNothingAfterDetach(t *testing.T) {
 	h.Loaded()
 	if told.times != before || win.hides != 0 || win.shows != 1 || h.Focus(true) {
 		t.Fatalf("after detach: told %d more, hides %d, shows %d", told.times-before, win.hides, win.shows)
+	}
+}
+
+// The order inside each change, as notch/main had it, on the copy and on the
+// controller alike: the service is told before the window moves (a notch on
+// its way out of sight has already let go of Esc, and one coming back takes
+// Esc as it appears); the notch says it holds the keyboard before the system
+// is asked (or the watch hands it straight back); and when it gives the
+// keyboard back the window changes first and the word after.
+func TestNotchHostDoesThingsInTheOrderWindowsDid(t *testing.T) {
+	for name, build := range map[string]func(win *notchFakeWin, told *notchFakeTold) notchHostUnderTest{
+		"windows then": func(win *notchFakeWin, told *notchFakeTold) notchHostUnderTest {
+			return &notchHostWindowsThen{win: win, tell: told.tell}
+		},
+		"controller": func(win *notchFakeWin, told *notchFakeTold) notchHostUnderTest {
+			return notchHostDriven{newNotchHost(win, told.tell)}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			win, told := &notchFakeWin{grants: true}, &notchFakeTold{}
+			h := build(win, told)
+			var seen []string
+			win.on = func(what string) {
+				switch what {
+				case "show", "hide":
+					seen = append(seen, fmt.Sprintf("%s told hidden=%v", what, told.last()))
+				case "take", "give":
+					seen = append(seen, fmt.Sprintf("%s holds=%v", what, h.HasFocus()))
+				}
+			}
+			h.Loaded()
+			h.Tick(notchFilm)
+			h.Asking(true)
+			h.Focus(true)
+			h.Focus(false)
+			h.Asking(false)
+			h.Tick(notchFilm)
+			want := []string{
+				"show told hidden=false",
+				"hide told hidden=true",
+				"show told hidden=false",
+				"take holds=true",
+				"give holds=true",
+				"hide told hidden=true",
+			}
+			if fmt.Sprint(seen) != fmt.Sprint(want) {
+				t.Fatalf("got\n  %v\nwant\n  %v", seen, want)
+			}
+		})
+	}
+}
+
+// A window whose Focus(true) also puts it on screen, as the Mac's
+// makeKeyAndOrderFront does, and which waits while it is asked.
+type notchMacLikeWin struct {
+	notchFakeWin
+	inFocus chan struct{}
+	goOn    chan struct{}
+	once    sync.Once
+}
+
+func (w *notchMacLikeWin) Focus(take bool) bool {
+	if take {
+		w.once.Do(func() {
+			close(w.inFocus)
+			<-w.goOn
+		})
+		w.mu.Lock()
+		w.visible = true
+		w.takes++
+		w.mu.Unlock()
+		return true
+	}
+	return w.notchFakeWin.Focus(take)
+}
+
+// The keyboard asked for, and a film's look landing while the system is
+// asked: the notch must not end on screen over the film holding the
+// keyboard while the service believes it hidden (no Esc, no yes). On
+// notch/main's Mac both ran on the main thread and could not cross.
+func TestNotchHostFocusRacingAHideHoldsNothing(t *testing.T) {
+	win := &notchMacLikeWin{inFocus: make(chan struct{}), goOn: make(chan struct{})}
+	told := &notchFakeTold{}
+	h := newNotchHost(win, told.tell)
+	h.Loaded()
+	film := notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true}
+	got := make(chan bool)
+	go func() { got <- h.Focus(true) }()
+	<-win.inFocus
+	h.Tick(film) // the timer's look, between the check and the focus
+	close(win.goOn)
+	answered := <-got
+	h.Tick(film)
+	if answered || !h.Hidden() || !told.last() || win.seen() || h.HasFocus() {
+		t.Fatalf("focus answered %v, hidden %v, told hidden %v, on screen %v, holds the keyboard %v",
+			answered, h.Hidden(), told.last(), win.seen(), h.HasFocus())
+	}
+	win.mu.Lock()
+	gives := win.gives
+	win.mu.Unlock()
+	if gives != 1 {
+		t.Fatalf("the keyboard was given back %d times, want 1", gives)
+	}
+}
+
+// Detach waits for a tell already under way, and after it nothing more is
+// told: a look that began before the window went cannot leave the service
+// believing a window that is gone is hidden.
+func TestNotchHostDetachWaitsForATellUnderWay(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var heard []bool
+	first := true
+	win := &notchFakeWin{}
+	h := newNotchHost(win, func(hidden bool) {
+		mu.Lock()
+		heard = append(heard, hidden)
+		wait := first && hidden
+		if wait {
+			first = false
+		}
+		mu.Unlock()
+		if wait {
+			close(entered)
+			<-release
+		}
+	})
+	h.Loaded()
+	go h.Tick(notchHostFacts{FullscreenInFront: true, DisplayKeptAwake: true, VideoPlaying: true})
+	<-entered
+	detached := make(chan struct{})
+	go func() {
+		h.Detach()
+		close(detached)
+	}()
+	select {
+	case <-detached:
+		t.Fatal("Detach returned while a tell was under way")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-detached
+	mu.Lock()
+	n := len(heard)
+	mu.Unlock()
+	h.Tick(notchHostFacts{})
+	h.Asking(true)
+	h.Loaded()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != n {
+		t.Fatalf("told %v after Detach returned", heard[n:])
+	}
+}
+
+// The Windows window cannot be built here, so how it is wired to the rule is
+// held to in its text (notch_host_windows_test.go drives it on Windows): the
+// page's load and question go to the host, the watch hands the host what it
+// read and gives the keyboard back only when the host says the page did not
+// ask for it, and the window's own focus does not decide about hidden.
+func TestNotchWindowsWindowIsWiredToTheOneRule(t *testing.T) {
+	for name, want := range map[string][]string{
+		"platformNotchReveal":   {"w.host.Loaded()"},
+		"platformNotchAsking":   {"w.host.Asking(asking)"},
+		"platformNotchFocus":    {"return w.host.Focus(take)"},
+		"platformNotchSetUp":    {"w.host = newNotchHost(w, notch.setHidden)"},
+		"platformNotchTearDown": {"w.host.Detach()"},
+	} {
+		body := goFunc(t, "notch_host_windows.go", name)
+		for _, w := range want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s no longer has: %s", name, w)
+			}
+		}
+	}
+	raw, err := os.ReadFile("notch_host_windows.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	at := strings.Index(text, "\nfunc (w *notchWindow) watch(")
+	if at < 0 {
+		t.Fatal("notch_host_windows.go has no watch")
+	}
+	watch := text[at:]
+	watch = watch[:strings.Index(watch, "\n}\n")]
+	for _, w := range []string{
+		"facts := notchHostFacts{FullscreenInFront: fullscreen, DisplayKeptAwake: awake, VideoPlaying: playing}",
+		"w.host.Tick(facts)",
+		"w.host.Tick(notchHostFacts{FullscreenInFront: true, CaptureOverlay: true})",
+		"holds := fg == w.hwnd && !w.host.HasFocus()",
+	} {
+		if !strings.Contains(watch, w) {
+			t.Errorf("watch no longer has: %s", w)
+		}
+	}
+	for _, own := range []string{"notchShouldHide(", "notch.setHidden(", "w.Show()", "w.Hide()"} {
+		if strings.Contains(watch, own) {
+			t.Errorf("watch decides for itself again (%s)", own)
+		}
+	}
+	focus := text[strings.Index(text, "\nfunc (w *notchWindow) Focus("):]
+	focus = focus[:strings.Index(focus, "\n}\n")]
+	if strings.Contains(focus, "host.Hidden()") || strings.Contains(focus, "hasFocus") {
+		t.Error("the window's focus decides about hidden or holding again: that is notchHost.Focus")
 	}
 }

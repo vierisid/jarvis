@@ -810,12 +810,38 @@ func TestNotchMacWindowIsWiredToTheOneRule(t *testing.T) {
 			t.Errorf("%s no longer has: %s", name, want)
 		}
 	}
+	// Show shows and Hide hides.
+	for _, line := range []string{
+		"func (w notchMacWindow) Show() { C.jarvis_notch_show(1) }",
+		"func (w notchMacWindow) Hide() { C.jarvis_notch_show(0) }",
+		"return C.jarvis_notch_focus(w.handle, boolToCInt(take)) == 1",
+	} {
+		if !strings.Contains(text, line) {
+			t.Errorf("notch_host_darwin.go no longer has: %s", line)
+		}
+	}
+	// The window goes: the rule is let go first, then the service hears
+	// that no window is not a hidden window.
+	before(t, "platformNotchTearDown", goFunc(t, "notch_host_darwin.go", "platformNotchTearDown"),
+		"notch.setHidden(false)", "notchMacHost.Swap(nil)", "host.Detach()")
 	bridge, err := os.ReadFile("notch_host_bridge_darwin.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(bridge), "notchMacFacts.Report(") {
-		t.Fatal("the timer's facts no longer go through the relay: on the main thread nothing else may be done with them")
+	report := strings.Join(strings.Fields(goFunc(t, "notch_host_bridge_darwin.go", "goNotchFacts")), " ")
+	for _, want := range []string{
+		"notchMacFacts.Report(",
+		"FullscreenInFront: fullscreen != 0,",
+		"DisplayKeptAwake: awake != 0,",
+		// On the Mac the app in front keeping the display awake is the video.
+		"VideoPlaying: awake != 0,",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("goNotchFacts no longer has: %s", want)
+		}
+	}
+	if strings.Contains(report, "CaptureOverlay") || strings.Contains(string(bridge), "notchHidden") {
+		t.Error("the bridge says more than the timer sees")
 	}
 }
 

@@ -128,6 +128,9 @@ the shared seams.
   returns at once and the show is done by the caller already at work.
 - To confirm (step 4): a window never shown is not hidden again (a film seen
   before the page loads); nothing on screen differs.
+- To confirm (step 4): a keyboard the page takes while a film's look hides
+  the notch is given back at once and the page is answered "no keyboard".
+  On notch/main Windows could keep it (same race), the Mac could not.
 
 ## Status
 
@@ -168,6 +171,18 @@ the shared seams.
   reads); Windows vet and test build clean. Not seen by hand on Windows (try.sh:
   film hides, question brings back, Esc leaves fullscreen, no keyboard while
   hidden). The Mac code was never compiled; its wiring is held by a text test.
+  After review, in "notch: review of step 4: a keyboard taken while a film
+  hides the notch is given back, nothing is told after the window goes, and
+  the Windows wiring is tested": a focus that a film's look overtakes gives
+  the keyboard back and hides the window again; Detach waits for a tell
+  under way, and the Mac tells "not hidden" after it at tear-down, as
+  notch/main's Mac did; the give-back order is notch/main's again (window
+  first, then the word); the order inside each change (told before the
+  window moves, holding before the system is asked) is tested on the copy
+  and the controller. Windows wiring: a text pin (runs everywhere) and a
+  Windows test driving the page's calls through the real entry points; the
+  windows-latest job runs both. Every mutant named in the review fails a
+  test, the Windows one on a real Windows run as well.
 - Steps 5 to 8: pending.
 
 ## Only a Mac can say (and one look on Windows)

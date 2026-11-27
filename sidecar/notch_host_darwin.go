@@ -532,7 +532,12 @@ func platformNotchSetUp(handle unsafe.Pointer, done <-chan struct{}) {
 
 func platformNotchTearDown(handle unsafe.Pointer) {
 	if host := notchMacHost.Swap(nil); host != nil {
+		// Detach waits for a tell already under way; after it the window
+		// says nothing more, and no window is not a hidden window (as
+		// notch/main's Mac said at tear-down). A look of the timer that
+		// landed after the page was detached is undone here.
 		host.Detach()
+		notch.setHidden(false)
 	}
 	C.jarvis_notch_tear_down()
 }
