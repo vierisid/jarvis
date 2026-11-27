@@ -153,7 +153,8 @@ export interface NotchTalk {
   pretend(words: string | null): void;
   /**
    * Stops hearing the desktop apps: what they say of the keys is let go from here, the limits that wait for a
-   * recording's end are cleared, and nothing new is asked. What was already being made into words ends as it would.
+   * recording's end and the steps of `pretend` are cleared, and what was still being made into words is dropped
+   * when it comes back. Nothing reaches the asks after it.
    */
   stop(): void;
 }
@@ -189,6 +190,10 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
   const now = deps.now ?? (() => Date.now());
   /** The recordings whose microphone is open now, by desktop app. */
   const open = new Map<string, string>();
+  /** Stopped with the notch: the port has no way to take a listener back, so each listener asks this first. */
+  let stopped = false;
+  /** The timers of `pretend`, cleared at stop. */
+  const pretending = new Set<ReturnType<typeof setTimeout>>();
   /** When each recording was opened, by its key, for as long as it matters: until its words are in. */
   const since = new Map<string, number>();
   const limits = new Map<string, ReturnType<typeof setTimeout>>();
@@ -229,6 +234,7 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     try { dropped = deps.held?.() ?? []; } catch { dropped = []; }
     // The files that were handed over first: they were given on purpose. Then as much of the look as a turn may carry.
     const files = [...dropped, ...seen].slice(0, ATTACHMENT_LIMITS.perTurn);
+    if (stopped) return;
     deps.asks.words(talkKey, said, { ...(cut ? { cut: true } : {}), ...(files.length ? { files } : {}) });
   };
   const closed = (sidecarId: string): void => {
@@ -247,8 +253,6 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     if (looked(sidecarId, talkKey)) deps.look!.alone(sidecarId);
     since.delete(talkKey);
   };
-  /** Stopped with the notch: the port has no way to take a listener back, so each listener asks this first. */
-  let stopped = false;
   port.onSidecarDisconnected?.((sidecarId) => { if (!stopped) lost(sidecarId, 'its desktop app disconnected'); });
   const key = (sidecarId: string, talkId: string): string => `${sidecarId}:${talkId}`;
 
@@ -266,12 +270,15 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
         provider.transcribe(pcmToWav(pcm, sampleRate)),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer in ${timeoutMs} ms`)), timeoutMs); }),
       ]);
+      // Stopped while it was being made into words: what was said is dropped, and nothing more is asked.
+      if (stopped) return;
       const said = (words ?? '').trim();
       // The length, never the words: a log is not the place for what was said.
       log(`[notch] a recording was made into ${said.length} characters`);
       if (!hasSpokenContent(said) || notchTalkSignOff(said) || (voicedMs < NOTCH_TALK_SHORT_MS && filler(said))) nothing(sidecarId, talkKey, 'silence');
       else await heard(sidecarId, talkKey, said, cut);
     } catch (error) {
+      if (stopped) return;
       log(`[notch] a recording could not be made into words: ${error instanceof Error ? error.message : String(error)}`);
       nothing(sidecarId, talkKey, 'failed');
     } finally {
@@ -352,19 +359,26 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
     open: (sidecarId) => open.has(sidecarId) || [...making.values()].includes(sidecarId),
     pretend(words) {
       const talkKey = `pretend:${Date.now().toString(36)}-${++pretended}`;
+      if (stopped) return;
       deps.asks.listen(talkKey);
-      setTimeout(() => {
+      const later = (ms: number, run: () => void): void => {
+        const timer = setTimeout(() => { pretending.delete(timer); if (!stopped) run(); }, ms);
+        pretending.add(timer);
+      };
+      later(700, () => {
         deps.asks.released(talkKey);
-        setTimeout(() => {
+        later(250, () => {
           if (words && hasSpokenContent(words)) deps.asks.words(talkKey, words.trim()); else deps.asks.nothing(talkKey, 'silence');
-        }, 250);
-      }, 700);
+        });
+      });
     },
     stop() {
       stopped = true;
       for (const limit of limits.values()) clearTimeout(limit);
       limits.clear();
       open.clear();
+      for (const timer of pretending) clearTimeout(timer);
+      pretending.clear();
     },
   };
 }

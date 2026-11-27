@@ -509,8 +509,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     log,
     home: (stage) => { const asks = registry.use('asks'); return asks ? asks.home(stage) : today(stage); },
     // Only in a still moment, not to an empty chair, and never in the quiet hours. The part that knows whether
-    // the person is there is made right after this, whenever there are settings.
-    ...(quiet ? { maySpeak: () => { const presence = registry.use('presence'); return !presence || (presence.still() && !presence.isAway() && !quiet.now()); } } : {}),
+    // the person is there is made right after this, whenever there are settings; the quiet hours hold either way.
+    ...(quiet ? { maySpeak: () => { const presence = registry.use('presence'); return (!presence || (presence.still() && !presence.isAway())) && !quiet.now(); } } : {}),
     // Replies that were seen wait in Home, not in the count: with any of them there, a round has not been everything.
     elsewhere: () => (registry.use('mail')?.store.ready().length ?? 0) > 0,
   });
@@ -620,11 +620,10 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     onPause: emergency ? (listener) => { emergency.subscribe((state) => listener(state !== 'normal')); } : undefined,
   } : undefined));
   const around: NotchAround | null = registry.add(notchAroundFeature(deps.day?.around));
-  const slipped = deps.promises?.slipped;
-  const move = deps.promises?.move;
   registry.add(notchDayFeature(deps.day ? {
     done: (since, until) => notchDoneBetween(todayDeps, since, until).length,
-    slipped: slipped && move ? { today: (since, until) => slipped(since, until), move: (ids, at) => move(ids, at) } : undefined,
+    // Called on the promises, as they always were: they may be methods of the product's store.
+    slipped: promises?.slipped && promises.move ? { today: (since, until) => promises.slipped!(since, until), move: (ids, at) => promises.move!(ids, at) } : undefined,
     overnight: {
       blocks: (since) => notchTodayBlocks(notchDoneBetween(todayDeps, since, dayNow()), 'Nothing was done overnight.'),
       undo: (row) => {
@@ -671,7 +670,9 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
 
   // Day one (pass 12). Made last: it leans on the look, the mail layer and the way to a sign-in.
   const dayOne: NotchDayOne | null = registry.add(notchDayOneFeature(deps.dayOne ? {
-    ...deps.dayOne, isWhere: whereQuestion, canPoint: deps.asks?.point !== undefined, connect: office?.connect,
+    ...deps.dayOne, isWhere: whereQuestion, canPoint: deps.asks?.point !== undefined,
+    // Called on the back office, as it always was.
+    connect: office?.connect ? (id, sidecarId) => office.connect!(id, sidecarId) : undefined,
   } : undefined));
 
   const suggestions = registry.must(notchSuggestionsFeature);

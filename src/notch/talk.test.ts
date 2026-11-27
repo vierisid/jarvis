@@ -45,6 +45,31 @@ describe('a recording from the desktop app', () => {
     expect(h.calls).toEqual(['listen pc:a1']);
   });
 
+  test('a recording still being made into words when the notch stops reaches nothing, words or failure', async () => {
+    for (const ends of ['words', 'failure'] as const) {
+      let answer: (words: string) => void = () => {};
+      let fail: (error: Error) => void = () => {};
+      const h = harness(() => ({ transcribe: () => new Promise<string>((resolve, reject) => { answer = resolve; fail = reject; }) }));
+      h.event({ phase: 'start', talk_id: 'a1' });
+      h.event({ phase: 'end', talk_id: 'a1', voiced_ms: 900, duration_ms: 1500, sample_rate: 16000 }, true);
+      await settle();
+      h.talk.stop();
+      if (ends === 'words') answer('send Leo the numbers'); else fail(new Error('the service went away'));
+      await settle();
+      expect([ends, h.calls]).toEqual([ends, ['listen pc:a1', 'released pc:a1']]);
+    }
+  });
+
+  test('what is pretended stops with the notch: neither its release nor its words come after stop', async () => {
+    const h = harness();
+    h.talk.pretend('send Leo the numbers');
+    h.talk.stop();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(h.calls.filter((call) => !call.startsWith('listen '))).toEqual([]);
+    h.talk.pretend('again');
+    expect(h.calls).toHaveLength(1);
+  });
+
   test('start, then end with enough speech: the words reach the instruction with that id', async () => {
     const h = harness();
     h.event({ phase: 'start', talk_id: 'a1' });

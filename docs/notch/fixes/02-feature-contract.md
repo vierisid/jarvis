@@ -200,7 +200,7 @@ What step 4 does, and what it proved:
 - Behaviour that changed, both after stop only: the features are stopped
   from the last made to the first, before the parts that are not features
   yet (drop, look, asks, agents, put, teach, catch, jobs, then the rest as
-  before); a stop runs synchronously and no stop calls another part, so
+  before); a stop runs synchronously and no stop calls another feature, so
   nothing can see the order. And a page that comes up after stop no longer
   reaches day one.
 - `talk` is a feature. Its stop (added after the review) lets go of what the
@@ -215,7 +215,7 @@ What step 5 does, and what it proved:
   (`notchMailFeature` in mail/attach.ts, and so on). The attach bodies are
   untouched: a definition wraps the attach function and hands it what
   `real.ts` used to. Nothing is lent any more and no part is stopped by
-  hand; `lend` and `onStop` stay in the registry, unused by `real.ts`.
+  hand. (After the review, `lend` and `onStop` left the registry.)
 - `real.ts` is a list: the settings, the quiet hours, the inbox, the
   approvals, Today and the look for approvals are still made there (the
   core every part stands on), then one `registry.add` per feature.
@@ -236,10 +236,25 @@ What step 5 does, and what it proved:
 - Behaviour that changed, after stop only: every part is stopped from the
   last made to the first: day one, noticing, around, calls, standing,
   mail, the promises and the pause, drop, look, asks, people, agents, put,
-  teach, catch, jobs, where, presence (the day and soon have no stop). As in step 4, no stop calls another part synchronously.
+  teach, catch, jobs, where, presence (the day and soon have no stop). As
+  in step 4, no stop calls another feature.
 - Known limits kept: calls hear the product's pause through a subscription
   that is never taken back (it was so before); the surface's own page
   listeners are not removed.
+
+After the review of step 5:
+
+- The inbox's `maySpeak` keeps the quiet hours also in the moment before
+  presence is made.
+- The evening's slipped promises and day one's way to Gmail are called on
+  their objects (`promises.slipped(...)`, `office.connect(...)`), as before
+  step 5.
+- A feature that is stopped claims the eye no more, and nothing can claim
+  it on a stopped notch: the eye does not stay citron after stop.
+- Talk's stop also clears the steps of `pretend`, and a recording that was
+  still being made into words is dropped when it comes back: nothing
+  reaches the asks after stop.
+- `registry.lend` and `registry.onStop` are gone: every part is a feature.
 
 ## Owner decisions
 

@@ -235,10 +235,8 @@ describe('making a feature', () => {
     expect(w.logs).toHaveLength(1);
   });
 
-  test('a part that is lent counts when it is there, and is found when it is made later', () => {
+  test('a part that is not made counts as not there, and one made later is found when it is asked for', () => {
     const w = world();
-    let where: unknown = null;
-    w.registry.lend('where', () => where as never);
     const pause = feature('pause', (ctx) => ({ api: { asks: () => ctx.use('where') } as never }), { needs: ['where'] });
     const wanting = feature('pause', (ctx) => ({ api: { asks: () => ctx.use('where') } as never }), { wants: ['where'] });
     expect(w.registry.add(pause)).toBeNull();
@@ -246,18 +244,14 @@ describe('making a feature', () => {
     // Only wanted, it is made, and finds the part when it asks after the part was made.
     const made = w.registry.add(wanting) as unknown as { asks(): unknown };
     expect(made.asks()).toBeNull();
-    where = api('where');
+    w.registry.add(feature('where', () => ({ api: api('where') })));
     expect(made.asks()).toEqual(api('where'));
   });
 
-  test('the same id is not taken twice, by a feature or by a part that is lent', () => {
+  test('the same id is not taken twice', () => {
     const w = world();
     w.registry.add(feature('moves', () => ({ api: api('moves') })));
-    w.registry.lend('where', () => null);
     expect(() => w.registry.add(feature('moves', () => ({ api: api('moves') })))).toThrow('[notch] moves is there already');
-    expect(() => w.registry.add(feature('where', () => ({ api: api('where') })))).toThrow('[notch] where is there already');
-    expect(() => w.registry.lend('moves', () => null)).toThrow('[notch] moves is there already');
-    expect(() => w.registry.lend('where', () => null)).toThrow('[notch] where is there already');
   });
 
   test('none is made before the inbox, or on a notch that was stopped', () => {
@@ -271,8 +265,8 @@ describe('making a feature', () => {
 
   test('it is handed only the parts it named in its needs and wants: asking for another throws, by name', () => {
     const w = world();
-    w.registry.lend('where', () => api('where'));
-    w.registry.lend('mail', () => api('mail'));
+    w.registry.add(feature('where', () => ({ api: api('where') })));
+    w.registry.add(feature('mail', () => ({ api: api('mail') })));
     let asks: (id: NotchFeatureId) => unknown = () => null;
     w.registry.add(feature('moves', (ctx) => { asks = (id) => ctx.use(id); return { api: api('moves') }; }, { needs: ['where'], wants: ['mail', 'calls'] }));
     expect(asks('where')).toEqual(api('where'));
@@ -304,8 +298,7 @@ describe('making a feature', () => {
       one.registry.stop();
       expect(one.order).toEqual(['inbox stopped', 'moves stopped']);
     }
-    // A part that is lent is refused the same way.
-    expect(() => w.registry.lend('where', () => null, { homeRows: () => [] })).toThrow('[notch] where gives homeRows, and has no place in the order of homeRows');
+    expect(w.logs).toEqual([]);
   });
 });
 
@@ -325,6 +318,17 @@ describe('the eye', () => {
     standing(false);
     expect(w.eyes).toEqual([true, true, true, true, false, false]);
   });
+
+  test('a feature that is stopped claims it no more, whatever it says on its way down, and nothing claims it after', () => {
+    const w = world();
+    let claim: (on: boolean) => void = () => {};
+    w.registry.add(feature('standing', (ctx) => { claim = (on) => ctx.eye(on); return { api: api('standing'), stop() { claim(true); } }; }));
+    w.registry.add(feature('calls', () => ({ api: api('calls') })));
+    claim(true);
+    w.registry.stop();
+    claim(true);
+    expect(w.eyes).toEqual([true, false]);
+  });
 });
 
 describe('what is gathered from every part', () => {
@@ -341,7 +345,6 @@ describe('what is gathered from every part', () => {
     });
     const opened: string[] = [];
     const heard: string[] = [];
-    let where: unknown = null;
     w.registry.add(feature('moves', () => ({
       api: api('moves'),
       intents: () => [intent('moves.open', 'open'), intent('moves.first', 'control')],
@@ -363,17 +366,20 @@ describe('what is gathered from every part', () => {
       done: () => [done('could')],
       undo: (id) => (id === 'could' || id === 'both' ? ['canDo took it back.'] : null),
     })));
-    // A part that is not a feature yet gives the same, while it is there.
-    w.registry.lend('where', () => where as never, {
-      intents: () => [intent('where.open', 'open')],
-      homeRows: () => [row('see')],
-      open: async (_stage, id) => { opened.push(`where asked: ${id}`); return id === 'see'; },
-      hello: (sidecarId) => heard.push(`where: ${sidecarId}`),
-    });
-    return { ...w, opened, heard, arrive: () => { where = api('where'); } };
+    // One made later gives what it gives from then on, in its place.
+    const arrive = (): void => {
+      w.registry.add(feature('where', () => ({
+        api: api('where'),
+        intents: () => [intent('where.open', 'open')],
+        homeRows: () => [row('see')],
+        open: async (_stage, id) => { opened.push(`where asked: ${id}`); return id === 'see'; },
+        hello: (sidecarId) => heard.push(`where: ${sidecarId}`),
+      })));
+    };
+    return { ...w, opened, heard, arrive };
   };
 
-  test('each kind stands in its own order, not in the order the parts were made, and a part that is lent gives only while it is there', async () => {
+  test('each kind stands in its own order, not in the order the parts were made, and one made later stands in its place', async () => {
     const w = gathering();
     // The table orders by band first; inside a band, by the order of `says`.
     expect(w.registry.all.intents().map((one) => one.id)).toEqual(['moves.first', 'cando.open', 'moves.open']);
@@ -417,14 +423,12 @@ describe('what is gathered from every part', () => {
 });
 
 describe('the way down', () => {
-  test('the clocks first, then what is on the notch, then the features from the last made to the first, then the other parts as they were given', () => {
+  test('the clocks first, then what is on the notch, then the features from the last made to the first', () => {
     const w = world();
-    w.registry.onStop(() => w.order.push('part one stopped'));
     w.registry.every('by hand', 50, () => {});
     w.registry.add(feature('moves', () => ({ api: api('moves'), ticks: [{ name: 'moving', everyMs: 100, run() {} }], stop() { w.order.push('moves stopped'); } })));
     w.registry.add(feature('canDo', () => ({ api: api('canDo') })));
     w.registry.add(feature('prefs', (ctx) => { ctx.every('preferring', 200, () => {}); return { api: api('prefs'), stop() { w.order.push('prefs stopped'); } }; }));
-    w.registry.onStop(() => w.order.push('part two stopped'));
     expect(w.registry.stopped()).toBe(false);
     w.registry.stop();
     expect(w.registry.stopped()).toBe(true);
@@ -432,7 +436,6 @@ describe('the way down', () => {
       'clock 50 cleared', 'clock 100 cleared', 'clock 200 cleared',
       'inbox stopped',
       'prefs stopped', 'moves stopped',
-      'part one stopped', 'part two stopped',
     ]);
     expect(w.started.filter((one) => !one.cleared)).toEqual([]);
   });
@@ -442,14 +445,14 @@ describe('the way down', () => {
     w.inbox.stop = () => { throw new Error('the inbox is stuck'); };
     w.registry.add(feature('moves', () => ({ api: api('moves'), stop() { w.order.push('moves stopped'); } })));
     w.registry.add(feature('canDo', () => ({ api: api('canDo'), stop() { throw new ReferenceError('gone is not defined'); } })));
-    w.registry.onStop(() => { throw 'a part is stuck'; });
-    w.registry.onStop(() => w.order.push('the last part stopped'));
+    w.registry.add(feature('prefs', () => ({ api: api('prefs'), stop() { throw 'a part is stuck'; } })));
+    w.registry.add(feature('memory', () => ({ api: api('memory'), stop() { w.order.push('the last one made stopped'); } })));
     expect(() => w.registry.stop()).not.toThrow();
-    expect(w.order).toEqual(['moves stopped', 'the last part stopped']);
+    expect(w.order).toEqual(['the last one made stopped', 'moves stopped']);
     expect(w.logs).toEqual([
       '[notch] a part of the notch did not stop: the inbox is stuck',
-      '[notch] a part of the notch did not stop: gone is not defined',
       '[notch] a part of the notch did not stop: a part is stuck',
+      '[notch] a part of the notch did not stop: gone is not defined',
     ]);
   });
 
@@ -464,12 +467,11 @@ describe('the way down', () => {
     expect(w.logs).toEqual([]);
   });
 
-  test('before the inbox is made there is only the clocks and the parts to stop', () => {
+  test('before the inbox is made there is only the clocks to stop', () => {
     const w = world({ noInbox: true });
     w.registry.every('by hand', 50, () => {});
-    w.registry.onStop(() => w.order.push('a part stopped'));
     w.registry.stop();
-    expect(w.order).toEqual(['clock 50 cleared', 'a part stopped']);
+    expect(w.order).toEqual(['clock 50 cleared']);
     expect(w.logs).toEqual([]);
   });
 });

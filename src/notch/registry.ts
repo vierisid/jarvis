@@ -10,9 +10,10 @@
  *                   ends the brain. No clock keeps the process alive.
  *   one way down    `stop` clears the clocks first, so that nothing new is
  *                   started, then ends what is on the notch, then stops the
- *                   features, the last one made first, then the parts
- *                   `real.ts` still makes by hand. Each by itself: one that
- *                   fails to stop is said and does not keep the others going.
+ *                   features, the last one made first. Each by itself: one
+ *                   that fails to stop is said and does not keep the others
+ *                   going, and a feature that was stopped claims the eye no
+ *                   more.
  *                   Whatever was made when the making failed is what is
  *                   stopped; a part that was never made has nothing here.
  *
@@ -52,19 +53,12 @@ export interface NotchRegistry {
   every(name: string, everyMs: number, run: () => void | Promise<void>, options?: NotchTickOptions): () => void;
   /** The inbox, once it is made. Features are made after it, and it is stopped before them. */
   setInbox(inbox: NotchInbox): void;
-  /**
-   * A part that is not a feature yet, reachable by its id until it is. Asked each time, so one made later is
-   * found. `gives`: what it gives to what is gathered, as a feature would; asked only while the part is there.
-   */
-  lend<K extends NotchFeatureId>(id: K, get: () => NotchApis[K] | null, gives?: NotchGives): void;
   /** Makes a feature and starts its clocks. Null when it is absent: a part it needs is, or the brain was not given what it is made from. */
   add<K extends NotchFeatureId>(def: NotchFeatureDef<K>): NotchApis[K] | null;
   /** The same, for a feature the notch is not made without: its absence is a failure of the making. */
   must<K extends NotchFeatureId>(def: NotchFeatureDef<K>): NotchApis[K];
   /** Another part, by its id: null while it is not there. */
   use<K extends NotchFeatureId>(id: K): NotchApis[K] | null;
-  /** How a part that is not a feature yet is stopped. These run after the features, in the order they were given. */
-  onStop(stop: () => void): void;
   /** The quiet links at the foot of Home, in the order their features were made. */
   homeLinks(): NotchButton[];
   /** A press on one of them: what the feature that owns it answers, or null when none does. */
@@ -84,18 +78,15 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   let stopped = false;
   const clocks = new Set<ReturnType<typeof setInterval>>();
   const features: { id: NotchFeatureId; feature: NotchFeature<unknown> }[] = [];
-  const lent = new Map<NotchFeatureId, () => unknown>();
-  const parts: (() => void)[] = [];
-  /** What each part gives, by its id: a feature's own members, or what was lent with a part while that part is there. */
+  /** What each feature gives, by its id: its own members. */
   const gives = new Map<NotchFeatureId, () => NotchGives | null>();
   const order: NotchOrder = { says: [], homeRows: [], settingsRows: [], done: [], undo: [], hello: [], ...deps.order };
   /** The features that claim the eye now. Told to the surface at every claim, as the parts used to tell it. */
   const eyes = new Set<NotchFeatureId>();
 
   /**
-   * Throws for a part that gives something and has no place for it in that kind's order. A part that is lent is
-   * refused before it is kept. A feature is asked after it was made and kept, so it is stopped with the rest
-   * when the making then fails.
+   * Throws for a feature that gives something and has no place for it in that kind's order. It is asked after
+   * the feature was made and kept, so the feature is stopped with the rest when the making then fails.
    */
   function placed(id: NotchFeatureId, given: NotchGives): void {
     for (const member of Object.keys(NOTCH_GIVES_IN) as (keyof NotchGives)[]) {
@@ -151,8 +142,7 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
 
   function use<K extends NotchFeatureId>(id: K): NotchApis[K] | null {
     const made = features.find((one) => one.id === id);
-    if (made) return made.feature.api as NotchApis[K];
-    return (lent.get(id)?.() as NotchApis[K] | null | undefined) ?? null;
+    return made ? made.feature.api as NotchApis[K] : null;
   }
 
   const homeLinks = (): NotchButton[] => features.flatMap((one) => one.feature.homeLinks?.() ?? []);
@@ -187,7 +177,7 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   function add<K extends NotchFeatureId>(def: NotchFeatureDef<K>): NotchApis[K] | null {
     if (!inbox) throw new Error(`[notch] ${def.id} cannot be made before the inbox`);
     if (stopped) throw new Error(`[notch] ${def.id} cannot be made on a notch that was stopped`);
-    if (features.some((one) => one.id === def.id) || lent.has(def.id)) throw new Error(`[notch] ${def.id} is there already`);
+    if (features.some((one) => one.id === def.id)) throw new Error(`[notch] ${def.id} is there already`);
     const missing = (def.needs ?? []).filter((id) => use(id) === null);
     if (missing.length > 0) {
       log(`[notch] ${def.id} was not made: it needs ${missing.join(', ')}`);
@@ -198,6 +188,8 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     const ctx: NotchContext = {
       surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every, all,
       eye: (on) => {
+        // A notch that was stopped is claimed for nothing: what a part says on its way down only lets go.
+        if (stopped && on) return;
         if (on) eyes.add(def.id); else eyes.delete(def.id);
         deps.surface.setEye(eyes.size > 0);
       },
@@ -223,12 +215,6 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
       if (inbox) throw new Error('[notch] the inbox is there already');
       inbox = made;
     },
-    lend(id, get, given) {
-      if (features.some((one) => one.id === id) || lent.has(id)) throw new Error(`[notch] ${id} is there already`);
-      if (given) placed(id, given);
-      lent.set(id, get);
-      if (given) gives.set(id, () => (get() == null ? null : given));
-    },
     add,
     must(def) {
       const api = add(def);
@@ -236,7 +222,6 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
       return api;
     },
     use,
-    onStop(stop) { parts.push(stop); },
     homeLinks,
     press,
     all,
@@ -252,8 +237,14 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
         ...[...clocks].map((timer) => () => { clearInterval(timer); clocks.delete(timer); }),
         // What is on the notch ends where it is: a yes whose window is still running sends nothing.
         () => inbox?.stop(),
-        ...[...features].reverse().map((one) => () => one.feature.stop?.()),
-        ...parts,
+        ...[...features].reverse().map((one) => () => {
+          try {
+            one.feature.stop?.();
+          } finally {
+            // A feature that was stopped claims the eye no more, whatever it said as it stopped.
+            if (eyes.delete(one.id)) deps.surface.setEye(eyes.size > 0);
+          }
+        }),
       ];
       for (const step of steps) {
         try {

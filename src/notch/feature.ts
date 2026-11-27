@@ -72,9 +72,7 @@ export type NotchNoApi = Readonly<Record<string, never>>;
 
 /**
  * Every part another may ask for by its id, and what it gets. All of them are
- * features. A part that is made by hand can still be lent under an id
- * (`NotchRegistry.lend`), so that a feature that leans on it reads the same
- * whether or not it is a feature.
+ * features.
  */
 export interface NotchApis {
   questions: NotchQuestions;
@@ -143,9 +141,8 @@ export interface NotchTick extends NotchTickOptions {
 export type NotchFeatureSurface = Pick<NotchSurface, 'resting' | 'current' | 'setSound' | 'onStop' | 'setFace' | 'act' | 'gulp' | 'setMouth' | 'onDrag' | 'setWhere' | 'setPark'>;
 
 /**
- * What a feature may give to what the registry gathers, each where `NOTCH_ORDER` puts it. A part that is not a
- * feature yet gives the same through `NotchRegistry.lend`, so that moving it changes nothing of where its rows
- * stand. Every member is asked when it is needed, and calls the part's `api` then.
+ * What a feature may give to what the registry gathers, each where `NOTCH_ORDER` puts it. Every member is asked
+ * when it is needed, and calls the feature's `api` then.
  */
 export interface NotchGives {
   /** The words it acts on itself, as intents of the one table (./intents.ts). The table orders them by band; inside a band, by `NOTCH_ORDER.says`. */
