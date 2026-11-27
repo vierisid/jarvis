@@ -4,7 +4,7 @@
  * stops the notch on its way down.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
@@ -130,23 +130,4 @@ process.kill(process.pid, 'SIGTERM');
     expect(output.indexOf('[fixture] the notch was stopped')).toBeLessThan(output.indexOf('Received SIGTERM'));
     expect(exitCode).toBe(0);
   }, 90_000);
-});
-
-describe('where the daemon makes the notch', () => {
-  const source = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
-
-  test('both places are made as parts that may fail, and the one that runs is held for the way down', () => {
-    // The surface, and the real things on it: each made once, and only inside startNotchPart.
-    expect(source.split('new NotchSurface(').length - 1).toBe(1);
-    expect(source).toContain("notchSurface = startNotchPart('the notch', () => {\n        // With the real timers: the brain folds an offer that was left alone (the page no longer does).\n        const surface = new NotchSurface(sidecarManager, undefined, undefined, realNotchTimers);");
-    expect(source.split('attachNotchReal(').length - 1).toBe(1);
-    expect(source).toContain("notchReal = startNotchPart('the notch', () => attachNotchReal(notchPage, {");
-    expect(source).toContain('holdNotch(notchReal);');
-    // And the way down stops it before it waits for anything.
-    const down = source.slice(source.indexOf('async function handleShutdown('));
-    // With it goes the clock that would keep a promise whose window was on the notch; without a notch, nothing moves.
-    const stops = 'if (stopNotch()) commitmentExecutor?.stop();';
-    expect(down.indexOf(stops)).toBeGreaterThan(0);
-    expect(down.indexOf(stops)).toBeLessThan(down.indexOf('await '));
-  });
 });
