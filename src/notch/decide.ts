@@ -10,8 +10,9 @@
  *            nothing confirmed it). It is looked for before it is done
  *            again: found, it is written down as done and not done twice;
  *            not known, nothing is done
- *   still    asked again after the look and after the fuse: whether it is
- *            still to be done (decided somewhere else, closed meanwhile)
+ *   still    asked again after the look and after the fuse (inside the act,
+ *            right after its gate burns out): whether it is still to be done
+ *            (decided somewhere else, closed meanwhile)
  *   the fuse a line with its window, or the letter on paper under it, which
  *            goes only on a page's word that it was seen to its end
  *            (`NotchStage.letter`). Esc takes the yes back. A fuse nobody
@@ -33,7 +34,7 @@
  * written down.
  */
 import { notchSentOutcome, type NotchActionAsked, type NotchActionEntry, type NotchActionHow, type NotchActionKind, type NotchActionOutcome, type NotchActions } from './actions.ts';
-import type { NotchBlock, NotchPart } from './protocol.ts';
+import type { NotchBlock, NotchLine, NotchPart } from './protocol.ts';
 import { NotchStageEnded, type NotchLineExtras, type NotchStage } from './stage.ts';
 
 /** How a fuse ended: seen to burn out, taken back, burnt out over a letter nobody vouched for, or nobody said. */
@@ -52,11 +53,20 @@ export interface NotchDecidable<H, R> {
   fuse: { say: NotchPart[]; ms: number; extras?: NotchLineExtras; letter?: NotchBlock[] };
   /** Why nothing may burn now (everything is stopped, it cannot start). Null when it may. */
   held?(): H | null;
-  /** An earlier try may have gone: it is looked for first (`went`), and `ref` is the entry that says it may have. */
-  look?: { went(): Promise<boolean | null> } | null;
-  /** Asked after the look and after the fuse: why it is no longer to be done. Null when it still is. */
+  /**
+   * An earlier try may have gone: it is looked for first (`went`). Found, the entry `entry` names by its
+   * `ref` says it went. `src` is the app the line that says so is about (mail when not given).
+   */
+  look?: { went(): Promise<boolean | null>; src?: NotchLine['src'] } | null;
+  /**
+   * Asked after the look and after the fuse: why it is no longer to be done. Null when it still is. With
+   * `inside`, asked when the gate has burnt out: a gate it holds answers false, and nothing is written.
+   */
   still?(): H | null;
-  /** The act burns the gate itself, in its middle. Without it the fuse burns first and the act follows. */
+  /**
+   * The act burns the gate itself, in its middle. Without it the fuse burns first and the act follows. An
+   * act that ends without burning it did nothing on this yes: nothing is written, and that is logged.
+   */
   inside?: boolean;
   act(gate: () => Promise<boolean>): Promise<NotchActed<R>>;
   /** The entry this action is written down as, with what came of it, and the act's result when it ran. */
@@ -77,9 +87,10 @@ export type NotchDecided<H, R> =
   /** The act ran. `fuse` is how its gate ended: with `inside`, the act may have ended before or without it. */
   | { took: 'acted'; fuse: NotchFuseEnd; result: R };
 
-/** Where what was done is written down, and what the act's own lines are said with. */
+/** Where what was done is written down, and where the road says what went wrong with it. */
 export interface NotchDecideDeps {
   actions?: Pick<NotchActions, 'record' | 'settle'> | null;
+  log?: (line: string) => void;
 }
 
 /** Burns the fuse of a decidable on its stage: the line, or the letter that goes only when seen. */
@@ -99,7 +110,7 @@ export async function playDecidable<H, R>(stage: NotchStage, item: NotchDecidabl
   const held = item.held?.() ?? null;
   if (held !== null) return { took: 'held', held };
   if (item.look) {
-    stage.put({ id: stage.id(), kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: 'mail' });
+    stage.put({ id: stage.id(), kind: 'work', say: ['Looking whether it went…'], steps: 0, done: 0, src: item.look.src ?? 'mail' });
     // A look that breaks says nothing about whether it went. A stage that ended ends this too.
     const there = await item.look.went().catch((error: unknown) => { if (error instanceof NotchStageEnded) throw error; return null; });
     const after = item.still?.() ?? null;
@@ -116,9 +127,15 @@ export async function playDecidable<H, R>(stage: NotchStage, item: NotchDecidabl
   }
   // Changed by the gate, wherever it is burnt.
   let fuse = 'lost' as NotchFuseEnd;
+  let burnt = false;
+  /** Inside the act: what `still` said once the gate had burnt out. */
+  let heldInside: H | null = null;
   const gate = async (): Promise<boolean> => {
+    burnt = true;
     fuse = await burn(stage, item.fuse);
-    return fuse === 'done';
+    if (fuse !== 'done') return false;
+    if (item.inside) heldInside = item.still?.() ?? null;
+    return heldInside === null;
   };
   if (!item.inside) {
     if (!(await gate())) return { took: fuse as 'undo' | 'unseen' | 'lost' };
@@ -129,8 +146,13 @@ export async function playDecidable<H, R>(stage: NotchStage, item: NotchDecidabl
   try {
     acted = await item.act(item.inside ? gate : async () => true);
   } catch (error) {
-    if (fuse === 'done' && item.broke) deps.actions?.record(item.entry(item.broke, asked));
+    if (fuse === 'done' && heldInside === null && item.broke) deps.actions?.record(item.entry(item.broke, asked));
     throw error;
+  }
+  if (heldInside !== null) return { took: 'held', held: heldInside };
+  if (item.inside && !burnt) {
+    // The act ended before its gate: nothing was done on this yes, and nothing is written.
+    try { deps.log?.(`[notch] an act ended without burning its fuse: nothing is written of it (${acted.outcome ?? 'no outcome'})`); } catch { /* a log that fails says nothing */ }
   }
   // Written down once the yes stands: the fuse was seen to burn out. Then whatever came of it is.
   if (fuse === 'done' && acted.outcome !== null) deps.actions?.record(item.entry(acted.outcome, asked, acted.result));

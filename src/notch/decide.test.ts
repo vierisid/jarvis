@@ -188,8 +188,53 @@ describe('a gate burnt in the middle of the act', () => {
   test('an act that ends before its gate (it could not be written) writes nothing', async () => {
     const h = harness();
     const { it } = item({ inside: true, act: async () => ({ outcome: 'not_done', result: 'refused' }) });
-    expect(await playDecidable(h.stage, it, { actions: h.actions })).toEqual({ took: 'acted', fuse: 'lost', result: 'refused' });
+    const logs: string[] = [];
+    expect(await playDecidable(h.stage, it, { actions: h.actions, log: (line) => logs.push(line) })).toEqual({ took: 'acted', fuse: 'lost', result: 'refused' });
     expect(h.actions.since(0)).toEqual([]);
+    expect(logs).toEqual(['[notch] an act ended without burning its fuse: nothing is written of it (not_done)']);
+  });
+
+  test('no longer to be done once the gate inside the act burnt out: the gate holds, nothing is written', async () => {
+    const h = harness();
+    let closed = false;
+    let past = null as boolean | null;
+    const { it } = item({
+      inside: true, broke: 'unsure', still: () => (closed ? 'closed' : null),
+      act: async (gate) => { past = await gate(); return { outcome: past ? 'done' : 'not_done', result: 'acted' }; },
+    });
+    const logs: string[] = [];
+    const played = playDecidable(h.stage, it, { actions: h.actions, log: (line) => logs.push(line) });
+    await settle();
+    closed = true;
+    h.page('done');
+    expect(await played).toEqual({ took: 'held', held: 'closed' });
+    expect(past).toBe(false);
+    expect(h.actions.since(0)).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  test('the same, and the act then breaks off: nothing is written either', async () => {
+    const h = harness();
+    const { it } = item({
+      inside: true, broke: 'unsure', still: () => 'closed',
+      act: async (gate) => { await gate(); throw new Error('the tab went away'); },
+    });
+    const played = playDecidable(h.stage, it, { actions: h.actions });
+    await settle();
+    h.page('done');
+    await expect(played).rejects.toThrow('the tab went away');
+    expect(h.actions.since(0)).toEqual([]);
+  });
+});
+
+describe('the line of the look', () => {
+  test('says which app it is about: mail when not given', async () => {
+    for (const [src, shown] of [[undefined, 'mail'], ['call', 'call']] as const) {
+      const h = harness();
+      const { it } = item({ look: { went: async () => null, ...(src ? { src } : {}) } });
+      await playDecidable(h.stage, it, { actions: h.actions });
+      expect(h.shown[0]).toMatchObject({ kind: 'work', src: shown });
+    }
   });
 });
 
