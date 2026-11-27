@@ -446,7 +446,8 @@ export function createNotchRender(root: HTMLElement, options: NotchRenderOptions
       // What goes out, on paper under the sentence, for as long as the fuse burns.
       const going = l.blocks?.length ? l.blocks : null;
       const go = (): void => {
-        if (m().drawn !== drawn) return;
+        // Only if it is still this drawing of this line: the notch may have rested, or taken another line, meanwhile.
+        if (m().drawn !== drawn || m().line?.id !== l.id || !m().cur) return;
         hooks.fuseUp(drawn);
         if (going) {
           sheetSeen = false;

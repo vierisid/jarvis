@@ -225,8 +225,8 @@ export function notchTimed(model: NotchPageModel, id: string, left: number, now:
 /** The fuse of the send drawn as `drawn` was put up: from now on Esc takes it back. */
 export const notchFuseUp = (model: NotchPageModel, drawn: number): NotchPageModel => (model.drawn === drawn ? { ...model, undoable: drawn } : model);
 
-/** Back to the eyes. */
-export const notchRested = (model: NotchPageModel): NotchPageModel => ({ ...model, line: null, cur: null, due: null });
+/** Back to the eyes. What the last drawing still had to do (a fuse lit after its paper folded away) is void with it. */
+export const notchRested = (model: NotchPageModel): NotchPageModel => ({ ...model, line: null, cur: null, due: null, drawn: model.drawn + 1 });
 
 /** The line that is up is answered: it takes nothing more. */
 const settled = (model: NotchPageModel): NotchPageModel => (model.cur ? { ...model, cur: { ...model.cur, done: true } } : model);

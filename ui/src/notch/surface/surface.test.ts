@@ -1298,3 +1298,42 @@ describe('a display with a camera housing', () => {
     expect(document.documentElement.classList.contains('notch-housed')).toBe(false);
   });
 });
+
+describe('a send whose paper folds away first (motion on)', () => {
+  const draft: NotchLine = { id: 'p', kind: 'sheet', say: ['Send this?'], yes: 'send', blocks: [{ kind: 'paper', to: ['To ', { em: 'Leo' }], lines: [['Hi Leo,']] }] };
+  const sending: NotchLine = { id: 'f', kind: 'send', say: ['Sending.'], ms: 4000 };
+  const moving = (): { page: NotchSurface; at: HTMLElement; esc: boolean[] } => {
+    const at = document.createElement('div');
+    document.body.append(at);
+    const esc: boolean[] = [];
+    const page = createNotchSurface(at, () => {}, { reducedMotion: false });
+    page.onWantEsc((want) => esc.push(want));
+    page.receive({ type: 'state', line: null, count: 0 });
+    page.receive({ type: 'show', line: draft });
+    return { page, at, esc };
+  };
+
+  for (const how of ['rest', 'retire'] as const) {
+    test(`put to rest (${how}) while the paper folds, nothing of the send is drawn after`, async () => {
+      const { page, at, esc } = moving();
+      page.receive({ type: 'show', line: sending });
+      if (how === 'rest') page.receive({ type: 'rest' }); else page.retire();
+      await wait(320);
+      expect(at.querySelector<HTMLElement>('.nin')?.dataset.body).toBe('rest');
+      expect(at.querySelector('.say')?.textContent ?? '').not.toContain('Sending');
+      expect(at.querySelector('.hint')?.textContent ?? '').not.toContain('undo');
+      expect(esc.at(-1) ?? false).toBe(false);
+      page.destroy();
+      at.remove();
+    });
+  }
+
+  test('still the line when the paper has folded, the fuse is drawn', async () => {
+    const { page, at } = moving();
+    page.receive({ type: 'show', line: sending });
+    await wait(320);
+    expect(at.querySelector('.say')?.textContent ?? '').toContain('Sending');
+    page.destroy();
+    at.remove();
+  });
+});
