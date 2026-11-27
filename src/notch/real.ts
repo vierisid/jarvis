@@ -15,12 +15,13 @@ import { attachNotchWhere, type NotchWhere, type NotchWherePort } from './where.
 import { attachNotchActionsOrNone } from './actions.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { NOTCH_APPROVAL_LOOK_MS, attachNotchApprovals } from './approvals.ts';
-import { attachNotchAsks } from './asks.ts';
+import { notchAsksFeature } from './asks.ts';
 import type { NotchAskFile, NotchAskHow, NotchAsks, NotchAsksDeps } from './asks.ts';
 import { notchIntentTable, resolveIntent, type NotchIntent, type NotchIntentHit, type NotchIntentSource, type NotchRouted } from './intents.ts';
+import type { NotchOrder } from './feature.ts';
 import { NotchLedger } from './ledger.ts';
-import { attachNotchLook, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
-import { attachNotchTalk } from './talk.ts';
+import { notchLookFeature, type NotchLook, type NotchLookDeps, type NotchLookPort } from './look.ts';
+import { notchTalkFeature } from './talk.ts';
 import type { NotchTalk, NotchTalkDeps, NotchTalkPort } from './talk.ts';
 import type { NotchApprovalWhere, NotchApprovals } from './approvals.ts';
 import type { CommitmentEvent, CommitmentRunner } from '../daemon/commitment-executor.ts';
@@ -29,7 +30,7 @@ import type { NotchFixtures } from './fixtures.ts';
 import { NotchInbox } from './inbox.ts';
 import { notchNewsFeature } from './news.ts';
 import type { NotchNews, NotchOpenFailure } from './news.ts';
-import { notchPauseFeature, notchPauseWords } from './pause.ts';
+import { notchPauseFeature } from './pause.ts';
 import type { NotchPauseDeps } from './pause.ts';
 import { notchPromisesFeature } from './promises.ts';
 import { notchQuestionsFeature } from './questions.ts';
@@ -37,7 +38,7 @@ import type { NotchQuestionDeps, NotchQuestions } from './questions.ts';
 import { attachNotchAround, type NotchAround, type NotchAroundPort } from './around.ts';
 import { attachNotchCalls, type NotchCallDeps, type NotchCallPort, type NotchCalls } from './call.ts';
 import { attachNotchNotice, type NotchNotice, type NotchNoticeDeps } from './notice.ts';
-import { attachNotchDrop, type NotchDrop } from './drop.ts';
+import { notchDropFeature, type NotchDrop } from './drop.ts';
 import { attachNotchDay, type NotchDay } from './day.ts';
 import { attachMailLayer, type NotchMailLayer, type NotchMailLayerDeps } from './mail/attach.ts';
 import { NOTCH_MAIL_ITEM } from './mail/notch.ts';
@@ -50,9 +51,9 @@ import { notchBirthAfter, type NotchSurface } from './surface.ts';
 import { notchSuggestionsFeature } from './suggestions.ts';
 import type { NotchSuggestions } from './suggestions.ts';
 import { notchDoneBetween, notchToday, notchTodayBlocks, notchTodayScript } from './today.ts';
-import { attachNotchCatch, type NotchCatch, type NotchCatchDeps, type NotchCatchPort } from './catch.ts';
-import { attachNotchJobs, type NotchJobHands, type NotchJobs } from './jobs.ts';
-import { attachNotchPut, type NotchPutDeps, type NotchPutter } from './put.ts';
+import { notchCatchFeature, type NotchCatch, type NotchCatchDeps, type NotchCatchPort } from './catch.ts';
+import { notchJobsFeature, type NotchJobHands, type NotchJobs } from './jobs.ts';
+import { notchPutFeature, type NotchPutDeps, type NotchPutter } from './put.ts';
 import { NOTCH_STANDING_TICK_MS, attachNotchStanding, type NotchStanding } from './standing.ts';
 import { attachNotchPeople } from './people.ts';
 import type { NotchPeople } from './people.ts';
@@ -60,8 +61,8 @@ import type { PeerLink } from '../peers/link.ts';
 import type { PeerSetupLike } from '../peers/setup.ts';
 import type { PeerFileFound } from './people-files.ts';
 import { PeerStore } from '../peers/store.ts';
-import { NOTCH_AGENT_TICK_MS, attachNotchAgents, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
-import { attachNotchTeach, type NotchTeach, type NotchTeachDeps } from './teach.ts';
+import { notchAgentsFeature, type NotchAgentWorkflows, type NotchAgents } from './agents.ts';
+import { notchTeachFeature, type NotchTeach, type NotchTeachDeps } from './teach.ts';
 import { notchMemoryFeature, type NotchMemory, type NotchMemoryDeps } from './memory.ts';
 import { notchMovesFeature, type NotchMoves } from './moves.ts';
 import { notchPrefsFeature, type NotchPrefs, type NotchPrefsDeps, type NotchSettingsPage } from './prefs.ts';
@@ -349,6 +350,8 @@ export interface NotchReal {
   catcher: NotchCatch | null;
   teach: NotchTeach | null;
   put: NotchPutter | null;
+  /** The one table of intents the notch routes by, as it stands now: from the words every part hands over, in `NOTCH_ORDER.says`. */
+  intents(): NotchIntent[];
   /** Whether a notch page is up: then the notch tells the person, and the toasts need not. */
   showing(): boolean;
   /** Stops looking. */
@@ -365,13 +368,36 @@ export interface NotchSideRouters {
 }
 
 /**
- * The one table of intents (./intents.ts), from the lists the parts hand over. The table orders them by band
- * (a control word, an answer to what is up, a command, something to open, what was said over a line); inside
- * a band this is the order.
+ * Where what each part gives stands among the others (./registry.ts gathers it in this order). Not the order
+ * the parts are made in: Home shows people, agents, chases and eyes, calls, and they are made as agents,
+ * people, chases and eyes, calls; Settings shows noticing before calls, and calls are made first.
+ *
+ *   says          the words each part acts on itself. The one table orders intents by band (a control word, an
+ *                 answer to what is up, a command, something to open, what was said over a line); inside a
+ *                 band this is the order. A word to Leo before an eye and a chase, and those before an agent,
+ *                 because "tell me when" and "get Sam's answer" are theirs.
+ *   homeRows      the rows in Home under the field, each leading to its own list (the rows of a call that is
+ *                 on, the prepared replies, what is seen and the jobs that were shown stand above them, in
+ *                 places of their own in ./asks.ts).
+ *   settingsRows  the rows in Settings that other parts own, after the notch's own.
+ *   done, undo    what was done today besides approvals, promises, mail and jobs, and its undo.
+ *   hello         who is told that a page came up, after the inbox.
+ */
+export const NOTCH_ORDER = {
+  says: ['pause', 'dayOne', 'mail', 'put', 'teach', 'people', 'standing', 'agents', 'memory', 'calls', 'prefs', 'moves', 'canDo', 'said'],
+  homeRows: ['people', 'agents', 'standing', 'calls'],
+  settingsRows: ['notice', 'calls'],
+  done: ['standing', 'agents'],
+  undo: ['standing', 'agents'],
+  hello: ['dayOne'],
+} as const satisfies NotchOrder & { says: readonly (keyof NotchSideRouters)[] };
+
+/**
+ * The one table of intents (./intents.ts), from the lists the parts hand over, in `NOTCH_ORDER.says`: the
+ * order the notch's own table has (./registry.ts), so that the corpus asks what the notch asks.
  */
 export function notchIntents(routers: NotchSideRouters): NotchIntent[] {
-  const { pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said } = routers;
-  return notchIntentTable([pause, dayOne, mail, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said].map((part) => part?.intents()));
+  return notchIntentTable(NOTCH_ORDER.says.map((id) => routers[id]?.intents()));
 }
 
 /**
@@ -390,6 +416,8 @@ export interface NotchReadParts {
   /** The one reader of a sentence the fixed words missed (./intent-read.ts), and the parts whose intents it may name. Not given: only words about people are read, as before there was one. */
   reader?: NotchIntentReader | null;
   routers?: NotchSideRouters;
+  /** The table itself, where it is put together elsewhere (the notch's registry): asked in place of `routers`. */
+  table?: () => NotchIntent[];
   /** The name of the app in front, when the notch is looking at it. The name, and nothing else of the window. */
   app?: () => string | null;
 }
@@ -408,7 +436,7 @@ export interface NotchReadParts {
  */
 export function notchRead(parts: NotchReadParts, text: string, how?: NotchAskHow): Promise<NotchRead | null> | null {
   const about = parts.teach?.begins(text) ? null : parts.people;
-  if (!parts.reader || !parts.routers) {
+  if (!parts.reader || (!parts.routers && !parts.table)) {
     // No reader of every sentence: words that name somebody are still read, in the question they always had.
     const reading = about?.read(text) ?? null;
     return reading ? reading.then((hit) => ({ hit, asksFor: null, how: 'read' as const, ms: 0 })) : null;
@@ -419,7 +447,7 @@ export function notchRead(parts: NotchReadParts, text: string, how?: NotchAskHow
   if (parts.reader.resting(people && people.names.length > 0 ? 'people' : 'small')) return null;
   let app: string | null = null;
   try { app = parts.app?.() ?? null; } catch { app = null; }
-  return parts.reader.read({ text, how, table: notchIntents(parts.routers), app, people });
+  return parts.reader.read({ text, how, table: parts.table ? parts.table() : notchIntents(parts.routers!), app, people });
 }
 
 /**
@@ -441,11 +469,6 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   const log = deps.log ?? ((line: string) => console.log(line));
   // Made after the inbox it puts its lines in; Today and the place the person is in both reach it.
   let mail: NotchMailLayer | null = null;
-  // Made after the inbox they play on; Today lists what they did.
-  let jobs: NotchJobs | null = null;
-  let catcher: NotchCatch | null = null;
-  let teach: NotchTeach | null = null;
-  let put: NotchPutter | null = null;
   let standing: NotchStanding | null = null;
   // Made further down, once the mail and the day are: what is said and shown before then finds it when it is asked.
   let calls: NotchCalls | null = null;
@@ -454,31 +477,13 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   // One of the notch's eyes is citron while something is watched for, or a call is listened to.
   let eyeKept = false, eyeCall = false;
   const paintEye = (): void => surface.setEye(eyeKept || eyeCall);
-  let agents: NotchAgents | null = null;
   // Made further down, and stopped from up here: what is not made yet when the notch is stopped has nothing to stop.
   let dayOne: NotchDayOne | null = null;
-  let lookAt: NotchLook | null = null;
-  let drop: NotchDrop | null = null;
   let around: NotchAround | null = null;
   let stopWhere: () => void = () => {};
   // What the notch does in the world, as one list that also writes the audit. Each part writes its own
   // entries, where it knows what came of a thing: this only makes the list and hands it to them.
   const actions = deps.actions ? attachNotchActionsOrNone(deps.actions.db, { audit: deps.actions.audit, log }) : null;
-  const todayDeps = {
-    executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
-    keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
-    sentMail: (since: number) => mail?.sentSince(since) ?? [],
-    jobs: (since: number) => jobs?.done(since) ?? [],
-    // What else was started and can be taken back: a watch, a chase, an agent that was made.
-    more: (since: number) => [...(standing?.done(since) ?? []), ...(agents?.done(since) ?? [])],
-    // And what only the list of what was done has: a follow-up, a word to somebody, what may have gone.
-    actions: (since: number) => actions?.today(since) ?? [],
-  };
-  /** Undo on a row of what was done that is not a paste: what to say, or null when the row stands for nothing that can be taken back. */
-  const undoRow = (row: string): NotchPart[] | null => standing?.undo(row) ?? agents?.undo(row) ?? null;
-  // Made after the inbox, which opens it: yes at rest with nothing waiting.
-  let asks: NotchAsks | null = null;
-  const today = notchTodayScript(todayDeps);
   // Pass 8: whether the person is there, and their quiet hours. Made before the inbox, which asks them
   // whether a line may come up; what they set off is made after it and reached through these.
   const dayNow = deps.day?.now ?? Date.now;
@@ -496,6 +501,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   const quiet = settings ? new NotchQuiet(settings, dayNow) : null;
   let day: NotchDay | null = null;
   let calmed: () => void = () => {};
+  // Asked for by the part that knows whether the person is there, which is made before it.
+  let asks: NotchAsks | null = null;
   const presence = settings ? new NotchPresence({
     settings,
     calm: () => calmed(),
@@ -507,26 +514,71 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     clock: deps.clock,
     log,
   }) : null;
-  // The features, their one scheduler and their one way down (./registry.ts).
+  // The features, their one scheduler, their one way down, and what they give to Home, Settings and the
+  // router, each in NOTCH_ORDER (./registry.ts).
   const registry = createNotchRegistry({
     surface, settings, clock: deps.clock, now: dayNow, log,
     paused: () => (deps.emergency ? deps.emergency.getState() !== 'normal' : false),
+    order: NOTCH_ORDER,
   });
+  const todayDeps = {
+    executedApprovals: (limit: number) => deps.approvalManager.getHistory({ status: 'executed', limit }),
+    keptPromises: deps.promises ? () => deps.promises!.kept() : undefined,
+    sentMail: (since: number) => mail?.sentSince(since) ?? [],
+    // The jobs have a place of their own in Today, and their own undo.
+    jobs: (since: number) => registry.use('jobs')?.done(since) ?? [],
+    // What else was started and can be taken back: a watch, a chase, an agent that was made (NOTCH_ORDER.done).
+    more: (since: number) => registry.all.done(since),
+    // And what only the list of what was done has: a follow-up, a word to somebody, what may have gone.
+    actions: (since: number) => actions?.today(since) ?? [],
+  };
+  /** Undo on a row of what was done that is not a paste: what to say, or null when the row stands for nothing that can be taken back (NOTCH_ORDER.undo). */
+  const undoRow = (row: string): NotchPart[] | null => registry.all.undo(row);
+  const today = notchTodayScript(todayDeps);
   // From here on there is something to stop, if the making fails further down.
   built.stop = () => registry.stop();
   // The parts that are not features yet are stopped after those that are, in the order they always were. Each
   // is asked for when the notch is stopped: one that was not made by then has nothing to stop.
   for (const part of [
-    () => asks?.stop(), () => people?.stop(), () => dayOne?.stop(), () => lookAt?.stop(), () => drop?.stop(), () => stopWhere(), () => mail?.stop(),
-    () => presence?.stop(), () => around?.stop(), () => jobs?.stop(), () => catcher?.stop(), () => teach?.stop(), () => put?.stop(),
-    () => standing?.stop(), () => calls?.stop(), () => notice?.stop(), () => agents?.stop(),
+    () => people?.stop(), () => dayOne?.stop(), () => stopWhere(), () => mail?.stop(),
+    () => presence?.stop(), () => around?.stop(), () => standing?.stop(), () => calls?.stop(), () => notice?.stop(),
   ]) registry.onStop(part);
-  // And reached by their ids by the features that lean on them.
-  registry.lend('mail', () => mail);
-  registry.lend('agents', () => agents);
-  registry.lend('calls', () => calls);
-  registry.lend('notice', () => notice);
-  registry.lend('dayOne', () => dayOne);
+  // And reached by their ids by the features that lean on them, with what they give to what is gathered.
+  registry.lend('mail', () => mail, { intents: () => mail?.mail.intents() ?? [] });
+  registry.lend('calls', () => calls, {
+    intents: () => calls?.intents() ?? [],
+    homeRows: () => calls?.rows() ?? [],
+    open: async (stage, row) => { if (row !== 'calls' || !calls) return false; await calls.open(stage, row); return true; },
+    settingsRows: () => (calls ? [calls.settingsRow()] : []),
+    setWord: (name, value) => calls?.setWord(name, value) ?? false,
+  });
+  registry.lend('notice', () => notice, {
+    settingsRows: () => (notice ? [notice.settingsRow()] : []),
+    setWord: (name, value) => notice?.setWord(name, value) ?? false,
+  });
+  registry.lend('dayOne', () => dayOne, {
+    intents: () => dayOne?.intents() ?? [],
+    // A notch has come up: on a brain that is due it, day one begins a moment later.
+    hello: () => dayOne?.cameUp(),
+  });
+  registry.lend('people', () => people, {
+    intents: () => people?.intents() ?? [],
+    homeRows: () => people?.rows() ?? [],
+    open: async (stage, row) => {
+      if (row === 'people') await people?.open(stage);
+      else if (row === 'people-server') await people?.server(stage);
+      else return false;
+      return true;
+    },
+  });
+  registry.lend('standing', () => standing, {
+    intents: () => standing?.intents() ?? [],
+    homeRows: () => standing?.rows() ?? [],
+    open: async (stage, row) => { if (row !== 'eyes' && row !== 'chases') return false; await standing?.open(stage, row); return true; },
+    done: (since) => standing?.done(since) ?? [],
+    undo: (row) => standing?.undo(row) ?? null,
+  });
+  registry.lend('around', () => around);
   const inbox = new NotchInbox(surface, {
     busy: deps.busy,
     clock: deps.clock,
@@ -539,6 +591,8 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
   });
   calmed = () => inbox.calmed();
   registry.setInbox(inbox);
+  // A page has come up: the inbox hears it first (it listens from its making), then each part in NOTCH_ORDER.hello.
+  surface.onHello((sidecarId) => registry.hello(sidecarId));
   const approvals = attachNotchApprovals(inbox, {
     approvalManager: deps.approvalManager,
     approve: deps.approve,
@@ -568,45 +622,17 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
     : null;
   stopWhere = () => where?.stop();
   registry.lend('where', () => where);
-  let talk: NotchTalk | null = null;
-  if (deps.asks && deps.jobs) {
-    // Doing it in view (pass 10). Before asking, which sends "Watch me" and "run it" here.
-    const given = deps.jobs;
-    const emergency = deps.emergency;
-    const paused = emergency ? () => emergency.getState() !== 'normal' : undefined;
-    jobs = attachNotchJobs(inbox, {
-      db: given.db, hands: given.hands, paused, actions,
-      // What the person does while Jarvis works is not a job to take over, and what came before it is over.
-      running: () => catcher?.reset(),
-      log,
-    });
-    catcher = attachNotchCatch(given.watchPort, {
-      inbox, jobs, hands: given.hands, paused, count: given.count,
-      teaching: () => teach?.watching() ?? false,
-      log,
-    });
-    teach = attachNotchTeach({
-      inbox, jobs, hands: given.hands, db: given.db, ...given.teach, count: given.count,
-      catcher: () => catcher, paused, log,
-    });
-    put = attachNotchPut({ inbox, jobs, hands: given.hands, hold: given.hold, read: given.read, paused, actions, log });
-    given.watch?.();
-    if (!given.noClock) {
-      const learned = teach;
-      registry.every('the clock of the shown jobs', 30_000, () => learned.tick());
-    }
-  }
-  if (deps.agents && deps.asks) {
-    const emergency = deps.emergency;
-    const made = attachNotchAgents({
-      inbox, db: deps.agents.db, workflows: deps.agents.workflows, log, actions,
-      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
-    });
-    agents = made;
-    if (!deps.agents.noClock) {
-      registry.every("looking at the agents' runs", NOTCH_AGENT_TICK_MS, () => { try { made.tick(); } catch (error) { log(`[notch] the agents' runs could not be looked at: ${error instanceof Error ? error.message : String(error)}`); } });
-    }
-  }
+  // Doing it in view (pass 10): jobs done where they can be seen, a job caught when it is done twice by hand, a
+  // job shown with "Watch me", and a thing put where the person points. Before asking, which sends "Watch me"
+  // and "run it" here. All of it is started by what is said or answered on the notch: without asking, none.
+  const shown = deps.asks ? deps.jobs : undefined;
+  const jobs: NotchJobs | null = registry.add(notchJobsFeature(shown ? { db: shown.db, hands: shown.hands, actions } : undefined));
+  const catcher: NotchCatch | null = registry.add(notchCatchFeature(shown ? { port: shown.watchPort, hands: shown.hands, count: shown.count } : undefined));
+  const teach: NotchTeach | null = registry.add(notchTeachFeature(shown ? { ...shown.teach, hands: shown.hands, db: shown.db, count: shown.count, noClock: shown.noClock } : undefined));
+  const put: NotchPutter | null = registry.add(notchPutFeature(shown ? { hands: shown.hands, hold: shown.hold, read: shown.read, actions } : undefined));
+  if (jobs) shown?.watch?.();
+  // Agents (pass 11): a sentence becomes a workflow that is switched on and asks first.
+  const agents: NotchAgents | null = registry.add(notchAgentsFeature(deps.agents ? { ...deps.agents, asks: deps.asks !== undefined, actions } : undefined));
   // The back office that fits in a sheet (pass 12): what is remembered, the notch's own settings,
   // what is connected, and every movement, playable by hand. Reached from the foot of Home, and by saying so.
   const office = deps.office;
@@ -633,144 +659,54 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       // What was last circled and is still held, for "send this to Leo". Asked for when it is said: the part that holds it is made after this.
       look: () => { const held = put?.held() ?? null; return held ? { what: held.what, rows: held.rows, app: held.app } : null; },
       // A file that arrived is held by the notch like one that was dropped on it, with the same card.
-      ...(deps.peers.files ? { files: { ...deps.peers.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => drop?.arrived(file) ?? false } } : {}),
+      ...(deps.peers.files ? { files: { ...deps.peers.files, arrived: (file: { name: string; bytes: Uint8Array; from: string; place: string | null }) => registry.use('drop')?.arrived(file) ?? false } } : {}),
       ...(deps.peers.noClock ? { noClock: true } : {}),
     });
   }
   // What is said with a line up is tried as an answer to that line (./said.ts). An instruction's own lines are read by ./asks.ts.
   // Words that a shown job could mean are that job's, and are not read as a new value for the line.
-  const saidLine = registry.must(notchSaidFeature({ jobWords: (text) => teach?.begins(text) ?? false }));
+  registry.must(notchSaidFeature({ jobWords: (text) => teach?.begins(text) ?? false }));
   const prefs: NotchPrefs | null = registry.add(notchPrefsFeature({
     keys: office?.keys, voice: office?.voice, connections: office?.connections, connect: office?.connect,
     openPage: office?.openPage, openDashboard: deps.openDashboard,
     dayOne: deps.dayOne !== undefined,
   }));
-  if (deps.asks) {
-    const emergency = deps.emergency;
-    const pauseWords = emergency ? notchPauseWords(emergency, log) : null;
-    const readIntent = deps.asks.readIntent;
-    const intentReader = readIntent ? createNotchIntentReader({ think: readIntent, log }) : null;
-    asks = attachNotchAsks(inbox, {
-      ledger: new NotchLedger(deps.asks.db),
-      turns: deps.asks.turns,
-      modelReady: deps.asks.modelReady,
-      remember: deps.asks.remember,
-      understand: deps.asks.understand,
-      point: deps.asks.point,
-      // Words the notch does itself: "watch me", "run it on nine rows", "tell Leo ...", "tell me when Sam
-      // replies", "every Monday send Sam the numbers", "settings", "pause". Each part hands its words over as
-      // intents, and the one table says which of them takes a sentence and in what order (./intents.ts: a
-      // control word, an answer to what is up, a command, something to open, what was said over a line).
-      // Inside a band the order is the order of this list: a word to Leo before an eye and a chase, and those
-      // before an agent, because "tell me when" and "get Sam's answer" are theirs.
-      // The parts are read when something is said, not now: several of them are made further down.
-      side: (text, how) => notchSide({ pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine }, text, how),
-      // After all of them: a sentence that is none of the fixed words is read by the model, once
-      // (./intent-read.ts): is it one of these things said another way, is it a word for somebody of the
-      // organisation, and what does it ask for. Only what `side` left: while day one waits to hear the
-      // person, whatever they say is its answer and never gets here. The model is told the sentence and the
-      // name of the app in front, when the notch is looking at it and the person is not on the desktop.
-      read: (text, how) => notchRead({
-        teach, people, reader: intentReader,
-        routers: { pause: pauseWords, dayOne, mail: mail?.mail ?? null, put, teach, people, standing, agents, memory, calls, prefs, moves, canDo, said: saidLine },
-        app: () => (where && where.onDesktop() !== true ? where.front()?.name ?? null : null),
-      }, text, how),
-      keys: () => saidLine.keys(),
-      // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
-      people: () => mail?.store.people() ?? [],
-      // And who is in the organisation: a name that is exactly one of theirs is not read back as somebody else's.
-      here: () => people?.names() ?? [],
-      unheard: (why) => dayOne?.unheard(why) ?? false,
-      pointed: (shown) => dayOne?.pointed(shown),
-      // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed. The
-      // features have theirs, as they stand when Home is opened; the dashboard's is the last.
-      more: {
-        buttons: () => [
-          ...registry.homeLinks(),
-          ...(deps.openDashboard ? [{ id: 'dashboard', label: 'Dashboard', quiet: true }] : []),
-        ],
-        press: async (stage, button) => {
-          const went = await registry.press(stage, button);
-          if (went !== null) return went;
-          if (button === 'dashboard' && deps.openDashboard) { deps.openDashboard(stage.from()); return 'leave'; }
-          return null;
-        },
-      },
-      // What the assistant built in a turn is an agent like any other: switched on and named here.
-      afterTurn: (since) => agents?.adopt(since),
-      standing: {
-        rows: () => { const row = agents?.row(); return [...(people?.rows() ?? []), ...(row ? [row] : []), ...(standing?.rows() ?? []), ...(calls?.rows() ?? [])]; },
-        open: async (stage, row) => {
-          if (row === 'people') await people?.open(stage);
-          else if (row === 'people-server') await people?.server(stage);
-          else if (row === 'agents') await agents?.open(stage);
-          else if (row === 'eyes' || row === 'chases') await standing?.open(stage, row);
-          else if (row === 'calls') await calls?.open(stage, row);
-        },
-      },
-      learned: teach ? { row: () => teach!.row(), open: (stage) => teach!.open(stage) } : undefined,
-      undoJob: jobs ? (jobId) => jobs!.undo(jobId) : undefined,
-      undoRow,
-      // On a call: Home says so, and has the way to have it listened to when it is not.
-      call: { row: () => around?.callRow() ?? null, open: async (stage) => { await around?.callOpen(stage); } },
-      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
-      raiseApproval: (approvalId) => approvals.raise(approvalId),
-      // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
-      callHeard: () => calls?.listening() ?? false,
-      stillFor: () => presence?.stillFor() ?? 0,
-      // The instruction is over: what it was still asking for is asked no more. Closed as the system:
-      // it went through `deny`, and every turn that ended was written in the audit as the owner's no
-      // on the notch (the review of 26 November 2026).
-      withdrawApproval: (approvalId) => { void deps.withdraw(approvalId).catch(() => {}); },
-      attention: () => surface.act({ gesture: 'shake' }),
-      nod: () => surface.act({ gesture: 'nodg', kick: 240 }),
-      reach: (aim) => surface.act({ lip: 'reach', aim }),
-      openDashboard: deps.openDashboard,
-      today: () => notchTodayBlocks(notchToday(todayDeps)),
-      see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
-      // Replies that are prepared wait in Home, one row for all of them (pass 7).
-      mail: deps.mail ? { row: () => mail?.mail.homeRow() ?? null, open: async (stage) => { await mail?.mail.open(stage); } } : undefined,
-      // The quiet hours are changed where they are shown. Ending them lets what waited speak.
-      quiet: quiet ? notchQuietHome(quiet, () => inbox.calmed()) : undefined,
-      log,
-    });
-    // Look at this (pass 9). It is joined to talking, because the same keys
-    // are held for both: what is said while a thing is circled is about it.
-    if (deps.asks.look) {
-      const owner = asks;
-      lookAt = attachNotchLook(deps.asks.look.port, {
-        inbox,
-        // Nothing was said with it: the question is the notch's own, not the owner's word.
-        ask: (text, files) => { owner.shown(text, files); },
-        talking: (sidecarId) => talk?.open(sidecarId) ?? false,
-        modelReady: deps.asks.look.modelReady ?? deps.asks.modelReady,
-        paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
-        // What was shown is held for a while, and a place pointed at meanwhile is where it goes (pass 10).
-        // On day one, the first look anyone takes is the lesson, and nothing else comes of it.
-        shown: (sidecarId, looked) => dayOne?.shown(looked) === true || (put?.shown(sidecarId, looked) ?? false),
-        // The blink is the shutter, and what was circled is swallowed.
-        seen: () => surface.act({ gesture: 'blink', kick: 230 }),
-        log,
-      });
-    }
-    // What is said while a dropped file waits for its question is about that file: the words take it.
-    talk = attachNotchTalk(deps.asks.talkPort, { asks, stt: deps.asks.stt, look: lookAt ?? undefined, held: () => drop?.claim() ?? [], log });
-    // A file dropped on the notch (pass 9) waits for its question: one of three offered, typed, or said.
-    const owner = asks;
-    drop = attachNotchDrop(surface, inbox, {
-      // A button's words are the notch's own; what was typed in the field is the owner's.
-      ask: (text, files, said) => { if (said) owner.typed(text, files); else owner.shown(text, files); },
-      tell: (parts, mood) => { owner.tell(parts, mood); },
-      // For somebody in the organisation: the file goes on as it was dropped (./people-files.ts).
-      ...(people ? { send: { to: () => people!.fileTargets(), file: (to: string, file: { name: string; bytes: Uint8Array }) => people!.sendFile(to, file) } } : {}),
-      paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
-      // A file that arrived from somebody is read by itself, and what it is is said with its arrival.
-      ...(deps.gist ? { gist: deps.gist } : {}),
-      // On day one, the first file anyone drops is the lesson, and is asked about as any file is.
-      taken: () => dayOne?.gave(),
-      log,
-    });
-  }
+  const readIntent = deps.asks?.readIntent;
+  const intentReader = readIntent ? createNotchIntentReader({ think: readIntent, log }) : null;
+  asks = registry.add(notchAsksFeature(deps.asks ? {
+    ledger: new NotchLedger(deps.asks.db),
+    turns: deps.asks.turns,
+    modelReady: deps.asks.modelReady,
+    remember: deps.asks.remember,
+    understand: deps.asks.understand,
+    point: deps.asks.point,
+    // After the fixed words: a sentence that is none of them is read by the model, once
+    // (./intent-read.ts): is it one of these things said another way, is it a word for somebody of the
+    // organisation, and what does it ask for. Only what `side` left: while day one waits to hear the
+    // person, whatever they say is its answer and never gets here. The model is told the sentence and the
+    // name of the app in front, when the notch is looking at it and the person is not on the desktop.
+    read: (text, how) => notchRead({
+      teach, people, reader: intentReader,
+      table: () => registry.all.intents(),
+      app: () => (where && where.onDesktop() !== true ? where.front()?.name ?? null : null),
+    }, text, how),
+    raiseApproval: (approvalId) => approvals.raise(approvalId),
+    stillFor: () => presence?.stillFor() ?? 0,
+    // The instruction is over: what it was still asking for is asked no more. Closed as the system:
+    // it went through `deny`, and every turn that ended was written in the audit as the owner's no
+    // on the notch (the review of 26 November 2026).
+    withdrawApproval: (approvalId) => { void deps.withdraw(approvalId).catch(() => {}); },
+    openDashboard: deps.openDashboard,
+    today: () => notchTodayBlocks(notchToday(todayDeps)),
+    // The quiet hours are changed where they are shown. Ending them lets what waited speak.
+    quiet: quiet ? notchQuietHome(quiet, () => inbox.calmed()) : undefined,
+    mail: deps.mail !== undefined,
+  } : undefined));
+  // Look at this (pass 9), talking with the keys held, and a file dropped on the notch (pass 9).
+  const looking = deps.asks?.look;
+  const lookAt: NotchLook | null = registry.add(notchLookFeature(looking ? { port: looking.port, modelReady: looking.modelReady ?? deps.asks!.modelReady } : undefined));
+  const talk: NotchTalk | null = registry.add(notchTalkFeature(deps.asks ? { port: deps.asks.talkPort, stt: deps.asks.stt } : undefined));
+  const drop: NotchDrop | null = registry.add(notchDropFeature(deps.asks ? { gist: deps.gist } : undefined));
   const promises = deps.promises;
   registry.add(notchPromisesFeature(promises?.executor, actions));
   // A fixture promise is kept by writing one line, not by a model turn.
@@ -967,14 +903,13 @@ function makeNotchReal(surface: NotchSurface, deps: NotchRealDeps, built: { stop
       paused: emergency ? () => emergency.getState() !== 'normal' : undefined,
     });
     dayOne = made;
-    // A notch has come up: on a brain that is due it, day one begins a moment later.
-    surface.onHello(() => made.cameUp());
   }
 
   const suggestions = registry.must(notchSuggestionsFeature);
   return {
     inbox, approvals, news, questions, suggestions, fixtures, asks, where, talk, look: lookAt, drop, mail, quiet, presence, around, soon,
     jobs, catcher, teach, put, memory, prefs, moves, dayOne, agents, notice, people,
+    intents: () => registry.all.intents(),
     // A notch that was stopped tells the person nothing: what it would have said goes where it went before there was a notch.
     showing: () => !registry.stopped() && surface.listening() > 0,
     stop: () => registry.stop(),

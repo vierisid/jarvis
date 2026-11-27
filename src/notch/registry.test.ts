@@ -5,7 +5,10 @@
  * real-wiring.test.ts.
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
-import type { NotchFeature, NotchFeatureDef, NotchFeatureId } from './feature.ts';
+import type { NotchFeature, NotchFeatureDef, NotchFeatureId, NotchOrder } from './feature.ts';
+import type { NotchIntent } from './intents.ts';
+import type { NotchBlock } from './protocol.ts';
+import type { NotchDone } from './today.ts';
 import { NOTCH_TICK_FAILURE_SAID_MS, createNotchRegistry } from './registry.ts';
 
 type Started = { fn: () => void; ms: number; cleared: boolean; unrefed: boolean; handle: unknown };
@@ -14,7 +17,7 @@ const realClear = globalThis.clearInterval;
 afterEach(() => { globalThis.setInterval = realSet; globalThis.clearInterval = realClear; setSystemTime(); });
 
 /** A registry whose clocks are run by hand, with a log and a record of what happened in which order. */
-function world(more: { noInbox?: boolean } = {}) {
+function world(more: { noInbox?: boolean; order?: Partial<NotchOrder> } = {}) {
   const started: Started[] = [];
   const order: string[] = [];
   const logs: string[] = [];
@@ -31,6 +34,7 @@ function world(more: { noInbox?: boolean } = {}) {
   const state = { paused: false };
   const registry = createNotchRegistry({
     surface: { name: 'the surface' } as never, settings: null, now: () => 42, log: (line) => logs.push(line), paused: () => state.paused,
+    order: more.order,
   });
   const inbox = { stop() { order.push('inbox stopped'); } };
   if (!more.noInbox) registry.setInbox(inbox as never);
@@ -279,20 +283,117 @@ describe('making a feature', () => {
     expect(w.registry.use('agents')).toBeNull();
   });
 
-  test('what nothing gathers yet is not in the contract: naming it does not compile', () => {
-    // @ts-expect-error rows in Home are not in the contract until the registry gathers them
-    const rows: NotchFeature<never> = { api: api('moves'), homeRows: () => [] };
-    // @ts-expect-error nor is what a row opens
-    const open: NotchFeature<never> = { api: api('moves'), open: async () => {} };
-    // @ts-expect-error nor are rows in Settings
-    const settings: NotchFeature<never> = { api: api('moves'), settingsRows: () => [] };
-    // @ts-expect-error nor is what was done today
-    const done: NotchFeature<never> = { api: api('moves'), done: () => [] };
-    // @ts-expect-error nor is taking it back
-    const undo: NotchFeature<never> = { api: api('moves'), undo: () => null };
-    // @ts-expect-error nor is a page coming up
-    const hello: NotchFeature<never> = { api: api('moves'), hello: () => {} };
-    expect([rows, open, settings, done, undo, hello]).toHaveLength(6);
+  test('one that gives something and has no place for it in that order cannot be made, and is stopped with the rest', () => {
+    const w = world();
+    const given: [string, NotchFeature<never>][] = [
+      ['intents', { api: api('moves'), intents: () => [] }],
+      ['homeRows', { api: api('moves'), homeRows: () => [] }],
+      ['open', { api: api('moves'), open: async () => false }],
+      ['settingsRows', { api: api('moves'), settingsRows: () => [] }],
+      ['setWord', { api: api('moves'), setWord: () => false }],
+      ['done', { api: api('moves'), done: () => [] }],
+      ['undo', { api: api('moves'), undo: () => null }],
+      ['hello', { api: api('moves'), hello: () => {} }],
+    ];
+    const kinds: Record<string, string> = { intents: 'says', homeRows: 'homeRows', open: 'homeRows', settingsRows: 'settingsRows', setWord: 'settingsRows', done: 'done', undo: 'undo', hello: 'hello' };
+    for (const [member, made] of given) {
+      const one = world();
+      expect(() => one.registry.add(feature('moves', () => ({ ...made, stop() { one.order.push('moves stopped'); } }))))
+        .toThrow(`[notch] moves gives ${member}, and has no place in the order of ${kinds[member]}`);
+      one.registry.stop();
+      expect(one.order).toEqual(['inbox stopped', 'moves stopped']);
+    }
+    // A part that is lent is refused the same way.
+    expect(() => w.registry.lend('where', () => null, { homeRows: () => [] })).toThrow('[notch] where gives homeRows, and has no place in the order of homeRows');
+  });
+});
+
+describe('what is gathered from every part', () => {
+  const row = (id: string): NotchBlock => ({ kind: 'row', id, say: [id] });
+  const done = (id: string): NotchDone => ({ id, at: 1, text: id, small: '', undo: true });
+  const intent = (id: string, band: NotchIntent['band']): NotchIntent => ({ id, feature: id, says: id, band, act: 'none', first: 'acts', examples: [], match: () => null });
+  /** A registry whose orders differ from the order the parts are made in. */
+  const gathering = () => {
+    const w = world({
+      order: {
+        says: ['canDo', 'moves', 'where'], homeRows: ['moves', 'where', 'canDo'], settingsRows: ['canDo', 'moves'],
+        done: ['canDo', 'moves'], undo: ['canDo', 'moves'], hello: ['moves', 'where'],
+      },
+    });
+    const opened: string[] = [];
+    const heard: string[] = [];
+    let where: unknown = null;
+    w.registry.add(feature('moves', () => ({
+      api: api('moves'),
+      intents: () => [intent('moves.open', 'open'), intent('moves.first', 'control')],
+      homeRows: () => [row('moves')],
+      open: async (_stage, id) => { opened.push(`moves asked: ${id}`); return id === 'moves'; },
+      settingsRows: () => [row('moves-setting')],
+      setWord: (name) => name === 'speed',
+      done: () => [done('moved')],
+      undo: (id) => (id === 'moved' || id === 'both' ? ['Moves took it back.'] : null),
+      hello: (sidecarId) => heard.push(`moves: ${sidecarId}`),
+    })));
+    w.registry.add(feature('canDo', () => ({
+      api: api('canDo'),
+      intents: () => [intent('cando.open', 'open')],
+      homeRows: () => [row('cando')],
+      open: async (_stage, id) => { opened.push(`canDo asked: ${id}`); return id === 'cando'; },
+      settingsRows: () => [row('cando-setting')],
+      setWord: (name) => name === 'all',
+      done: () => [done('could')],
+      undo: (id) => (id === 'could' || id === 'both' ? ['canDo took it back.'] : null),
+    })));
+    // A part that is not a feature yet gives the same, while it is there.
+    w.registry.lend('where', () => where as never, {
+      intents: () => [intent('where.open', 'open')],
+      homeRows: () => [row('see')],
+      open: async (_stage, id) => { opened.push(`where asked: ${id}`); return id === 'see'; },
+      hello: (sidecarId) => heard.push(`where: ${sidecarId}`),
+    });
+    return { ...w, opened, heard, arrive: () => { where = api('where'); } };
+  };
+
+  test('each kind stands in its own order, not in the order the parts were made, and a part that is lent gives only while it is there', async () => {
+    const w = gathering();
+    // The table orders by band first; inside a band, by the order of `says`.
+    expect(w.registry.all.intents().map((one) => one.id)).toEqual(['moves.first', 'cando.open', 'moves.open']);
+    expect(w.registry.all.homeRows().map((one) => (one as { id: string }).id)).toEqual(['moves', 'cando']);
+    expect(w.registry.all.settingsRows().map((one) => (one as { id: string }).id)).toEqual(['cando-setting', 'moves-setting']);
+    expect(w.registry.all.done(0).map((one) => one.id)).toEqual(['could', 'moved']);
+    w.registry.hello('pc');
+    expect(w.heard).toEqual(['moves: pc']);
+    w.arrive();
+    expect(w.registry.all.intents().map((one) => one.id)).toEqual(['moves.first', 'cando.open', 'moves.open', 'where.open']);
+    expect(w.registry.all.homeRows().map((one) => (one as { id: string }).id)).toEqual(['moves', 'see', 'cando']);
+    w.registry.hello('laptop');
+    expect(w.heard).toEqual(['moves: pc', 'moves: laptop', 'where: laptop']);
+    // The ctx of a feature has the same view.
+    let seen: string[] = [];
+    w.registry.add(feature('prefs', (ctx) => { seen = ctx.all.homeRows().map((one) => (one as { id: string }).id); return { api: api('prefs') }; }));
+    expect(seen).toEqual(['moves', 'see', 'cando']);
+  });
+
+  test('a row is opened by the first part in its order that owns it; a word, and an undo, by the first that takes it', async () => {
+    const w = gathering();
+    w.arrive();
+    await w.registry.all.open({} as never, 'cando');
+    expect(w.opened).toEqual(['moves asked: cando', 'where asked: cando', 'canDo asked: cando']);
+    w.opened.length = 0;
+    await w.registry.all.open({} as never, 'nobody');
+    expect(w.opened).toEqual(['moves asked: nobody', 'where asked: nobody', 'canDo asked: nobody']);
+    expect([w.registry.all.setWord('speed', 'x'), w.registry.all.setWord('all', 'x'), w.registry.all.setWord('none', 'x')]).toEqual([true, true, false]);
+    expect(w.registry.all.undo('both')).toEqual(['canDo took it back.']);
+    expect(w.registry.all.undo('moved')).toEqual(['Moves took it back.']);
+    expect(w.registry.all.undo('nothing')).toBeNull();
+  });
+
+  test('on a notch that was stopped a page that comes up is told to nobody', () => {
+    const w = gathering();
+    w.arrive();
+    w.registry.stop();
+    w.registry.hello('pc');
+    expect(w.heard).toEqual([]);
   });
 });
 

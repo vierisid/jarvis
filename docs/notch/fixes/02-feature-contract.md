@@ -131,10 +131,10 @@ What steps 1 to 3 do, and what they proved:
 - Ten features are on it: questions, news, moves, canDo, memory, prefs, said,
   promises, pause, suggestions. The clocks of the parts that are not features
   yet run through the same scheduler.
-- `route` is not in the contract. It stays a method of each `api`; once the
-  intent table of point 3 has landed, a feature contributes its words through
-  that table. The eye claim and the four signals are not in the context yet:
-  nothing that was moved uses them.
+- (Changed in step 4.) A feature hands its words over as `intents()`, and the
+  registry puts them into the one table. `route` stays a method of each
+  `api` for the parts' own tests. The eye claim and the four signals are not
+  in the context yet: nothing that was moved uses them.
 - `ctx.surface` is effects only: `resting`, `current`, `setSound`, `onStop`,
   `setFace`, `act`. What is shown goes through the inbox.
 - `ctx.use(id)` hands a feature only the parts it named in `needs` or
@@ -159,16 +159,49 @@ What steps 1 to 3 do, and what they proved:
   as agents, people, chases and eyes, calls. Settings shows noticing before
   calls, and calls is made first. Today's `more` is standing before agents.
   The quiet links at the foot of Home are in build order, and are gathered.
-- What step 4 must add to the contract, each with a position of its own, and
-  gather in the registry: `homeRows` with `open`, `done`, `undo`; step 5 adds
-  `settingsRows` and `hello` (after the inbox, day one last). They are not in
-  `NotchFeature` until then, so that naming one does not compile, instead of
-  being silently left out.
+- (Done in step 4, see below.) What step 4 had to add to the contract, each
+  with a position of its own, and gather in the registry.
 - A feature that is absent because the brain was not given what it is made
   from says nothing (as before). Only a missing `needs` is logged.
 - The clocks of agents, chases and noticing, and the look for approvals, keep
   their own catch and their own words in the log; the scheduler's guard is
   around them as well now.
+
+What step 4 does, and what it proved:
+
+- Asks, look, talk, drop, jobs, catch, teach, put and agents are features,
+  each defined in its own file. `real.ts` adds them in the order they were
+  made before.
+- The contract gathers, besides the quiet links: `intents`, `homeRows` with
+  `open`, `settingsRows` with `setWord`, `done`, `undo`, `hello`. Each kind
+  has its order written once in `real.ts` (`NOTCH_ORDER`), not taken from
+  the build order: says pause, dayOne, mail, put, teach, people, standing,
+  agents, memory, calls, prefs, moves, canDo, said; Home's rows people,
+  agents, standing, calls; Settings noticing, calls; done and undo standing,
+  agents; hello day one (the inbox hears a page first, by itself). A part
+  that gives one of them and has no place in its order cannot be made.
+- The parts of step 5 give theirs through `registry.lend(id, get, gives)`,
+  asked only while the part is there, so moving one changes nothing of
+  where its rows stand. People, standing and around are lent now as well.
+- The notch routes by `registry.all.intents()`. The corpus still asks
+  `notchSide`; both put the lists together in `NOTCH_ORDER.says`, and
+  `real-wiring.test.ts` holds that the two tables are the same.
+- `ctx.all` is what is gathered, for the parts that show Home and Settings
+  and route (asks, prefs). Prefs reads the rows of noticing and calls from
+  it instead of asking those two parts by name.
+- Not gathered, on purpose: the rows of a call that is on, the prepared
+  replies, what is seen and the jobs that were shown stand above the
+  gathered rows in places of their own in `asks.ts`, with what their open
+  does to Home (a call's row ends it). The jobs keep their own place in
+  Today with their own undo, which leaves Home.
+- Behaviour that changed, both after stop only: the features are stopped
+  from the last made to the first, before the parts that are not features
+  yet (drop, look, asks, agents, put, teach, catch, jobs, then the rest as
+  before); a stop runs synchronously and no stop calls another part, so
+  nothing can see the order. And a page that comes up after stop no longer
+  reaches day one.
+- `talk` is a feature with nothing to stop. The scheduler's
+  `skipWhileRunning` stays off: every clock runs as it did.
 
 ## Owner decisions
 
@@ -196,7 +229,7 @@ What steps 1 to 3 do, and what they proved:
   two"
 - Step 3: done in "notch: moves, what it can do, memory, settings, what is
   said over a line, promises, the pause and suggestions are features"
-- Step 4: pending
+- Step 4: done in "notch: asking, the look, the drop, the jobs and the agents are features, and the registry gathers the words, Home's rows, Settings, today, undo and hello in one order"
 - Step 5: pending
 - Step 6: pending
 - Step 7: pending

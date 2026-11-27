@@ -25,6 +25,7 @@ import { mintStanding, type TurnStanding } from '../authority/standing.ts';
 import { turnOutsideRead } from '../authority/owner-word.ts';
 import { OWNER_ACTS, questionAsked, readActs, wordsCover, type OwnerAct } from '../authority/words-cover.ts';
 import { isBareAffirmation } from '../agents/realtime-taint.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import { notchNameDoubt, notchNamed, type NotchNameDoubt } from './names.ts';
 import type { NotchAskRow, NotchAskSource, NotchAskState, NotchLedger } from './ledger.ts';
@@ -33,7 +34,7 @@ import type { NotchQuietHome } from './quiet.ts';
 import { NotchStageEnded } from './stage.ts';
 import type { NotchStage } from './stage.ts';
 import { pointsAtScreen, whereQuestion, type NotchPointDuring, type NotchPointed } from './point.ts';
-import type { NotchAsksFor, NotchIntent, NotchIntentHit, NotchSentenceAct } from './intents.ts';
+import { resolveIntent, type NotchAsksFor, type NotchIntent, type NotchIntentHit, type NotchSentenceAct } from './intents.ts';
 import { intentReadCut, plainQuestion, type NotchRead } from './intent-read.ts';
 import { runItRequest } from './teach.ts';
 
@@ -1669,5 +1670,100 @@ export function attachNotchAsks(inbox: NotchInbox, deps: NotchAsksDeps): NotchAs
       unlisten = null;
     },
     reconcile,
+  };
+}
+
+/** What asking is made from, of the product and of the parts of the notch that are not features. */
+export interface NotchAsksGiven extends Pick<NotchAsksDeps, 'ledger' | 'turns' | 'modelReady' | 'remember' | 'understand' | 'point' | 'read'
+  | 'raiseApproval' | 'stillFor' | 'withdrawApproval' | 'openDashboard' | 'today' | 'quiet'> {
+  /** Whether the brain was given mail: then Home has the row of the replies that are prepared. */
+  mail: boolean;
+}
+
+/**
+ * Asking, typed in Home or spoken while the talk keys are held, as a feature of the notch (./feature.ts). It
+ * owns Home: the text field, and under it what the registry gathers from the others (rows, today and its
+ * undo, the quiet links), and it routes what is said by the one table of intents the registry puts together
+ * from the words every part hands over. Absent on a brain that takes no instructions.
+ */
+export function notchAsksFeature(given: NotchAsksGiven | undefined): NotchFeatureDef<'asks'> {
+  return {
+    id: 'asks',
+    wants: ['said', 'mail', 'people', 'dayOne', 'agents', 'teach', 'jobs', 'around', 'calls', 'where'],
+    make(ctx) {
+      if (!given) return null;
+      const { all } = ctx;
+      // Made before this: what they are is known now. Each is still asked when it is used.
+      const teach = ctx.use('teach');
+      const jobs = ctx.use('jobs');
+      const where = ctx.use('where');
+      const { openDashboard } = given;
+      const api = attachNotchAsks(ctx.inbox, {
+        ledger: given.ledger,
+        turns: given.turns,
+        modelReady: given.modelReady,
+        remember: given.remember,
+        understand: given.understand,
+        point: given.point,
+        // Words the notch does itself: "watch me", "run it on nine rows", "tell Leo ...", "tell me when Sam
+        // replies", "every Monday send Sam the numbers", "settings", "pause". Each part hands its words over as
+        // intents, and the one table says which of them takes a sentence and in what order (./intents.ts: a
+        // control word, an answer to what is up, a command, something to open, what was said over a line).
+        // Inside a band the order is NOTCH_ORDER's (./real.ts): a word to Leo before an eye and a chase, and
+        // those before an agent, because "tell me when" and "get Sam's answer" are theirs. The table is put
+        // together when something is said, not now: several of the parts are made further down.
+        side: (text, how) => resolveIntent(all.intents(), text, how),
+        // After all of them: a sentence that is none of the fixed words is read by the model, once (./real.ts, `notchRead`).
+        read: given.read,
+        keys: () => ctx.use('said')?.keys(),
+        // Who the owner writes with: a name that was heard and is close to one of theirs is read back (./names.ts).
+        people: () => ctx.use('mail')?.store.people() ?? [],
+        // And who is in the organisation: a name that is exactly one of theirs is not read back as somebody else's.
+        here: () => ctx.use('people')?.names() ?? [],
+        unheard: (why) => ctx.use('dayOne')?.unheard(why) ?? false,
+        pointed: (shown) => ctx.use('dayOne')?.pointed(shown),
+        // The quiet links at the foot of Home: each opens over it, and Home is back when it is closed. The
+        // features have theirs, as they stand when Home is opened; the dashboard's is the last.
+        more: {
+          buttons: () => [
+            ...all.homeLinks(),
+            ...(openDashboard ? [{ id: 'dashboard', label: 'Dashboard', quiet: true }] : []),
+          ],
+          press: async (stage, button) => {
+            const went = await all.press(stage, button);
+            if (went !== null) return went;
+            if (button === 'dashboard' && openDashboard) { openDashboard(stage.from()); return 'leave'; }
+            return null;
+          },
+        },
+        // What the assistant built in a turn is an agent like any other: switched on and named here.
+        afterTurn: (since) => ctx.use('agents')?.adopt(since),
+        // What stands: the organisation, the agents, the chases and the eyes, the calls. Each row leads to its own list.
+        standing: { rows: () => all.homeRows(), open: (stage, row) => all.open(stage, row) },
+        learned: teach ? { row: () => teach.row(), open: (stage) => teach.open(stage) } : undefined,
+        undoJob: jobs ? (jobId) => jobs.undo(jobId) : undefined,
+        undoRow: (row) => all.undo(row),
+        // On a call: Home says so, and has the way to have it listened to when it is not.
+        call: { row: () => ctx.use('around')?.callRow() ?? null, open: async (stage) => { await ctx.use('around')?.callOpen(stage); } },
+        paused: () => ctx.paused(),
+        raiseApproval: given.raiseApproval,
+        // While a call is listened to, the microphone is the call's. On any other call the talk keys work.
+        callHeard: () => ctx.use('calls')?.listening() ?? false,
+        stillFor: given.stillFor,
+        withdrawApproval: given.withdrawApproval,
+        attention: () => ctx.surface.act({ gesture: 'shake' }),
+        nod: () => ctx.surface.act({ gesture: 'nodg', kick: 240 }),
+        reach: (aim) => ctx.surface.act({ lip: 'reach', aim }),
+        openDashboard,
+        today: given.today,
+        see: where ? { row: () => where.row(), open: (stage) => where.see(stage) } : undefined,
+        // Replies that are prepared wait in Home, one row for all of them (pass 7).
+        mail: given.mail ? { row: () => ctx.use('mail')?.mail.homeRow() ?? null, open: async (stage) => { await ctx.use('mail')?.mail.open(stage); } } : undefined,
+        // The quiet hours are changed where they are shown. Ending them lets what waited speak.
+        quiet: given.quiet,
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
+    },
   };
 }

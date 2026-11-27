@@ -20,6 +20,7 @@
  * something asks once before it runs.
  */
 import { notchAskedHow, type NotchActionAsked } from './actions.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { Database } from 'bun:sqlite';
 import type { RawInteraction } from '../skills/recorder.ts';
 import type { NotchCatch } from './catch.ts';
@@ -978,6 +979,36 @@ export function attachNotchTeach(deps: NotchTeachDeps): NotchTeach {
     stop() {
       stopped = true;
       if (session) { session.unhear(); if (session.cap) clearTimeout(session.cap); session = null; void deps.recorder.stop().catch(() => {}); }
+    },
+  };
+}
+
+/** What a job shown with "Watch me" is made from, of the product. */
+export type NotchTeachGiven = Pick<NotchTeachDeps, 'recorder' | 'save' | 'describe' | 'forget' | 'effect' | 'runSkill' | 'byPlace' | 'hands' | 'db' | 'count'> & {
+  /** Without the clock that offers a shown job at its time of the week. */
+  noClock?: boolean;
+};
+
+/**
+ * A job shown with "Watch me", as a feature of the notch (./feature.ts): its words, and the clock that offers a
+ * shown job at its time of the week. Home's row about the jobs that were shown is asked of its `api` by the
+ * asks (`learned`). It stands on the jobs: without them it is absent, and nothing is said.
+ */
+export function notchTeachFeature(given: NotchTeachGiven | undefined): NotchFeatureDef<'teach'> {
+  return {
+    id: 'teach',
+    wants: ['jobs', 'catch'],
+    make(ctx) {
+      const jobs = ctx.use('jobs');
+      if (!given || !jobs) return null;
+      const { noClock, ...made } = given;
+      const api = attachNotchTeach({ inbox: ctx.inbox, jobs, ...made, catcher: () => ctx.use('catch'), paused: () => ctx.paused(), log: ctx.log });
+      return {
+        api,
+        ticks: noClock ? [] : [{ name: 'the clock of the shown jobs', everyMs: 30_000, run: () => api.tick() }],
+        intents: () => api.intents(),
+        stop: () => api.stop(),
+      };
     },
   };
 }

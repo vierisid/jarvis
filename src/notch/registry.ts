@@ -16,12 +16,16 @@
  *                   Whatever was made when the making failed is what is
  *                   stopped; a part that was never made has nothing here.
  *
- * It also gathers what Home asks of the features. Today that is the quiet
- * links at its foot. Rows in Home, rows in Settings, what was done today, an
- * undo and a hello are still put together by hand in `real.ts`, in an order
- * of their own, and are not in the contract until they are gathered here.
+ * It also gathers what Home, Settings and the router ask of every part
+ * (`NotchGives`): the words each acts on, its rows in Home and in Settings,
+ * what it did today and its undo, and what it does when a page comes up. Each
+ * kind stands in the order it is given (`NOTCH_ORDER` in `real.ts`), not in
+ * the order the parts are made; a part that gives one and has no place in
+ * its order is refused. The quiet links at the foot of Home stand in the
+ * order the features were made.
  */
-import type { NotchApis, NotchContext, NotchFeature, NotchFeatureDef, NotchFeatureId, NotchTickOptions } from './feature.ts';
+import { NOTCH_GIVES_IN, type NotchAll, type NotchApis, type NotchContext, type NotchFeature, type NotchFeatureDef, type NotchFeatureId, type NotchGives, type NotchOrder, type NotchTickOptions } from './feature.ts';
+import { notchIntentTable } from './intents.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchButton } from './protocol.ts';
 import type { NotchSettings } from './settings.ts';
@@ -39,6 +43,8 @@ export interface NotchRegistryDeps {
   log: (line: string) => void;
   /** Whether everything is stopped. */
   paused: () => boolean;
+  /** Where what each part gives stands among the others. A kind not given here has no place for anybody. */
+  order?: Partial<NotchOrder>;
 }
 
 export interface NotchRegistry {
@@ -46,8 +52,11 @@ export interface NotchRegistry {
   every(name: string, everyMs: number, run: () => void | Promise<void>, options?: NotchTickOptions): () => void;
   /** The inbox, once it is made. Features are made after it, and it is stopped before them. */
   setInbox(inbox: NotchInbox): void;
-  /** A part that is not a feature yet, reachable by its id until it is. Asked each time, so one made later is found. */
-  lend<K extends NotchFeatureId>(id: K, get: () => NotchApis[K] | null): void;
+  /**
+   * A part that is not a feature yet, reachable by its id until it is. Asked each time, so one made later is
+   * found. `gives`: what it gives to what is gathered, as a feature would; asked only while the part is there.
+   */
+  lend<K extends NotchFeatureId>(id: K, get: () => NotchApis[K] | null, gives?: NotchGives): void;
   /** Makes a feature and starts its clocks. Null when it is absent: a part it needs is, or the brain was not given what it is made from. */
   add<K extends NotchFeatureId>(def: NotchFeatureDef<K>): NotchApis[K] | null;
   /** The same, for a feature the notch is not made without: its absence is a failure of the making. */
@@ -60,6 +69,10 @@ export interface NotchRegistry {
   homeLinks(): NotchButton[];
   /** A press on one of them: what the feature that owns it answers, or null when none does. */
   press(stage: NotchStage, link: string): Promise<'stay' | 'leave' | null>;
+  /** What every part gives, gathered, each kind in its order. */
+  all: NotchAll;
+  /** A page has come up on a machine: each part that hears it, in its order. Nothing on a notch that was stopped. */
+  hello(sidecarId: string): void;
   /** Whether the notch was stopped. */
   stopped(): boolean;
   stop(): void;
@@ -73,6 +86,23 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
   const features: { id: NotchFeatureId; feature: NotchFeature<unknown> }[] = [];
   const lent = new Map<NotchFeatureId, () => unknown>();
   const parts: (() => void)[] = [];
+  /** What each part gives, by its id: a feature's own members, or what was lent with a part while that part is there. */
+  const gives = new Map<NotchFeatureId, () => NotchGives | null>();
+  const order: NotchOrder = { says: [], homeRows: [], settingsRows: [], done: [], undo: [], hello: [], ...deps.order };
+
+  /** Refused before anything of it is kept: a part that gives something and has no place for it in that kind's order. */
+  function placed(id: NotchFeatureId, given: NotchGives): void {
+    for (const member of Object.keys(NOTCH_GIVES_IN) as (keyof NotchGives)[]) {
+      if (given[member] === undefined) continue;
+      const kind = NOTCH_GIVES_IN[member];
+      if (!order[kind].includes(id)) throw new Error(`[notch] ${id} gives ${member}, and has no place in the order of ${kind}`);
+    }
+  }
+
+  /** The parts that give a kind, in its order, each as it gives now. */
+  function givers(kind: keyof NotchOrder): NotchGives[] {
+    return order[kind].flatMap((id) => { const given = gives.get(id)?.() ?? null; return given ? [given] : []; });
+  }
 
   function every(name: string, everyMs: number, run: () => void | Promise<void>, options: NotchTickOptions = {}): () => void {
     if (stopped) return () => {};
@@ -119,6 +149,35 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     return (lent.get(id)?.() as NotchApis[K] | null | undefined) ?? null;
   }
 
+  const homeLinks = (): NotchButton[] => features.flatMap((one) => one.feature.homeLinks?.() ?? []);
+  async function press(stage: NotchStage, link: string): Promise<'stay' | 'leave' | null> {
+    for (const one of features) {
+      const went = (await one.feature.press?.(stage, link)) ?? null;
+      if (went !== null) return went;
+    }
+    return null;
+  }
+
+  const all: NotchAll = {
+    intents: () => notchIntentTable(givers('says').map((given) => given.intents?.())),
+    homeRows: () => givers('homeRows').flatMap((given) => given.homeRows?.() ?? []),
+    async open(stage, row) {
+      for (const given of givers('homeRows')) if (await given.open?.(stage, row)) return;
+    },
+    homeLinks,
+    press,
+    settingsRows: () => givers('settingsRows').flatMap((given) => given.settingsRows?.() ?? []),
+    setWord: (name, value) => givers('settingsRows').some((given) => given.setWord?.(name, value) === true),
+    done: (since) => givers('done').flatMap((given) => given.done?.(since) ?? []),
+    undo(row) {
+      for (const given of givers('undo')) {
+        const said = given.undo?.(row) ?? null;
+        if (said) return said;
+      }
+      return null;
+    },
+  };
+
   function add<K extends NotchFeatureId>(def: NotchFeatureDef<K>): NotchApis[K] | null {
     if (!inbox) throw new Error(`[notch] ${def.id} cannot be made before the inbox`);
     if (stopped) throw new Error(`[notch] ${def.id} cannot be made on a notch that was stopped`);
@@ -131,7 +190,7 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     // Only what it said it leans on: the list in its definition is the whole list.
     const named = new Set<NotchFeatureId>([...(def.needs ?? []), ...(def.wants ?? [])]);
     const ctx: NotchContext = {
-      surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every,
+      surface: deps.surface, inbox, settings: deps.settings, clock: deps.clock, now: deps.now, log, paused: deps.paused, every, all,
       use: (id) => {
         if (!named.has(id)) throw new Error(`[notch] ${def.id} asked for ${id}, which is not in its needs or wants`);
         return use(id);
@@ -141,6 +200,8 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     if (!feature) return null;
     // From here it is stopped with the rest, whatever fails after this.
     features.push({ id: def.id, feature });
+    placed(def.id, feature);
+    gives.set(def.id, () => feature);
     for (const tick of feature.ticks ?? []) every(tick.name, tick.everyMs, () => tick.run(), { skipWhileRunning: tick.skipWhileRunning });
     return feature.api;
   }
@@ -151,9 +212,11 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
       if (inbox) throw new Error('[notch] the inbox is there already');
       inbox = made;
     },
-    lend(id, get) {
+    lend(id, get, given) {
       if (features.some((one) => one.id === id) || lent.has(id)) throw new Error(`[notch] ${id} is there already`);
+      if (given) placed(id, given);
       lent.set(id, get);
+      if (given) gives.set(id, () => (get() === null ? null : given));
     },
     add,
     must(def) {
@@ -163,13 +226,12 @@ export function createNotchRegistry(deps: NotchRegistryDeps): NotchRegistry {
     },
     use,
     onStop(stop) { parts.push(stop); },
-    homeLinks: () => features.flatMap((one) => one.feature.homeLinks?.() ?? []),
-    async press(stage, link) {
-      for (const one of features) {
-        const went = (await one.feature.press?.(stage, link)) ?? null;
-        if (went !== null) return went;
-      }
-      return null;
+    homeLinks,
+    press,
+    all,
+    hello(sidecarId) {
+      if (stopped) return;
+      for (const given of givers('hello')) given.hello?.(sidecarId);
     },
     stopped: () => stopped,
     stop() {

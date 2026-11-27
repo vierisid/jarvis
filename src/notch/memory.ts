@@ -189,6 +189,7 @@ export function notchMemoryFeature(given: Pick<NotchMemoryDeps, 'list' | 'forget
       });
       return {
         api,
+        intents: () => api.intents(),
         homeLinks: () => [{ id: 'memory', label: 'Memory', quiet: true }],
         press: async (stage, link) => {
           if (link !== 'memory') return null;

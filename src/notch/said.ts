@@ -377,8 +377,9 @@ export function attachNotchSaid(deps: NotchSaidDeps): NotchSaidLine {
 export function notchSaidFeature(more: Pick<NotchSaidDeps, 'jobWords'> = {}): NotchFeatureDef<'said'> {
   return {
     id: 'said',
-    make: (ctx) => ({
-      api: attachNotchSaid({ inbox: ctx.inbox, line: () => ctx.surface.current().line, skip: (item) => item.startsWith('ask:'), log: ctx.log, ...more }),
-    }),
+    make(ctx) {
+      const api = attachNotchSaid({ inbox: ctx.inbox, line: () => ctx.surface.current().line, skip: (item) => item.startsWith('ask:'), log: ctx.log, ...more });
+      return { api, intents: () => api.intents() };
+    },
   };
 }

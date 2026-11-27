@@ -28,6 +28,7 @@
  */
 import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from './actions.ts';
 import type { Database } from 'bun:sqlite';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchBead, NotchBlock, NotchPart, NotchWord } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -876,5 +877,35 @@ export function attachNotchAgents(deps: NotchAgentsDeps): NotchAgents {
       return [em(agent.name), ' is switched off. It is still in Agents.'];
     },
     stop() { stopped = true; },
+  };
+}
+
+/**
+ * The agents as a feature of the notch (./feature.ts): their row in Home, what they made today and its undo,
+ * their words, and the clock that looks at their runs. Absent on a brain that was not given the product's
+ * workflows, or that takes no instructions (`asks`): an agent is made from what is said or typed there.
+ */
+export function notchAgentsFeature(given: { db: Database; workflows: NotchAgentWorkflows; noClock?: boolean; asks: boolean; actions?: NotchActions | null } | undefined): NotchFeatureDef<'agents'> {
+  return {
+    id: 'agents',
+    make(ctx) {
+      if (!given || !given.asks) return null;
+      const log = ctx.log;
+      const api = attachNotchAgents({ inbox: ctx.inbox, db: given.db, workflows: given.workflows, log, actions: given.actions, paused: () => ctx.paused() });
+      return {
+        api,
+        // Its own catch and its own words in the log, as it always had; the scheduler's guard is around it as well.
+        ticks: given.noClock ? [] : [{
+          name: "looking at the agents' runs", everyMs: NOTCH_AGENT_TICK_MS,
+          run: () => { try { api.tick(); } catch (error) { log(`[notch] the agents' runs could not be looked at: ${error instanceof Error ? error.message : String(error)}`); } },
+        }],
+        intents: () => api.intents(),
+        homeRows: () => { const row = api.row(); return row ? [row] : []; },
+        open: async (stage, row) => { if (row !== 'agents') return false; await api.open(stage); return true; },
+        done: (since) => api.done(since),
+        undo: (row) => api.undo(row),
+        stop: () => api.stop(),
+      };
+    },
   };
 }

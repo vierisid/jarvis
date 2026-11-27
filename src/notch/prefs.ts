@@ -120,10 +120,11 @@ export interface NotchPrefsDeps {
   canDo?: (stage: NotchStage) => Promise<void>;
   /** Starts day one again (./dayone.ts). */
   dayOne?: () => void;
-  /** Listening to calls (./call.ts): its row here, and what a word of that row changes. */
-  calls?: { row(): NotchBlock | null; set(name: string, value: string): boolean };
-  /** Noticing (./notice.ts): its row here, and what its word changes. */
-  notice?: { row(): NotchBlock | null; set(name: string, value: string): boolean };
+  /**
+   * The rows here that other parts own (noticing, listening to calls), in the order they stand, and what a word
+   * of one of them changes: true when the word was one of theirs.
+   */
+  others?: { rows(): NotchBlock[]; set(name: string, value: string): boolean };
   /** What Jarvis is connected to, as it stands now. */
   connections?: () => NotchConnection[] | Promise<NotchConnection[]>;
   /** Takes the person to where one is connected: a sign-in window, or its page in the dashboard. */
@@ -179,8 +180,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
             ...(deps.openDashboard ? { buttons: [{ id: 'voice', label: voice ? 'Change' : 'Set up', quiet: true }] } : {}),
           },
           ...(deps.see ? [{ kind: 'row' as const, id: 'see', go: true, lead: 'Watching', say: ['What I see, and what I never watch.'] satisfies NotchPart[] }] : []),
-          ...((): NotchBlock[] => { const row = deps.notice?.row(); return row ? [row] : []; })(),
-          ...((): NotchBlock[] => { const row = deps.calls?.row(); return row ? [row] : []; })(),
+          ...(deps.others?.rows() ?? []),
           ...(links.length ? [{ kind: 'buttons' as const, buttons: links }] : []),
           { kind: 'note', say: ['The keys are for this computer. Nothing spoken is kept as sound.'] },
         ];
@@ -204,7 +204,7 @@ export function attachNotchPrefs(deps: NotchPrefsDeps): NotchPrefs {
         }
         if (answer.act !== 'word') continue;
         const value = (answer.value ?? '').trim();
-        if (answer.word && (deps.calls?.set(answer.word, value) || deps.notice?.set(answer.word, value))) {
+        if (answer.word && deps.others?.set(answer.word, value)) {
           refused = null;
           stage.surface.update(id, { blocks: blocks() });
           continue;
@@ -320,13 +320,14 @@ export interface NotchPrefsGiven extends Pick<NotchPrefsDeps, 'keys' | 'voice' |
  *
  * Day one, the calls and the noticing are made after this: each is asked for
  * when its row is drawn or its word is changed, and one that is not there has
- * no row and takes no word.
+ * no row and takes no word. Their rows are what the registry gathers for
+ * Settings, in its order (./real.ts, `NOTCH_ORDER.settingsRows`).
  */
 export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'prefs'> {
   return {
     id: 'prefs',
     needs: ['moves', 'canDo'],
-    wants: ['where', 'dayOne', 'calls', 'notice'],
+    wants: ['where', 'dayOne'],
     make(ctx) {
       const settings = ctx.settings;
       const moves = ctx.use('moves');
@@ -343,10 +344,9 @@ export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'pref
         moves: (stage) => moves.open(stage),
         canDo: (stage) => canDo.open(stage),
         dayOne: given.dayOne ? () => ctx.use('dayOne')?.again() : undefined,
-        // Listening to calls: whether it is offered, and whether the other side is heard.
-        calls: { row: () => ctx.use('calls')?.settingsRow() ?? null, set: (name, value) => ctx.use('calls')?.setWord(name, value) ?? false },
-        // Noticing: whether it offers one thing in the window the person is in.
-        notice: { row: () => ctx.use('notice')?.settingsRow() ?? null, set: (name, value) => ctx.use('notice')?.setWord(name, value) ?? false },
+        // Noticing, whether it offers one thing in the window the person is in; listening to calls, whether it is
+        // offered and whether the other side is heard.
+        others: { rows: () => ctx.all.settingsRows(), set: (name, value) => ctx.all.setWord(name, value) },
         connections: given.connections,
         connect: given.connect,
         // A page of the dashboard when it can be opened at one, the dashboard itself when not.
@@ -356,6 +356,7 @@ export function notchPrefsFeature(given: NotchPrefsGiven): NotchFeatureDef<'pref
       });
       return {
         api,
+        intents: () => api.intents(),
         // The connections have their link when the brain can tell what is connected.
         homeLinks: () => [
           ...(given.connections ? [{ id: 'connections', label: 'Connections', quiet: true }] : []),

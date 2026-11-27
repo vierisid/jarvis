@@ -153,7 +153,9 @@ export function notchPauseFeature(controller: NotchPauseDeps['controller'] | und
         changed: where ? () => where.refresh() : undefined,
         log: ctx.log,
       });
-      return { api: {}, stop };
+      // The control word: "pause" said or typed pauses everything, as Esc twice does.
+      const words = notchPauseWords(controller, ctx.log);
+      return { api: {}, intents: () => words.intents(), stop };
     },
   };
 }

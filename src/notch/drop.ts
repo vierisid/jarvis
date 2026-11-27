@@ -23,6 +23,7 @@
  */
 import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import type { NotchAskFile } from './asks.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import { NOTCH_GIST_MS, NOTCH_GIST_WAIT_MS, gistRead } from './drop-gist.ts';
 import { NOTCH_DROP_READERS, readDropped, type DropReader } from './drop-read.ts';
 import type { NotchInbox } from './inbox.ts';
@@ -323,7 +324,7 @@ export interface NotchDrop {
  * I drop a deck and I ask what has changed since the last deck." A second
  * file dropped while the first waits joins it, so that can be asked.
  */
-export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: NotchDropDeps): NotchDrop {
+export function attachNotchDrop(surface: Pick<NotchSurface, 'gulp' | 'setMouth' | 'onDrag'>, inbox: NotchInbox, deps: NotchDropDeps): NotchDrop {
   const log = deps.log ?? ((line: string) => console.log(line));
   const holdMs = deps.holdMs ?? NOTCH_DROP_HOLD_MS;
   const gotMs = deps.gotMs ?? NOTCH_DROP_GOT_MS;
@@ -574,6 +575,36 @@ export function attachNotchDrop(surface: NotchSurface, inbox: NotchInbox, deps: 
       unlisten();
       shut('shut');
       forget();
+    },
+  };
+}
+
+/**
+ * A file dropped on the notch (pass 9) as a feature of the notch (./feature.ts): it waits for its question, one
+ * of three offered, typed, or said. Without the asks it is absent, and nothing is said.
+ */
+export function notchDropFeature(given: Pick<NotchDropDeps, 'gist'> | undefined): NotchFeatureDef<'drop'> {
+  return {
+    id: 'drop',
+    wants: ['asks', 'people', 'dayOne'],
+    make(ctx) {
+      const asks = ctx.use('asks');
+      if (!given || !asks) return null;
+      const people = ctx.use('people');
+      const api = attachNotchDrop(ctx.surface, ctx.inbox, {
+        // A button's words are the notch's own; what was typed in the field is the owner's.
+        ask: (text, files, said) => { if (said) asks.typed(text, files); else asks.shown(text, files); },
+        tell: (parts, mood) => { asks.tell(parts, mood); },
+        // For somebody in the organisation: the file goes on as it was dropped (./people-files.ts).
+        ...(people ? { send: { to: () => people.fileTargets(), file: (to: string, file: { name: string; bytes: Uint8Array }) => people.sendFile(to, file) } } : {}),
+        paused: () => ctx.paused(),
+        // A file that arrived from somebody is read by itself, and what it is is said with its arrival.
+        ...(given.gist ? { gist: given.gist } : {}),
+        // On day one, the first file anyone drops is the lesson, and is asked about as any file is.
+        taken: () => ctx.use('dayOne')?.gave(),
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
     },
   };
 }

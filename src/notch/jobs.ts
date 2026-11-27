@@ -31,6 +31,7 @@
 import { NOTCH_NAME } from './name.ts';
 import type { Database } from 'bun:sqlite';
 import type { NotchActionAsked, NotchActions } from './actions.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox, NotchItem, NotchItemEnd } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import { roundPlace, roundsCopy, type RoundStep, type Rounds, type WatchWin } from './rounds.ts';
@@ -877,4 +878,27 @@ export function roundsWords(rounds: Rounds, apps: string[]): NotchJobWords {
   return pastes
     ? { doing: 'Pasting', said: (n) => `${n} pasted`, title: (done) => `Pasted ${done}${where}` }
     : { doing: 'Doing the rest', said: (n) => `${n} more`, title: (done) => `Did ${done} more${where}, the way you began` };
+}
+
+/**
+ * Doing it in view (pass 10) as a feature of the notch (./feature.ts): the jobs done where they can be seen.
+ * Absent on a brain that was not given the hands, or that takes no instructions: every job is started by
+ * what is said or answered on the notch. What it did today has its own place in Today (./today.ts, `jobs`),
+ * with its own undo, and is not gathered with the rest.
+ */
+export function notchJobsFeature(given: Pick<NotchJobsDeps, 'db' | 'hands' | 'actions'> | undefined): NotchFeatureDef<'jobs'> {
+  return {
+    id: 'jobs',
+    wants: ['catch'],
+    make(ctx) {
+      if (!given) return null;
+      const api = attachNotchJobs(ctx.inbox, {
+        db: given.db, hands: given.hands, paused: () => ctx.paused(), actions: given.actions,
+        // What the person does while Jarvis works is not a job to take over, and what came before it is over.
+        running: () => ctx.use('catch')?.reset(),
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
+    },
+  };
 }

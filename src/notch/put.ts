@@ -38,6 +38,7 @@
  * exactly what was put there.
  */
 import { notchAskedHow, type NotchActionAsked, type NotchActionOutcome, type NotchActions } from './actions.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import { actRefusal, type NotchJobHands, type NotchJobs, type NotchPut as NotchPutPlace } from './jobs.ts';
 import { lookCount, type NotchLooked, type NotchThing } from './look.ts';
@@ -496,4 +497,21 @@ export function attachNotchPut(deps: NotchPutDeps): NotchPutter {
     match(text) { const found = taken(text); return found && !found.answers ? hit(found) : null; },
   }];
   return made;
+}
+
+/**
+ * A thing put where the person points, as a feature of the notch (./feature.ts): its words, and what was
+ * circled while it is held. It stands on the jobs: without them it is absent, and nothing is said.
+ */
+export function notchPutFeature(given: Pick<NotchPutDeps, 'hands' | 'hold' | 'read' | 'actions'> | undefined): NotchFeatureDef<'put'> {
+  return {
+    id: 'put',
+    wants: ['jobs'],
+    make(ctx) {
+      const jobs = ctx.use('jobs');
+      if (!given || !jobs) return null;
+      const api = attachNotchPut({ inbox: ctx.inbox, jobs, hands: given.hands, hold: given.hold, read: given.read, paused: () => ctx.paused(), actions: given.actions, log: ctx.log });
+      return { api, intents: () => api.intents(), stop: () => api.stop() };
+    },
+  };
 }

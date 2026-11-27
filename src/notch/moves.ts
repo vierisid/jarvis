@@ -253,5 +253,8 @@ export function attachNotchMoves(deps: NotchMovesDeps): NotchMoves {
 /** The movements as a feature of the notch (./feature.ts). */
 export const notchMovesFeature: NotchFeatureDef<'moves'> = {
   id: 'moves',
-  make: (ctx) => ({ api: attachNotchMoves({ inbox: ctx.inbox, resting: () => ctx.surface.resting(), log: ctx.log }) }),
+  make(ctx) {
+    const api = attachNotchMoves({ inbox: ctx.inbox, resting: () => ctx.surface.resting(), log: ctx.log });
+    return { api, intents: () => api.intents() };
+  },
 };

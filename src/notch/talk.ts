@@ -28,6 +28,7 @@ import { NOTCH_NAME } from './name.ts';
 import { ATTACHMENT_LIMITS } from '../brief/attachment-contracts.ts';
 import { hasSpokenContent } from '../voice/wake-phrase.ts';
 import type { NotchAskFile, NotchAsks } from './asks.ts';
+import type { NotchFeatureDef } from './feature.ts';
 
 export const NOTCH_TALK_EVENT = 'notch.talk';
 /** Less voiced sound than this is not an instruction: nothing is transcribed. */
@@ -351,6 +352,23 @@ export function attachNotchTalk(port: NotchTalkPort, deps: NotchTalkDeps): Notch
           if (words && hasSpokenContent(words)) deps.asks.words(talkKey, words.trim()); else deps.asks.nothing(talkKey, 'silence');
         }, 250);
       }, 700);
+    },
+  };
+}
+
+/**
+ * Talking to the notch with the talk keys held, as a feature of the notch (./feature.ts). What is said while a
+ * dropped file waits for its question is about that file: the words take it. Without the asks it is absent.
+ * It has nothing to stop: what the desktop app says of the keys is heard until the brain ends.
+ */
+export function notchTalkFeature(given: { port: NotchTalkPort; stt: NotchTalkDeps['stt'] } | undefined): NotchFeatureDef<'talk'> {
+  return {
+    id: 'talk',
+    wants: ['asks', 'look', 'drop'],
+    make(ctx) {
+      const asks = ctx.use('asks');
+      if (!given || !asks) return null;
+      return { api: attachNotchTalk(given.port, { asks, stt: given.stt, look: ctx.use('look') ?? undefined, held: () => ctx.use('drop')?.claim() ?? [], log: ctx.log }) };
     },
   };
 }

@@ -137,5 +137,8 @@ export function attachNotchCanDo(deps: { inbox: NotchInbox }): NotchCanDo {
 /** Everything it does, on one sheet, as a feature of the notch (./feature.ts). */
 export const notchCanDoFeature: NotchFeatureDef<'canDo'> = {
   id: 'canDo',
-  make: (ctx) => ({ api: attachNotchCanDo({ inbox: ctx.inbox }) }),
+  make(ctx) {
+    const api = attachNotchCanDo({ inbox: ctx.inbox });
+    return { api, intents: () => api.intents() };
+  },
 };

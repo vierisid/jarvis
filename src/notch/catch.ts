@@ -19,6 +19,7 @@
  * not made again for the same job for ten minutes.
  */
 import { notchAskedHow, type NotchActionAsked } from './actions.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import { NOTCH_ROWS_NOT_SEEN, newRoundsRun, roundsPlan, roundsWords, sureRounds, type NotchJobHands, type NotchJobs } from './jobs.ts';
 import type { NotchPart } from './protocol.ts';
@@ -310,6 +311,27 @@ export function attachNotchCatch(port: NotchCatchPort, deps: NotchCatchDeps): No
     stop() {
       stopped = true;
       reset();
+    },
+  };
+}
+
+/**
+ * A job caught by itself when it is done twice by hand, as a feature of the notch (./feature.ts). It stands on
+ * the jobs: without them it is absent, and nothing is said.
+ */
+export function notchCatchFeature(given: { port: NotchCatchPort; hands: NotchJobHands; count?: NotchCatchDeps['count'] } | undefined): NotchFeatureDef<'catch'> {
+  return {
+    id: 'catch',
+    wants: ['jobs', 'teach'],
+    make(ctx) {
+      const jobs = ctx.use('jobs');
+      if (!given || !jobs) return null;
+      const api = attachNotchCatch(given.port, {
+        inbox: ctx.inbox, jobs, hands: given.hands, paused: () => ctx.paused(), count: given.count,
+        teaching: () => ctx.use('teach')?.watching() ?? false,
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
     },
   };
 }

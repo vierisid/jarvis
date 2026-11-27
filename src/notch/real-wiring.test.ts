@@ -32,7 +32,7 @@ import { NOTCH_FAILURE_LOOK_MS, type NotchNews, type NotchOpenFailure } from './
 import { NOTCH_PEOPLE_TICK_MS } from './people.ts';
 import type { NotchBlock, NotchLine } from './protocol.ts';
 import { NOTCH_QUESTION_LOOK_MS } from './questions.ts';
-import { attachNotchReal, type NotchReal, type NotchRealDeps } from './real.ts';
+import { NOTCH_ORDER, attachNotchReal, notchIntents, type NotchReal, type NotchRealDeps, type NotchSideRouters } from './real.ts';
 import { NOTCH_STANDING_TICK_MS, NotchStandingStore } from './standing.ts';
 import { NOTCH_CALL_AFTER_MS } from './around.ts';
 import { NOTCH_MESSAGE_EVENT, NotchSurface } from './surface.ts';
@@ -528,6 +528,39 @@ describe('a page comes up', () => {
     w.fromPage({ type: 'hello', v: 2 }, 'laptop');
     expect(heard).toEqual(['inbox', 'day one']);
   });
+
+  test('on a notch that was stopped, day one is not told', () => {
+    const w = everything();
+    const heard: string[] = [];
+    const dayOne = w.real.dayOne!;
+    dayOne.cameUp = () => { heard.push('day one'); };
+    w.fromPage({ type: 'hello', v: 2 }, 'laptop');
+    expect(heard).toEqual(['day one']);
+    w.real.stop();
+    w.fromPage({ type: 'hello', v: 2 }, 'laptop');
+    expect(heard).toEqual(['day one']);
+  });
+});
+
+describe('the words the notch acts on itself, put together', () => {
+  test('the table it routes by is the one the corpus asks: every part\'s words, by band, and inside a band in the order of `notchIntents`', () => {
+    const w = everything();
+    const table = w.real.intents();
+    // Every part that has words of its own hands them over.
+    expect([...new Set(table.map((one) => one.feature))].sort()).toEqual([...NOTCH_ORDER.says].sort());
+    // Each part's list as the notch has it, put together by the function the corpus asks (./intents-corpus.test.ts).
+    const routers = Object.fromEntries(NOTCH_ORDER.says.map((id) => [id, { intents: () => table.filter((one) => one.feature === id) }])) as unknown as NotchSideRouters;
+    expect(table.map((one) => one.id)).toEqual(notchIntents(routers).map((one) => one.id));
+    // Inside a band: a word to somebody before an eye and a chase, and those before an agent.
+    const commands = table.filter((one) => one.band === 'command').map((one) => one.feature);
+    expect(commands.indexOf('standing')).toBeGreaterThan(commands.lastIndexOf('people'));
+    expect(commands.lastIndexOf('standing')).toBeLessThan(commands.indexOf('agents'));
+  });
+
+  test('a part that is not there hands over nothing', () => {
+    const w = everything({ without: ['mail', 'peers', 'calls', 'dayOne', 'emergency'] });
+    expect([...new Set(w.real.intents().map((one) => one.feature))].sort()).toEqual(['agents', 'canDo', 'memory', 'moves', 'prefs', 'put', 'said', 'teach']);
+  });
 });
 
 describe('the clocks of the notch', () => {
@@ -604,22 +637,24 @@ describe('stop, with every part given', () => {
     expect(parts[0]).toBe('stop: inbox');
     // The promises and the pause only stop hearing: which of the two goes first is not pinned.
     expect(parts.slice(1, 3).sort()).toEqual(['stop: promises', 'stop: the pause no longer heard']);
+    // The features from the last made to the first (fix 02, step 4: asking, the look, the drop, the jobs and
+    // the agents are features now), then the parts that are not features yet, in the order they always had.
     expect(parts.slice(3)).toEqual([
+      'stop: drop',
+      'stop: look',
       'stop: asks',
+      'stop: agents',
+      'stop: put',
+      'stop: teach',
+      'stop: catcher',
+      'stop: jobs',
       'stop: people',
       'stop: day one',
-      'stop: look',
-      'stop: drop',
       'stop: where',
       'stop: mail',
       'stop: presence',
       'stop: around',
-      'stop: jobs',
-      'stop: catcher',
-      'stop: teach',
-      'stop: put',
       'stop: notice',
-      'stop: agents',
     ]);
   });
 

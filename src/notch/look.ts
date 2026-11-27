@@ -38,6 +38,7 @@
  * are framed as outside content where the turn is built.
  */
 import type { NotchAskFile } from './asks.ts';
+import type { NotchFeatureDef } from './feature.ts';
 import type { NotchInbox } from './inbox.ts';
 import type { NotchPart } from './protocol.ts';
 import type { NotchStage } from './stage.ts';
@@ -610,6 +611,37 @@ export function attachNotchLook(port: NotchLookPort, deps: NotchLookDeps): Notch
     stop() {
       stopped = true;
       for (const [sidecarId, look] of [...under]) end(sidecarId, look, null);
+    },
+  };
+}
+
+/**
+ * Look at this (pass 9) as a feature of the notch (./feature.ts). It is joined to talking, because the same keys
+ * are held for both: what is said while a thing is circled is about it. A look is asked about as an
+ * instruction, so without the asks it is absent, and nothing is said.
+ */
+export function notchLookFeature(given: { port: NotchLookPort; modelReady?: NotchLookDeps['modelReady'] } | undefined): NotchFeatureDef<'look'> {
+  return {
+    id: 'look',
+    wants: ['asks', 'talk', 'dayOne', 'put'],
+    make(ctx) {
+      const asks = ctx.use('asks');
+      if (!given || !asks) return null;
+      const api = attachNotchLook(given.port, {
+        inbox: ctx.inbox,
+        // Nothing was said with it: the question is the notch's own, not the owner's word.
+        ask: (text, files) => { asks.shown(text, files); },
+        talking: (sidecarId) => ctx.use('talk')?.open(sidecarId) ?? false,
+        modelReady: given.modelReady,
+        paused: () => ctx.paused(),
+        // What was shown is held for a while, and a place pointed at meanwhile is where it goes (pass 10).
+        // On day one, the first look anyone takes is the lesson, and nothing else comes of it.
+        shown: (sidecarId, looked) => ctx.use('dayOne')?.shown(looked) === true || (ctx.use('put')?.shown(sidecarId, looked) ?? false),
+        // The blink is the shutter, and what was circled is swallowed.
+        seen: () => ctx.surface.act({ gesture: 'blink', kick: 230 }),
+        log: ctx.log,
+      });
+      return { api, stop: () => api.stop() };
     },
   };
 }
